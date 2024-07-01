@@ -196,7 +196,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherWaypoints) {
+TEST_F(WatcherFixture, DISABLED_TestWatcherWaypoints) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

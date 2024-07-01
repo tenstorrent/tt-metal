@@ -17,6 +17,7 @@ auto dispatch(DataType dtype, Func &&func, Args &&...args) {
         case DataType::INT32: return func.template operator()<int32_t>(static_cast<Args &&>(args)...);
         case DataType::UINT32: return func.template operator()<uint32_t>(static_cast<Args &&>(args)...);
         case DataType::UINT16: return func.template operator()<uint16_t>(static_cast<Args &&>(args)...);
+        case DataType::UINT8: return func.template operator()<uint8_t>(static_cast<Args &&>(args)...);
         case DataType::BFLOAT8_B: return func.template operator()<bfloat8_b>(static_cast<Args &&>(args)...);
         case DataType::BFLOAT4_B: return func.template operator()<bfloat4_b>(static_cast<Args &&>(args)...);
         default: TT_THROW("Unsupported data type");

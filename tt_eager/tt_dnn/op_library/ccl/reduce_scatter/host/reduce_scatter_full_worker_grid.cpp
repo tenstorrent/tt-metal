@@ -42,35 +42,16 @@ namespace ccl {
 namespace reduce_scatter_detail {
 struct WorkerTransferInfo {
     WorkerTransferInfo(
-        std::vector<uint32_t> pages_per_full_chunk_per_worker,
-        std::vector<uint32_t> num_messages_per_worker,
-        std::vector<uint32_t> remaining_num_pages_per_worker,
-        uint32_t num_links,
-        uint32_t num_workers) :
+        std::vector<uint32_t> pages_per_full_chunk_per_worker, uint32_t num_links, uint32_t num_workers) :
         pages_per_full_chunk_per_worker(pages_per_full_chunk_per_worker),
-        num_messages_per_worker(num_messages_per_worker),
-        remaining_num_pages_per_worker(remaining_num_pages_per_worker),
         num_links(num_links),
         num_workers(num_workers) {}
 
     uint32_t get_num_pages_per_full_chunk(uint32_t link, uint32_t worker_idx) const {
         return pages_per_full_chunk_per_worker.at(link * num_workers + worker_idx);
     }
-    uint32_t get_num_remaining_pages(uint32_t link, uint32_t worker_idx) const {
-        return remaining_num_pages_per_worker.at(link * num_workers + worker_idx);
-    }
-    uint32_t get_num_full_chunks_per_transfer(uint32_t link, uint32_t worker_idx) const {
-        return num_messages_per_worker.at(link * num_workers + worker_idx) -
-               (get_num_remaining_pages(link, worker_idx) > 0 ? 1 : 0);
-    }
-    uint32_t get_num_pages_per_ring_index(uint32_t link, uint32_t worker_idx) const {
-        return get_num_full_chunks_per_transfer(link, worker_idx) * get_num_pages_per_full_chunk(link, worker_idx) +
-               get_num_remaining_pages(link, worker_idx);
-    }
 
     std::vector<uint32_t> pages_per_full_chunk_per_worker;
-    std::vector<uint32_t> num_messages_per_worker;
-    std::vector<uint32_t> remaining_num_pages_per_worker;
     uint32_t num_links;
     uint32_t num_workers;
 };
@@ -90,16 +71,32 @@ struct ReduceScatterWorkerArgBuilder {
         ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
         WorkerTransferInfo const& worker_transfer_info,
         uint32_t worker_idx,
+        uint32_t link,
         uint32_t cb_num_pages_per_packet,
-        uint32_t worker_receiver_semaphore_address,
-        uint32_t worker_sender_semaphore_address) :
+        uint32_t worker_sender_semaphore_address,
+        uint32_t worker_receiver_semaphore_address) :
         op_config(op_config),
         topology_config(topology_config),
         worker_input_slice(worker_input_slice),
         worker_transfer_info(worker_transfer_info),
         cb_num_pages_per_packet(cb_num_pages_per_packet),
-        worker_receiver_semaphore_address(worker_receiver_semaphore_address),
-        worker_sender_semaphore_address(worker_sender_semaphore_address) {}
+        worker_sender_semaphore_address(worker_sender_semaphore_address),
+        worker_receiver_semaphore_address(worker_receiver_semaphore_address) {
+#ifndef SEND_MATH_TERMINATE_SIGNAL
+        // This algorithm assumes that the worker slices are sized such that they start at the same x offsets for each
+        // new row they slice into (as they stride through the tensor)
+        std::size_t num_slice_iterations =
+            worker_input_slice.compute_num_worker_slice_iterations(worker_transfer_info.num_workers);
+        std::size_t worker_slice_num_pages =
+            worker_input_slice.worker_slice_shape.x * worker_input_slice.worker_slice_shape.y;
+        std::size_t pages_per_full_chunk = worker_transfer_info.get_num_pages_per_full_chunk(link, worker_idx);
+        std::size_t num_filler_pages_per_slice = pages_per_full_chunk - (worker_slice_num_pages % pages_per_full_chunk);
+        this->total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
+                                     num_slice_iterations * (topology_config.ring_size - 1);
+
+        log_trace(tt::LogOp, "ReduceScatterWorkerArgBuilder: total_num_math_pages: {}", this->total_num_math_pages);
+#endif
+    }
 
     std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const {
         log_trace(tt::LogOp, "Reduce Scatter Worker CT Args: None");
@@ -108,27 +105,15 @@ struct ReduceScatterWorkerArgBuilder {
 
     std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
         uint32_t link, uint32_t worker_index, uint32_t ring_size) const {
-        uint32_t num_pages_per_ring_index_slice =
-            this->worker_transfer_info.get_num_pages_per_ring_index(link, worker_index);
-        if (this->worker_transfer_info.get_num_remaining_pages(link, worker_index) > 0) {
-            // Add the filler pages
-            uint32_t num_padded_pages = this->worker_transfer_info.get_num_pages_per_full_chunk(link, worker_index) -
-                                        this->worker_transfer_info.get_num_remaining_pages(link, worker_index);
-            num_pages_per_ring_index_slice += num_padded_pages;
-        }
+        log_trace(tt::LogOp, "generate_reduce_op_kernel_rt_args");
 
-        auto num_iterations =
-            this->worker_input_slice.compute_num_worker_slice_iterations(this->worker_transfer_info.num_workers);
-        auto const& args = std::vector<uint32_t>{
-            static_cast<uint32_t>(num_pages_per_ring_index_slice * (ring_size - 1) * num_iterations),
-            // TODO: update to half-cb size
-            1};  // this field is supposed to be # pages from looking at the kernel code//
-                 // this->tensor_slicer.input_page_size};
+        auto const& args = std::vector<uint32_t>{total_num_math_pages, 1, 0};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Worker RT Args:");
-        log_trace(tt::LogOp, "\tnum_pages: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tpage_size: {}", args.at(i++));
+        log_trace(tt::LogOp, "\tblock_size: {}", args.at(i++));
+        log_trace(tt::LogOp, "\ttotal_num_math_pages: {}", args.at(i++));
+        log_trace(tt::LogOp, "\tacc_to_dst: {}", args.at(i++));
 
         return args;
     }
@@ -193,9 +178,7 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
 
-            // How many messages does the eltwise kernel expect? Use this as a kludge for now until we can
-            // elegently compute exactly how many tiles the math kernel will need
-            generate_reduce_op_kernel_rt_args(link, worker_index, this->topology_config.ring_size).at(0)};
+            this->total_num_math_pages};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Receiver Worker RT Args:");
@@ -223,8 +206,7 @@ struct ReduceScatterWorkerArgBuilder {
         log_trace(tt::LogOp, "\tworker_slice_shape.y={}", args.at(i++));
         log_trace(tt::LogOp, "\tworker_slice_offset.x={}", args.at(i++));
         log_trace(tt::LogOp, "\tworker_slice_offset.y={}", args.at(i++));
-
-        log_trace(tt::LogOp, "\ttotal_eltwise_kernel_num_pages={}", args.at(i++));
+        log_trace(tt::LogOp, "\ttotal_num_math_pages={}", args.at(i++));
 
         TT_ASSERT(args.size() == i, "Missed some args");
 
@@ -283,9 +265,7 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
 
-            // How many messages does the eltwise kernel expect? Use this as a kludge for now until we can
-            // elegently compute exactly how many tiles the math kernel will need
-            generate_reduce_op_kernel_rt_args(link, worker_index, this->topology_config.ring_size).at(0)};
+            total_num_math_pages};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Sender Worker RT Args:");
@@ -308,7 +288,7 @@ struct ReduceScatterWorkerArgBuilder {
         log_trace(tt::LogOp, "\tworker_slice_offset.x: {}", args.at(i++));
         log_trace(tt::LogOp, "\tworker_slice_offset.y: {}", args.at(i++));
 
-        log_trace(tt::LogOp, "\ttotal_eltwise_kernel_num_pages={}", args.at(i++));
+        log_trace(tt::LogOp, "\ttotal_num_math_pages={}", args.at(i++));
 
         TT_ASSERT(args.size() == i, "Missed some args");
 
@@ -320,8 +300,10 @@ struct ReduceScatterWorkerArgBuilder {
     ccl::InterleavedTensorWorkerSlice const worker_input_slice;
     WorkerTransferInfo const worker_transfer_info;
     uint32_t cb_num_pages_per_packet;
-    uint32_t worker_receiver_semaphore_address;
     uint32_t worker_sender_semaphore_address;
+    uint32_t worker_receiver_semaphore_address;
+
+    uint32_t total_num_math_pages;
     bool src_is_dram;
     bool dst_is_dram;
 };
@@ -346,9 +328,6 @@ static void add_worker_config_to_edm_builders(
     std::vector<ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
 
-    std::vector<uint32_t> const& cw_edm_channel_num_messages_to_send_per_transfer,
-    std::vector<uint32_t> const& ccw_edm_channel_num_messages_to_send_per_transfer,
-
     uint32_t worker_sender_semaphore_address,
     uint32_t worker_receiver_semaphore_address,
     uint32_t link,
@@ -358,7 +337,7 @@ static void add_worker_config_to_edm_builders(
     EdmInterfaceAddresses& edm_interface_addresses) {
     for (uint32_t c = 0; c < num_channels_per_edm; ++c) {
         uint32_t global_worker_idx = c + num_channels_per_edm * link;
-        uint32_t num_workers_per_eth_buffer = 1;  // std::min(workers_per_link, num_channels_per_edm );
+        uint32_t num_workers_per_eth_buffer = 1;
 
         std::vector<ccl::WorkerXY> sender_worker_coords;
         std::vector<ccl::WorkerXY> receiver_worker_coords;
@@ -379,12 +358,12 @@ static void add_worker_config_to_edm_builders(
             ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
                 sender_edm_builder.add_sender_channel(
                     worker_sender_semaphore_address,
-                    cw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
+                    1,  // cw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
                     sender_worker_coords);
-            edm_interface_addresses.worker_sender_edm_semaphore_addresses[global_worker_idx] =
-                sender_channel_buffer_info.eth_semaphore_l1_address;
-            edm_interface_addresses.worker_sender_edm_buffer_addresses[global_worker_idx] =
-                sender_channel_buffer_info.eth_buffer_l1_address;
+            edm_interface_addresses.worker_sender_edm_semaphore_addresses.insert(
+                {global_worker_idx, sender_channel_buffer_info.eth_semaphore_l1_address});
+            edm_interface_addresses.worker_sender_edm_buffer_addresses.insert(
+                {global_worker_idx, sender_channel_buffer_info.eth_buffer_l1_address});
         }
 
         bool receiver_enabled = true;  //(!is_linear || !is_first_chip_in_chain);
@@ -396,12 +375,14 @@ static void add_worker_config_to_edm_builders(
             ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
                 receiver_edm_builder.add_receiver_channel(
                     worker_receiver_semaphore_address,
-                    ccw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
+                    // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
+                    // messages the EDM must forward as it will receive its finish signal from the worker instead
+                    1,
                     receiver_worker_coords);
-            edm_interface_addresses.worker_receiver_edm_semaphore_addresses[global_worker_idx] =
-                receiver_channel_buffer_info.eth_semaphore_l1_address;
-            edm_interface_addresses.worker_receiver_edm_buffer_addresses[global_worker_idx] =
-                receiver_channel_buffer_info.eth_buffer_l1_address;
+            edm_interface_addresses.worker_receiver_edm_semaphore_addresses.insert(
+                {global_worker_idx, receiver_channel_buffer_info.eth_semaphore_l1_address});
+            edm_interface_addresses.worker_receiver_edm_buffer_addresses.insert(
+                {global_worker_idx, receiver_channel_buffer_info.eth_buffer_l1_address});
         }
     }
 }
@@ -422,6 +403,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     uint32_t worker_index,
     std::map<string, string> const& worker_defines,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
+
     TT_ASSERT(worker_defines.size() > 0);
     for (auto const& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
@@ -434,7 +416,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
 
-    bool is_in_clockwise_direction = true;
+    bool is_in_clockwise_direction = true;  // TODO: bidirectional
     uint32_t global_worker_index = link * num_edm_channels + worker_index;
     {
         CoreCoord const& receiver_edm = is_in_clockwise_direction ? topology_config.eth_receiver_cores.at(link)
@@ -450,6 +432,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
             is_in_clockwise_direction
                 ? edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index);
+
         worker_receiver_kernel_id = tt_metal::CreateKernel(
             program,
             receiver_kernel_path,
@@ -540,33 +523,26 @@ static CoreRangeSet select_worker_cores(
     };
 }
 
-// map: (CW) link -> (CW) edm num messages to send per channel
-// map: (CCW) link -> (CCW) edm num messages to send per channel
-// There's a bit of a mutual dependence here between the number of workers and the number of channels,
-// and the number of channels and the channel buffer size and the buffer size and the number of transfers
 static WorkerTransferInfo compute_num_edm_messages_per_channel(
     ccl::CCLOpConfig const& op_config,
-    uint32_t const page_size_in_bytes,
-    uint32_t const pages_per_slice,
-
+    RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     std::vector<ccl::EriscDatamoverBuilder> const& cw_per_link_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& ccw_per_link_edm_builders,
     std::size_t const num_edm_channels,
     std::size_t const num_links,
     std::size_t const ring_size) {
+    uint32_t const page_size_in_bytes = op_config.get_page_size();
     TT_ASSERT(num_edm_channels > 0);
     TT_ASSERT(num_links > 0);
     TT_ASSERT(page_size_in_bytes > 0);
-    TT_ASSERT(pages_per_slice > 0);
     log_trace(tt::LogOp, "WorkerTransferInfo");
+    std::size_t total_num_workers = num_edm_channels * num_links;
 
-    auto get_iter_begin = [num_edm_channels](
-                              std::vector<uint32_t>& vec, std::size_t link) -> std::vector<uint32_t>::iterator {
+    auto get_iter_begin = [num_edm_channels](auto& vec, std::size_t link) -> auto {
         return vec.begin() + (link * num_edm_channels);
     };
 
-    auto get_iter_end = [num_edm_channels, num_links](
-                            std::vector<uint32_t>& vec, std::size_t link) -> std::vector<uint32_t>::iterator {
+    auto get_iter_end = [num_edm_channels, num_links](auto& vec, std::size_t link) -> auto {
         bool last_link = link == num_links - 1;
         TT_ASSERT(
             (!last_link && ((link + 1) * num_edm_channels < vec.size())) ||
@@ -574,39 +550,12 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
         return last_link ? vec.end() : vec.begin() + ((link + 1) * num_edm_channels);
     };
 
-    std::unordered_map<int, std::vector<uint32_t>> cw_edm_channel_num_messages_to_send;
-    std::unordered_map<int, std::vector<uint32_t>> ccw_edm_channel_num_messages_to_send;
-
-    std::size_t const total_num_pages = pages_per_slice;
-    std::vector<uint32_t> pages_per_link(num_links, total_num_pages / num_links);
-    for (std::size_t i = 0; i < total_num_pages % num_links; i++) {
-        pages_per_link.at(i)++;
-    }
-    log_trace(tt::LogOp, "pages_per_link");
-    for (std::size_t i = 0; i < num_links; i++) {
-        log_trace(tt::LogOp, "\tpages_per_link[{}]: {}", i, pages_per_link.at(i));
-    }
-
     // Pages per EDM channel
     std::size_t total_num_edm_channels = num_links * num_edm_channels;
     log_trace(tt::LogOp, "total_num_edm_channels: {}", total_num_edm_channels);
-    std::vector<uint32_t> num_pages_per_edm_channel(total_num_edm_channels, 0);
 
-    for (std::size_t link = 0; link < num_links; link++) {
-        std::fill(
-            get_iter_begin(num_pages_per_edm_channel, link),
-            get_iter_end(num_pages_per_edm_channel, link),
-            pages_per_link.at(link) / num_edm_channels);
-        for (std::size_t i = 0; i < pages_per_link.at(link) % num_edm_channels; i++) {
-            num_pages_per_edm_channel.at(link * num_edm_channels + i)++;
-        }
-    }
+    std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels * num_links, 0);
 
-    std::vector<uint32_t> num_messages_per_edm_channel;
-    std::vector<uint32_t> num_pages_per_full_chunk(num_pages_per_edm_channel.size(), 0);
-    std::vector<uint32_t> remaining_num_pages_per_edm_channel;
-    num_messages_per_edm_channel.reserve(num_pages_per_edm_channel.size());
-    remaining_num_pages_per_edm_channel.reserve(num_pages_per_edm_channel.size());
     for (std::size_t link = 0; link < num_links; link++) {
         std::size_t edm_channel_size_in_bytes = cw_per_link_edm_builders.at(link).get_eth_buffer_size_bytes();
         std::size_t num_pages_per_edm_buffer = edm_channel_size_in_bytes / page_size_in_bytes;
@@ -618,34 +567,10 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
             page_size_in_bytes,
             num_pages_per_edm_buffer);
 
-        std::transform(
-            get_iter_begin(num_pages_per_edm_channel, link),
-            get_iter_end(num_pages_per_edm_channel, link),
-            std::back_inserter(num_messages_per_edm_channel),
-            [num_pages_per_edm_buffer](uint32_t num_pages) {
-                return (((num_pages - 1) / num_pages_per_edm_buffer) + 1);
-            });
-        std::transform(
-            get_iter_begin(num_pages_per_edm_channel, link),
-            get_iter_end(num_pages_per_edm_channel, link),
-            std::back_inserter(remaining_num_pages_per_edm_channel),
-            [num_pages_per_edm_buffer](uint32_t num_pages) { return num_pages % num_pages_per_edm_buffer; });
         std::fill(
             get_iter_begin(num_pages_per_full_chunk, link),
             get_iter_end(num_pages_per_full_chunk, link),
             num_pages_per_edm_buffer);
-    }
-
-    log_trace(tt::LogOp, "-- num_pages_per_edm_channel:");
-    for (std::size_t link = 0; link < num_links; link++) {
-        for (std::size_t c = 0; c < num_edm_channels; c++) {
-            log_trace(
-                tt::LogOp,
-                "-- num pages for link: {}, channel: {}: {}",
-                link,
-                c,
-                num_pages_per_edm_channel.at(link * num_edm_channels + c));
-        }
     }
 
     log_trace(tt::LogOp, "-- num_pages_per_full_chunk:");
@@ -655,53 +580,32 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
                 tt::LogOp, "\t\t(link={},worker={}): {}", l, w, num_pages_per_full_chunk.at(l * num_edm_channels + w));
         }
     }
-    log_trace(tt::LogOp, "-- num_messages_per_edm_channel:");
-    for (std::size_t l = 0; l < num_links; l++) {
-        for (std::size_t w = 0; w < num_edm_channels; w++) {
-            log_trace(
-                tt::LogOp,
-                "\t\t(link={},worker={}): {}",
-                l,
-                w,
-                num_messages_per_edm_channel.at(l * num_edm_channels + w));
-        }
-    }
-    log_trace(tt::LogOp, "-- remaining_num_pages_per_edm_channel:");
-    for (std::size_t l = 0; l < num_links; l++) {
-        for (std::size_t w = 0; w < num_edm_channels; w++) {
-            log_trace(
-                tt::LogOp,
-                "\t\t(link={},worker={}): {}",
-                l,
-                w,
-                remaining_num_pages_per_edm_channel.at(l * num_edm_channels + w));
-        }
-    }
 
-    return WorkerTransferInfo(
-        num_pages_per_full_chunk,
-        num_messages_per_edm_channel,
-        remaining_num_pages_per_edm_channel,
-        num_links,
-        num_edm_channels);
+    return WorkerTransferInfo(num_pages_per_full_chunk, num_links, num_edm_channels);
 }
 
 static uint32_t compute_maximum_worker_slice_in_bytes(
-    uint32_t cb_src0_size_pages, uint32_t cb_dst0_size_pages, std::size_t edm_channel_buffer_size, uint32_t page_size) {
-    return (cb_src0_size_pages + cb_dst0_size_pages) * page_size + edm_channel_buffer_size;
+    uint32_t cb_src0_size_pages,
+    uint32_t cb_dst0_size_pages,
+    uint32_t cb_short_circuit_size_pages,
+    std::size_t edm_channel_buffer_size,
+    uint32_t page_size) {
+    return std::min(cb_short_circuit_size_pages, cb_src0_size_pages + cb_dst0_size_pages) * page_size +
+           edm_channel_buffer_size;
 }
 
 static bool is_cb_buffering_sufficient_to_avoid_deadlock(
     ccl::InterleavedTensorWorkerSlice const& worker_slice,
     uint32_t cb_src0_size_pages,
     uint32_t cb_dst0_size_pages,
+    uint32_t cb_short_circuit_size_pages,
     std::size_t edm_channel_buffer_size,
     uint32_t page_size) {
     uint32_t worker_size_pages_rounded_up =
-        round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages);
+        round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / 2);
     uint32_t worker_slice_size_bytes = worker_size_pages_rounded_up * page_size;
     uint32_t available_buffering_capacity = compute_maximum_worker_slice_in_bytes(
-        cb_src0_size_pages, cb_dst0_size_pages, edm_channel_buffer_size, page_size);
+        cb_src0_size_pages, cb_dst0_size_pages, cb_short_circuit_size_pages, edm_channel_buffer_size, page_size);
     log_trace(tt::LogOp, "worker_slice.worker_slice_shape.x: {}", worker_slice.worker_slice_shape.x);
     log_trace(tt::LogOp, "worker_slice.worker_slice_shape.y: {}", worker_slice.worker_slice_shape.y);
     log_trace(tt::LogOp, "worker_slice_size_bytes: {}", worker_slice_size_bytes);
@@ -750,7 +654,8 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
     // it seems like the math kernels hold some of the CB state in local variables)
     uint32_t cb_short_circuit_index = CB::c_out1;
     tt_metal::CircularBufferConfig cb_short_circuit_config =
-        tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{cb_short_circuit_index, df}})
+        tt_metal::CircularBufferConfig(
+            (worker_pages_per_transfer * page_size_bytes) * 2, {{cb_short_circuit_index, df}})
             .set_page_size(cb_short_circuit_index, page_size_bytes);
     CBHandle cb_short_circuit_sender_workers =
         CreateCircularBuffer(program, worker_core_range, cb_short_circuit_config);
@@ -791,7 +696,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         per_step_dim_size / constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
     TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
     uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_scatter_dim);
-    auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, false);
+    bool enable_bidirectional = false;
+    auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
     auto edm_termination_mode = ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
     auto const& edm_builder = create_erisc_datamover_builder(
@@ -824,17 +730,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto dim_slice_factors = Shape(std::vector<uint32_t>(local_chip_tensor.get_legacy_shape().rank(), 1));
     dim_slice_factors[-1] = ring_size;
 
-    // Not per buffer because the buffer sharing mode may cause some buffers to share EDM transfers
-    WorkerTransferInfo const& worker_transfer_info = compute_num_edm_messages_per_channel(
-        op_config,
-        op_config.get_page_size(),
-        local_chip_tensor.buffer()->num_pages() / ring_size,  // pages_per_slice,
-        cw_per_link_edm_builders,
-        ccw_per_link_edm_builders,
-        num_edm_channels,
-        num_links,
-        ring_size);
-
     CoreRangeSet const& worker_core_range = select_worker_cores(op_config, num_links, num_edm_channels);
     auto const& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
 
@@ -852,21 +747,32 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     uint32_t max_worker_slice_in_bytes = compute_maximum_worker_slice_in_bytes(
         cb_num_pages,
         cb_num_pages,
+        cb_num_pages,
         cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
         op_config.get_page_size());
-    auto tensor_slicer = ccl::InterleavedRingReduceScatterTensorSlicer(
+    auto tensor_slicer = ccl::RingReduceScatterTensorSlicer(
         local_chip_tensor,
         local_chip_output_tensor,
         scatter_split_dim,
         ring_index,
         ring_size,
         num_edm_channels * num_links,
-        cb_num_pages * 2 * op_config.get_page_size());
+        max_worker_slice_in_bytes,
+        cb_num_pages / 2);
+
+    // Not per buffer because the buffer sharing mode may cause some buffers to share EDM transfers
+    WorkerTransferInfo const& worker_transfer_info = compute_num_edm_messages_per_channel(
+        op_config,
+        tensor_slicer,
+        cw_per_link_edm_builders,
+        ccw_per_link_edm_builders,
+        num_edm_channels,
+        num_links,
+        ring_size);
 
     // Configure the EDM builders
     EdmInterfaceAddresses edm_interface_addresses;
     for (std::size_t link = 0; link < num_links; link++) {
-        TT_ASSERT(((link + 1) * num_edm_channels) <= worker_transfer_info.num_messages_per_worker.size());
         add_worker_config_to_edm_builders(
             device,
             op_config,
@@ -876,18 +782,13 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             cw_per_link_edm_builders,
             ccw_per_link_edm_builders,
 
-            std::vector<uint32_t>(
-                worker_transfer_info.num_messages_per_worker.begin() + link * num_edm_channels,
-                worker_transfer_info.num_messages_per_worker.begin() + (link + 1) * num_edm_channels),
-            std::vector<uint32_t>(
-                worker_transfer_info.num_messages_per_worker.begin() + link * num_edm_channels,
-                worker_transfer_info.num_messages_per_worker.begin() + (link + 1) * num_edm_channels),
-
             worker_sender_semaphore_address,
             worker_receiver_semaphore_address,
             link,
             ring_size,
-            [](uint32_t x) { return true; },  // std::function<bool(uint32_t)> is_buffer_in_clockwise_direction_fn
+            [enable_bidirectional, num_edm_channels](uint32_t x) {
+                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
+            },
 
             edm_interface_addresses);
     }
@@ -909,9 +810,10 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 worker_slice,
                 worker_transfer_info,
                 worker,
+                link,
                 cb_num_pages_per_packet,
-                worker_receiver_semaphore_address,
-                worker_sender_semaphore_address);
+                worker_sender_semaphore_address,
+                worker_receiver_semaphore_address);
 
             log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
             auto [receiver_kernel_id, sender_kernel_id] = build_reduce_scatter_worker(
@@ -935,6 +837,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
             TT_ASSERT(is_cb_buffering_sufficient_to_avoid_deadlock(
                 worker_slice,
+                cb_num_pages,
                 cb_num_pages,
                 cb_num_pages,
                 cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),

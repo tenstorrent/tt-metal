@@ -162,7 +162,7 @@ def test_sharded_matmul_1d_in0(
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 1),
         in0_block_w=32,
         out_subblock_h=1,
@@ -173,13 +173,13 @@ def test_sharded_matmul_1d_in0(
         fused_activation=None,
         mcast_in0=True,
     )
-    output_t = ttnn.experimental.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -264,7 +264,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if num_devices == 4:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -276,7 +276,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
             mcast_in0=True,
         )
     elif num_devices == 8:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -291,12 +291,12 @@ def test_sharded_matmul_1d_in0_multi_chip(
     for i in range(num_devices):
         logger.info(f"Running matmul on device: {i}")
         output_t.append(
-            ttnn.experimental.operations.primary.matmul_1d(
+            ttnn.matmul(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,
-                output_mem_config=output_mem_config,
-                output_dtype=activations_dtype,
+                memory_config=output_mem_config,
+                dtype=activations_dtype,
             )
         )
 
@@ -377,7 +377,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if num_devices == 4:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -389,7 +389,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
             mcast_in0=True,
         )
     elif num_devices == 8:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -404,12 +404,12 @@ def test_sharded_matmul_1d_in0_multi_chip(
     for i in range(num_devices):
         logger.info(f"Running matmul on device: {i}")
         output_t.append(
-            ttnn.experimental.operations.primary.matmul_1d(
+            ttnn.matmul(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,
-                output_mem_config=output_mem_config,
-                output_dtype=activations_dtype,
+                memory_config=output_mem_config,
+                dtype=activations_dtype,
             )
         )
 

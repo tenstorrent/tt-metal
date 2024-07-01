@@ -144,6 +144,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_div_unary,
         "pytorch_op": pytorch_ops.div_unary,
     },
+    "eltwise-unary_div": {
+        "tt_op": tt_lib_ops.eltwise_unary_div,
+        "pytorch_op": pytorch_ops.unary_div,
+    },
     "eltwise-mul_unary": {
         "tt_op": tt_lib_ops.eltwise_mul_unary,
         "pytorch_op": pytorch_ops.mul_unary,
@@ -488,6 +492,14 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_heaviside,
         "pytorch_op": pytorch_ops.heaviside,
     },
+    "eltwise-bitwise_xor": {
+        "tt_op": tt_lib_ops.eltwise_bitwise_xor,
+        "pytorch_op": pytorch_ops.bitwise_xor,
+    },
+    "eltwise-bitwise_not": {
+        "tt_op": tt_lib_ops.eltwise_bitwise_not,
+        "pytorch_op": pytorch_ops.bitwise_not,
+    },
     "eltwise-right_shift": {
         "tt_op": tt_lib_ops.eltwise_right_shift,
         "pytorch_op": pytorch_ops.right_shift,
@@ -499,6 +511,18 @@ op_map = {
     "eltwise-unary_remainder": {
         "tt_op": tt_lib_ops.eltwise_unary_remainder,
         "pytorch_op": pytorch_ops.unary_remainder,
+    },
+    "eltwise-remainder": {
+        "tt_op": tt_lib_ops.eltwise_remainder,
+        "pytorch_op": pytorch_ops.remainder,
+    },
+    "eltwise-fmod": {
+        "tt_op": tt_lib_ops.eltwise_fmod,
+        "pytorch_op": pytorch_ops.fmod,
+    },
+    "eltwise-unary_fmod": {
+        "tt_op": tt_lib_ops.eltwise_unary_fmod,
+        "pytorch_op": pytorch_ops.unary_fmod,
     },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,

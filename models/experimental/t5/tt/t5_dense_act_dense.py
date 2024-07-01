@@ -4,6 +4,7 @@
 
 from torch import nn
 import tt_lib
+import ttnn
 from models.utility_functions import torch2tt_tensor
 
 
@@ -31,8 +32,8 @@ class TtT5DenseActDense(nn.Module):
         self.act = tt_lib.tensor.relu
 
     def forward(self, hidden_states):
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_wi)
+        hidden_states = ttnn.matmul(hidden_states, self.out_proj_wi)
         hidden_states = self.act(hidden_states, output_mem_config=self.mem_config)
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0, self.mem_config)
+        hidden_states = ttnn.matmul(hidden_states, self.out_proj_w0, memory_config=self.mem_config)
         return hidden_states

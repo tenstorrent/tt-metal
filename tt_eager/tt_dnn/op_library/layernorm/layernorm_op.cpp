@@ -3,15 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
 
 #include <optional>
 
@@ -111,15 +106,15 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 bool mcast_1d = M == block_h;
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 if (mcast_1d) {
-                    TT_FATAL(Kt / shard_spec.num_cores() == program_config.block_w, "block_w must equal to K / num_cores.");
+                    TT_FATAL(div_up(Kt, shard_spec.num_cores()) == program_config.block_w, "block_w must equal to K / num_cores.");
                     TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
                     TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
                 } else {
                     if (row_wise) {
-                        TT_FATAL(Kt / (bbox.end.x + 1) == program_config.block_w, "block_w must equal to K / num_cores_c.");
+                        TT_FATAL(div_up(Kt, (bbox.end.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
                         TT_FATAL(Mt / (bbox.end.y + 1) == program_config.block_h, "block_h must equal to M / num_cores_r.");
                     } else {
-                        TT_FATAL(Kt / (bbox.end.y + 1) == program_config.block_w, "block_w must equal to K / num_cores_r.");
+                        TT_FATAL(div_up(Kt, (bbox.end.y + 1)) == program_config.block_w, "block_w must equal to K / num_cores_r.");
                         TT_FATAL(Mt / (bbox.end.x + 1) == program_config.block_h, "block_h must equal to M / num_cores_c.");
                     }
                 }

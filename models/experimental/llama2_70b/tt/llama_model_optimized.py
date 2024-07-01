@@ -6,19 +6,16 @@ from loguru import logger
 from typing import List
 from tqdm import tqdm
 import torch
-from torch import nn
 import ttnn.experimental as tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 
-from models.utility_functions import torch2tt_tensor, nearest_32, profiler
+from models.utility_functions import nearest_32, profiler
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.experimental.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.experimental.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
     freqs_to_rotation_matrix,
-    get_weight_cache_path,
     get_rotation_mat,
     precompute_freqs,
     gather_cos_sin,
@@ -35,8 +32,6 @@ class TtLlamaModel_optimized:
         n_layers,
         model_config,
         configuration,
-        batch,
-        emulated=False,
         cache_path=None,
         read_cache=False,
     ):
@@ -44,7 +39,6 @@ class TtLlamaModel_optimized:
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
-        self.emulated = emulated
         self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
@@ -80,9 +74,7 @@ class TtLlamaModel_optimized:
                 layer_num,
                 model_config,
                 configuration,
-                batch,
                 transformation_mats,
-                emulated=emulated,
                 cache_path=cache_path,
                 read_cache=read_cache,
             )
@@ -186,8 +178,8 @@ class TtLlamaModel_optimized:
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
-                seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
-            ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+                seq_len % 128 == 0 and seq_len > 0
+            ), "Prefill mode only supports seqlen as a multiple of 128 up to 8k (llama3) and 2k (llama2)"
             assert batch == 1, "prefill mode only supports batch size 1"
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
@@ -234,7 +226,7 @@ class TtLlamaModel_optimized:
                 attn_mask,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                cache_file_name=cache_name(f"attn_masks_prefill_{seq_len}"),
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 device=self.device_mesh,
@@ -333,31 +325,11 @@ class TtLlamaModel_optimized:
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
 
-        # Convert decoder_output to interleaved
-        xs = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
-
-        ## Gather fractured layers output
-        # if self.emulated:
-        #     xs = tt_all_gather_torch(xs, dim=-1)
-        # else:
-        #     xs = ttnn.all_gather(
-        #         xs,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
-
         xs = ttnn.all_gather(
             xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
-        )
-
-        ## Duplicate layernorm
-        # RMSNorm must execute on sharded input
-        xs = tt_lib.tensor.interleaved_to_sharded(
-            xs, sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -371,14 +343,13 @@ class TtLlamaModel_optimized:
         )
 
         ### Each device does an LM head fracture
-        lm_head_out = tt_lib.operations.primary.matmul_1d(
-            norm_out_replicated,
+        lm_head_out = ttnn.matmul(
             self.lm_head,
             program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
             if self.llama3
             else self.model_config["LM_HEAD_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         norm_out_replicated.deallocate(True)
@@ -453,15 +424,6 @@ class TtLlamaModel_optimized:
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
 
         ## Gather fractured layers output
-        # if self.emulated:
-        #     xs = tt_all_gather_torch(xs, dim=-1)
-        # else:
-        #     xs = ttnn.all_gather(
-        #         xs,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["DRAM_MEMCFG"],
-        #     )
         xs = ttnn.all_gather(
             xs,
             dim=3,
@@ -478,13 +440,21 @@ class TtLlamaModel_optimized:
         if self.llama3:
             self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
 
-        lm_head_out = tt_lib.operations.primary.matmul(
+        _, _, seq_len, _ = norm_out_replicated.shape
+
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
+
+        lm_head_out = ttnn.matmul(
             norm_out_replicated,
             self.lm_head,
             program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
         )
         norm_out_replicated.deallocate(True)
+
+        lm_head_out = ttnn.reshape(lm_head_out, (1, 1, seq_len, -1))
 
         return lm_head_out

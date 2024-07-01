@@ -25,7 +25,7 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-BroadcastHeightAndWidthMultiCore::cached_program_t BroadcastHeightAndWidthMultiCore::create(
+Binary::BroadcastHeightAndWidthMultiCore::cached_program_t Binary::BroadcastHeightAndWidthMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -158,7 +158,7 @@ BroadcastHeightAndWidthMultiCore::cached_program_t BroadcastHeightAndWidthMultiC
     }
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -218,19 +218,18 @@ BroadcastHeightAndWidthMultiCore::cached_program_t BroadcastHeightAndWidthMultiC
 
     return {
         std::move(program),
-        BroadcastHeightAndWidthMultiCore::cached_program_attributes_t{
-            binary_reader_kernel_id,
-            unary_writer_kernel_id,
-            bcast_kernel_id,
-            compute_with_storage_grid_size,
-            cb_src0,
-            src0_single_tile_size,
-            src1_single_tile_size,
-            dst_single_tile_size,
-            cb_output}};
+        {binary_reader_kernel_id,
+         unary_writer_kernel_id,
+         bcast_kernel_id,
+         compute_with_storage_grid_size,
+         cb_src0,
+         src0_single_tile_size,
+         src1_single_tile_size,
+         dst_single_tile_size,
+         cb_output}};
 }
 
-void BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
+void Binary::BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

@@ -245,7 +245,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
-ElementWiseMultiCore::cached_program_t ElementWiseMultiCore::create(
+Binary::ElementWiseMultiCore::cached_program_t Binary::ElementWiseMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -382,7 +382,7 @@ ElementWiseMultiCore::cached_program_t ElementWiseMultiCore::create(
         program,
         (block_sharded and not out_sharded) ? "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/"
                                               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
-                                            : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+                                            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -413,20 +413,19 @@ ElementWiseMultiCore::cached_program_t ElementWiseMultiCore::create(
 
     return {
         std::move(program),
-        ElementWiseMultiCore::cached_program_attributes_t{
-            binary_reader_kernel_id,
-            unary_writer_kernel_id,
-            eltwise_binary_kernel_id,
-            cb_src0,
-            cb_src1,
-            cb_output,
-            compute_with_storage_grid_size,
-            src0_single_tile_size,
-            src1_single_tile_size,
-            dst_single_tile_size}};
+        {binary_reader_kernel_id,
+         unary_writer_kernel_id,
+         eltwise_binary_kernel_id,
+         cb_src0,
+         cb_src1,
+         cb_output,
+         compute_with_storage_grid_size,
+         src0_single_tile_size,
+         src1_single_tile_size,
+         dst_single_tile_size}};
 }
 
-void ElementWiseMultiCore::override_runtime_arguments(
+void Binary::ElementWiseMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

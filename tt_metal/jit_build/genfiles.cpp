@@ -481,7 +481,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "};" << endl;
     ss << endl;
 
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     /*
      * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
      * and the ceiled number of cores per DRAM banks.
@@ -595,8 +595,7 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows,
-    const CoreCoord& enqueue_program_physical_dispatch_core) {
+    const std::vector<uint32_t>& harvested_rows) {
 
     stringstream ss;
 
@@ -675,9 +674,6 @@ static string generate_noc_addr_ranges_string(
     ss << endl;
     ss << endl;
 
-    ss << "#define DISPATCH_CORE_X " << enqueue_program_physical_dispatch_core.x << endl;
-    ss << "#define DISPATCH_CORE_Y " << enqueue_program_physical_dispatch_core.y << endl;
-
     return ss.str();
 }
 
@@ -691,11 +687,10 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows,
-    const CoreCoord& enqueue_program_physical_dispatch_core) {
+    const std::vector<uint32_t>& harvested_rows) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, enqueue_program_physical_dispatch_core);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows);
 
     ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;

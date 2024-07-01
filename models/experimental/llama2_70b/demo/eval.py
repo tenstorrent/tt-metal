@@ -9,21 +9,17 @@ import torch
 import torch.nn.functional as F
 
 from time import time
-from time import sleep
 import datasets
 import pytest
 from loguru import logger
 
-from models.experimental.llama2_70b.reference.llama.llama import Llama
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from transformers.generation.utils import top_k_top_p_filtering
 from tqdm import tqdm
 from models.experimental.llama2_70b.demo.demo import run_decode, build_generator
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
+from datetime import datetime
+from models.experimental.llama2_70b.tt.llama_common import (
+    setup_llama_env,
+    check_device_mesh,
 )
-from models.utility_functions import get_devices_for_t3000
-from models.experimental.llama2_70b.tt.llama_common import get_llama_path
 
 
 def main(args):
@@ -33,9 +29,6 @@ def main(args):
 
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
-
-    # set num_tokens to 1, because this the number of tokens to generate
-    args.num_tokens = 1
 
     # Dataset preparation
     dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
@@ -62,6 +55,20 @@ def main(args):
         args, model, tokenizer, seq_len, max_length, stride, encodings, num_samples, max_batch_size
     )
 
+    # Get current timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
+    filename = f"models/experimental/llama2_70b/scripts/llama_perplexity_runs/perplexity_{args.llama_version}_{args.implementation}_{args.sample_len}_{args.num_tokens}_{timestamp}.json"
+    result = {
+        "model": args.llama_version,
+        "perplexity": perplexity.item(),
+        "seq_len": args.sample_len,
+        "gen_length": args.num_tokens,
+    }
+    with open(filename, "w") as f:
+        json.dump(result, f)
+
     logger.info("Perplexity: %f" % perplexity)
     if perplexity < args.perplexity_score:
         logger.info("Perplexity is less than the threshold")
@@ -79,7 +86,7 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
 
     # construct perplexity calculation inputs
     for i, begin_loc in enumerate(range(0, total_len, stride)):
-        end_loc = begin_loc + seq_len
+        end_loc = begin_loc + seq_len + args.num_tokens - 1
         if end_loc >= total_len:
             raise ValueError(
                 "The dataset is too small to decode the number of samples requested with the given stride."
@@ -104,7 +111,12 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
         for sample in tqdm(dataloader):
             tokens, labels = sample
             outputs = run_decode(
-                args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokens, prompts=None, return_full_logits=True
+                args=args,
+                model=model,
+                tokenizer=tokenizer,
+                prompt_tokens=tokens,
+                prompts=None,
+                return_full_logits=True,
             )
 
             all_text, logits = outputs
@@ -184,7 +196,7 @@ class Args:
         top_k=1,
         temperature=1.0,
         # TT args
-        devices=None,
+        device_mesh=None,
         n_devices=8,
         emulated=False,
         cache_path=None,
@@ -197,6 +209,7 @@ class Args:
         sample_len=128,
         num_samples=32,
         perplexity_score=5.4,
+        llama_version="llama3",
     ):
         self.implementation = implementation
         self.ckpt_dir = ckpt_dir
@@ -211,7 +224,7 @@ class Args:
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
-        self.devices = devices
+        self.device_mesh = device_mesh
         self.n_devices = n_devices
         self.emulated = emulated
         self.cache_path = cache_path
@@ -223,6 +236,7 @@ class Args:
         self.sample_len = sample_len
         self.num_samples = num_samples
         self.perplexity_score = perplexity_score
+        self.llama_version = llama_version
 
 
 def construct_arg(**kwargs):
@@ -230,30 +244,29 @@ def construct_arg(**kwargs):
 
 
 @pytest.mark.timeout(240000)
+@pytest.mark.parametrize(
+    "llama_version",
+    (
+        ("llama2"),
+        ("llama3"),
+    ),
+)
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=["1L", "2L", "10L", "80L"])
 @pytest.mark.parametrize(
-    "implementation, skip_model_load, n_devices, emulated",
+    "implementation, skip_model_load, n_devices",
     [
         (
             "tt",
             False,
             8,
-            False,
         ),
         (
             "meta",
             False,
             8,
-            True,
-        ),
-        (
-            "tt",
-            False,
-            8,
-            True,
         ),
     ],
-    ids=["tt-70b-T3000", "meta-70b", "tt-70b-emulated"],
+    ids=["tt-70b", "meta-70b"],
 )
 @pytest.mark.parametrize(
     "top_p, top_k, temperature",
@@ -263,13 +276,15 @@ def construct_arg(**kwargs):
     ],
     ids=["greedy", "sampling"],
 )
-@pytest.mark.parametrize(
-    "dataset, split, config, stride, sample_len, num_samples, perplexity_score",
+@pytest.mark.parametrize(  # sample_len => prefill length, num_samples => decode length
+    "dataset, split, config, stride, sample_len, num_tokens, num_samples, perplexity_score",
     [
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 32, 5.4),
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 32, 3.4313),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 1, 128, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 1, 128, 3.4313),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 128, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 128, 128, 3.4313),
     ],
-    ids=["wikitext-128", "wikitext-2k"],
+    ids=["wikitext-128-0", "wikitext-2k-0", "wikitext-128-128", "wikitext-2k-128"],
 )
 def test_LlamaModel_demo(
     # model args
@@ -277,14 +292,13 @@ def test_LlamaModel_demo(
     skip_model_load,
     num_layers,
     # Generation args
+    num_tokens,
     top_p,
     top_k,
     temperature,
     # TT args
-    all_devices,
+    t3k_device_mesh,
     n_devices,
-    emulated,
-    use_program_cache,
     # Dataset args
     dataset,
     split,
@@ -293,21 +307,21 @@ def test_LlamaModel_demo(
     sample_len,
     num_samples,
     perplexity_score,
+    llama_version,
+    use_program_cache,
 ):
+    logger.info("Running LlamaModel demo")
     ## Get model config
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config_default = get_model_config("BFLOAT16-DRAM", num_devices=n_devices)
 
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices and emulated == False:
-        pytest.skip(f"Requires at {n_devices} devices to run")
-    if (
-        compute_grid_size.x < model_config_default["MAX_GRID_SIZE"][0]
-        or compute_grid_size.y < model_config_default["MAX_GRID_SIZE"][1]
-    ):
-        pytest.skip(f"Requires grid size of at least {model_config_default['MAX_GRID_SIZE']} to run")
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+    )
 
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config_default, n_devices, emulated)
+    check_device_mesh(t3k_device_mesh, model_config)
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
@@ -315,12 +329,12 @@ def test_LlamaModel_demo(
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
         num_layers=num_layers,
+        num_tokens=num_tokens,
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        devices=devices,
+        device_mesh=t3k_device_mesh,
         n_devices=n_devices,
-        emulated=emulated,
         cache_path=cache_path,
         dataset=dataset,
         split=split,
@@ -329,5 +343,6 @@ def test_LlamaModel_demo(
         sample_len=sample_len,
         num_samples=num_samples,
         perplexity_score=perplexity_score,
+        llama_version=llama_version,
     )
     main(args)

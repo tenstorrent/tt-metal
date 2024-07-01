@@ -90,7 +90,8 @@ void py_module(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
-            py::arg("inplace") = true
+            py::arg("inplace") = true,
+            py::arg("output_layout") = std::nullopt
         }
     );
 }

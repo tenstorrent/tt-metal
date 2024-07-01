@@ -29,17 +29,11 @@ namespace {
 
 void ConfigureKernelGroup(
     const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
-    if (kernel_group->compute_id.has_value()) {
-        detail::GetKernel(program, kernel_group->compute_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->riscv1_id.has_value()) {
-        detail::GetKernel(program, kernel_group->riscv1_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->riscv0_id.has_value()) {
-        detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->erisc_id.has_value()) {
-        detail::GetKernel(program, kernel_group->erisc_id.value())->configure(device, logical_core);
+
+    for (auto& optional_id : kernel_group->kernel_ids) {
+        if (optional_id) {
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+        }
     }
 }
 
@@ -722,7 +716,7 @@ void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(dev
 
 size_t GetNumAvailableDevices() {
 #ifdef TT_METAL_VERSIM_DISABLED
-    return tt::Cluster::instance().number_of_devices();
+    return tt::Cluster::instance().number_of_user_devices();
 #else
     return 1;
 #endif
@@ -734,6 +728,10 @@ size_t GetNumPCIeDevices() {
 #else
     return 1;
 #endif
+}
+
+chip_id_t GetPCIeDeviceID(chip_id_t device_id){
+    return tt::Cluster::instance().get_associated_mmio_device(device_id);
 }
 
 Device *CreateDevice(

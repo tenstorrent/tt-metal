@@ -9,6 +9,7 @@
 #include <experimental/type_traits>
 #include <optional>
 #include <ostream>
+#include <reflect>
 #include <set>
 #include <string>
 #include <tuple>
@@ -16,7 +17,6 @@
 #include <vector>
 
 #include "third_party/magic_enum/magic_enum.hpp"
-
 #include "type_name.hpp"
 
 namespace tt {
@@ -30,6 +30,14 @@ constexpr std::string_view get_type_name() {
 template <typename T>
 constexpr std::string_view get_type_name(const T& object) {
     return get_type_name<T>();
+}
+
+template <typename T>
+concept IsVariant = requires { typename std::variant_size<T>::type; };
+
+template <IsVariant Variant>
+constexpr auto get_active_type_name_in_variant(const Variant& v) {
+    return std::visit([](auto&& arg) -> std::string_view { return short_type_name<std::decay_t<decltype(arg)>>; }, v);
 }
 
 // Forward Declare hash_object
@@ -387,46 +395,100 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
     return os;
 }
 
-template <typename to_visit_t, typename T>
-    requires std::same_as<std::decay_t<T>, to_visit_t>
+template <typename object_t, typename T>
+    requires std::same_as<std::decay_t<T>, object_t>
 constexpr auto visit_object_of_type(auto callback, T&& value) {
     callback(value);
 }
 
-template <typename to_visit_t, typename T>
+template <typename object_t, typename T>
 constexpr auto visit_object_of_type(auto callback, const std::optional<T>& value) {
     if (value.has_value()) {
-        visit_object_of_type<to_visit_t>(callback, value.value());
+        visit_object_of_type<object_t>(callback, value.value());
     }
 }
 
-template <typename to_visit_t, typename T>
+template <typename object_t, typename T>
 constexpr auto visit_object_of_type(auto callback, const std::vector<T>& value) {
     for (auto& tensor : value) {
-        visit_object_of_type<to_visit_t>(callback, tensor);
+        visit_object_of_type<object_t>(callback, tensor);
     }
 }
 
-template <typename to_visit_t, typename T, auto N>
+template <typename object_t, typename T, auto N>
 constexpr auto visit_object_of_type(auto callback, const std::array<T, N>& value) {
     for (auto& tensor : value) {
-        visit_object_of_type<to_visit_t>(callback, tensor);
+        visit_object_of_type<object_t>(callback, tensor);
     }
 }
 
-template <typename to_visit_t, typename... Ts>
+template <typename object_t, typename... Ts>
 constexpr auto visit_object_of_type(auto callback, const std::tuple<Ts...>& value) {
     constexpr auto num_attributes = sizeof...(Ts);
     [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
-        (visit_object_of_type<to_visit_t>(callback, std::get<Ns>(value)), ...);
+        (visit_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
     }(std::make_index_sequence<num_attributes>{});
 }
 
-template <typename to_visit_t, typename T>
-    requires(not std::same_as<std::decay_t<T>, to_visit_t>) and requires { std::decay_t<T>::attribute_names; }
+template <typename object_t, typename T>
+    requires(not std::same_as<std::decay_t<T>, object_t>) and requires { std::decay_t<T>::attribute_names; }
 constexpr auto visit_object_of_type(auto callback, T&& object) {
     constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
-    visit_object_of_type<to_visit_t>(callback, object.attribute_values());
+    visit_object_of_type<object_t>(callback, object.attribute_values());
+}
+
+template <typename object_t, typename T>
+    requires(not std::same_as<std::decay_t<T>, object_t>) and requires { std::is_aggregate_v<std::decay_t<T>>; }
+constexpr auto visit_object_of_type(auto callback, T&& object) {
+    reflect::for_each(
+        [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
+}
+
+template <typename object_t, typename T>
+    requires std::same_as<std::decay_t<T>, object_t>
+constexpr auto get_first_object_of_type(T&& value) {
+    return std::cref(value);
+}
+
+template <typename object_t, typename T>
+constexpr auto get_first_object_of_type(const std::optional<T>& value) {
+    if (value.has_value()) {
+        const auto& tensor = value.value();
+        return get_first_object_of_type<object_t>(tensor);
+    }
+}
+
+template <typename object_t, typename T>
+constexpr auto get_first_object_of_type(const std::vector<T>& value) {
+    for (auto& tensor : value) {
+        return get_first_object_of_type<object_t>(tensor);
+    }
+}
+
+template <typename object_t, typename T, auto N>
+constexpr auto get_first_object_of_type(const std::array<T, N>& value) {
+    for (auto& tensor : value) {
+        return get_first_object_of_type<object_t>(tensor);
+    }
+}
+
+template <typename object_t, typename... Ts>
+constexpr auto get_first_object_of_type(const std::tuple<Ts...>& value) {
+    constexpr auto num_attributes = sizeof...(Ts);
+    return get_first_object_of_type<object_t>(std::get<0>(value));
+}
+
+template <typename object_t, typename T>
+    requires (not std::same_as<std::decay_t<T>, object_t>) and requires { std::decay_t<T>::attribute_names; }
+constexpr auto get_first_object_of_type(T&& object) {
+    constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+    return get_first_object_of_type<object_t>(object.attribute_values());
+}
+
+template <typename object_t, typename T>
+    requires (not std::same_as<std::decay_t<T>, object_t>) and requires { std::is_aggregate_v<std::decay_t<T>>; }
+constexpr auto get_first_object_of_type(T&& object) {
+    return get_first_object_of_type<object_t>(reflect::get<0>(object));
 }
 
 }  // namespace reflection
@@ -684,6 +746,13 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
+    } else if constexpr (std::is_aggregate_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
+        }
+        std::size_t hash = 0;
+        reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);
+        return hash;
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Type doesn't support std::hash");
     }

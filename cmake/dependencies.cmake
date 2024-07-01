@@ -21,6 +21,7 @@ CPMAddPackage(
   OPTIONS
     "YAML_CPP_BUILD_TESTS OFF"
     "YAML_CPP_BUILD_TOOLS OFF"
+    "YAML_BUILD_SHARED_LIBS OFF"
 )
 
 if (yaml-cpp_ADDED)
@@ -47,3 +48,13 @@ if (googletest_ADDED)
     target_link_libraries(gtest PRIVATE c++ c++abi)
     target_link_libraries(gtest_main PRIVATE c++ c++abi)
 endif()
+
+############################################################################################################################
+# boost-ext reflect : https://github.com/boost-ext/reflect
+############################################################################################################################
+
+CPMAddPackage(
+  NAME reflect
+  GITHUB_REPOSITORY boost-ext/reflect
+  GIT_TAG v1.1.1
+)

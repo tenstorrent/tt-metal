@@ -21,10 +21,11 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/ternary.hpp"
 #include "pybind11/operations/transformer.hpp"
-#include "pybind11/operations/unary.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
+#include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -39,6 +40,9 @@ void py_module(py::module& module) {
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
+
+    auto m_binary_backward = module.def_submodule("binary_backward", "binary_backward operations");
+    binary_backward::py_module(m_binary_backward);
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);

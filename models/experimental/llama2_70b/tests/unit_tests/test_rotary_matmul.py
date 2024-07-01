@@ -76,7 +76,7 @@ def run_test_rotary_matmul1(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_Q_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ROT_MAT_Q_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 1),
         in0_block_w=4,
         out_subblock_h=1,
@@ -101,18 +101,18 @@ def run_test_rotary_matmul1(
     rotary_mat_tt = torch2tt_tensor(rotary_mat, devices[0])
 
     # tt operation
-    query_tt = ttl.operations.primary.matmul(
+    query_tt = ttnn.matmul(
         query_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_Q_MM_PROGCFG,
-        output_mem_config=ROT_MAT_Q_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_Q_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
     )
-    key_tt = ttl.operations.primary.matmul(
+    key_tt = ttnn.matmul(
         key_tt,
         rotary_mat_tt,
-        output_mem_config=L1_MEMCFG,
+        memory_config=L1_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, 1, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, 1, bsz, head_dim]
     )
@@ -189,7 +189,7 @@ def run_test_rotary_matmul2(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=4,
         out_subblock_h=1,
@@ -214,19 +214,19 @@ def run_test_rotary_matmul2(
     rotary_mat_tt = torch2tt_tensor(rotary_mat, devices[0])
 
     # tt operation
-    query_tt = ttl.operations.primary.matmul(
+    query_tt = ttnn.matmul(
         query_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
     )
-    key_tt = ttl.operations.primary.matmul(
+    key_tt = ttnn.matmul(
         key_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, 1, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, 1, bsz, head_dim]
     )
@@ -303,7 +303,7 @@ def run_test_rotary_matmul3(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,
@@ -325,19 +325,19 @@ def run_test_rotary_matmul3(
     rotary_mat_tt = torch2tt_tensor(rotary_mat, devices[0])
 
     # tt operation
-    query_tt = ttl.operations.primary.matmul(
+    query_tt = ttnn.matmul(
         query_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
     )
-    key_tt = ttl.operations.primary.matmul(
+    key_tt = ttnn.matmul(
         key_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, 1, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, 1, bsz, head_dim]
     )
@@ -425,7 +425,7 @@ def run_test_rotary_matmul4(
             False,
         ),
     )
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,
@@ -447,19 +447,19 @@ def run_test_rotary_matmul4(
     rotary_mat_tt = torch2tt_tensor(rotary_mat, tt_device=None).to(device=devices[0], mem_config=ROT_MAT_MM_IN1_MEMCFG)
 
     # tt operation
-    query_tt = ttl.operations.primary.matmul(
+    query_tt = ttnn.matmul(
         query_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
     )
-    key_tt = ttl.operations.primary.matmul(
+    key_tt = ttnn.matmul(
         key_tt,
         rotary_mat_tt,
         program_config=ROT_MAT_MM_PROGCFG,
-        output_mem_config=ROT_MAT_MM_OUTPUT_MEMCFG,
+        memory_config=ROT_MAT_MM_OUTPUT_MEMCFG,
         compute_kernel_config=ROT_MAT_COMPUTE_KERNEL_CONFIG
         # [seqlen, 1, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, 1, bsz, head_dim]
     )

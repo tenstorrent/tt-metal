@@ -72,17 +72,13 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 }
 
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     command.add_prefetch_relay_paged(
-        this->buffer.is_dram(),
-        this->src_page_index,
-        this->buffer.address(),
-        padded_page_size,
-        this->pages_to_read);
+        this->buffer.is_dram(), this->src_page_index, this->buffer.address(), padded_page_size, this->pages_to_read);
 }
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     const CoreCoord physical_core =
         this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
@@ -106,7 +102,7 @@ void EnqueueReadBufferCommand::process() {
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
     command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
 
@@ -164,9 +160,8 @@ void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(HugepageDeviceComm
 void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
 
-    uint32_t full_page_size =
-        align(this->buffer.page_size(), ADDRESS_ALIGNMENT);  // this->padded_page_size could be a partial page if buffer
-                                                             // page size > MAX_PREFETCH_CMD_SIZE
+    uint32_t full_page_size = this->buffer.aligned_page_size();  // this->padded_page_size could be a partial page if
+                                                                 // buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
     uint32_t buffer_addr_offset = this->bank_base_address - this->buffer.address();
@@ -191,7 +186,8 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
         uint32_t unpadded_src_offset =
             (((buffer_addr_offset / this->padded_page_size) * num_banks) + this->dst_page_index) *
             this->buffer.page_size();
-        if (this->buffer.page_size() % ADDRESS_ALIGNMENT != 0 and this->buffer.page_size() != this->buffer.size()) {
+        if (this->buffer.page_size() % this->buffer.alignment() != 0 and
+            this->buffer.page_size() != this->buffer.size()) {
             // If page size is not 32B-aligned, we cannot do a contiguous write
             uint32_t src_address_offset = unpadded_src_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
@@ -273,9 +269,8 @@ void EnqueueWriteBufferCommand::process() {
 
     this->add_dispatch_write(command_sequence);
 
-    uint32_t full_page_size =
-        align(this->buffer.page_size(), ADDRESS_ALIGNMENT);  // this->padded_page_size could be a partial page if buffer
-                                                             // page size > MAX_PREFETCH_CMD_SIZE
+    uint32_t full_page_size = this->buffer.aligned_page_size();  // this->padded_page_size could be a partial page if
+                                                                 // buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
     this->add_buffer_data(command_sequence);
@@ -293,13 +288,15 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     Device* device,
     NOC noc_index,
     Program& program,
+    CoreCoord& dispatch_core,
     SystemMemoryManager& manager,
     uint32_t expected_num_workers_completed) :
     command_queue_id(command_queue_id),
     noc_index(noc_index),
     manager(manager),
     expected_num_workers_completed(expected_num_workers_completed),
-    program(program) {
+    program(program),
+    dispatch_core(dispatch_core) {
     this->device = device;
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
@@ -336,7 +333,50 @@ void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
 }
 
 template <typename PackedSubCmd>
-void generate_dispatch_write_packed(
+uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch_cmd_size, bool no_stride) {
+    static_assert(
+        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
+        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+    constexpr bool is_unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
+    uint32_t sub_cmd_sizeB =
+        is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+    // Approximate calculation due to alignment
+    uint32_t max_prefetch_size =
+        max_prefetch_cmd_size - sizeof(CQPrefetchCmd) - PCIE_ALIGNMENT - sizeof(CQDispatchCmd) - L1_ALIGNMENT;
+    uint32_t max_prefetch_num_packed_cmds =
+        no_stride ? (max_prefetch_size - align(data_size * sizeof(uint32_t), L1_ALIGNMENT)) / sub_cmd_sizeB
+                  : max_prefetch_size / (align(data_size * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
+    return min(
+        max_prefetch_num_packed_cmds,
+        is_unicast ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS
+                   : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS);
+};
+
+template <typename PackedSubCmd>
+uint32_t insert_write_packed_payloads(
+    const uint32_t num_sub_cmds,
+    const uint32_t sub_cmd_sizeB,
+    const uint32_t max_prefetch_command_size,
+    std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
+    const uint32_t aligned_sub_cmd_sizeB = align(sub_cmd_sizeB, L1_ALIGNMENT);
+    const uint32_t max_packed_sub_cmds_per_cmd =
+        get_max_write_packed_sub_cmds<PackedSubCmd>(aligned_sub_cmd_sizeB, max_prefetch_command_size, false);
+    uint32_t rem_num_sub_cmds = num_sub_cmds;
+    uint32_t cmd_payload_sizeB = 0;
+    while (rem_num_sub_cmds != 0) {
+        const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
+        const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
+        const uint32_t dispatch_cmd_sizeB =
+            align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), L1_ALIGNMENT);
+        packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
+        cmd_payload_sizeB += align(sizeof(CQPrefetchCmd) + packed_cmd_payloads.back().second, PCIE_ALIGNMENT);
+        rem_num_sub_cmds -= num_sub_cmds_in_cmd;
+    }
+    return cmd_payload_sizeB;
+}
+
+template <typename PackedSubCmd>
+void generate_runtime_args_cmds(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
     const uint32_t& l1_arg_base_addr,
     const std::vector<PackedSubCmd>& sub_cmds,
@@ -359,17 +399,6 @@ void generate_dispatch_write_packed(
                 (no_stride ? 1 : num_packed_cmds) * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
             return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         };
-    thread_local static auto get_max_num_packed_cmds =
-        [](uint32_t runtime_args_len, uint32_t max_size, bool is_unicast, bool no_stride) {
-            uint32_t sub_cmd_sizeB =
-                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-            // Approximate calculation due to alignment
-            max_size = max_size - sizeof(CQPrefetchCmd) - PCIE_ALIGNMENT - sizeof(CQDispatchCmd) - L1_ALIGNMENT;
-            uint32_t max_num_packed_cmds =
-                no_stride ? (max_size - align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT)) / sub_cmd_sizeB
-                          : max_size / (align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
-            return max_num_packed_cmds;
-        };
     thread_local static auto get_runtime_args_data_offset =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
             uint32_t sub_cmd_sizeB =
@@ -382,7 +411,7 @@ void generate_dispatch_write_packed(
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     uint32_t max_packed_cmds =
-        get_max_num_packed_cmds(max_runtime_args_len, max_prefetch_command_size, unicast, no_stride);
+        get_max_write_packed_sub_cmds<PackedSubCmd>(max_runtime_args_len, max_prefetch_command_size, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
         TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
@@ -485,8 +514,8 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
 
         if (common_rt_args.size() > 0) {
             common_kernels.insert(kernel_id);
-            uint32_t common_args_addr =
-                unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
+            uint32_t common_args_addr = unique_processor_to_l1_arg_base_addr[processor_idx] +
+                                        kernel->get_common_runtime_args_index() * sizeof(uint32_t);
             common_processor_to_l1_arg_base_addr[kernel_id] = common_args_addr;
             common_rt_data_and_sizes[kernel_id].emplace_back(
                 common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
@@ -533,7 +562,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     // Currently we only really need the base cmd idx since they are sequential, and the rt arg len is currently the
     // same for all splits
     for (const uint32_t& processor_idx : unique_processors) {
-        generate_dispatch_write_packed(
+        generate_runtime_args_cmds(
             this->cached_program_command_sequences[program.id].runtime_args_command_sequences,
             unique_processor_to_l1_arg_base_addr[processor_idx],
             unique_sub_cmds[processor_idx],
@@ -547,7 +576,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (const uint32_t& kernel_id : common_kernels) {
         std::visit(
             [&](auto&& sub_cmds) {
-                generate_dispatch_write_packed(
+                generate_runtime_args_cmds(
                     this->cached_program_command_sequences[program.id].runtime_args_command_sequences,
                     common_processor_to_l1_arg_base_addr[kernel_id],
                     sub_cmds,
@@ -574,6 +603,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
         // Calculate size of command and fill program indices of data to update
         // TODO: Would be nice if we could pull this out of program
         uint32_t cmd_sequence_sizeB = 0;
+        const uint32_t max_prefetch_command_size =
+            dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
         for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
             uint32_t num_packed_cmds = 0;
@@ -619,11 +650,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
 
         const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
         const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
-        uint32_t cb_configs_payload_start =
-            (cmd_sequence_sizeB + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
-             align(num_multicast_cb_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
-            sizeof(uint32_t);
-        uint32_t mcast_cb_payload_sizeB = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> mcast_cb_payload;
         uint16_t cb_config_size_bytes = 0;
         uint32_t aligned_cb_config_size_bytes = 0;
         std::vector<std::vector<uint32_t>> cb_config_payloads(
@@ -676,25 +703,125 @@ void EnqueueProgramCommand::assemble_device_commands() {
             cb_config_size_bytes =
                 (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
             aligned_cb_config_size_bytes = align(cb_config_size_bytes, L1_ALIGNMENT);
-            const uint32_t aligned_cb_config_data_sizeB = aligned_cb_config_size_bytes * num_multicast_cb_sub_cmds;
-            const uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_multicast_cb_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd),
-                L1_ALIGNMENT);
-            mcast_cb_payload_sizeB = dispatch_cmd_sizeB + aligned_cb_config_data_sizeB;
-            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + mcast_cb_payload_sizeB, PCIE_ALIGNMENT);
+            cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+                num_multicast_cb_sub_cmds, cb_config_size_bytes, max_prefetch_command_size, mcast_cb_payload);
         }
 
         // Program Binaries and Go Signals
         // Get launch msg data while getting size of cmds
-        // TODO: move program binaries to here as well
+        std::vector<std::vector<CQPrefetchRelayPagedPackedSubCmd>> kernel_bins_prefetch_subcmds;
+        std::vector<std::vector<CQDispatchWritePackedLargeSubCmd>> kernel_bins_dispatch_subcmds;
+        std::vector<uint32_t> kernel_bins_write_packed_large_data_aligned_sizeB;
+        std::vector<HostMemDeviceCommand> kernel_bins_unicast_cmds;
+        const uint32_t max_length_per_sub_cmd = dispatch_constants::get(this->dispatch_core_type).scratch_db_size() / 2;
+        const uint32_t max_paged_length_per_sub_cmd =
+            max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
         for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
             const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
             for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
                 for (const pair<transfer_info_cores, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
-                    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                    bool write_linear;
+                    uint32_t noc_encoding;
+                    std::visit(
+                        [&](auto&& cores) {
+                            using T = std::decay_t<decltype(cores)>;
+                            if constexpr (std::is_same_v<T, CoreRange>) {
+                                noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
+                                write_linear = false;
+                            } else {
+                                noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
+                                write_linear = true;
+                            }
+                        },
+                        dst_noc_info.first);
+                    if (write_linear) {
+                        kernel_bins_unicast_cmds.emplace_back(2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+                        cmd_sequence_sizeB += 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                        kernel_bins_unicast_cmds.back().add_dispatch_write_linear(
+                            false,                // flush_prefetch
+                            dst_noc_info.second,  // num_mcast_dests
+                            noc_encoding,         // noc_xy_addr
+                            kg_transfer_info.dst_base_addrs[kernel_idx],
+                            kg_transfer_info.lengths[kernel_idx]);
+                        // Difference between prefetch total relayed pages and dispatch write linear
+                        uint32_t relayed_bytes =
+                            align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
+                        // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
+                        uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
+
+                        uint32_t base_address, page_offset;
+                        if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+                            const uint32_t num_banks =
+                                this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
+                            page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
+                            uint32_t num_full_pages_written_per_bank =
+                                kg_transfer_info.page_offsets[kernel_idx] / num_banks;
+                            base_address =
+                                this->program.kg_buffers[buffer_idx]->address() +
+                                num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
+                        } else {
+                            base_address = this->program.kg_buffers[buffer_idx]->address();
+                            page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                        }
+
+                        kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
+                            true,  // is_dram
+                            page_offset,
+                            base_address,
+                            this->program.kg_buffers[buffer_idx]->page_size(),
+                            relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
+                            length_adjust);
+                    } else {
+                        uint32_t base_address = this->program.kg_buffers[buffer_idx]->address();
+                        uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                        uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+                        uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT);
+                        uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
+                        while (aligned_length != 0) {
+                            if (kernel_bins_dispatch_subcmds.empty() ||
+                                kernel_bins_dispatch_subcmds.back().size() ==
+                                    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
+                                kernel_bins_dispatch_subcmds.push_back({});
+                                kernel_bins_prefetch_subcmds.push_back({});
+                                kernel_bins_write_packed_large_data_aligned_sizeB.push_back(0);
+                            }
+                            uint32_t write_length, read_length;
+                            if (aligned_length <= max_length_per_sub_cmd) {
+                                read_length = aligned_length;
+                                write_length = read_length - padding;
+                            } else {
+                                read_length = max_paged_length_per_sub_cmd;
+                                write_length = read_length;
+                            }
+                            kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
+                                .noc_xy_addr = noc_encoding,
+                                .addr = dst_addr,
+                                .length = (uint16_t)write_length,
+                                .num_mcast_dests = (uint16_t)dst_noc_info.second});
+                            dst_addr += write_length;
+
+                            kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
+                                .start_page = (uint16_t)page_offset,
+                                .log_page_size = (uint16_t)HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE,
+                                .base_addr = base_address,
+                                .length = read_length});
+                            page_offset += read_length / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
+                            aligned_length -= read_length;
+                            kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
+                        }
+                    }
                 }
             }
+        }
+        for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
+            cmd_sequence_sizeB += align(
+                CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                    kernel_bins_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
+                PCIE_ALIGNMENT);
+            cmd_sequence_sizeB += align(
+                kernel_bins_prefetch_subcmds[i].size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) +
+                    sizeof(CQPrefetchCmd),
+                PCIE_ALIGNMENT);
         }
 
         // Wait Cmd
@@ -706,9 +833,15 @@ void EnqueueProgramCommand::assemble_device_commands() {
         std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
         std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
         std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_go_signal_sub_cmds;
-        const uint32_t go_signal_sizeB = sizeof(launch_msg_t);
+        std::vector<std::pair<uint32_t, uint32_t>> multicast_go_signals_payload;
+        std::vector<std::pair<uint32_t, uint32_t>> unicast_go_signals_payload;
+        constexpr uint32_t go_signal_sizeB = sizeof(launch_msg_t);
+        constexpr uint32_t aligned_go_signal_sizeB = align(go_signal_sizeB, L1_ALIGNMENT);
+        constexpr uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
         for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
             kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
+            kernel_group.launch_msg.dispatch_core_x = this->dispatch_core.x;
+            kernel_group.launch_msg.dispatch_core_y = this->dispatch_core.y;
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
@@ -724,18 +857,18 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
         if (multicast_go_signal_sub_cmds.size() > 0) {
-            uint32_t num_multicast_sub_cmds = multicast_go_signal_sub_cmds.size();
-            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_multicast_sub_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_multicast_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd),
-                L1_ALIGNMENT);
-            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
-            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
+            cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+                multicast_go_signal_sub_cmds.size(),
+                go_signal_sizeB,
+                max_prefetch_command_size,
+                multicast_go_signals_payload);
         }
 
         for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
             kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-            const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
+            kernel_group.launch_msg.dispatch_core_x = this->dispatch_core.x;
+            kernel_group.launch_msg.dispatch_core_y = this->dispatch_core.y;
+            const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -749,13 +882,11 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
         if (unicast_go_signal_sub_cmds.size() > 0) {
-            uint32_t num_unicast_sub_cmds = unicast_go_signal_sub_cmds.size();
-            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_unicast_sub_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
-                L1_ALIGNMENT);
-            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
-            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + ucast_payload_sizeB, PCIE_ALIGNMENT);
+            cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+                unicast_go_signal_sub_cmds.size(),
+                go_signal_sizeB,
+                max_prefetch_command_size,
+                unicast_go_signals_payload);
         }
 
         cached_program_command_sequence.program_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
@@ -822,71 +953,47 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
 
         // CB Configs commands
-        cached_program_command_sequence.cb_configs_payload_start = cb_configs_payload_start;
-        cached_program_command_sequence.aligned_cb_config_size_bytes = aligned_cb_config_size_bytes;
         if (num_multicast_cb_sub_cmds > 0) {
-            program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-                num_multicast_cb_sub_cmds,
-                CIRCULAR_BUFFER_CONFIG_BASE,
-                cb_config_size_bytes,
-                mcast_cb_payload_sizeB,
-                multicast_cb_config_sub_cmds,
-                multicast_cb_config_data);
+            uint32_t curr_sub_cmd_idx = 0;
+            cached_program_command_sequence.cb_configs_payloads.reserve(num_multicast_cb_sub_cmds);
+            const uint32_t cb_config_size_words = aligned_cb_config_size_bytes / sizeof(uint32_t);
+            for (const auto& [num_sub_cmds_in_cmd, mcast_cb_payload_sizeB] : mcast_cb_payload) {
+                uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
+                program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                    num_sub_cmds_in_cmd,
+                    CIRCULAR_BUFFER_CONFIG_BASE,
+                    cb_config_size_bytes,
+                    mcast_cb_payload_sizeB,
+                    multicast_cb_config_sub_cmds,
+                    multicast_cb_config_data,
+                    curr_sub_cmd_idx);
+                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                uint32_t curr_sub_cmd_data_offset_words =
+                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
+                    sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
+                    cached_program_command_sequence.cb_configs_payloads.push_back(
+                        (uint32_t*)program_command_sequence.data() + curr_sub_cmd_data_offset_words);
+                    curr_sub_cmd_data_offset_words += cb_config_size_words;
+                }
+            }
         }
 
         // Program Binaries
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-            const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
-            for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-                for (const pair<transfer_info_cores, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
-                    uint32_t noc_encoding;
-                    std::visit(
-                        [&](auto&& cores) {
-                            using T = std::decay_t<decltype(cores)>;
-                            if constexpr (std::is_same_v<T, CoreRange>) {
-                                noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
-                            } else {
-                                noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
-                            }
-                        },
-                        dst_noc_info.first);
-                    program_command_sequence.add_dispatch_write_linear(
-                        false,                // flush_prefetch
-                        dst_noc_info.second,  // num_mcast_dests
-                        noc_encoding,         // noc_xy_addr
-                        kg_transfer_info.dst_base_addrs[kernel_idx],
-                        align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
-                    // Difference between prefetch total relayed pages and dispatch write linear
-                    uint32_t relayed_bytes =
-                        align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-                    // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
-                    uint16_t length_adjust =
-                        uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
-
-                    uint32_t base_address, page_offset;
-                    if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                        const uint32_t num_banks =
-                            this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
-                        page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
-                        uint32_t num_full_pages_written_per_bank =
-                            kg_transfer_info.page_offsets[kernel_idx] / num_banks;
-                        base_address =
-                            this->program.kg_buffers[buffer_idx]->address() +
-                            num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
-                    } else {
-                        base_address = this->program.kg_buffers[buffer_idx]->address();
-                        page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                    }
-
-                    program_command_sequence.add_prefetch_relay_paged(
-                        true,  // is_dram
-                        page_offset,
-                        base_address,
-                        this->program.kg_buffers[buffer_idx]->page_size(),
-                        relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
-                        length_adjust);
-                }
-            }
+        for (const auto& kernel_bins_unicast_cmd : kernel_bins_unicast_cmds) {
+            program_command_sequence.add_data(
+                kernel_bins_unicast_cmd.data(),
+                kernel_bins_unicast_cmd.size_bytes(),
+                kernel_bins_unicast_cmd.size_bytes());
+        }
+        for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
+            program_command_sequence.add_dispatch_write_packed_large(
+                DRAM_ALIGNMENT, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+            program_command_sequence.add_prefetch_relay_paged_packed(
+                kernel_bins_write_packed_large_data_aligned_sizeB[i],
+                kernel_bins_prefetch_subcmds[i],
+                kernel_bins_prefetch_subcmds[i].size());
         }
 
         // Wait Noc Write Barrier, wait for binaries/configs to be written to worker cores
@@ -895,43 +1002,61 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
 
         // Go Signals
+        cached_program_command_sequence.go_signals.reserve(
+            multicast_go_signal_sub_cmds.size() + unicast_go_signal_sub_cmds.size());
         if (multicast_go_signal_sub_cmds.size() > 0) {
-            uint32_t num_multicast_sub_cmds = multicast_go_signal_sub_cmds.size();
-            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_multicast_sub_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_multicast_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd),
-                L1_ALIGNMENT);
-            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
-            program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-                num_multicast_sub_cmds,
-                GET_MAILBOX_ADDRESS_HOST(launch),
-                go_signal_sizeB,
-                mcast_payload_sizeB,
-                multicast_go_signal_sub_cmds,
-                multicast_go_signal_data);
+            uint32_t curr_sub_cmd_idx = 0;
+            for (const auto& [num_sub_cmds_in_cmd, multicast_go_signal_payload_sizeB] : multicast_go_signals_payload) {
+                uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
+                program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                    num_sub_cmds_in_cmd,
+                    GET_MAILBOX_ADDRESS_HOST(launch),
+                    go_signal_sizeB,
+                    multicast_go_signal_payload_sizeB,
+                    multicast_go_signal_sub_cmds,
+                    multicast_go_signal_data,
+                    curr_sub_cmd_idx);
+                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                uint32_t curr_sub_cmd_data_offset_words =
+                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
+                    sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
+                    cached_program_command_sequence.go_signals.push_back(
+                        (launch_msg_t*)((uint32_t*)program_command_sequence.data() + curr_sub_cmd_data_offset_words));
+                    curr_sub_cmd_data_offset_words += go_signal_size_words;
+                }
+            }
         }
 
         if (unicast_go_signal_sub_cmds.size() > 0) {
-            uint32_t num_unicast_sub_cmds = unicast_go_signal_sub_cmds.size();
-            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_unicast_sub_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
-                L1_ALIGNMENT);
-            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
-            program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                num_unicast_sub_cmds,
-                GET_ETH_MAILBOX_ADDRESS_HOST(launch),
-                go_signal_sizeB,
-                ucast_payload_sizeB,
-                unicast_go_signal_sub_cmds,
-                unicast_go_signal_data);
+            uint32_t curr_sub_cmd_idx = 0;
+            for (const auto& [num_sub_cmds_in_cmd, unicast_go_signal_payload_sizeB] : unicast_go_signals_payload) {
+                uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
+                program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                    num_sub_cmds_in_cmd,
+                    GET_ETH_MAILBOX_ADDRESS_HOST(launch),
+                    go_signal_sizeB,
+                    unicast_go_signal_payload_sizeB,
+                    unicast_go_signal_sub_cmds,
+                    unicast_go_signal_data,
+                    curr_sub_cmd_idx);
+                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                uint32_t curr_sub_cmd_data_offset_words =
+                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT)) /
+                    sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
+                    cached_program_command_sequence.go_signals.push_back(
+                        (launch_msg_t*)((uint32_t*)program_command_sequence.data() + curr_sub_cmd_data_offset_words));
+                    curr_sub_cmd_data_offset_words += go_signal_size_words;
+                }
+            }
         }
     } else {
-        auto& program_command_sequence = cached_program_command_sequence.program_command_sequence;
-        uint32_t* cb_config_payload =
-            (uint32_t*)program_command_sequence.data() + cached_program_command_sequence.cb_configs_payload_start;
-        uint32_t aligned_cb_config_size_bytes = cached_program_command_sequence.aligned_cb_config_size_bytes;
+        uint32_t i = 0;
         for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
+            uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
             for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
                 const uint32_t cb_address = cb->address() >> 4;
                 const uint32_t cb_size = cb->size() >> 4;
@@ -946,7 +1071,11 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
                 }
             }
-            cb_config_payload += aligned_cb_config_size_bytes / sizeof(uint32_t);
+            i++;
+        }
+        for (auto& go_signal : cached_program_command_sequence.go_signals) {
+            go_signal->dispatch_core_x = this->dispatch_core.x;
+            go_signal->dispatch_core_y = this->dispatch_core.y;
         }
     }
 }
@@ -964,7 +1093,9 @@ void EnqueueProgramCommand::process() {
         this->assemble_device_commands();
     } else {
         static constexpr uint32_t count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-        TT_ASSERT(this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(), "Program cache hit, but no stored command sequence");
+        TT_ASSERT(
+            this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(),
+            "Program cache hit, but no stored command sequence");
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
             count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
         this->assemble_device_commands();
@@ -1243,9 +1374,22 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     this->size_B = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / device->num_hw_cqs();
     if (tt::Cluster::instance().is_galaxy_cluster()) {
-        //Galaxy puts 4 devices per host channel until umd can provide one channel per device.
+        // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
         this->size_B = this->size_B / 4;
     }
+
+    CoreCoord enqueue_program_dispatch_core;
+    if (device->is_mmio_capable()) {
+        enqueue_program_dispatch_core =
+            dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, id);
+    } else {
+        enqueue_program_dispatch_core =
+            dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_d_core(device->id(), channel, id);
+    }
+    CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    this->physical_enqueue_program_dispatch_core =
+        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::get(device->num_hw_cqs()).completion_queue_writer_core(device->id(), channel, this->id);
 
@@ -1318,7 +1462,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
 
-    uint32_t padded_page_size = align(buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = buffer.aligned_page_size();
     uint32_t pages_to_read = buffer.num_pages();
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
@@ -1393,9 +1537,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
         }
         if (blocking) {
             this->finish();
-        } else {
-            std::shared_ptr<Event> event = std::make_shared<Event>();
-            this->enqueue_record_event(event);
         }
     } else {
         // this is a streaming command so we don't need to break down to multiple
@@ -1420,10 +1561,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             src_page_index));
         this->enqueue_command(command, blocking);
         this->increment_num_entries_in_completion_q();
-        if (not blocking) {  // should this be unconditional?
-            std::shared_ptr<Event> event = std::make_shared<Event>();
-            this->enqueue_record_event(event);
-        }
     }
 }
 
@@ -1466,7 +1603,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
-    uint32_t padded_page_size = align(buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = buffer.aligned_page_size();
 
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
     CoreType dispatch_core_type =
@@ -1653,9 +1790,6 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     if (blocking) {
         this->finish();
-    } else {
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
     }
 }
 
@@ -1695,7 +1829,13 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     auto command = EnqueueProgramCommand(
-        this->id, this->device, this->noc_index, program, this->manager, expected_workers_completed);
+        this->id,
+        this->device,
+        this->noc_index,
+        program,
+        this->physical_enqueue_program_dispatch_core,
+        this->manager,
+        expected_workers_completed);
     this->enqueue_command(command, blocking);
 
 #ifdef DEBUG
@@ -1778,10 +1918,6 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     if (blocking) {
         this->finish();
     }
-    else {
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
-    }
 }
 
 void HWCommandQueue::copy_into_user_space(
@@ -1834,7 +1970,7 @@ void HWCommandQueue::copy_into_user_space(
 
         if (dev_page_to_host_page_mapping.empty()) {
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
-            if ((page_size % ADDRESS_ALIGNMENT) == 0) {
+            if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
                 tt::Cluster::instance().read_sysmem(
                     contiguous_dst,
@@ -2035,6 +2171,10 @@ void HWCommandQueue::read_completion_queue() {
                     read_descriptor);
             }
             this->num_completed_completion_q_reads += num_events_to_read;
+            {
+                std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
+                this->reads_processed_cv.notify_one();
+            }
         } else if (this->exit_condition) {
             return;
         }
@@ -2061,7 +2201,10 @@ void HWCommandQueue::finish() {
             }
         }
     } else {
-        while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads);
+        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
+        this->reads_processed_cv.wait(lock, [this] {
+            return this->num_entries_in_completion_q == this->num_completed_completion_q_reads;
+        });
     }
 }
 
@@ -2322,9 +2465,6 @@ void EnqueueWriteBufferImpl(
 void EnqueueProgram(
     CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
     detail::DispatchStateCheck(true);
-    if (cq.get_mode() != CommandQueue::CommandQueueMode::TRACE) {
-        TT_FATAL(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
-    }
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = program});
 }

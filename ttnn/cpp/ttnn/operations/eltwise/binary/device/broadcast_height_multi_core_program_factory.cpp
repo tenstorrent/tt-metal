@@ -22,10 +22,10 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-BroadcastHeightMultiCore::cached_program_t BroadcastHeightMultiCore::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+Binary::BroadcastHeightMultiCore::cached_program_t Binary :: BroadcastHeightMultiCore::create(
+                                                                const operation_attributes_t& operation_attributes,
+                                                                const tensor_args_t& tensor_args,
+                                                                tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -195,15 +195,16 @@ BroadcastHeightMultiCore::cached_program_t BroadcastHeightMultiCore::create(
 
     return {
         std::move(program),
-        BroadcastHeightMultiCore::cached_program_attributes_t{
-            binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
+        {
+            binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}
+    };
 }
 
-void BroadcastHeightMultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+void Binary :: BroadcastHeightMultiCore::override_runtime_arguments(
+                  cached_program_t& cached_program,
+                  const operation_attributes_t& operation_attributes,
+                  const tensor_args_t& tensor_args,
+                  tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 

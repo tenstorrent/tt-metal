@@ -5,6 +5,7 @@
 import pytest
 import torch
 import math
+import ttnn
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -167,7 +168,7 @@ def test_bert_linear(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -182,20 +183,20 @@ def test_bert_linear(
     compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -364,7 +365,7 @@ def test_bert_linear_batch7(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -383,20 +384,20 @@ def test_bert_linear_batch7(
     )
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -498,7 +499,7 @@ def run_bert_linear_batch4(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -517,20 +518,20 @@ def run_bert_linear_batch4(
     )
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -733,7 +734,7 @@ def test_bert_linear_batch4_fp32_input_output(
         bias, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.FLOAT32
     )[0]
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -752,20 +753,20 @@ def test_bert_linear_batch4_fp32_input_output(
     )
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
 

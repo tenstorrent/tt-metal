@@ -8,7 +8,6 @@ from functools import partial
 from loguru import logger
 from pathlib import Path
 import torch
-from torch import nn
 import tt_lib
 import ttnn
 
@@ -17,12 +16,7 @@ from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    get_llama_path,
-    MAX_SEQ_LEN,
-    BASE_URL,
-    UNIT_TEST_GENERATION_LENGTH,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -36,6 +30,7 @@ from models.utility_functions import (
 )
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from tqdm import tqdm
 
 
 def load_prompts_file(tokenizer, prefill_length, generation_length=128, gap=64):
@@ -90,7 +85,7 @@ def print_output_prompts(
 
 
 def run_test_LlamaModel_end_to_end(
-    devices,
+    device_mesh,
     batch,
     seq_len,
     model_config,
@@ -103,7 +98,7 @@ def run_test_LlamaModel_end_to_end(
     emulated,
     num_users,
 ):
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(device_mesh, model_config, n_devices, emulated)
     logger.info(f"Running num_layer: {n_layers}")
 
     generator = Llama.build(
@@ -116,7 +111,8 @@ def run_test_LlamaModel_end_to_end(
     )
     hugging_face_reference_model, tokenizer = generator.model, generator.tokenizer
     hugging_face_reference_model.eval()
-    state_dict = hugging_face_reference_model.state_dict()
+    state_dict = load_llama_state_dict(ckpt_dir, n_layers=n_layers)
+    configuration = hugging_face_reference_model.params
 
     # Prepare input ------------------------------------------------------------------------
     torch.manual_seed(0)
@@ -132,7 +128,7 @@ def run_test_LlamaModel_end_to_end(
     logger.info("Moving weights to devices; might take some time...")
     profiler.start("TT_llama_model_setup")
     tt_model = TtLlamaModel_optimized(
-        devices,
+        device_mesh,
         state_dict,
         BASE_URL,
         n_layers,
@@ -141,10 +137,12 @@ def run_test_LlamaModel_end_to_end(
         batch,
         emulated=emulated,
         cache_path=cache_path,
+        read_cache=False,
     )
-    for device in devices:
+
+    for i in device_mesh.get_device_ids():
+        device = device_mesh.get_device(i)
         tt_lib.device.Synchronize(device)
-    profiler.end("TT_llama_model_setup")
 
     del state_dict
 
@@ -152,7 +150,7 @@ def run_test_LlamaModel_end_to_end(
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
     post_processor = partial(post_process)
 
-    for user_id in range(num_users):
+    for user_id in tqdm(range(num_users), desc="Prefill to 2k upto 32 users", colour="blue"):
         logger.info(f"Filling kv cache for user {user_id + 1}")
         if user_id == 0 or user_id == 25:
             profiler.start(f"processing_of_prefill_input_{user_id}")
@@ -229,11 +227,12 @@ def run_test_LlamaModel_end_to_end(
         del rot_mat
         del attn_mask
 
-        for device in devices:
+        for i in device_mesh.get_device_ids():
+            device = device_mesh.get_device(i)
             tt_lib.device.Synchronize(device)
 
-        logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
-        logits = logits[..., : configuration.vocab_size].float()
+        logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+        logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
         del tt_logits
 
         decode_ids = post_processor(logits=logits, index=...).reshape(batch, 1)
@@ -267,6 +266,7 @@ def run_test_LlamaModel_end_to_end(
         inference_time_cpu=cpu_time,
     )
 
+    logger.info(f"Prefill tokens per second for user 25 { 1 / prefill_time}")
     logger.info(f"llama {comment} inference time: {decode_time}")
     tokens_per_s_per_user = 1 / decode_time
     tokens_per_s_overall = tokens_per_s_per_user * batch * seq_len
@@ -297,24 +297,30 @@ def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
     expected_inference_time,
-    all_devices,
-    # use_program_cache,
+    t3k_device_mesh,
     n_layers=80,
     n_devices=8,
     emulated=False,
     num_users=32,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     batch, seq_len = 1, prefill_length
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+
+    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
+        device.enable_async(True)
     disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         model_config,

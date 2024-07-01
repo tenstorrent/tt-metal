@@ -4,10 +4,9 @@
 
 #include "tt_metal/impl/kernels/kernel.hpp"
 
-#include <fmt/ranges.h>
+#include <fmt/core.h>
 
 #include <set>
-#include <unordered_set>
 
 #include "jit_build/build.hpp"
 #include "llrt/llrt.hpp"

@@ -334,7 +334,7 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 }
 
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     for (auto &core : this->physical_workers)
     {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);

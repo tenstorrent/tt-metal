@@ -246,9 +246,7 @@ class cross_attention:
             in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
                 M, K, N, grid_size
             )
-            self.program_configs[
-                "qkv"
-            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            self.program_configs["qkv"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -265,7 +263,7 @@ class cross_attention:
             in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
                 M, K, N, grid_size
             )
-            self.program_configs["q"] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            self.program_configs["q"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -286,9 +284,7 @@ class cross_attention:
             in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
                 M, K, N, grid_size
             )
-            self.program_configs[
-                "kv"
-            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            self.program_configs["kv"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -316,9 +312,7 @@ class cross_attention:
             if slow_mm:
                 out_subblock_h = 1
                 out_subblock_w = 1
-            self.program_configs[
-                "tsa_qkt"
-            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            self.program_configs["tsa_qkt"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.tsa_grid_size,
                 in0_block_w=self.key_len // 32,
                 per_core_M=tiles_per_shard,
@@ -343,9 +337,7 @@ class cross_attention:
             if slow_mm:
                 out_subblock_h = 1
                 out_subblock_w = 1
-            self.program_configs[
-                "tsa_v"
-            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            self.program_configs["tsa_v"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.tsa_grid_size,
                 in0_block_w=seq_len // 32,
                 per_core_M=tiles_per_shard,
@@ -388,12 +380,12 @@ class cross_attention:
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
 
-                mm_slice = ttnn.experimental.operations.primary.matmul(
+                mm_slice = ttnn.matmul(
                     slice,
                     k_slice,
                     program_config=self.program_configs["tsa_qkt"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 k_slice.deallocate()
@@ -428,12 +420,12 @@ class cross_attention:
                     (j, i, self.seq_len - 1, self.key_len - 1),
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
-                mm_slice = ttnn.experimental.operations.primary.matmul(
+                mm_slice = ttnn.matmul(
                     mm_slice,
                     v_slice,
                     program_config=self.program_configs["tsa_v"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 v_slice.deallocate()
@@ -479,7 +471,7 @@ class cross_attention:
             query.deallocate()
         else:
             q_sharded = query
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=inner // 32,
             out_subblock_h=1,
@@ -488,12 +480,12 @@ class cross_attention:
             per_core_N=key_len // 32,
         )
         attention_scores = dealloc_input(
-            ttnn.experimental.operations.primary.matmul,
+            ttnn.matmul,
             q_sharded,
             key,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -573,7 +565,7 @@ class cross_attention:
         else:
             v_sharded = value
 
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=key_len // 32,
             out_subblock_h=1,
@@ -581,12 +573,12 @@ class cross_attention:
             per_core_M=num_heads * seq_len // num_cores // 32,
             per_core_N=inner // 32,
         )
-        attention_scores = ttnn.experimental.operations.primary.matmul(
+        attention_scores = ttnn.matmul(
             attention_scores,
             v_sharded,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         attention_scores = reshard_to(
@@ -625,7 +617,7 @@ class cross_attention:
                 hidden_states, grid_size, ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
             )
             output_mem_config = self.height_sharded_memory_config
-            program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=K // 32 if hs else 1,
                 per_core_M=B * M // num_cores // 32 if hs else B * M // 32,
@@ -644,7 +636,7 @@ class cross_attention:
             in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
                 M, K, N, grid_size
             )
-            program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -655,13 +647,13 @@ class cross_attention:
                 fused_activation=None,
             )
 
-        hidden_states = ttnn.experimental.operations.primary.matmul(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=output_mem_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -702,14 +694,14 @@ class cross_attention:
             program_config = self.program_configs["qkv"]
             # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
             interleaved_out = self.seq_len == 4096 or self.seq_len == 1024
-            qkv_out = ttnn.experimental.operations.primary.matmul(
+            qkv_out = ttnn.matmul(
                 hidden_states,
                 self.parameters.qkv.weight,
                 program_config=program_config,
-                output_mem_config=self.l1_interleaved_memory_config
+                memory_config=self.l1_interleaved_memory_config
                 if interleaved_out
                 else self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
@@ -736,23 +728,23 @@ class cross_attention:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
             program_config = self.program_configs["q"]
-            q_proj = ttnn.experimental.operations.primary.matmul(
+            q_proj = ttnn.matmul(
                 hidden_states,
                 self.parameters.to_q.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
 
             program_config = self.program_configs["kv"]
-            kv_proj = ttnn.experimental.operations.primary.matmul(
+            kv_proj = ttnn.matmul(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             end_core = (

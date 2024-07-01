@@ -58,6 +58,16 @@ void py_module(py::module& m_transformers) {
         Performs a custom reduction along dim 3 which is used in the SSM block of the Mamba architecture. Performs the following PyTorch equivalent (where latent_size = 32):
             x = torch.sum(x.reshape(1, 1, shape[2], shape[3] // latent_size, latent_size), dim=-1).reshape(1, 1, shape[2], shape[3] // latent_size)
     )doc");
+    m_transformers.def(
+        "ssm_prefix_scan",
+        &ssm_prefix_scan,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+        R"doc(
+        Performs a prefix scan to produce the SSM hidden states across an entire sequence. All input and output tensors are expected to be shape [1, 1, L, 2EN] where E = 2560 and N = 32. L can be any multiple of 32.)doc");
 
     py::class_<SoftmaxProgramConfig>(m_transformers, "SoftmaxProgramConfig").def(py::init<>());
 
@@ -133,6 +143,30 @@ void py_module(py::module& m_transformers) {
         "Mask must be a causal mask with 0s in the lower triangle and -inf in the upper triangle."
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension."
+        );
+
+    m_transformers.def(
+        "scaled_dot_product_attention_decode",
+        &scaled_dot_product_attention_decode,
+        py::arg("input_tensor_q").noconvert(),
+        py::arg("input_tensor_k").noconvert(),
+        py::arg("input_tensor_v").noconvert(),
+        py::arg("mask").noconvert(),
+        py::arg("scale").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("program_config").noconvert() = SDPADefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("valid_seq_len").noconvert() = std::nullopt,
+        "A version of scaled dot product attention specifically for decode."
+        "The implementation is Flash-Decode and it currently only supports MQA on decoding single token.\n"
+
+        "Q:      [1 x b x pnh x dh]"
+        "K:      [1 x b x   s x dh]"
+        "V:      [1 x b x   s x dh]"
+        "mask:   [1 x b x pnh x s ]"
+        "output: [1 x b x pnh x dh]"
+
+        "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
         );
 
 }

@@ -8,7 +8,6 @@
 #include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-// #include "debug/dprint.h"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker              = get_compile_time_arg_val(0) == 1;

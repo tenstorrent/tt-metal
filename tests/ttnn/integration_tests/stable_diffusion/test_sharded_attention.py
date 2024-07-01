@@ -138,7 +138,7 @@ def test_time_sharded_attnention_hwb(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=1,
@@ -149,12 +149,12 @@ def test_time_sharded_attnention_hwb(
             fused_activation=None,
         )
 
-        mm_slice = ttl.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             q_slice,
             k_slice,
             program_config=program_config,
-            output_mem_config=block_sharded_mem_config,
-            output_dtype=data_format,
+            memory_config=block_sharded_mem_config,
+            dtype=data_format,
             compute_kernel_config=compute_kernel_config,
         )
         # mmt = tt2torch_tensor(mm_slice)
@@ -194,7 +194,7 @@ def test_time_sharded_attnention_hwb(
         # print(message)
         # assert passed
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,
@@ -212,12 +212,12 @@ def test_time_sharded_attnention_hwb(
             output_mem_config=dram_interleaved_memory_config,
         )
 
-        mm_slice = ttl.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             mm_slice,
             v_slice,
             program_config=program_config,
-            output_mem_config=height_sharded_mem_config,
-            output_dtype=data_format,
+            memory_config=height_sharded_mem_config,
+            dtype=data_format,
             compute_kernel_config=compute_kernel_config,
         )
         v_slice.deallocate()
@@ -336,7 +336,7 @@ def test_time_sharded_attnention(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=2,
             per_core_M=tiles_per_shard,
@@ -354,12 +354,12 @@ def test_time_sharded_attnention(
             (0, (i * heads_per_slice) + (heads_per_slice - 1), 63, seq_len - 1),
             output_mem_config=l1_interleaved_memory_config,
         )
-        mm_slice = ttl.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             slice,
             k_slice,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=data_format,
+            memory_config=height_sharded_memory_config,
+            dtype=data_format,
             compute_kernel_config=compute_kernel_config,
         )
         k_slice.deallocate()
@@ -374,7 +374,7 @@ def test_time_sharded_attnention(
 
         mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,
@@ -391,12 +391,12 @@ def test_time_sharded_attnention(
             (0, (i * heads_per_slice) + (heads_per_slice - 1), seq_len - 1, 63),
             output_mem_config=l1_interleaved_memory_config,
         )
-        mm_slice = ttl.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             mm_slice,
             v_slice,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=data_format,
+            memory_config=height_sharded_memory_config,
+            dtype=data_format,
             compute_kernel_config=compute_kernel_config,
         )
         v_slice.deallocate()
@@ -513,7 +513,7 @@ def test_cross_attnention(
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=2,
         out_subblock_h=1,
@@ -530,12 +530,12 @@ def test_cross_attnention(
         packer_l1_acc=False,
     )
 
-    mm_slice = ttl.operations.primary.matmul(
+    mm_slice = ttnn.matmul(
         q_sharded,
         reference_key_layer_transposed,
         program_config=program_config,
-        output_mem_config=height_sharded_memory_config,
-        output_dtype=data_format,
+        memory_config=height_sharded_memory_config,
+        dtype=data_format,
         compute_kernel_config=compute_kernel_config,
     )
     q_sharded.deallocate()
@@ -597,7 +597,7 @@ def test_cross_attnention(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=kv_len // 32,
         out_subblock_h=1,
@@ -605,12 +605,12 @@ def test_cross_attnention(
         per_core_M=num_heads * seq_len // num_cores // 32,
         per_core_N=2,
     )
-    mm_slice = ttl.operations.primary.matmul(
+    mm_slice = ttnn.matmul(
         mm_slice,
         v_sharded,
         program_config=program_config,
-        output_mem_config=height_sharded_memory_config,
-        output_dtype=data_format,
+        memory_config=height_sharded_memory_config,
+        dtype=data_format,
         compute_kernel_config=compute_kernel_config,
     )
     v_sharded.deallocate()
@@ -712,7 +712,7 @@ def test_attention(
     M = num_heads * seq_len
     K = 64
     N = seq_len
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=K // 32,
         out_subblock_h=1,
@@ -729,12 +729,12 @@ def test_attention(
         packer_l1_acc=False,
     )
 
-    mm_slice = ttl.operations.primary.matmul(
+    mm_slice = ttnn.matmul(
         q_sharded,
         reference_key_layer_transposed,
         program_config=program_config,
-        output_mem_config=height_sharded_memory_config,
-        output_dtype=data_format,
+        memory_config=height_sharded_memory_config,
+        dtype=data_format,
         compute_kernel_config=compute_kernel_config,
     )
     q_sharded.deallocate()
@@ -812,7 +812,7 @@ def test_attention(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=seq_len // 32,
         out_subblock_h=1,
@@ -821,12 +821,12 @@ def test_attention(
         per_core_N=2,
     )
     print(program_config)
-    mm_slice = ttl.operations.primary.matmul(
+    mm_slice = ttnn.matmul(
         mm_slice,
         v_sharded,
         program_config=program_config,
-        output_mem_config=height_sharded_memory_config,
-        output_dtype=data_format,
+        memory_config=height_sharded_memory_config,
+        dtype=data_format,
         compute_kernel_config=compute_kernel_config,
     )
     v_sharded.deallocate()
@@ -940,7 +940,7 @@ def test_q_and_kv(
     in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
         M, K, N, grid_size
     )
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -957,12 +957,12 @@ def test_q_and_kv(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    mm = ttl.operations.primary.matmul(
+    mm = ttnn.matmul(
         in_0_sharded if size != 4096 else in_0,
         in_1,
         program_config=program_config,
-        output_mem_config=block_sharded_memory_config,
-        output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        memory_config=block_sharded_memory_config,
+        dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         compute_kernel_config=compute_kernel_config,
     )
     in_0_sharded.deallocate()
@@ -973,7 +973,7 @@ def test_q_and_kv(
     out_block_h = math.ceil(M / grid_size[1] / 32)
     out_block_w = math.ceil(N / grid_size[0] / 32)
     out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,

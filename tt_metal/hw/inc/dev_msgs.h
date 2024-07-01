@@ -49,25 +49,32 @@ enum dispatch_mode {
     DISPATCH_MODE_HOST,
 };
 
+enum dispatch_core_processor_classes {
+    // Tensix processor classes
+    DISPATCH_CLASS_TENSIX_DM0 = 0,
+    DISPATCH_CLASS_TENSIX_DM1 = 1,
+    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
+
+    // Ethernet processor classes
+    DISPATCH_CLASS_ETH_DM0 = 0,
+
+    DISPATCH_CLASS_MAX_PROC = 3,
+};
+
 struct launch_msg_t {  // must be cacheline aligned
-    volatile uint16_t brisc_watcher_kernel_id;
-    volatile uint16_t ncrisc_watcher_kernel_id;
-    volatile uint16_t triscs_watcher_kernel_id;
+    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX_PROC];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
-    volatile uint16_t rta_offset_brisc;
-    volatile uint16_t rta_offset_ncrisc;
-    volatile uint16_t rta_offset_trisc;
+    volatile uint16_t rta_offsets[DISPATCH_CLASS_MAX_PROC];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
-    volatile uint8_t enable_brisc;
-    volatile uint8_t enable_ncrisc;
-    volatile uint8_t enable_triscs;
+    volatile uint8_t enables[DISPATCH_CLASS_MAX_PROC];
     volatile uint8_t max_cb_index;
-    volatile uint8_t enable_erisc;
+    volatile uint8_t dispatch_core_x;
+    volatile uint8_t dispatch_core_y;
     volatile uint8_t run;  // must be in last cacheline of this msg
 };
 

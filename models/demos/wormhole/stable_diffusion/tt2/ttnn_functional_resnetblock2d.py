@@ -507,7 +507,7 @@ class resnetBlock2D:
                     time_emb_proj_out_channels = out_channels * 2
                 else:
                     raise ValueError(f"unknown time_embedding_norm : {time_embedding_norm} ")
-                program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=grid_size,
                     in0_block_w=temb.shape[-1] // grid_size[1] // 32,
                     out_subblock_h=1,
@@ -527,13 +527,13 @@ class resnetBlock2D:
                     memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
                     buffer_type=ttnn.experimental.tensor.BufferType.L1,
                 )
-                temb = ttnn.experimental.operations.primary.matmul(
+                temb = ttnn.linear(
                     temb,
                     self.parameters.time_emb_proj.weight,
                     bias=self.parameters.time_emb_proj.bias,
                     program_config=program_config,
-                    output_mem_config=l1_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=l1_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=compute_kernel_config,
                 )
 

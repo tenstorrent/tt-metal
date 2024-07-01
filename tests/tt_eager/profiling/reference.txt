@@ -14,11 +14,11 @@ tt_lib.operations.primary.moreh_logsoftmax_dim_3,40,0.86,0.95,1.23,0.99
 tt_lib.operations.primary.moreh_mean_backward,40,0.8,0.92,1.16,0.96
 tt_lib.operations.primary.moreh_mean_dims_0,40,0.9,0.95,1.23,1.0
 tt_lib.operations.primary.moreh_mean_dims_01,40,1.58,1.65,2.06,1.75
-tt_lib.operations.primary.moreh_mean_dims_012,40,1.71,2.07,2.38,2.09
-tt_lib.operations.primary.moreh_mean_dims_013,40,1.62,1.7,2.06,1.76
+tt_lib.operations.primary.moreh_mean_dims_012,80,2.0,2.55,2.45,2.33
+tt_lib.operations.primary.moreh_mean_dims_013,40,1.91,2.07,2.21,2.09
 tt_lib.operations.primary.moreh_mean_dims_1,40,0.86,0.97,1.17,0.97
 tt_lib.operations.primary.moreh_mean_dims_12,40,1.33,1.43,1.68,1.43
-tt_lib.operations.primary.moreh_mean_dims_13,40,1.1,1.17,1.57,1.25
+tt_lib.operations.primary.moreh_mean_dims_13,40,1.26,1.93,1.84,1.72
 tt_lib.operations.primary.moreh_mean_dims_2,40,0.84,0.94,1.15,0.96
 tt_lib.operations.primary.moreh_mean_dims_23,40,1.31,1.47,1.73,1.49
 tt_lib.operations.primary.moreh_mean_dims_3,40,0.84,1.43,1.73,1.4
@@ -39,10 +39,10 @@ tt_lib.operations.primary.moreh_softmin_backward_dim_1,40,0.81,0.96,1.28,1.02
 tt_lib.operations.primary.moreh_softmin_backward_dim_2,40,0.87,0.99,1.23,1.0
 tt_lib.operations.primary.moreh_softmin_backward_dim_3,40,0.92,1.26,1.46,1.14
 tt_lib.operations.primary.moreh_softmin_dim_0,40,0.88,0.97,1.33,1.01
-tt_lib.operations.primary.moreh_softmin_dim_1,40,0.74,0.78,1.16,0.84
+tt_lib.operations.primary.moreh_softmin_dim_1,40,0.88,0.92,1.1,0.91
 tt_lib.operations.primary.moreh_softmin_dim_2,40,0.9,1.0,1.29,1.05
 tt_lib.operations.primary.softmax_in_place,40,0.91,0.95,1.2,1.0
-tt_lib.operations.primary.transformers.scale_mask_softmax_in_place,40,0.82,1.26,1.6,1.29
+tt_lib.operations.primary.transformers.scale_mask_softmax_in_place,40,0.96,0.99,1.06,0.97
 tt_lib.operations.primary_moreh_softmin_dim_3,40,0.86,1.02,1.29,1.09
 tt_lib.tensor.abs,40,0.81,0.87,1.13,0.92
 tt_lib.tensor.abs_bw,40,1.68,1.77,2.08,1.82
@@ -80,7 +80,7 @@ tt_lib.tensor.assign_unary,40,0.61,0.71,0.95,0.79
 tt_lib.tensor.atan,40,0.84,0.89,1.16,0.93
 tt_lib.tensor.atan2,40,36.98,39.44,40.1,38.78
 tt_lib.tensor.atan2_bw,40,17.84,19.8,20.66,19.76
-tt_lib.tensor.atan_bw,40,1.61,1.88,2.26,1.9
+tt_lib.tensor.atan_bw,40,1.84,2.55,2.57,2.34
 tt_lib.tensor.atanh,40,12.04,13.14,14.2,13.2
 tt_lib.tensor.atanh_bw,40,31.72,33.08,33.3,31.65
 tt_lib.tensor.bcast_add_h,40,0.97,1.29,1.56,1.18
@@ -88,7 +88,7 @@ tt_lib.tensor.bcast_add_hw,40,0.88,0.97,1.23,1.01
 tt_lib.tensor.bcast_add_w,40,0.94,1.75,1.81,1.67
 tt_lib.tensor.bcast_mul_h,40,1.02,1.62,2.03,1.59
 tt_lib.tensor.bcast_mul_hw,40,0.88,0.95,1.23,0.99
-tt_lib.tensor.bcast_mul_w,40,0.85,1.26,2.4,1.63
+tt_lib.tensor.bcast_mul_w,40,1.01,1.12,1.14,1.05
 tt_lib.tensor.bcast_sub_h,40,0.96,1.46,1.5,1.34
 tt_lib.tensor.bcast_sub_hw,40,0.96,1.29,1.61,1.23
 tt_lib.tensor.bcast_sub_w,40,0.87,0.98,1.2,1.0
@@ -121,7 +121,7 @@ tt_lib.tensor.complex_div,40,17.94,18.43,18.75,17.95
 tt_lib.tensor.complex_mul,40,8.24,9.8,10.05,9.22
 tt_lib.tensor.complex_recip,40,9.2,9.98,10.63,9.99
 tt_lib.tensor.complex_sub,40,0.88,0.97,1.23,0.99
-tt_lib.tensor.concat_bw_dim_0,40,1.25,1.32,1.66,1.39
+tt_lib.tensor.concat_bw_dim_0,80,1.45,1.63,1.57,1.53
 tt_lib.tensor.concat_bw_dim_1,40,1.29,1.36,1.69,1.41
 tt_lib.tensor.concat_bw_dim_2,40,1.29,1.36,1.66,1.41
 tt_lib.tensor.concat_bw_dim_3,40,1.29,1.36,1.66,1.41
@@ -155,11 +155,11 @@ tt_lib.tensor.erf_fast_and_approx_True,40,0.82,0.9,1.22,0.95
 tt_lib.tensor.erfc_bw,40,4.29,4.45,4.78,4.45
 tt_lib.tensor.erfc_fast_and_approx_False,40,0.81,0.91,1.34,0.99
 tt_lib.tensor.erfc_fast_and_approx_True,40,0.83,0.9,1.19,0.94
-tt_lib.tensor.erfinv,40,0.7,0.78,1.36,0.81
+tt_lib.tensor.erfinv,40,0.82,0.87,1.7,0.97
 tt_lib.tensor.erfinv_bw,40,29.23,30.73,31.9,30.12
 tt_lib.tensor.exp,40,0.82,0.89,1.14,0.92
 tt_lib.tensor.exp2,40,0.77,0.81,1.08,0.85
-tt_lib.tensor.exp2_bw,40,2.14,2.27,2.61,2.27
+tt_lib.tensor.exp2_bw,80,2.53,2.81,2.8,2.74
 tt_lib.tensor.exp_bw,40,21.52,23.13,25.86,23.33
 tt_lib.tensor.expm1,40,0.82,0.89,1.12,0.92
 tt_lib.tensor.expm1_bw,40,2.72,3.11,3.53,3.0
@@ -218,7 +218,7 @@ tt_lib.tensor.ldexp,40,0.86,0.97,1.22,1.0
 tt_lib.tensor.ldexp_bw,40,4.43,4.88,5.12,4.82
 tt_lib.tensor.le_bw,40,0.99,1.03,1.33,1.08
 tt_lib.tensor.leaky_relu,40,0.87,0.91,1.19,0.96
-tt_lib.tensor.leaky_relu_bw,40,5.32,5.82,6.36,5.85
+tt_lib.tensor.leaky_relu_bw,40,6.08,6.41,6.27,6.15
 tt_lib.tensor.lerp,40,2.6,2.97,3.12,2.92
 tt_lib.tensor.lerp_binary,40,2.48,2.65,2.92,2.65
 tt_lib.tensor.lerp_bw_float_weight,40,1.87,2.01,2.39,2.03
@@ -365,7 +365,7 @@ tt_lib.tensor.swiglu_dim_3,40,2.98,3.69,4.23,3.54
 tt_lib.tensor.swish,40,0.81,1.05,1.36,1.02
 tt_lib.tensor.tan,40,0.82,0.88,0.93,0.85
 tt_lib.tensor.tan_bw,40,2.99,3.27,3.7,3.29
-tt_lib.tensor.tanh,40,0.71,0.77,1.04,0.83
+tt_lib.tensor.tanh,40,0.83,0.99,1.13,0.93
 tt_lib.tensor.tanh_bw,40,3.0,3.84,4.31,3.59
 tt_lib.tensor.tanhshrink,40,1.8,1.95,2.27,2.01
 tt_lib.tensor.tanhshrink_bw,40,2.37,2.94,3.1,2.76
@@ -375,8 +375,8 @@ tt_lib.tensor.tilize,40,0.01,0.02,0.11,0.0
 tt_lib.tensor.tilize_with_val_padding,40,0.54,1.03,4.61,0.87
 tt_lib.tensor.tilize_with_zero_padding,40,0.01,0.02,0.11,0.0
 tt_lib.tensor.transpose,40,0.88,0.95,1.23,0.99
-tt_lib.tensor.tril,40,87.96,89.4,90.01,1.15
-tt_lib.tensor.triu,40,87.9,89.07,90.23,1.27
+tt_lib.tensor.tril,24,99.64,99.76,99.54,1.65
+tt_lib.tensor.triu,24,99.97,100.18,99.82,1.2
 tt_lib.tensor.trunc_bw,40,0.94,1.41,1.73,1.49
 tt_lib.tensor.typecast,40,0.76,0.81,1.32,0.92
 tt_lib.tensor.unary_add_bw,40,0.0,0.01,0.1,0.0
@@ -391,7 +391,7 @@ tt_lib.tensor.unary_remainder_bw,40,0.0,0.01,0.08,0.0
 tt_lib.tensor.unary_sub_bw,40,0.0,0.01,0.09,0.0
 tt_lib.tensor.unpad,40,0.66,0.74,1.02,0.77
 tt_lib.tensor.untilize,40,0.79,0.85,1.13,0.9
-tt_lib.tensor.untilize_with_unpadding,40,0.46,1.02,3.96,0.67
+tt_lib.tensor.untilize_with_unpadding,40,0.59,0.82,4.13,0.72
 tt_lib.tensor.var_hw,40,3.69,4.05,4.4,4.17
 tt_lib.tensor.where,40,3.57,4.16,4.47,4.19
 tt_lib.tensor.where_binary_x_const_y,40,4.46,5.09,5.27,4.84

@@ -79,10 +79,13 @@ enum class UnaryOpType {
     UNARY_LT,
     TILED_PROD,
     TYPECAST,
+    BITWISE_XOR,
+    BITWISE_NOT,
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
-    REMAINDER
+    REMAINDER,
+    FMOD
 };
 
 template <typename T>
@@ -110,9 +113,12 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER: return true;
+        case UnaryOpType::REMAINDER:
+        case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;
@@ -212,6 +218,7 @@ inline Tensor run_eltwise_unary_with_output_tensor(
         preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
+        output_dtype == DataType::FLOAT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
@@ -262,7 +269,8 @@ inline Tensor run_eltwise_unary(
     uint8_t cq_id,
     const Tensor& input_tensor,
     const std::vector<UnaryWithParam>& ops_chain,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
     DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
     bool preserve_fp32_precision = (ops_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
@@ -270,12 +278,13 @@ inline Tensor run_eltwise_unary(
         preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
+        output_dtype == DataType::FLOAT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
                EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
-               {input_tensor}, {}, {}, cq_id)
+               {input_tensor}, {}, {output_tensor}, cq_id)
         .at(0);
 }
 
@@ -358,6 +367,188 @@ inline Tensor recip(
         return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::RECIP)}, output_mem_config, output_tensor);
 }
 
+inline Tensor gtz(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::GTZ)}, output_mem_config, output_tensor);
+}
+inline Tensor gtz(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::GTZ)}, output_mem_config, output_tensor);
+}
+
+inline Tensor gez(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::GEZ)}, output_mem_config, output_tensor);
+}
+inline Tensor gez(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::GEZ)}, output_mem_config, output_tensor);
+}
+
+inline Tensor lez(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LEZ)}, output_mem_config, output_tensor);
+}
+inline Tensor lez(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LEZ)}, output_mem_config, output_tensor);
+}
+
+inline Tensor ltz(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LTZ)}, output_mem_config, output_tensor);
+}
+inline Tensor ltz(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LTZ)}, output_mem_config, output_tensor);
+}
+
+inline Tensor eqz(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::EQZ)}, output_mem_config, output_tensor);
+}
+
+inline Tensor eqz(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::EQZ)}, output_mem_config, output_tensor);
+}
+inline Tensor sign(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::SIGN)}, output_mem_config, output_tensor);
+}
+
+inline Tensor sign(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::SIGN)}, output_mem_config, output_tensor);
+}
+
+inline Tensor neg(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::NEG)}, output_mem_config, output_tensor);
+}
+
+inline Tensor neg(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::NEG)}, output_mem_config, output_tensor);
+}
+
+inline Tensor tanh(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::TANH)}, output_mem_config, output_tensor);
+}
+
+inline Tensor tanh(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::TANH)}, output_mem_config, output_tensor);
+}
+
+inline Tensor log(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LOG)}, output_mem_config, output_tensor);
+}
+
+inline Tensor log(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::LOG)}, output_mem_config, output_tensor);
+}
+
+inline Tensor abs(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::ABS)}, output_mem_config, output_tensor);
+}
+
+inline Tensor abs(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::ABS)}, output_mem_config, output_tensor);
+}
+
+inline Tensor square(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return run_eltwise_unary_with_output_tensor(
+        default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::SQUARE)}, output_mem_config, output_tensor);
+}
+
+inline Tensor square(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        return run_eltwise_unary_with_output_tensor(queue_id, input_tensor, {UnaryWithParam(UnaryOpType::SQUARE)}, output_mem_config, output_tensor);
+}
+
 inline Tensor sqrt(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     uint8_t default_queue_id = 0;
@@ -368,16 +559,15 @@ inline Tensor sqrt(
 inline Tensor sqrt(
     uint8_t cq_id,
     const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return run_eltwise_unary(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    return run_eltwise_unary(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config, output_tensor);
 }
 
 constexpr auto relu = make_eltwise_unary<UnaryOpType::RELU>{};
 constexpr auto relu6 = make_eltwise_unary<UnaryOpType::RELU6>{};
 constexpr auto sigmoid = make_eltwise_unary<UnaryOpType::SIGMOID>{};
 constexpr auto tiled_prod = make_eltwise_unary<UnaryOpType::TILED_PROD>{};
-constexpr auto log = make_eltwise_unary<UnaryOpType::LOG>{};
-constexpr auto tanh = make_eltwise_unary<UnaryOpType::TANH>{};
 constexpr auto log2 = make_eltwise_unary<UnaryOpType::LOG2>{};
 constexpr auto log10 = make_eltwise_unary<UnaryOpType::LOG10>{};
 constexpr auto exp2 = make_eltwise_unary<UnaryOpType::EXP2>{};
@@ -386,40 +576,32 @@ constexpr auto sin = make_eltwise_unary<UnaryOpType::SIN>{};
 constexpr auto cos = make_eltwise_unary<UnaryOpType::COS>{};
 constexpr auto asin = make_eltwise_unary<UnaryOpType::ASIN>{};
 constexpr auto acos = make_eltwise_unary<UnaryOpType::ACOS>{};
-constexpr auto abs = make_eltwise_unary<UnaryOpType::ABS>{};
 constexpr auto isfinite = make_eltwise_unary<UnaryOpType::ISFINITE>{};
 constexpr auto isinf = make_eltwise_unary<UnaryOpType::ISINF>{};
 constexpr auto isposinf = make_eltwise_unary<UnaryOpType::ISPOSINF>{};
 constexpr auto isneginf = make_eltwise_unary<UnaryOpType::ISNEGINF>{};
 constexpr auto isnan = make_eltwise_unary<UnaryOpType::ISNAN>{};
-constexpr auto sign = make_eltwise_unary<UnaryOpType::SIGN>{};
 constexpr auto signbit = make_eltwise_unary<UnaryOpType::SIGNBIT>{};
 constexpr auto floor = make_eltwise_unary<UnaryOpType::FLOOR>{};
-constexpr auto square = make_eltwise_unary<UnaryOpType::SQUARE>{};
 constexpr auto atan = make_eltwise_unary<UnaryOpType::ATAN>{};
-constexpr auto eqz = make_eltwise_unary<UnaryOpType::EQZ>{};
 constexpr auto nez = make_eltwise_unary<UnaryOpType::NEZ>{};
-constexpr auto gez = make_eltwise_unary<UnaryOpType::GEZ>{};
-constexpr auto lez = make_eltwise_unary<UnaryOpType::LEZ>{};
-constexpr auto gtz = make_eltwise_unary<UnaryOpType::GTZ>{};
-constexpr auto ltz = make_eltwise_unary<UnaryOpType::LTZ>{};
 constexpr auto logical_not_unary = make_eltwise_unary<UnaryOpType::LOGICAL_NOT_UNARY>{};
 constexpr auto i0 = make_eltwise_unary<UnaryOpType::I0>{};
 constexpr auto erfinv = make_eltwise_unary<UnaryOpType::ERFINV>{};
 constexpr auto tan = make_eltwise_unary<UnaryOpType::TAN>{};
-constexpr auto neg = make_eltwise_unary<UnaryOpType::NEG>{};
 constexpr auto relu_max = make_eltwise_unary_with_param<UnaryOpType::RELU_MAX>{};
 constexpr auto relu_min = make_eltwise_unary_with_param<UnaryOpType::RELU_MIN>{};
-constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER, uint32_t>{};
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
 constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto bitwise_xor = make_eltwise_unary_with_param<UnaryOpType::BITWISE_XOR>{};
+constexpr auto bitwise_not = make_eltwise_unary_with_param<UnaryOpType::BITWISE_NOT>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};
+constexpr auto unary_fmod = make_eltwise_unary_with_param<UnaryOpType::FMOD>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
-constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 constexpr auto identity_uint32 = make_eltwise_unary<UnaryOpType::IDENTITY_UINT32>{};
@@ -432,15 +614,72 @@ constexpr auto sub_unary_sfpu =
 constexpr auto div_unary_sfpu =
     make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>{};
 
+inline Tensor power(
+    uint8_t cq_id,
+    const Tensor& input_tensor,
+    uint32_t exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+
+    return run_eltwise_unary_with_output_tensor(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::POWER, static_cast<float>(exponent))}, output_mem_config, output_tensor);
+}
+inline Tensor power(
+    const Tensor& input_tensor,
+    uint32_t exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        uint8_t default_queue_id = 0;
+        return run_eltwise_unary_with_output_tensor(default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::POWER, static_cast<float>(exponent))}, output_mem_config, output_tensor);
+}
+
+inline Tensor rsub(
+    uint8_t cq_id,
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+
+    return run_eltwise_unary_with_output_tensor(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::RSUB, static_cast<float>(value))}, output_mem_config, output_tensor);
+}
+inline Tensor rsub(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+        uint8_t default_queue_id = 0;
+        return run_eltwise_unary_with_output_tensor(default_queue_id, input_tensor, {UnaryWithParam(UnaryOpType::RSUB, static_cast<float>(value))}, output_mem_config, output_tensor);
+}
+
+inline Tensor exp(
+    uint8_t cq_id,
+    const Tensor& input_tensor,
+    bool fast_and_approx,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    return run_eltwise_unary_with_output_tensor(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::EXP, static_cast<float>(fast_and_approx))}, output_mem_config, output_tensor);
+}
+inline Tensor exp(
+    uint8_t cq_id,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    return run_eltwise_unary_with_output_tensor(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::EXP, static_cast<float>(false))}, output_mem_config, output_tensor);
+}
+
 inline Tensor exp(
     const Tensor& input_tensor,
     bool fast_and_approx,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return make_eltwise_unary_with_param<UnaryOpType::EXP>{}(input_tensor, fast_and_approx, output_mem_config);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return exp(default_queue_id, input_tensor, fast_and_approx, output_mem_config, output_tensor);
 }
+
 inline Tensor exp(
-    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return exp(input_tensor, false, output_mem_config);
+    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return exp(default_queue_id, input_tensor, output_mem_config, output_tensor);
 }
 
 inline Tensor erf(
@@ -601,21 +840,49 @@ Tensor div_unary(
     std::optional<Tensor> output_tensor = std::nullopt);
 // relops with unary argument
 Tensor lte_unary(
+    uint8_t queue_id,
     const Tensor& input_tensor,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor lte_unary(
+    uint8_t queue_id,
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor lte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor lte_unary(
     float value,
     const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor gte_unary(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor gte_unary(
+    uint8_t queue_id,
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor gte_unary(
     const Tensor& input_tensor,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor gte_unary(
     float value,
     const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor eq_unary(
     const Tensor& input_tensor,
     float value,

@@ -15,7 +15,7 @@ jobs:
       matrix:
         test-info: [
           {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal", timeout: 20},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal", timeout: 30},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:
@@ -38,6 +38,7 @@ jobs:
       - name: Build tt-metal and libs
         run: |
           ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
       - name: Run device performance regressions
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |

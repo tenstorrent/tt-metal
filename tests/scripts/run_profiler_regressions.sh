@@ -10,6 +10,8 @@ run_additional_T3000_test(){
 
     ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config0-input_dtype0-8-1-input_shape1-0-layout1]" > $PROFILER_ARTIFACTS_DIR/test_out.log
 
+    cat $PROFILER_ARTIFACTS_DIR/test_out.log
+
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
         echo "No verification as test was skipped"
@@ -20,7 +22,6 @@ run_additional_T3000_test(){
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
         echo $res
     fi
-    cat $PROFILER_ARTIFACTS_DIR/test_out.log
 }
 
 run_async_mode_T3000_test(){
@@ -52,7 +53,7 @@ run_profiling_test(){
       exit 1
     fi
 
-    echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
+    echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
     source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
@@ -82,7 +83,7 @@ run_profiling_no_reset_test(){
       exit 1
     fi
 
-    echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
+    echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
     source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME

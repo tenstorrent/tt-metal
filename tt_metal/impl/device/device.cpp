@@ -31,14 +31,6 @@ Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
     id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
     ZoneScoped;
-    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
-    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
-    if (!this->is_mmio_capable()) {
-        //Remote device Vs MMIO Device need to be unique even if they have same harvesting mask because
-        //dispatch cores are allocated differently on two types of devices.
-        //harvest mask is 12-bit mask so adding 100000 should not alias with any possible harvest mask value.
-        this->build_key_ += 100000;
-    }
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
@@ -74,9 +66,9 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .compute_grid_size = this->compute_with_storage_grid_size()});
     TT_FATAL(config.l1_small_size < config.l1_bank_size, "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % ADDRESS_ALIGNMENT == 0,
-        "Reserved size must be aligned to ADDRESS_ALIGNMENT",
-        ADDRESS_ALIGNMENT);
+        config.l1_small_size % ALLOCATOR_ALIGNMENT == 0,
+        "Reserved size must be aligned to ALLOCATOR_ALIGNMENT {}",
+        ALLOCATOR_ALIGNMENT);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -201,19 +193,10 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
 void Device::initialize_and_launch_firmware() {
     ZoneScoped;
 
-    launch_msg_t launch_msg = {
-        .brisc_watcher_kernel_id = 0,
-        .ncrisc_watcher_kernel_id = 0,
-        .triscs_watcher_kernel_id = 0,
-        .ncrisc_kernel_size16 = 0,
-        .mode = DISPATCH_MODE_HOST,
-        .brisc_noc_id = 0,
-        .enable_brisc = 0,
-        .enable_ncrisc = 0,
-        .enable_triscs = 0,
-        .enable_erisc = 0,
-        .run = RUN_MSG_INIT,
-    };
+    launch_msg_t launch_msg;
+    std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    launch_msg.mode = DISPATCH_MODE_HOST,
+    launch_msg.run = RUN_MSG_INIT,
 
     // Download to worker cores
     log_debug("Initializing firmware");
@@ -1567,7 +1550,7 @@ void Device::initialize_command_queue() {
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, static_cast<NOC>(cq_id));
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, NOC::NOC_0);
         // Need to do this since CommandQueue constructor is private
         sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
@@ -1621,10 +1604,11 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
-    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
+    TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= Device::max_num_hw_cqs, "num_hw_cqs can be between 1 and {}", Device::max_num_hw_cqs);
     this->using_fast_dispatch = false;
-    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(this->id());
     this->num_hw_cqs_ = num_hw_cqs;
+    constexpr uint32_t harvesting_map_bits = 12;
+    this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
     this->initialize_cluster();
     this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
@@ -1651,7 +1635,7 @@ bool Device::close() {
         }
         hw_command_queue->terminate();
     }
-
+    this->work_executor.reset();
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
@@ -1802,7 +1786,6 @@ bool Device::close() {
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->work_executor.reset();
     this->allocator_.reset();
 
     this->initialized_ = false;
@@ -1910,12 +1893,23 @@ uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& ph
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
     const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
-    return NOC_MULTICAST_ENCODING(
-        NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
-        NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
-        NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
-        NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
-    );
+
+    // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
+    if (noc_index == 0) {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
+        );
+    } else {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y)
+        );
+    }
 }
 
 void Device::check_allocator_is_initialized() const {

@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -16,13 +17,13 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("alpha", [0.05, 1.0, 0.5, 0.12])
+@pytest.mark.parametrize("alpha", [0.05, 2.0, 1.5, 0.12])
 def test_bw_addalpha(input_shapes, alpha, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.addalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
+    tt_output_tensor_on_device = ttnn.addalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
 
     in_data.retain_grad()
     other_data.retain_grad()
@@ -46,7 +47,7 @@ def test_bw_addalpha(input_shapes, alpha, device):
     ),
 )
 @pytest.mark.parametrize("alpha", [0.05, 2.0, 1.5, 0.12])
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
 def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -60,14 +61,14 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    tt_output_tensor_on_device = tt_lib.tensor.addalpha_bw(
+    tt_output_tensor_on_device = ttnn.addalpha_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
         alpha,
         are_required_outputs=are_required_outputs,
-        input_a_grad=input_grad,
-        input_b_grad=other_grad,
+        optional_input_a_grad=input_grad,
+        optional_input_b_grad=other_grad,
         queue_id=cq_id,
     )
 

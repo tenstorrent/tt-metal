@@ -8,8 +8,10 @@ from typing import List, Optional, Tuple
 import torch
 import ttnn
 
+import tt_lib
+
 from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.falcon7b.tt.model_utils import get_weights_cached
+from models.demos.falcon7b.tt.model_utils import get_weights_cached, layernorm
 from models.utility_functions import nearest_32, torch_tensors_to_tt_tensors
 from models.demos.falcon7b.tests.test_utils import create_prefill_attn_mask_for_sharded_softmax
 from tqdm import tqdm
@@ -250,6 +252,7 @@ class TtFalconModelShared(torch.nn.Module):
         layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
+        device_perf_run: bool = False,
     ) -> ttnn.experimental.tensor.Tensor:
         # Convert input tokens to embeddings
         input_embeddings = [
@@ -281,29 +284,19 @@ class TtFalconModelShared(torch.nn.Module):
             presents += (layer_output[1],)
             layer_output = layer_output[0]
 
+            if device_perf_run and idx % 8 == 0:
+                for i in range(self.num_devices):
+                    tt_lib.device.DumpDeviceProfiler(layer_output[i].device())
+
         # apply final norm layer
-        for i in range(self.num_devices):
-            layer_output[i] = ttnn.experimental.tensor.layernorm(
-                layer_output[i],
-                self.layernorm_eps,
-                output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            )
-        for i in range(self.num_devices):
-            layer_output[i] = ttnn.experimental.tensor.bcast(
-                layer_output[i],
-                self.layernorm_gamma[i],
-                ttnn.experimental.tensor.BcastOpMath.MUL,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            )
-        for i in range(self.num_devices):
-            layer_output[i] = ttnn.experimental.tensor.bcast(
-                layer_output[i],
-                self.layernorm_beta[i],
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            )
+        layer_output = layernorm(
+            layer_output,
+            self.layernorm_eps,
+            self.layernorm_gamma,
+            self.layernorm_beta,
+            self.num_devices,
+            self.model_config,
+        )
 
         return layer_output, presents
 

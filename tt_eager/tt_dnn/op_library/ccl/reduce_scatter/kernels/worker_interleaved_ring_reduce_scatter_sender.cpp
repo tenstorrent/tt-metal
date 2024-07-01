@@ -62,7 +62,6 @@ void kernel_main() {
         get_noc_addr(eth_sender_noc_x, eth_sender_noc_y, eth_sender_l1_sem_addr);
 
     uint32_t total_lifetime_cb_pages_popped_from_math = 0;
-    uint32_t total_cb_pages_popped = 0;  // DEBUG ONLY
     while (worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
         // First phase - we only forward messages to EDM
         coord_t valid_worker_slice_shape = coord_t(
@@ -79,7 +78,6 @@ void kernel_main() {
                 noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
                 noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
                 send_chunk(cb_in, n_pages, page_size, eth_l1_sender_base_noc_addr);
-                total_cb_pages_popped += n_pages;  // DEBUG ONLY
                 noc_semaphore_inc(
                     eth_l1_sender_semaphore_addr,
                     tt::tt_metal::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
@@ -91,7 +89,6 @@ void kernel_main() {
 
                     ASSERT(p + n_pages == num_pages_to_write);
                     pop_filler_pages_from_cb(cb_in, num_filler_pages);
-                    total_cb_pages_popped += num_filler_pages;  // DEBUG ONLY
                     if (i != 0) {
                         total_lifetime_cb_pages_popped_from_math += num_filler_pages;
                     }
@@ -138,6 +135,7 @@ void kernel_main() {
             worker_slice_base_offset, worker_slice_shape, output_tensor_shape, num_concurrent_workers);
     }
 
+    ASSERT(total_lifetime_cb_pages_popped_from_math <= total_eltwise_kernel_num_pages);
     for (; total_lifetime_cb_pages_popped_from_math < total_eltwise_kernel_num_pages;
          total_lifetime_cb_pages_popped_from_math++) {
         pop_filler_pages_from_cb(cb_id_in0, 1);

@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
 from tt_lib.fallback_ops import fallback_ops
@@ -52,7 +53,7 @@ class TtConvNet(torch.nn.Module):
         last_dim_size = out.get_legacy_shape()[-1] * out.get_legacy_shape()[-2] * out.get_legacy_shape()[-3]
         out = fallback_ops.reshape(out, out.get_legacy_shape()[0], 1, 1, last_dim_size)
 
-        out = tt_lib.tensor.matmul(out, self.linear1_weights)
+        out = ttnn.matmul(out, self.linear1_weights)
         out = tt_lib.tensor.bcast(
             out,
             self.linear1_bias,
@@ -60,7 +61,7 @@ class TtConvNet(torch.nn.Module):
             tt_lib.tensor.BcastOpDim.H,
         )
         out = tt_lib.tensor.relu(out)
-        out = tt_lib.tensor.matmul(out, self.linear2_weights)
+        out = ttnn.matmul(out, self.linear2_weights)
         out = tt_lib.tensor.bcast(
             out,
             self.linear2_bias,

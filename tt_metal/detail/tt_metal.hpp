@@ -399,18 +399,6 @@ namespace tt::tt_metal{
                 pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
             }
 
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-            const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
-            tt_cxy_pair enqueue_program_dispatch_core;
-            if (device->is_mmio_capable()) {
-                enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, cq_id);
-            } else {
-                enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_d_core(device->id(), channel, cq_id);
-            }
-
-            CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
-            CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, core_type);
-
             jit_build_genfiles_noc_addr_ranges_header(
                 path,
                 pcie_chan_base_addr,
@@ -421,8 +409,7 @@ namespace tt::tt_metal{
                 soc_d.get_dram_cores(),
                 soc_d.get_physical_ethernet_cores(),
                 soc_d.grid_size,
-                harvested_rows,
-                physical_enqueue_program_dispatch_core);
+                harvested_rows);
         }
 
         inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
@@ -445,15 +432,16 @@ namespace tt::tt_metal{
                         const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
                         if (kernel_group != nullptr) {
                             bool local_noc0_in_use = false; bool local_noc1_in_use = false;
-                            if (kernel_group->riscv0_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
                                 riscv0_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->riscv0_id.value(), local_noc0_in_use, local_noc1_in_use);
+                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
                             }
-                            if (kernel_group->riscv1_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
                                 riscv1_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
+                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
                             }
-                            if (kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
+                                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
                                 TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
                             }
                         }

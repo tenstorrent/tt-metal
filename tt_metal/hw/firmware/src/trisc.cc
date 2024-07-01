@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
 #endif
 
         uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_trisc);
+        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_COMPUTE]);
 
         DEBUG_STATUS("R");
         kernel_init();

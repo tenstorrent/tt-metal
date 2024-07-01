@@ -31,7 +31,7 @@ constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
 constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024 + 2 * sizeof(CQPrefetchCmd) + 2 * sizeof(CQDispatchCmd);
-constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
+constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
@@ -112,7 +112,7 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
-        log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write-read 6:Host (default {})", DEFAULT_TEST_TYPE);
+        log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write-read 6:Host 7:Packed-read (default {})", DEFAULT_TEST_TYPE);
         log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end.x);
@@ -145,7 +145,7 @@ void init(int argc, char **argv) {
     hugepage_issue_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    max_prefetch_command_size_g = cmddat_q_size_g;  // note: half this for best perf
+    max_prefetch_command_size_g = cmddat_q_size_g / 2;  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
@@ -220,6 +220,36 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds,
         for (uint32_t i = 0; i < (CQ_PREFETCH_CMD_BARE_MIN_SIZE - sizeof(CQPrefetchCmd)) / sizeof(uint32_t); i++) {
             cmds.push_back(std::rand());
         }
+    }
+}
+
+void add_prefetcher_packed_paged_read_cmd(vector<uint32_t>& cmds,
+                                          vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+                                          uint32_t length) {
+
+    CQPrefetchCmd cmd;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
+
+    uint32_t stride = sub_cmds.size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) + sizeof(CQPrefetchCmd);
+    uint32_t aligned_stride = round_cmd_size_up(stride);
+    cmd.relay_paged_packed.total_length = length;
+    cmd.relay_paged_packed.stride = aligned_stride;
+    cmd.relay_paged_packed.count = sub_cmds.size();
+
+    uint32_t *ptr = (uint32_t *)&cmd;
+    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+        cmds.push_back(*ptr++);
+    }
+
+    for (int i = 0; i < sub_cmds.size(); i++) {
+        uint32_t *ptr = (uint32_t *)&sub_cmds[i];
+        for (int j = 0; j < sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t); j++) {
+            cmds.push_back(*ptr++);
+        }
+    }
+
+    for (int i = 0; i < (aligned_stride - stride) / sizeof(uint32_t); i++) {
+        cmds.push_back(0);
     }
 }
 
@@ -414,6 +444,69 @@ void add_paged_dram_data_to_device_data(Device *device,
             device_data.push_range(workers, datum, false);
         }
     }
+}
+
+// Packed page read from dram to linear write to worker
+void gen_dram_packed_read_cmd(Device *device,
+                              vector<uint32_t>& prefetch_cmds,
+                              vector<uint32_t>& cmd_sizes,
+                              DeviceData& device_data,
+                              CoreCoord worker_core,
+                              uint32_t log_page_size,
+                              vector<uint32_t>& lengths) {
+
+    vector<uint32_t> dispatch_cmds;
+    vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds;
+
+    uint32_t total_length = 0;
+    for (auto l : lengths) {
+        total_length += l;
+    }
+    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, total_length);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+
+    uint32_t page_size = 1 << log_page_size;
+    int count = 0;
+    for (auto length : lengths) {
+        TT_ASSERT(length <= num_dram_banks_g * page_size);
+        TT_ASSERT((length & (DRAM_DATA_ALIGNMENT - 1)) == 0);
+        CQPrefetchRelayPagedPackedSubCmd sub_cmd;
+        sub_cmd.start_page = 0; // TODO: randomize?
+        sub_cmd.log_page_size = log_page_size;
+        sub_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
+        sub_cmd.length = length;
+        sub_cmds.push_back(sub_cmd);
+        count++;
+
+        // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data, for validation later.
+        uint32_t length_words = length / sizeof(uint32_t);
+        uint32_t base_addr_words = (sub_cmd.base_addr - DRAM_DATA_BASE_ADDR) / sizeof(uint32_t);
+        uint32_t page_size_words = page_size / sizeof(uint32_t);
+
+        // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
+        uint32_t page_idx = sub_cmd.start_page;
+        for (uint32_t i = 0; i < length_words; i += page_size_words) {
+            uint32_t dram_bank_id = page_idx % num_dram_banks_g;
+            auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
+            CoreCoord bank_core = device->dram_core_from_dram_channel(dram_channel);
+            uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
+
+            uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
+            for (uint32_t j = 0; j  < words; j++) {
+                uint32_t datum = device_data.at(bank_core, dram_bank_id, bank_offset + j);
+                device_data.push_one(worker_core, datum);
+            }
+
+            page_idx++;
+        }
+    }
+
+    auto prior_end = prefetch_cmds.size();
+    add_prefetcher_packed_paged_read_cmd(prefetch_cmds, sub_cmds, total_length);
+    uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 }
 
 // Interleaved/Paged Read of DRAM to Worker L1
@@ -780,6 +873,35 @@ void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
 }
 
+void gen_packed_read_test(Device *device,
+                          vector<uint32_t>& prefetch_cmds,
+                          vector<uint32_t>& cmd_sizes,
+                          DeviceData& device_data) {
+
+    bool done = false;
+    while (!done) {
+        uint32_t packed_read_page_size = std::rand() % 3 + 9; // 512, 1024, 2048
+        uint32_t n_sub_cmds = (std::rand() % 7) + 1;
+
+        vector<uint32_t> lengths;
+        uint32_t total_length = 0;
+        for (uint32_t i = 0; i < n_sub_cmds; i++) {
+            uint32_t max_size128b = (scratch_db_size_g / 2) >> 7;
+            uint32_t length = (std::rand() % max_size128b) << 7;
+            if (length < 128) length = 128;
+            total_length += length;
+            lengths.push_back(length);
+        }
+
+        if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+            // got close-ish to the end anyway...
+            done = true;
+        } else {
+            gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, packed_read_page_size, lengths);
+        }
+    }
+}
+
 void gen_rnd_test(Device *device,
                   vector<uint32_t>& prefetch_cmds,
                   vector<uint32_t>& cmd_sizes,
@@ -887,7 +1009,8 @@ void gen_smoke_test(Device *device,
                     vector<uint32_t>& prefetch_cmds,
                     vector<uint32_t>& cmd_sizes,
                     DeviceData& device_data,
-                    CoreCoord worker_core) {
+                    CoreCoord worker_core,
+                    CoreCoord another_worker_core) {
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
@@ -956,6 +1079,44 @@ void gen_smoke_test(Device *device,
     cmd_sizes.pop_back();
     cmd_sizes.pop_back();
     cmd_sizes.pop_back();
+
+    // Use another_worker_core as worker_core is filling up
+    // Do this before dram paged commands below which level up the results across cores
+    vector<uint32_t> lengths;
+    constexpr uint32_t packed_read_page_size = 10;
+    lengths.push_back(256);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+
+    lengths.push_back(512);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+
+    lengths.resize(0);
+    lengths.push_back(1024);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+    lengths.push_back(2048);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+
+    lengths.resize(0);
+    lengths.push_back(2080);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+
+    lengths.push_back(2080);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size + 1, lengths);
+
+    lengths.resize(0);
+    lengths.push_back(scratch_db_size_g / 8);
+    lengths.push_back(scratch_db_size_g / 8);
+    lengths.push_back(scratch_db_size_g / 8);
+    lengths.push_back(scratch_db_size_g / 4);  // won't fit in first pass
+    lengths.push_back(scratch_db_size_g / 2);  // won't fit in second pass
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
+
+    lengths.resize(0);
+    lengths.push_back(scratch_db_size_g / 4 + 2 * 1024 + 32);
+    lengths.push_back(scratch_db_size_g / 4 + 3 * 1024 + 32);
+    lengths.push_back(scratch_db_size_g / 2);
+    lengths.push_back(scratch_db_size_g / 8 + 5 * 1024 + 96);
+    gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
@@ -1103,7 +1264,7 @@ void gen_prefetcher_cmds(Device *device,
         // No cmds, tests terminating - true smoke test
         break;
     case 1:
-        gen_smoke_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g);
+        gen_smoke_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, all_workers_g.end);
         break;
     case 2:
         gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data);
@@ -1121,7 +1282,10 @@ void gen_prefetcher_cmds(Device *device,
         gen_host_test(device, prefetch_cmds, cmd_sizes, device_data);
         break;
     case 7:
-        log_fatal("Unknown test");
+        gen_packed_read_test(device, prefetch_cmds, cmd_sizes, device_data);
+        break;
+    default:
+        log_fatal("Unknown test: {}", test_type_g);
         exit(0);
         break;
     }

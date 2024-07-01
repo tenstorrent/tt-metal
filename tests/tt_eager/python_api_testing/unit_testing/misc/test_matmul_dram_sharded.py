@@ -8,6 +8,7 @@ import tt_lib as ttl
 from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -144,7 +145,7 @@ def run_test_matmul_in1_dram_sharded(
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
@@ -165,22 +166,22 @@ def run_test_matmul_in1_dram_sharded(
         )
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=sharded_mem_config,
-            output_dtype=out_dtype,
+            memory_config=sharded_mem_config,
+            dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=sharded_mem_config,
-            output_dtype=out_dtype,
+            memory_config=sharded_mem_config,
+            dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
     output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -353,7 +354,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     )
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=in1_mem_config, tt_dtype=in1_dtype)
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
@@ -374,22 +375,22 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         )
 
     # 1st mm
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=sharded_mem_config,
-        output_dtype=out_dtype,
+        memory_config=sharded_mem_config,
+        dtype=out_dtype,
         compute_kernel_config=compute_kernel_config,
     )
 
     for _ in range(200):
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=sharded_mem_config,
-            output_dtype=out_dtype,
+            memory_config=sharded_mem_config,
+            dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -480,9 +481,10 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
 )
 @pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
 @pytest.mark.parametrize(
-    "M, K, N, activation",
+    "M, K, N, activation, in0_sharded, fuse_batch",
     [
-        (1024, 1024, 1024, None),
+        (1024, 1024, 1024, None, True, True),
+        (1024, 8192, 4096, None, False, False),
     ],
 )
 def test_matmul_2d_in1_dram_sharded(
@@ -495,6 +497,8 @@ def test_matmul_2d_in1_dram_sharded(
     K,
     N,
     activation,
+    in0_sharded,
+    fuse_batch,
     function_level_defaults,
 ):
     if is_grayskull():
@@ -504,7 +508,10 @@ def test_matmul_2d_in1_dram_sharded(
         N_padded = pad_to_dram_banks(N)
         num_banks = 12
 
-    in0_shape = [1, 1, M, K]
+    if fuse_batch:
+        in0_shape = [1, 1, M, K]
+    else:
+        in0_shape = [1, 2, M, K]
     in1_shape = [1, 1, K, N]
     in1_shard_shape = [K, N_padded // num_banks]
     bias_shape = [1, 1, N]
@@ -549,13 +556,14 @@ def test_matmul_2d_in1_dram_sharded(
     in0_t = torch2tt_tensor(
         in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT16
     )
-    in0_t = ttl.tensor.interleaved_to_sharded(
-        in0_t,
-        grid_size,
-        [M // grid_size[1], K // grid_size[0]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
-    )
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            grid_size,
+            [M // grid_size[1], K // grid_size[0]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
 
     in1 = torch.randn(in1_shape).bfloat16().float()
     in1_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
@@ -582,15 +590,16 @@ def test_matmul_2d_in1_dram_sharded(
             bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
+        in0_block_w=in0_block_w // 4,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
         transpose_mcast=False,
         fused_activation=activation,
+        fuse_batch=fuse_batch,
     )
 
     if is_grayskull():
@@ -606,24 +615,25 @@ def test_matmul_2d_in1_dram_sharded(
             packer_l1_acc=packer_l1_acc,
         )
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=sharded_mem_config,
+            memory_config=sharded_mem_config if in0_sharded else interleaved_mem_config_DRAM,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=sharded_mem_config,
+            memory_config=sharded_mem_config if in0_sharded else interleaved_mem_config_DRAM,
             compute_kernel_config=compute_kernel_config,
         )
 
-    output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_DRAM)
+    if in0_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_DRAM)
     tt_out = tt2torch_tensor(output_t)
 
     pt_out = in0 @ in1

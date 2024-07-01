@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import tt_lib
+import ttnn
 
 from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
 from models.demos.metal_BERT_large_11.tt.bert_encoder import TtBertEncoder
@@ -77,7 +78,7 @@ class TtBertBatchDram:
         # QA linear
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
-            output = tt_lib.tensor.matmul(activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"])
+            output = ttnn.matmul(activation, weight, memory_config=model_config["QA_LINEAR_OUTPUT_MEMCFG"])
             output_plus_bias = tt_lib.tensor.bcast(
                 output,
                 bias,

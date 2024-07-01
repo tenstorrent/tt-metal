@@ -8,26 +8,22 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
-
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.experimental.llama2_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-
-# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-#     comp_allclose,
-#     comp_pcc,
-# )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
+    setup_llama_env,
+    check_device_mesh,
     extract_pcc_from_log,
+    generate_rot_emb,
+    get_rotation_mat,
+    gather_cos_sin,
+    precompute_freqs,
     MAX_SEQ_LEN,
+    MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
     UNIT_TEST_N_LAYER,
     UNIT_TEST_LAYER_NUM,
@@ -38,7 +34,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
-import gc
+from models.utility_functions import nearest_32
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -105,26 +101,154 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
+    assert len(x.size()) == 3
+    batch, seq_len, hidden_size = x.shape
+
+    cache_name = lambda name: llama_decoder_model.cache_path / (
+        f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
+    )
+
+    if llama_decoder_model.model_config["LLM_MODE"] == "prefill":
+        assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+        assert batch == 1, "prefill mode only supports batch size 1"
+        x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
+
+        xs = ttnn.as_tensor(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.device_mesh, dim=3),
+            device=llama_decoder_model.device_mesh,
+        )
+        xs = ttnn.to_device(xs, llama_decoder_model.device_mesh)
+
+        cos, sin = precompute_freqs(
+            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
+        )
+        cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+        assert cos_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+        assert sin_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+
+        cos_gathereds = ttnn.as_tensor(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+        )
+        sin_gathereds = ttnn.as_tensor(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+        )
+        cos_gathereds = ttnn.to_device(cos_gathereds, llama_decoder_model.device_mesh)
+        sin_gathereds = ttnn.to_device(sin_gathereds, llama_decoder_model.device_mesh)
+        rot_mats = [cos_gathereds, sin_gathereds]
+
+        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask.expand(batch, 1, -1, -1)
+        attn_masks = ttnn.as_tensor(
+            attn_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+        )
+        attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
+
+    elif llama_decoder_model.model_config["LLM_MODE"] == "decode":
+        assert seq_len == 1, "Only supporting decode mode"
+        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+
+        xs = ttnn.as_tensor(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.device_mesh, dim=3),
+            device=llama_decoder_model.device_mesh,
+        )
+        xs = ttnn.to_device(xs, llama_decoder_model.device_mesh)
+        xs = tt_lib.tensor.interleaved_to_sharded(
+            xs, sharded_mem_config=llama_decoder_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+        )
+
+        rot_emb = generate_rot_emb(
+            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
+        )
+        rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
+        assert rot_mat.size() == (1, batch, llama_decoder_model.head_dim, llama_decoder_model.head_dim)
+        rot_mats = ttnn.as_tensor(
+            rot_mat,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.device_mesh,
+        )
+        rot_mats = ttnn.to_device(rot_mats, llama_decoder_model.device_mesh)
+
+        rot_mats = tt_lib.tensor.interleaved_to_sharded(
+            rot_mats, sharded_mem_config=llama_decoder_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+        )
+
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask_shape = (seq_len, 1, llama_decoder_model.padded_local_heads, padded_layer_past_len)
+        attn_mask = torch.zeros(*attn_mask_shape)
+        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+
+        attn_masks = ttnn.as_tensor(
+            attn_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.device_mesh,
+        )
+        attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
+
+        repeat_shape = (1, batch, 1, 1)
+        attn_masks = tt_lib.tensor.repeat(
+            attn_masks, repeat_shape, output_mem_config=llama_decoder_model.model_config["DRAM_MEMCFG"]
+        )
+    return (
+        xs,
+        start_pos,
+        rot_mats,
+        attn_masks,
+    )
+
+
 def run_test_LlamaDecoder_inference(
     t3k_device_mesh,
     batch,
     seq_len,
     pcc,
     model_config,
-    n_devices,
-    emulated=False,
+    llama_version,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
 ):
     # Prepare paths and devices
-    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
-    )
     skip_model_load = should_skip_model_load()
 
     # Prepare configs
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
         max_batch_size=batch,
         n_layers=UNIT_TEST_N_LAYER,
         skip_model_load=skip_model_load,
@@ -134,8 +258,6 @@ def run_test_LlamaDecoder_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
-    head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
@@ -160,9 +282,7 @@ def run_test_LlamaDecoder_inference(
         UNIT_TEST_LAYER_NUM,
         model_config,
         configuration,
-        batch,
         transformation_mats,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
@@ -196,7 +316,9 @@ def run_test_LlamaDecoder_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        x_input, start_pos, rot_mat, attn_mask = tt_LlamaDecoder_model.prepare_inputs(tt_input, start_pos)
+        x_input, start_pos, rot_mat, attn_mask = tt_llama_decoder_prepare_inputs(
+            tt_LlamaDecoder_model, tt_input, start_pos
+        )
 
         tt_out = tt_LlamaDecoder_model(
             x_input,
@@ -215,27 +337,29 @@ def run_test_LlamaDecoder_inference(
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] {model_name} Decoder output Passed!")
+            logger.info(f"[start_pos={start_pos}] {llama_version} Decoder output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] {model_name} Decoder output Failed! PCC value is lower than {pcc}")
+            logger.warning(
+                f"[start_pos={start_pos}] {llama_version} Decoder output Failed! PCC value is lower than {pcc}"
+            )
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
-        pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware output -----------------------------------------------------------------
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
@@ -251,74 +375,73 @@ def run_test_LlamaDecoder_inference(
     all_tests_pass = all_tests_pass and cache_test_pass
 
     if all_tests_pass:
-        logger.info(f"{model_name} Decoder output Passed!")
+        logger.info(f"{llama_version} Decoder output Passed!")
     else:
-        logger.warning(f"{model_name} Decoder output Failed!")
         gc.collect()
+        logger.warning(f"{llama_version} Decoder output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "n_devices, emulated",
+    "llama_version",
     (
-        (8, False),
-        (8, True),
-        (32, True),
-    ),
-    ids=(
-        "8chip-T3000",
-        "8chip-emulated",
-        "32chip-emulated",
+        ("llama2"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9993), (1, 128, 0.998), (1, 2048, 0.998)),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    ((32, 1, 0.9993), (1, 128, 0.998), (1, 2048, 0.998), (1, 8192, 0.998)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+)
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        # (32, 2048),
+        (16, 8192),
+    ),
+    ids=(
+        # "short_context",
+        "long_context",
+    ),
 )
 def test_LlamaDecoder_inference(
     batch,
     seq_len,
     pcc,
-    n_devices,
     t3k_device_mesh,
-    emulated,
+    max_batch_size,
+    max_context_len,
+    llama_version,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    if batch > max_batch_size:
+        pytest.skip(f"Decode with {batch} users is not supported with large context")
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    if batch == 1 and seq_len > max_context_len:
+        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_program_cache()
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
 
-    inp = torch.rand(1, 1, 32, 32)
-    for i in range(2):
-        run_test_LlamaDecoder_inference(
-            t3k_device_mesh,
-            batch,
-            seq_len,
-            pcc,
-            model_config,
-            n_devices,
-            emulated,
-        )
-
-        for i in t3k_device_mesh.get_device_ids():
-            device = t3k_device_mesh.get_device(i)
-            test_tensor = (
-                ttnn.Tensor(
-                    inp.reshape(-1).tolist(),
-                    inp.shape,
-                    ttnn.bfloat16,
-                    ttnn.Layout.ROW_MAJOR,
-                )
-                .to(ttnn.Layout.TILE)
-                .to(device)
-            )
+    check_device_mesh(t3k_device_mesh, model_config)
+    run_test_LlamaDecoder_inference(
+        t3k_device_mesh,
+        batch,
+        seq_len,
+        pcc,
+        model_config,
+        llama_version,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
+    )

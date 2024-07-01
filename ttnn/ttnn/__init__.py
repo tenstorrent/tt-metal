@@ -158,6 +158,7 @@ from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggre
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    uint8,
     uint16,
     int32,
     uint32,
@@ -278,6 +279,10 @@ from ttnn.operations.core import (
 from ttnn.operations.matmul import (
     matmul,
     linear,
+    MatmulMultiCoreReuseProgramConfig,
+    MatmulMultiCoreReuseMultiCastProgramConfig,
+    MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.embedding import (
@@ -445,6 +450,28 @@ from ttnn.operations.binary import (
     isclose,
     bias_gelu,
     divide,
+)
+
+
+from ttnn.operations.binary_backward import (
+    atan2_bw,
+    embedding_bw,
+    addalpha_bw,
+    subalpha_bw,
+    sub_bw,
+    xlogy_bw,
+    hypot_bw,
+    ldexp_bw,
+    logaddexp_bw,
+    logaddexp2_bw,
+    squared_difference_bw,
+    add_bw,
+    binary_eq_bw,
+    binary_assign_bw,
+    concat_bw,
+    binary_le_bw,
+    rsub_bw,
+    bias_gelu_bw,
 )
 
 from ttnn.operations.ternary import (

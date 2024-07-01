@@ -125,45 +125,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
 
-    CoreRange top_left_corner(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
-
-    CoreRange left_column(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1});
-
-    CoreRange top_row(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y});
-
-    CoreRange all_except_left_column(
-        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
-
-    CoreRange all_except_top_row(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
-        {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
-
-    CoreRange left_column_except_corner(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
-        {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1});
-
-    CoreRange top_row_except_corner(
-        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y});
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      INTERLEAVED SENDER/RECEIVER
-    ////////////////////////////////////////////////////////////////////////////
-    CoreRange in0_sender = left_column;
-    CoreRange in0_sender_in1_receiver = left_column_except_corner;
-    CoreRange in1_sender = top_row;
-    CoreRange in0_receiver_in1_sender = top_row_except_corner;
-    if (transpose_mcast) {
-        std::swap(in0_sender, in1_sender);
-        std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      IN0 SHARDED SENDER/RECEIVER
     ////////////////////////////////////////////////////////////////////////////
@@ -176,15 +137,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_sender_num_cores_along_width;
 
     // Only used for in0 block sharded
-    CoreRange in0_mcast_cores_with_work_and_in_receiver_grid(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x, (std::size_t)start_core_y});  // Placeholder
-    CoreRange in0_mcast_cores_without_work_and_not_in_receiver_grid(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x, (std::size_t)start_core_y});  // Placeholder
+    std::optional<CoreRange> in0_mcast_cores_without_work_and_not_in_receiver_grid;
     if (in0_block_sharded) {
-        in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
-
         CoreCoord in0_shard_grid = in0_buffer->shard_spec().grid().bounding_box().grid_size();
         // in0 shard grid already accounts for transpose_mcast
         // ie. If transpose_mcast, in0 width is along y
@@ -192,11 +146,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         if (in0_sender_num_cores_along_width > num_blocks_x) {
             in0_mcast_cores_without_work_and_not_in_receiver_grid =
                 transpose_mcast ? CoreRange(
-                                      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_blocks_x - 1},
+                                      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_blocks_x},
                                       {(std::size_t)start_core_x + num_blocks_y - 1,
                                        (std::size_t)start_core_y + in0_sender_num_cores_along_width - 1})
                                 : CoreRange(
-                                      {(std::size_t)start_core_x + num_blocks_x - 1, (std::size_t)start_core_y},
+                                      {(std::size_t)start_core_x + num_blocks_x, (std::size_t)start_core_y},
                                       {(std::size_t)start_core_x + in0_sender_num_cores_along_width - 1,
                                        (std::size_t)start_core_y + num_blocks_y - 1});
         }
@@ -232,22 +186,73 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    ////////////////////////////////////////////////////////////////////////////
-    //       RECEIVER-RECEIVER USED BY BOTH IN0 INTERLEAVED OR SHARDED
-    ////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////
+    //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
+    //////////////////////////////////////////////////////////////////////////////////////////
+    // Left column
+    CoreRange in0_sender_interleaved(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1});
+
+    // Top row
+    CoreRange in1_sender(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y});
+
+    // Left column except corner
+    std::optional<CoreRange> in0_sender_in1_receiver;
+    if (num_cores_with_work_r > 1) {
+        in0_sender_in1_receiver = {
+            {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
+            {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1}};
+    }
+
+    // Top row except corner
+    std::optional<CoreRange> in0_receiver_in1_sender;
+    if (num_cores_with_work_c > 1) {
+        in0_receiver_in1_sender = {
+            {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
+            {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y}};
+    }
+
+    if (transpose_mcast) {
+        std::swap(in0_sender_interleaved, in1_sender);
+        std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
+    }
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////
+    //       IN0 RECEIVER (interleaved only) and IN1 RECEIVER (both interleaved and sharded)
+    /////////////////////////////////////////////////////////////////////////////////////////////////
     // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
     // TODO: Experiment with different splits?
-    bool split_half = num_cores_with_work_c > 2 && !in0_is_sharded;
+    bool split_half = num_cores_with_work_c > 2 && num_cores_with_work_r > 1 && !in0_is_sharded;
     uint32_t half_core = split_half ? (num_cores_with_work_c) / 2 : num_cores_with_work_c - 1;
 
-    CoreRange in0_receiver_in1_receiver_left_half(
-        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
-        {(std::size_t)start_core_x + half_core, (std::size_t)start_core_y + num_cores_with_work_r - 1});
+    std::optional<CoreRange> in0_receiver_in1_receiver_left_half;
+    if (num_cores_with_work_c > 1 and num_cores_with_work_r > 1) {
+        in0_receiver_in1_receiver_left_half = {
+            {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
+            {(std::size_t)start_core_x + half_core, (std::size_t)start_core_y + num_cores_with_work_r - 1}};
+    }
 
-    CoreRange in0_receiver_in1_receiver_right_half({0, 0}, {0, 0});
+    std::set<CoreRange> in0_receiver_interleaved_set;
+    std::set<CoreRange> in1_receiver_set;
+    if (in0_receiver_in1_sender.has_value()) {
+        in0_receiver_interleaved_set.insert(in0_receiver_in1_sender.value());
+    }
+    if (in0_sender_in1_receiver.has_value()) {
+        in1_receiver_set.insert(in0_sender_in1_receiver.value());
+    }
+    if (in0_receiver_in1_receiver_left_half.has_value()) {
+        in0_receiver_interleaved_set.insert(in0_receiver_in1_receiver_left_half.value());
+        in1_receiver_set.insert(in0_receiver_in1_receiver_left_half.value());
+    }
+    CoreRangeSet in0_receiver_interleaved(in0_receiver_interleaved_set);
+    CoreRangeSet in1_receiver(in1_receiver_set);
 
+    std::optional<CoreRange> in0_receiver_in1_receiver_interleaved_other_cores;
     if (split_half) {
-        in0_receiver_in1_receiver_right_half = {
+        in0_receiver_in1_receiver_interleaved_other_cores = {
             {(std::size_t)start_core_x + half_core + 1, (std::size_t)start_core_y + 1},
             {(std::size_t)start_core_x + num_cores_with_work_c - 1,
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
@@ -321,6 +326,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)per_core_M,           // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
+            (std::uint32_t) false,               // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
@@ -427,7 +435,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_defines;
+    std::map<string, string> mm_kernel_in0_sender_sharded_defines;
+    std::map<string, string> mm_kernel_in0_sender_interleaved_defines;
     std::map<string, string> mm_kernel_in1_sender_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
@@ -452,8 +461,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    if (in0_receiver_interleaved.num_cores() == 0) {
+        mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
+    }
     if (in0_height_sharded) {
-        mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+        mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
+    }
+
+    if (in1_receiver.num_cores() == 0) {
+        mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
     if (in1_is_sharded) {
         if (in1_is_dram) {
@@ -482,36 +498,36 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/"
             "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-            in0_mcast_cores_with_work_and_in_receiver_grid,
+            all_cores_with_work,  // in0_mcast_cores_with_work_and_in_receiver_grid
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_defines});
-        if (in0_mcast_cores_without_work_and_not_in_receiver_grid.size() > 0) {
+                .defines = mm_kernel_in0_sender_sharded_defines});
+        if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
             mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                in0_mcast_cores_without_work_and_not_in_receiver_grid,
+                in0_mcast_cores_without_work_and_not_in_receiver_grid.value(),
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_defines});
+                    .defines = mm_kernel_in0_sender_sharded_defines});
         }
     } else {
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-            in0_sender,
+            in0_sender_interleaved,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_defines});
+                .defines = mm_kernel_in0_sender_interleaved_defines});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -524,26 +540,27 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines});
 
-    auto in1_receiver =
-        (CoreRangeSet)(std::set<CoreRange>){in0_sender_in1_receiver, in0_receiver_in1_receiver_left_half};
-    auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-        /* in0_sender_in1_receiver, // If not using half-half noc setup */
-        in1_receiver,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in1_noc,
-            .compile_args = in1_receiver_writer_compile_time_args,
-            .defines = mm_kernel_in1_receiver_writer_defines});
+    KernelHandle mm_kernel_in1_receiver_writer_id = 0;
+    if (in1_receiver.num_cores() > 0) {
+        mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+            /* in0_sender_in1_receiver, // If not using half-half noc setup */
+            in1_receiver,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in1_noc,
+                .compile_args = in1_receiver_writer_compile_time_args,
+                .defines = mm_kernel_in1_receiver_writer_defines});
+    }
 
     KernelHandle mm_kernel_in0_receiver_id = 0;
-    if (!in0_block_sharded) {
+    if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             /* in0_receiver_in1_sender, // If not using half-half noc setup */
-            (CoreRangeSet)(std::set<CoreRange>){in0_receiver_in1_sender, in0_receiver_in1_receiver_left_half},
+            in0_receiver_interleaved,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
@@ -553,11 +570,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
     KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
-    if (split_half) {
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            in0_receiver_in1_receiver_right_half,
+            in0_receiver_in1_receiver_interleaved_other_cores.value(),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_split_noc,
@@ -567,7 +584,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            in0_receiver_in1_receiver_right_half,
+            in0_receiver_in1_receiver_interleaved_other_cores.value(),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_split_noc,
@@ -773,12 +790,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
     const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
-    const auto& in0_sender_cores =
-        grid_to_cores(in0_sender.start, in0_sender.end, true);  // Only used for interleaved in0
+    const auto& in0_sender_interleaved_cores =
+        grid_to_cores(in0_sender_interleaved.start, in0_sender_interleaved.end, true);  // Only used for interleaved in0
     const auto& in1_sender_cores = grid_to_cores(in1_sender.start, in1_sender.end, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
-    const auto& in1_receiver_other_cores =
-        grid_to_cores(in0_receiver_in1_receiver_right_half.start, in0_receiver_in1_receiver_right_half.end, true);
+    std::vector<CoreCoord> in1_receiver_other_cores;
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        in1_receiver_other_cores = grid_to_cores(
+            in0_receiver_in1_receiver_interleaved_other_cores.value().start,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().end,
+            true);
+    }
+
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
         CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
@@ -1078,7 +1101,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_sender_id,
-         in0_sender_cores,
+         in0_sender_interleaved_cores,
          mm_kernel_in1_sender_writer_id,
          in1_sender_cores,
          mm_kernel_in1_receiver_writer_id,
@@ -1120,7 +1143,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
             } else {
                 auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
-                for (const auto& core : in0_sender_cores) {
+                for (const auto& core : in0_sender_interleaved_cores) {
                     auto& reader_runtime_args = reader_sender_runtime_args_by_core[core.x][core.y];
                     reader_runtime_args[0] = src_buffer_a->address();
                 }
@@ -1296,9 +1319,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
         num_blocks_x <= num_cores_x,
-        "Num output blocks along x {} must be smaller than or equal to the number of columns in compute grid {}!", num_blocks_x, num_cores_x);
+        "Num output blocks along x {} must be smaller than or equal to the number of columns in compute grid {}!",
+        num_blocks_x,
+        num_cores_x);
     TT_FATAL(
-        num_blocks_y <= num_cores_y, "Num output blocks along y {} must be smaller than or equal to the number of rows in compute grid {}!", num_blocks_y, num_cores_y);
+        num_blocks_y <= num_cores_y,
+        "Num output blocks along y {} must be smaller than or equal to the number of rows in compute grid {}!",
+        num_blocks_y,
+        num_cores_y);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -1309,43 +1337,33 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-
-    if (num_blocks_x > 1 and num_blocks_y > 1) {
-        return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
-            device,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode,
-            packer_l1_acc,
-            B,
-            Mt,
-            Nt,
-            Kt,
-            bcast_batch,
-            in0_block_w,
-            out_subblock_h,
-            out_subblock_w,
-            per_core_M,
-            per_core_N,
-            transpose_mcast,
-            fused_activation,
-            in0_buffer,
-            in1_buffer,
-            bias_buffer,
-            out_buffer,
-            in0_data_format,
-            in1_data_format,
-            bias_data_format,
-            output_data_format,
-            untilize_out);
-    } else if (num_blocks_x > 1 or num_blocks_y > 1) {
-        // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
-        TT_FATAL(false, "1D mcast for in0 or in1 is not implemented yet.");
-    } else {
-        TT_FATAL(false, "Grid is invalid for mcast matmul!");
-    }
-
-    return {};
+    return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
+        device,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        B,
+        Mt,
+        Nt,
+        Kt,
+        bcast_batch,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        transpose_mcast,
+        fused_activation,
+        in0_buffer,
+        in1_buffer,
+        bias_buffer,
+        out_buffer,
+        in0_data_format,
+        in1_data_format,
+        bias_data_format,
+        output_data_format,
+        untilize_out);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(

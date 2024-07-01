@@ -527,6 +527,17 @@ def heaviside(x, *args, **kwargs):
     return result
 
 
+def bitwise_xor(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_xor(x, value)
+    return result
+
+
+def bitwise_not(x, *args, **kwargs):
+    result = torch.bitwise_not(x)
+    return result
+
+
 def right_shift(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.bitwise_right_shift(x, value)
@@ -542,6 +553,22 @@ def left_shift(x, *args, **kwargs):
 def unary_remainder(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.remainder(x, value)
+    return result
+
+
+def remainder(x, y, *args, **kwargs):
+    result = torch.remainder(x, y)
+    return result
+
+
+def fmod(x, y, *args, **kwargs):
+    result = torch.fmod(x, y)
+    return result
+
+
+def unary_fmod(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.fmod(x, value)
     return result
 
 
@@ -708,9 +735,10 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div(x, y, *args, accurate_mode, **kwargs):
-    result = torch.div(x, y)
-    return result
+def div(x, y, *args, accurate_mode, round_mode, **kwargs):
+    if round_mode == "None":
+        return torch.div(x, y)
+    return torch.div(x, y, rounding_mode=round_mode)
 
 
 def div_no_nan(x, y, *args, **kwargs):
@@ -730,6 +758,12 @@ def unary_div_no_nan(x, *args, **kwargs):
 def div_unary(x, *args, scalar, **kwargs):
     result = torch.div(x, scalar)
     return result
+
+
+def unary_div(x, *args, scalar, accurate_mode, round_mode, **kwargs):
+    if round_mode == "None":
+        return torch.div(x, scalar)
+    return torch.div(x, scalar, rounding_mode=round_mode)
 
 
 def mul_unary(x, *args, scalar, **kwargs):
@@ -1394,6 +1428,22 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
         return x.to(torch.bfloat16).to(torch.float32)
     elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
+        return x.to(torch.int32)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
+        return x.to(torch.bfloat16).to(torch.int32)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
         return x.to(torch.bfloat16)
     else:
         return x

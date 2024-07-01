@@ -22,8 +22,8 @@ namespace tt_metal {
 operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math/*, BcastOpDim bcast_dim*/){
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
-    uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-    uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+    uint32_t N  = ashape.rank() >= 4 ? ashape[-4] : 1, C  = ashape.rank() >= 3 ? ashape[-3] : 1, H  = ashape[-2], W  = ashape[-1];
+    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2], bW = bshape[-1];
     uint32_t NC = N*C;
 
 
@@ -41,9 +41,11 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
 
     DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
+    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
@@ -84,8 +86,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 
     uint32_t num_input_tiles = (b.get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
     uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * aligned_input_tile_nbytes, {{src1_cb_index, act_df}})
-        .set_page_size(src1_cb_index, aligned_input_tile_nbytes);
+    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
+        .set_page_size(src1_cb_index, input1_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     auto src0_buffer = a.buffer();

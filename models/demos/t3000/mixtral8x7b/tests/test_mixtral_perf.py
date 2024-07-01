@@ -22,7 +22,6 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
-    prepare_rotation_mat_ttnn,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
@@ -44,10 +43,10 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
-        (32, 150, 0.025),
-        (128, 150, 0.025),
-        (1024, 150, 0.025),
-        (2048, 150, 0.025),
+        (32, 150, 0.075),
+        (128, 150, 0.075),
+        (1024, 150, 0.075),
+        (2048, 150, 0.075),
     ),
 )
 def test_mixtral_model_perf(
@@ -62,7 +61,7 @@ def test_mixtral_model_perf(
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
-    model_args.n_layers = 1
+    model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -95,18 +94,13 @@ def test_mixtral_model_perf(
         dtype=dtype,
     )
 
-    rot_mat = prepare_rotation_mat_ttnn(
-        tt_model.args.head_dim,
-        tt_model.args.max_seq_len,
-        tt_model.device_mesh,
-    )
     profiler.end("TtMistral_model_setup")
 
     # Call the function
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model warmup")
     profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
+    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
@@ -118,7 +112,7 @@ def test_mixtral_model_perf(
         signpost("Model perf run")
     profiler.clear()
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
+    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference")
     profiler.print(units="ms")
     iter_time = profiler.get("model_run_for_inference_0")
@@ -136,7 +130,7 @@ def test_mixtral_model_perf(
     )
 
 
-def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat):
+def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
 
@@ -155,7 +149,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
             pt_decode_input,
             tt_model.args.dim,
             start_pos,
-            tt_model.args.sliding_window,
+            tt_model.args,
             tt_model.device_mesh,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
@@ -163,7 +157,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
         profiler.start(f"python_dispatch_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
+        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
         profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor

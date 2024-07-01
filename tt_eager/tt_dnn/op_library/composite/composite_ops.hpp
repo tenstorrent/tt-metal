@@ -11,6 +11,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 
 
 #include "ttnn/operations/eltwise/binary/device/binary_op.hpp"
@@ -24,44 +25,6 @@ using binary_tensor_op_t = Tensor(const Tensor& a, const Tensor& b);
 
 // Note: inline doesn't allow pybind to work well so we keep few function not inlined.
 
-template <typename T>
-Tensor mk_scalar(T value) {
-    assert(std::is_scalar<T>::value && "T should be scalar");
-    std::array<unsigned int, 4> shape = {1, 1, 1, 1};
-    auto buffer = owned_buffer::create(std::vector{bfloat16(value)});
-    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
-    return scalar;
-}
-
-template <typename T>
-Tensor mk_tiled_scalar(T value) {
-    assert(std::is_scalar<T>::value && "T should be scalar");
-    std::array<unsigned int, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-    std::vector<bfloat16> buffer_vec(TILE_HW, bfloat16(0));
-    buffer_vec[0] = bfloat16(value);
-    auto buffer = owned_buffer::create(std::move(buffer_vec));
-    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::TILE);
-    return scalar;
-}
-
-template <typename T>
-Tensor mk_tiled_scalar(T value, DataType dtype) {
-    assert(std::is_scalar<T>::value && "T should be scalar");
-    std::array<unsigned int, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-    if(dtype == DataType::BFLOAT8_B)
-    {
-        std::vector<float> buffer_vec(TILE_HW, float(0));
-        buffer_vec[0] = float(value);
-        auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(buffer_vec, /*row_major_input=*/false, /*is_exp_a=*/false);
-        auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-        return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), shape, DataType::BFLOAT8_B, Layout::TILE);
-    }
-    std::vector<bfloat16> buffer_vec(TILE_HW, bfloat16(0));
-    buffer_vec[0] = bfloat16(value);
-    auto buffer = owned_buffer::create(std::move(buffer_vec));
-    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::TILE);
-    return scalar;
-}
 // Function: softshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
 Tensor softshrink(
@@ -183,6 +146,14 @@ Tensor div(
     const Tensor& input_a,
     const Tensor& input_b,
     bool accurate_mode = false,
+    string round_mode = "None",
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor div(
+    const Tensor& input_a,
+    float scalar,
+    bool accurate_mode = false,
+    string round_mode = "None",
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor div_no_nan(
@@ -193,6 +164,16 @@ Tensor div_no_nan(
 Tensor div_no_nan(
     const Tensor& input_a,
     float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor remainder(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -595,19 +576,37 @@ Tensor triu(
 
 // power_fp : power with floating point exponent
 Tensor power_fp(
+    uint8_t queue_id,
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor pow(
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor pow(
     const Tensor& input_a,
     int exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+Tensor pow(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    float exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+Tensor pow(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    int exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor argmax(
     const Tensor& input_a,

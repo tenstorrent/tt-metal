@@ -40,7 +40,7 @@ class TtMambaSSM(torch.nn.Module):
             x_proj_weight_name,
             lambda x: x[: self.args.dt_rank, :].transpose(-1, -2),
             postfix="delta_t",
-            tt_dtype=ttnn.bfloat8_b,
+            tt_dtype=self.configs["dtype"]["weights"],
         )
 
         # B_proj_weights
@@ -54,7 +54,7 @@ class TtMambaSSM(torch.nn.Module):
             x_proj_weight_name,
             tm_fn=preprocess_B,
             postfix="B_proj",
-            tt_dtype=ttnn.bfloat8_b,
+            tt_dtype=self.configs["dtype"]["weights"],
         )
 
         # C_proj_weights
@@ -63,13 +63,17 @@ class TtMambaSSM(torch.nn.Module):
             x = torch.nn.functional.pad(x, (0, 16), "constant", 0)
             return x
 
-        self.C_proj_weights = load_fn(x_proj_weight_name, preprocess_C, postfix="C_proj", tt_dtype=ttnn.bfloat8_b)
+        self.C_proj_weights = load_fn(
+            x_proj_weight_name, preprocess_C, postfix="C_proj", tt_dtype=self.configs["dtype"]["weights"]
+        )
 
         # dt_proj_weights
         dt_proj_weight_name = "mixer.dt_proj.weight"
         dt_proj_bias_name = "mixer.dt_proj.bias"
-        self.dt_proj_weights = load_fn(dt_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=ttnn.bfloat8_b)
-        self.dt_proj_bias = load_fn(dt_proj_bias_name, tt_dtype=ttnn.bfloat8_b)
+        self.dt_proj_weights = load_fn(
+            dt_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=self.configs["dtype"]["weights"]
+        )
+        self.dt_proj_bias = load_fn(dt_proj_bias_name, tt_dtype=self.configs["dtype"]["weights"])
 
         A_weight_name = "mixer.A_log"
 
@@ -94,7 +98,7 @@ class TtMambaSSM(torch.nn.Module):
         self.tt_hidden_state = load_fn(f"tt_hidden_state_{args.batch_size}", torch_tensor=prev_hidden_states)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi3,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -159,12 +163,17 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(abar1)
 
         # multiply abar and hidden_state
-        hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
-        amulh0 = ttnn.mul(
-            abar2, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        hidden_state0 = ttnn.to_memory_config(
+            self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        )
+        hidden_state0 = ttnn.multiply(
+            abar2,
+            hidden_state0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
+            output_tensor=hidden_state0,
         )
         ttnn.deallocate(abar2)
-        ttnn.deallocate(hidden_state0)
 
         # B
         B0 = ttnn.linear(
@@ -205,12 +214,17 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(bbar0)
 
         # add amulh and bmulx
-        hidden_state1 = ttnn.add(
-            amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        hidden_state0 = ttnn.add(
+            hidden_state0,
+            bmulx0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
+            output_tensor=hidden_state0,
         )
         ttnn.deallocate(self.tt_hidden_state)
-        self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(amulh0)
+        self.tt_hidden_state = ttnn.to_memory_config(
+            hidden_state0, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        )
         ttnn.deallocate(bmulx0)
 
         # compute C
@@ -227,14 +241,14 @@ class TtMambaSSM(torch.nn.Module):
         # c * hidden_state
         C1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
             C0,
-            hidden_state1,
+            hidden_state0,
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
             output_dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
-        ttnn.deallocate(hidden_state1)
+        ttnn.deallocate(hidden_state0)
         ttnn.deallocate(C0)
 
         # Reduction matmul
@@ -249,13 +263,16 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(C1)
 
         # x * D
-        D = ttnn.to_memory_config(self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
-        xD = ttnn.mul(x, D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"])
-        ttnn.deallocate(x)
+        D = ttnn.to_memory_config(
+            self.D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        )
+        x = ttnn.multiply(
+            x, D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"], output_tensor=x
+        )
 
-        # add xD and x
-        output = ttnn.add(xD, C2, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"])
+        x = ttnn.add(
+            x, C2, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"], output_tensor=x
+        )
         ttnn.deallocate(C2)
-        ttnn.deallocate(xD)
 
-        return output
+        return x

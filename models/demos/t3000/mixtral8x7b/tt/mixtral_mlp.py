@@ -53,31 +53,31 @@ class TtMixtralMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        w1_out = ttnn.experimental.operations.primary.matmul_1d(
+        w1_out = ttnn.matmul(
             x,
             self.w1,
             program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
-            output_mem_config=self.model_config["FF1_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["FF1_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b,
         )
-        w3_out = ttnn.experimental.operations.primary.matmul_1d(
+        w3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["FF3_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["FF3_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b,
         )
         w2_in = ttnn.mul(w1_out, w3_out)
 
-        w2_out = ttnn.experimental.operations.primary.matmul_1d(
+        w2_out = ttnn.matmul(
             w2_in,
             self.w2,
             program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["FF2_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b,
         )
 
         return w2_out

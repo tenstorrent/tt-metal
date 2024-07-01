@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 
 namespace tt {
 
@@ -225,7 +226,9 @@ Tensor moreh_clip_grad_norm_impl(
     // max_norm / (total_norm + 1e-6)
     const auto &clip_coef = div_unary(max_norm, add_unary(total_norm, 1e-6f));
     // min(clip_coef, 1.0f)
-    const auto &clip_coef_clamped = min(clip_coef, mk_tiled_scalar(1.0f));
+    Tensor scalar = ttnn::operations::creation::create_scalar(1.0f,inputs.at(0).get_dtype(),Layout::TILE, inputs.at(0).device());
+    const auto &clip_coef_clamped = min(clip_coef, scalar);
+    scalar.deallocate();
 
     // Inplace update inputs(inputs *= clip_coef_clamped)
     moreh_clip_grad_norm_step3(inputs, clip_coef_clamped);

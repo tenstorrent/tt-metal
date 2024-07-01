@@ -15,29 +15,6 @@ namespace operations {
 
 namespace primary {
 
-namespace {
-inline
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim) {
-    const auto rank = shape.rank();
-
-    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
-    uint32_t Wt = shape[-1] / TILE_WIDTH;
-    uint32_t Ht = shape[-2] / TILE_HEIGHT;
-
-    uint32_t reduce_dim = shape[dim];
-    uint32_t inner_dims_product = 1;
-    for (auto i = dim + 1; i < rank - 2; ++i) {
-        inner_dims_product *= shape[i];
-    }
-
-    uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
-    uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
-
-    return { Wt, Ht, inner_tile_size, reduce_tile_size};
-}
-
-}
-
 operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -105,11 +82,13 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args =
              {static_cast<uint32_t>(is_dram(input))} ;
+    std::map<string, string> reader_defines;
+    reader_defines["USE_FPU"] = "1";
     std::vector<uint32_t> writer_compile_time_args =
              {static_cast<uint32_t>(is_dram(output))} ;
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////

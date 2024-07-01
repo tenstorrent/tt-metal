@@ -6,14 +6,15 @@ import torch
 import ttnn
 
 from typing import List
-from models.utility_functions import torch2tt_tensor
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
+
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconMLP:
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -24,7 +25,7 @@ class TtFalconMLP:
         super().__init__()
 
         self.state_dict = state_dict
-        self.devices = devices
+        self.device_mesh = device_mesh
         self.hidden_size = hidden_size
         self.model_config = model_config
 
@@ -33,66 +34,30 @@ class TtFalconMLP:
         dense_h_to_4h_str = f"{layer_name}.mlp.dense_h_to_4h.weight"
         dense_4h_to_h_str = f"{layer_name}.mlp.dense_4h_to_h.weight"
 
-        num_devices = len(devices)
-        self.dense_h_to_4h_weights = []
-        self.dense_4h_to_h_weights = []
-        for i in range(num_devices):
-            dense_h_to_4h_path = (
-                tt_cache_path
-                / f"{dense_h_to_4h_str}_{i}_{num_devices}_{self.model_config['DENSE_H_TO_4H_MM_WEIGHTS_DTYPE'].name}.bin"
-            )
-            if (dense_h_to_4h_path).exists():
-                self.dense_h_to_4h_weights.append(
-                    ttnn.experimental.tensor.load_tensor(str(dense_h_to_4h_path)).to(
-                        devices[i], self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"]
-                    )
-                )
-            else:
-                dense_h_to_4h_weights_host = torch2tt_tensor(
-                    torch.transpose(
-                        torch.chunk(self.state_dict[dense_h_to_4h_str], num_devices)[i],
-                        -2,
-                        -1,
-                    ),
-                    None,
-                    tt_memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
-                )
-                self.dense_h_to_4h_weights.append(
-                    dense_h_to_4h_weights_host.to(devices[i], self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"])
-                )
-                ttnn.experimental.tensor.dump_tensor(
-                    str(dense_h_to_4h_path),
-                    dense_h_to_4h_weights_host,
-                )
-            dense_4h_to_h_path = (
-                tt_cache_path
-                / f"{dense_4h_to_h_str}_{i}_{num_devices}_{self.model_config['DENSE_4H_TO_H_MM_WEIGHTS_DTYPE'].name}.bin"
-            )
-            if (dense_4h_to_h_path).exists():
-                self.dense_4h_to_h_weights.append(
-                    ttnn.experimental.tensor.load_tensor(str(dense_4h_to_h_path)).to(
-                        devices[i], self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"]
-                    )
-                )
-            else:
-                dense_4h_to_h_weights_host = torch2tt_tensor(
-                    torch.transpose(
-                        torch.chunk(self.state_dict[dense_4h_to_h_str], num_devices)[i],
-                        -2,
-                        -1,
-                    ),
-                    None,
-                    tt_memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
-                )
-                self.dense_4h_to_h_weights.append(
-                    dense_4h_to_h_weights_host.to(devices[i], self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"])
-                )
-                ttnn.experimental.tensor.dump_tensor(
-                    str(dense_4h_to_h_path),
-                    dense_4h_to_h_weights_host,
-                )
+        w1_weight = self.state_dict.get(dense_h_to_4h_str) if self.state_dict else None
+        w2_weight = self.state_dict.get(dense_4h_to_h_str) if self.state_dict else None
+
+        self.dense_h_to_4h_weights = ttnn.as_tensor(
+            w1_weight,
+            dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            cache_file_name=tt_cache_path / dense_h_to_4h_str,
+            preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+        )
+
+        self.dense_4h_to_h_weights = ttnn.as_tensor(
+            w2_weight,
+            dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            cache_file_name=tt_cache_path / dense_4h_to_h_str,
+            preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+        )
 
     def set_model_config(self, model_config):
         self.model_config = model_config
@@ -108,84 +73,71 @@ class TtFalconMLP:
             assert False
 
     def fwd_decode(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
-        hidden_states = []
-        for i in range(len(x)):
-            hidden_states.append(
-                ttnn.experimental.operations.primary.matmul_1d(
-                    x[i],
-                    self.dense_h_to_4h_weights[i],
-                    program_config=self.model_config["DENSE_H_TO_4H_MM_PROGCFG"],
-                    output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                )
-            )
-            x[i].deallocate(True)
-        for i in range(len(hidden_states)):
-            hidden_states[i] = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
+        hidden_states = ttnn.matmul(
+            x,
+            self.dense_h_to_4h_weights,
+            program_config=self.model_config["DENSE_H_TO_4H_MM_PROGCFG"],
+            memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
+        x.deallocate(True)
+
+        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+        )
         hidden_states = ttnn.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        for i in range(len(hidden_states)):
-            hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                hidden_states[i], sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
-        for i in range(len(hidden_states)):
-            hidden_states[i] = ttnn.experimental.operations.primary.matmul_1d(
-                hidden_states[i],
-                self.dense_4h_to_h_weights[i],
-                program_config=self.model_config["DENSE_4H_TO_H_MM_PROGCFG"],
-                output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
-
+        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states, sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
+        )
+        hidden_states = ttnn.matmul(
+            hidden_states,
+            self.dense_4h_to_h_weights,
+            program_config=self.model_config["DENSE_4H_TO_H_MM_PROGCFG"],
+            memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
         # return TT Tensor
         return hidden_states
 
     def fwd_prefill(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
         hidden_states = []
         should_deallocate_ln_tensors = determine_tensor_deallocation(
-            self.model_config["layernorm_params"]["slice_size"], x[0].get_legacy_shape()[2]
+            self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
         )
-        for i in range(len(x)):
-            hidden_states.append(
-                falcon_prefill_matmul(
-                    x[i],
-                    self.dense_h_to_4h_weights[i],
-                    self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-                    act=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
-                    overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-                    overwrite_subblock_h=1,
-                )
-            )
-            if should_deallocate_ln_tensors:
-                x[i].deallocate(True)
-
+        hidden_states = falcon_prefill_matmul(
+            x,
+            self.dense_h_to_4h_weights,
+            self.model_config["COMPUTE_KERNEL_CONFIG"],
+            output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+            act=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+            overwrite_subblock_h=1,
+        )
         hidden_states = ttnn.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
+        if should_deallocate_ln_tensors:
+            x.deallocate(True)
 
-        for i in range(len(hidden_states)):
-            hidden_states[i] = falcon_prefill_matmul(
-                hidden_states[i],
-                self.dense_4h_to_h_weights[i],
-                self.model_config["COMPUTE_KERNEL_CONFIG"],
-                output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-                overwrite_subblock_h=1,
-            )
-
+        hidden_states = falcon_prefill_matmul(
+            hidden_states,
+            self.dense_4h_to_h_weights,
+            self.model_config["COMPUTE_KERNEL_CONFIG"],
+            output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+            overwrite_subblock_h=1,
+        )
         # return TT Tensor
         return hidden_states

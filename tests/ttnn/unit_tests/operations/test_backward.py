@@ -90,7 +90,7 @@ def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_fun
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
 def test_atan2(device, h, w, in_val, grad_val, other_val):
-    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.experimental.tensor.atan2_bw, torch.atan2)
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.atan2_bw, torch.atan2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -100,4 +100,60 @@ def test_atan2(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("other_val", [0])
 @skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
 def test_atan2_zero(device, h, w, in_val, grad_val, other_val):
-    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.experimental.tensor.atan2_bw, torch.atan2)
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.atan2_bw, torch.atan2)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+@skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
+def test_xlogy(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.xlogy_bw, torch.xlogy)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_hypot(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.hypot_bw, torch.hypot)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_ldexp(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.ldexp_bw, torch.ldexp)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_logaddexp(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.logaddexp_bw, torch.logaddexp)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_logaddexp2(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.logaddexp2_bw, torch.logaddexp2)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_squared_difference(device, h, w, in_val, grad_val, other_val):
+    torch_squared_diff = lambda x, y: torch.square(torch.sub(x, y))
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.squared_difference_bw, torch_squared_diff)

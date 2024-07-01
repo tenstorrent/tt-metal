@@ -6,8 +6,6 @@
 
 #include <optional>
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -15,8 +13,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -975,7 +971,6 @@ operation::ProgramWithCallbacks groupnorm_sharded_v2_(
     if (beta.has_value()) {
         TT_ASSERT(beta.value().get_layout() == Layout::ROW_MAJOR);
     }
-    TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR);
 
     bool is_height_sharding = a.get_legacy_shape()[3] == a.shard_spec().value().shape[1];
     // convert data format
@@ -1007,6 +1002,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_v2_(
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t per_core_N_bytes_padded = round_up_to_mul32(per_core_N * datum_size_bytes);
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
+    bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
+    bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t H = shape[2] * num_batches;
@@ -1288,6 +1285,14 @@ operation::ProgramWithCallbacks groupnorm_sharded_v2_(
         reader_mcast_sender_defines["READER_REPACK"] = "1";
         reader_mcast_receiver_defines["READER_REPACK"] = "1";
     }
+    if (tilize_in) {
+        reader_mcast_sender_defines["TILIZE_IN"] = "1";
+        reader_mcast_receiver_defines["TILIZE_IN"] = "1";
+    }
+    if (untilize_out) {
+        reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
+        reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
+    }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t) reduce_receiver_semaphore,
@@ -1387,6 +1392,12 @@ operation::ProgramWithCallbacks groupnorm_sharded_v2_(
     std::map<string, string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
+    }
+    if (tilize_in) {
+        eltwise_binary_defines["TILIZE_IN"] = "1";
+    }
+    if (untilize_out) {
+        eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
     // compute kernel compile time args
     std::vector<uint32_t> mcast_sender_compute_compile_time_args = {
@@ -1500,10 +1511,12 @@ operation::ProgramWithCallbacks groupnorm_sharded_v2_(
         .set_page_size(in_cb_index, in_single_tile_size);
     auto cb_in = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
     // out - stores tilized output
-    uint32_t out_cb_index = CB::c_intermed6;
-    tt_metal::CircularBufferConfig out_cb_config = tt_metal::CircularBufferConfig(in_CB_size, {{out_cb_index, in_data_format}})
-        .set_page_size(out_cb_index, in_single_tile_size);
-    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+    if (untilize_out) {
+        uint32_t out_cb_index = CB::c_intermed6;
+        tt_metal::CircularBufferConfig out_cb_config = tt_metal::CircularBufferConfig(in_CB_size, {{out_cb_index, in_data_format}})
+            .set_page_size(out_cb_index, in_single_tile_size);
+        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+    }
     // in2 scaler - for partial Ex
     uint32_t in2_cb_index = CB::c_in2;
     tt_metal::CircularBufferConfig in2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, cb_data_format}})
@@ -1785,7 +1798,6 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(a.get_dtype() == DataType::BFLOAT16);
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -1843,7 +1855,7 @@ std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor> &
     } else {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = input_tensor.shard_spec();
-        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, this->program_config.output_layout, input_tensor.device(), mem_config)};
     }
 }
 operation::ProgramWithCallbacks GroupNorm::create_program(

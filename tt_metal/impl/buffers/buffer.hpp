@@ -12,8 +12,10 @@
 #include "common/core_coord.h"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/common/base.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
+#include "tt_metal/impl/allocator/allocator_types.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
@@ -223,6 +225,12 @@ class Buffer {
 
     uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    uint32_t alignment() const { return ALLOCATOR_ALIGNMENT; }
+
+    uint32_t aligned_page_size() const { return align(page_size_, this->alignment());}
+
+    uint32_t aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
+
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
@@ -293,6 +301,7 @@ extern buffer_map_t BUFFER_MAP;
 }  // namespace detail
 
 using HostDataType = std::variant<
+    const std::shared_ptr<std::vector<uint8_t>>,
     const std::shared_ptr<std::vector<uint16_t>>,
     const std::shared_ptr<std::vector<int32_t>>,
     const std::shared_ptr<std::vector<uint32_t>>,

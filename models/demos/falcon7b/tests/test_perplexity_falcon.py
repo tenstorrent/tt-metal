@@ -151,7 +151,7 @@ def run_test_perplexity(
 
     if not use_hf_model:
         # Load tt-metal model config
-        model_config = get_model_config(model_config_str, max_seq_len)
+        model_config = get_model_config(model_config_str, max_seq_len, batch_size)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -240,12 +240,12 @@ def test_perplexity_huggingface(
 @pytest.mark.parametrize(
     "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 20.69, 0.40, 0.65),
-        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.77, 0.48, 0.71),
-        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 10.31, 0.49, 0.73),
-        ("decode", 32, 128, "BFLOAT16-L1_SHARDED", 64, 21.39, 0.39, 0.64),
-        ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 12.01, 0.47, 0.71),
-        ("decode", 32, 2048, "BFLOAT16-L1_SHARDED", 64, 10.59, 0.49, 0.73),
+        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 19.93, 0.41, 0.66),
+        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.41, 0.49, 0.72),
+        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 9.96, 0.50, 0.74),
+        ("decode", 32, 128, "BFLOAT16-L1_SHARDED", 64, 20.25, 0.40, 0.66),
+        ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 11.63, 0.48, 0.72),
+        ("decode", 32, 2048, "BFLOAT16-L1_SHARDED", 64, 10.18, 0.50, 0.74),
     ),
     ids=[
         "prefill_seq128_dram",

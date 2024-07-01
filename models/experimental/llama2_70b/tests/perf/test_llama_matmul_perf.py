@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -42,7 +43,7 @@ class Decode_FF1:
             tt_dtype=BFP8_DTYPE,
         )
 
-        self.prog_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -55,12 +56,12 @@ class Decode_FF1:
         )
 
     def __call__(self, x):
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
             program_config=self.prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG,
         )
 
@@ -76,7 +77,7 @@ class Decode_FF2:
             tt_dtype=BFP8_DTYPE,
         )
 
-        self.prog_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=32,
             out_subblock_h=1,
@@ -90,12 +91,12 @@ class Decode_FF2:
 
     def __call__(self, x):
         # Assume interleaved input
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
             program_config=self.prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG,
         )
 
@@ -123,7 +124,7 @@ class Prefill_MLP_128:
             tt_dtype=BFP8_DTYPE,
         )
 
-        self.prog_config1 = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.prog_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=2,  # Must be divisible by per_core_M
@@ -135,7 +136,7 @@ class Prefill_MLP_128:
             fuse_batch=True,
         )
 
-        self.prog_config3 = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.prog_config3 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=2,  # Must be divisible by per_core_M
@@ -147,7 +148,7 @@ class Prefill_MLP_128:
             fuse_batch=True,
         )
 
-        self.prog_config2 = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.prog_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=32,  # how much inner dim you take each time
             out_subblock_h=4,  # Must be divisible by per_core_M
@@ -161,20 +162,20 @@ class Prefill_MLP_128:
 
     def __call__(self, x, x_allgather):
         # Assume interleaved input
-        ff1_out = tt_lib.operations.primary.matmul(
+        ff1_out = ttnn.matmul(
             x,
             self.w1,
             program_config=self.prog_config1,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
-        ff3_out = tt_lib.operations.primary.matmul(
+        ff3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.prog_config3,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
@@ -186,12 +187,12 @@ class Prefill_MLP_128:
 
         out.deallocate()
         x.deallocate()
-        ff2_out = tt_lib.operations.primary.matmul(
+        ff2_out = ttnn.matmul(
             x_allgather,
             self.w2,
             program_config=self.prog_config2,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
         return out
@@ -302,7 +303,7 @@ class Prefill_MLP_2k:
         )
         in0_block_w = 4
 
-        self.prog_config1 = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.prog_config1 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             # [2048 x 8192] x [8192 x 4096]
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
@@ -314,7 +315,7 @@ class Prefill_MLP_2k:
             transpose_mcast=False,
         )
 
-        self.prog_config3 = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.prog_config3 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             # [2048 x 8192] x [8192 x 4096]
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
@@ -326,7 +327,7 @@ class Prefill_MLP_2k:
             transpose_mcast=False,
         )
 
-        self.prog_config2 = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.prog_config2 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             # [2048 x 32768] x [32768 x 1024]
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
@@ -340,18 +341,18 @@ class Prefill_MLP_2k:
 
     def __call__(self, x, x_allgather):
         # Assume interleaved input
-        ff1_out = tt_lib.operations.primary.matmul(
+        ff1_out = ttnn.matmul(
             x,
             self.w1,
             program_config=self.prog_config1,
-            output_mem_config=self.block_sharded,
+            memory_config=self.block_sharded,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
-        ff3_out = tt_lib.operations.primary.matmul(
+        ff3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.prog_config3,
-            output_mem_config=self.block_sharded,
+            memory_config=self.block_sharded,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
@@ -360,7 +361,7 @@ class Prefill_MLP_2k:
         ff3_out.deallocate()
         out.deallocate()
 
-        ff2_out = tt_lib.operations.primary.matmul(
+        ff2_out = ttnn.matmul(
             x_allgather,
             self.w2,
             program_config=self.prog_config2,

@@ -7,22 +7,18 @@ import pytest
 from loguru import logger
 
 import ttnn
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM, FalconConfig
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    skip_for_grayskull,
-    get_devices_for_t3000,
-)
+from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
 
 def run_test_falcon_prefill_end_to_end_determinism(
-    devices,
+    device_mesh,
     model_version,
     generate_weights,
     batch,
@@ -64,38 +60,31 @@ def run_test_falcon_prefill_end_to_end_determinism(
     tt_layer_past = ()
     tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
     tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-    tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-    tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
 
     for _ in range(num_layers):
-        tt_k_cache = []
-        tt_v_cache = []
-        for j in range(len(devices)):
-            tt_k_cache.append(
-                torch2tt_tensor(
-                    tt_k_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-            tt_v_cache.append(
-                torch2tt_tensor(
-                    tt_v_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
+        tt_k_cache = ttnn.as_tensor(
+            tensor=tt_k_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
+        tt_v_cache = ttnn.as_tensor(
+            tensor=tt_v_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
         tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     logger.info("Loading TT Falcon Model...")
     # NOTE: Passing in pytorch tensor here instead of tt tensor
     # since we don't yet have embedding support on device
     tt_FalconCausalLM = TtFalconCausalLM(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         num_layers,
@@ -105,7 +94,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
         tt_cache_path,
         use_global_cos_sin_cache,
     )
-    for device in devices:
+    for device in device_mesh.get_devices():
         ttnn.device.synchronize_device(device)
     logger.info("Done loading TT Falcon Model")
 
@@ -126,7 +115,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     tt_outs = []
     for user_id in range(batch):
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            tt_inputs=tt_inputs[user_id],
+            input_ids=tt_inputs[user_id],
             llm_mode="prefill",
             attention_mask=tt_attention_mask[user_id],
             user_id=user_id,
@@ -135,22 +124,27 @@ def run_test_falcon_prefill_end_to_end_determinism(
             use_cache=use_cache,
         )
         tt_outs.append(tt_out)
-    tt_outs = [[tt_o.cpu() for tt_o in tt_out] for tt_out in tt_outs]
-    tt_out = tt_outs
+
+    tt_outs = [
+        ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+        for tt_out in tt_outs
+    ]
 
     logger.info("Done running TT Falcon model")
 
-    for device in devices:
+    for device in device_mesh.get_devices():
         ttnn.device.synchronize_device(device)
 
-    reference_out = torch.vstack(
-        [torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1) for tt_out in tt_outs]
-    )
+    reference_out = torch.vstack(tt_outs)
     reference_kv_cache = []
     for i in range(num_layers):
         tt_layer_pres = (
-            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
-            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
+            ttnn.to_torch(
+                tt_layer_present[i][0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+            ),
+            ttnn.to_torch(
+                tt_layer_present[i][1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+            ),
         )
         reference_kv_cache.append(tt_layer_pres)
 
@@ -184,13 +178,15 @@ def run_test_falcon_prefill_end_to_end_determinism(
                 use_cache=use_cache,
             )
             tt_outs.append(tt_out)
-        tt_outs = [[tt_o.cpu() for tt_o in tt_out] for tt_out in tt_outs]
+
+        tt_outs = [
+            ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+            for tt_out in tt_outs
+        ]
         tt_out = tt_outs
 
         # Check outputs --------------------------------------------------------------------
-        pt_tt_out = torch.vstack(
-            [torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1) for tt_out in tt_outs]
-        )
+        pt_tt_out = torch.vstack(tt_outs)
         output_passes, output_pcc = comp_pcc(reference_out, pt_tt_out, expected_pcc)
         logger.info(f"Output: {output_pcc}")
 
@@ -199,8 +195,12 @@ def run_test_falcon_prefill_end_to_end_determinism(
         for i in range(num_layers):
             pytorch_layer_pres = reference_kv_cache[i]
             tt_layer_pres = (
-                torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
-                torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
+                ttnn.to_torch(
+                    tt_layer_present[i][0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                ),
+                ttnn.to_torch(
+                    tt_layer_present[i][1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                ),
             )
 
             k_cache_passes, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], expected_pcc)
@@ -270,13 +270,13 @@ def test_falcon_prefill_end_to_end_determinism(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
 ):
     num_devices = 8
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, "prefill", input_shape, num_devices)
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    devices = t3k_device_mesh.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -290,7 +290,7 @@ def test_falcon_prefill_end_to_end_determinism(
             device.enable_program_cache()
 
     run_test_falcon_prefill_end_to_end_determinism(
-        devices,
+        t3k_device_mesh,
         model_version,
         generate_weights,
         batch,

@@ -81,7 +81,7 @@ run_frequent_api_pipeline_tests() {
         ./tests/scripts/run_python_api_unit_tests.sh
     else
         if [[ $tt_arch == "wormhole_b0" ]]; then
-            pytest  tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k nightly
+            pytest -n auto tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k nightly
         else
             echo "API tests are not available for fast dispatch because they're already covered in post-commit"
         fi

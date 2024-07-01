@@ -26,7 +26,7 @@ parameters = {
             (16,),
             (128, 128, 1024),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -46,7 +46,7 @@ parameters = {
             (2, 16),
             (384, 64, 128),
             True,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
@@ -81,7 +81,7 @@ parameters = {
             (4, 1),
             (1024, 64, 1024),
             True,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
@@ -107,7 +107,7 @@ parameters = {
             (1,),
             (63 * 32, 32, 32),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,  # K // 32
                 out_subblock_h=1,
@@ -136,7 +136,7 @@ parameters = {
             (1,),
             (8704, 64, 64),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=4,  # 8 // (N // 32)
@@ -170,7 +170,7 @@ parameters = {
             (1,),
             (64, 2048, 1024),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
@@ -194,70 +194,12 @@ parameters = {
             ttnn.L1_MEMORY_CONFIG,
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         ),
-        # Matmul 1D mcast in0 (single core)
-        (
-            (1,),
-            (64, 64, 128),
-            False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
-                in0_block_w=2,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=2,
-                per_core_N=4,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            ),
-            ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-                    (64, 64),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            ),
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        ),
-        # Matmul 1D mcast in1 (single core)
-        (
-            (1,),
-            (64, 64, 128),
-            False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
-                in0_block_w=2,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=2,
-                per_core_N=4,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
-            ),
-            ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-                    (64, 64),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            ),
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        ),
         # Matmul 2D mcast
         (
             (1,),
             (1600, 512, 1024),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -285,7 +227,7 @@ parameters = {
             (1,),
             (1600, 256, 512),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 4),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -313,7 +255,7 @@ parameters = {
             (1,),
             (192, 64, 384),
             False,
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(6, 6),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,

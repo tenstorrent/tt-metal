@@ -17,14 +17,10 @@
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
-// XXXX
-// TODO(PGK): including wormhole in grayskull build is dangerous
-// Include noc/noc_parameters.h here so that including it from wormhole
-// doesn't pull in the wrong file!
 // clang-format off
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
-#include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
+#include "eth_interface.h"
 #include "dev_msgs.h"
 // clang-format on
 
@@ -49,7 +45,21 @@ class Cluster {
 
     static const Cluster &instance();
 
+    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
+    // user facing host apis
+    size_t number_of_user_devices() const {
+        if (this->is_tg_cluster_) {
+            const auto &chips = this->cluster_desc_->get_all_chips();
+            return std::count_if(chips.begin(), chips.end(), [&](const auto &id) {
+                return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
+            });
+        } else {
+            return this->cluster_desc_->get_number_of_chips();
+        }
+    }
+
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
+
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     ARCH arch() const { return this->arch_; }
@@ -208,8 +218,10 @@ class Cluster {
     }
 
     // Returns vector of unique tunnels originating from mmio device.
-    // Each vecor entry is another vector of remote devices on that tunnel.
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const;
+    // Each vector entry is another vector of remote devices on that tunnel.
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
+        return this->tunnels_from_mmio_device.at(mmio_chip_id);
+    }
 
     bool is_galaxy_cluster() const;
 
@@ -241,6 +253,9 @@ class Cluster {
         chip_id_t chip_id) const;
     void initialize_ethernet_sockets();
 
+    // Set tunnels from mmio
+    void set_tunnels_from_mmio_device();
+
     ARCH arch_;
     TargetDevice target_type_;
 
@@ -265,6 +280,9 @@ class Cluster {
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;
+
+    // Tunnels setup in cluster
+    std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device

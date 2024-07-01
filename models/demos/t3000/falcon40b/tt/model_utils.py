@@ -6,7 +6,6 @@ import torch
 import math
 
 import ttnn
-from models.utility_functions import torch2tt_tensor
 
 
 def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=False):
@@ -126,7 +125,7 @@ def matmul_1d_config(
     if overwrite_subblock_h is not None:
         out_subblock_h = overwrite_subblock_h
 
-    return ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=per_core_k,
         out_subblock_h=out_subblock_h,
@@ -215,7 +214,7 @@ def matmul_2d_config(
     #     f"per_core_m: {per_core_m}, per_core_k: {per_core_k}, per_core_n: {per_core_n}, out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}"
     # )
 
-    return ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=per_core_k,  # how much inner dim you take each time
         out_subblock_h=out_subblock_h,  # Must be divisible by per_core_M
@@ -269,12 +268,12 @@ def falcon_prefill_matmul(
             overwrite_subblock_h=overwrite_subblock_h,
         )
         # print(f"Program config: {matmul_pgmcfg}")
-        return ttnn.experimental.operations.primary.matmul(
+        return ttnn.matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
     else:
@@ -291,12 +290,12 @@ def falcon_prefill_matmul(
             overwrite_subblock_h=overwrite_subblock_h,
         )
         # print(f"Program config: {matmul_pgmcfg}")
-        return ttnn.experimental.operations.primary.matmul_1d(
+        return ttnn.matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -310,13 +309,11 @@ def partial_layernorm(
     memconfig,
     pgmconfig,
     dtype,
-    hidden_size,
-    devices,
     ln_output_tensors_dict,
 ):
     # Do partial layernorm by partial sequence length of 128
     # Input xs[0] is [1, 1, seq_len, 8192]
-    seq_len = xs[0].shape[2]
+    seq_len = xs.shape[2]
 
     slice_size = layernorm_params["slice_size"]
 
@@ -329,8 +326,6 @@ def partial_layernorm(
         layernorm_params["layernorm_shard_width_hidden_dim"],
     )
 
-    num_devices = len(devices)
-
     if seq_len > slice_size:
         assert seq_len % slice_size == 0, "Sequence length must be divisible by layernorm slice size {slice_size}"
         num_slices = seq_len // slice_size  # we do 128 per iteration (slice), then we concat the result.
@@ -338,54 +333,44 @@ def partial_layernorm(
         xs_output_cat = ln_output_tensors_dict[seq_len]
 
         for slice_i in range(num_slices):
-            xs_slice = []
-            for i in range(num_devices):
-                xs_slice.append(
-                    ttnn.experimental.tensor.interleaved_to_sharded_partial(
-                        xs[i],
-                        (layernorm_num_cores_x, layernorm_num_cores_y),
-                        [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
-                        num_slices,  # num_slices
-                        slice_i,  # slice_index
-                        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                    )
-                )
-
-            for i in range(num_devices):
-                xs_slice[i] = ttnn.experimental.operations.primary.layernorm(
-                    xs_slice[i],
-                    ln_eps,
-                    ln_gamma[i],
-                    ln_beta[i],
-                    memconfig,
-                    pgmconfig,
-                )
-
-            for i in range(num_devices):
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
-                    xs_slice[i],
-                    xs_output_cat[i],
-                    num_slices,
-                    slice_i,
-                    get_dram_memcfg(),
-                )
-                xs_slice[i].deallocate(True)
-    else:
-        xs = convert_to_layout(xs, get_dram_memcfg(), memconfig)
-        for i in range(len(xs)):
-            xs[i] = ttnn.experimental.operations.primary.layernorm(
-                xs[i],
+            xs_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                xs,
+                (layernorm_num_cores_x, layernorm_num_cores_y),
+                [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
+                num_slices,  # num_slices
+                slice_i,  # slice_index
+                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            )
+            xs_slice = ttnn.experimental.operations.primary.layernorm(
+                xs_slice,
                 ln_eps,
-                ln_gamma[i],
-                ln_beta[i],
+                ln_gamma,
+                ln_beta,
                 memconfig,
                 pgmconfig,
             )
+            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                xs_slice,
+                xs_output_cat,
+                num_slices,
+                slice_i,
+                get_dram_memcfg(),
+            )
+        xs_slice.deallocate(True)
+    else:
+        xs = convert_to_layout(xs, get_dram_memcfg(), memconfig)
+        xs = ttnn.experimental.operations.primary.layernorm(
+            xs,
+            ln_eps,
+            ln_gamma,
+            ln_beta,
+            memconfig,
+            pgmconfig,
+        )
         xs = convert_to_layout(xs, memconfig, get_dram_memcfg())
-        xs_output_cat = xs
-        for i in range(num_devices):
-            xs_output_cat[i] = ttnn.experimental.tensor.typecast(xs_output_cat[i], dtype)
+        xs_output_cat = ttnn.experimental.tensor.typecast(xs, dtype)
+
     return xs_output_cat
 
 
@@ -406,20 +391,20 @@ def determine_tensor_deallocation(layernorm_slice_size, seq_len):
     return seq_len <= layernorm_slice_size
 
 
-def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, devices, hidden_size, dtype):
+def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, device_mesh, hidden_size, dtype):
     if seq_len <= slice_size:
         return
 
+    tensor = torch.zeros(1, 1, seq_len, hidden_size)
     for name in ["final_layernorm", "mlp_layernorm", "attn_layernorm"]:
-        output_tensor = [
-            torch2tt_tensor(
-                torch.zeros(1, 1, seq_len, hidden_size),
-                devices[i],
-                tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                tt_dtype=dtype,
-            )
-            for i in range(len(devices))
-        ]
+        output_tensor = ttnn.as_tensor(
+            tensor=tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        )
         if name in ln_output_tensors_dict and ln_output_tensors_dict[name] is not None:
             ln_output_tensors_dict[name].update({seq_len: output_tensor})
         else:

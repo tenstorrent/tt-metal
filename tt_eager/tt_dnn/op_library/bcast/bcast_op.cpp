@@ -8,14 +8,11 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include "tt_metal/common/constants.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace bcast_op_utils {
 
@@ -158,6 +155,8 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     switch (parallelization_strategy){
         case BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED:
             return bcast_sharded_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
+        case BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED:
+            return bcast_sharded_h_optimised(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
             return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
@@ -186,6 +185,7 @@ const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
 
 BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
     uint32_t Ht = input_tensor_a.get_legacy_shape()[-2] / TILE_HEIGHT;
@@ -193,7 +193,11 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
 
     if(this->dim == BcastOpDim::H){
         if(input_tensor_a.is_sharded())
-            return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;
+            if (input_tensor_a.get_legacy_shape()[0] == input_tensor_b.get_legacy_shape()[0] || input_tensor_a.get_legacy_shape()[0] > 1 and input_tensor_b.get_legacy_shape()[0] == 1){
+                return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED;
+            } else {
+                return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;
+            }
         else
             return BcastOpParallelizationStrategy::MULTI_CORE_H;
     }

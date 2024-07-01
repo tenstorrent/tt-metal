@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
@@ -35,14 +36,12 @@ class TtFF1:
 
     def __call__(self, x, prog_config, output_config):
         # Assume interleaved input
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
-            fp32_dest_acc_en=USE_ACC,
-            packer_l1_acc=USE_ACC,
             program_config=prog_config,
-            output_mem_config=output_config,
-            output_dtype=self.model_config["FF1_MM_OUTPUT_DTYPE"],
+            memory_config=output_config,
+            dtype=self.model_config["FF1_MM_OUTPUT_DTYPE"],
         )
         x.deallocate()
 
@@ -85,7 +84,7 @@ def run_test_ff1(
         max_dst_size = 4 if USE_ACC else 8
         out_subblock_w = max([i for i in range(1, max_dst_size + 1) if (per_core_N % i) == 0])
 
-        prog_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=compute_with_storage_grid_size,
             in0_block_w=in0_block_w,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M

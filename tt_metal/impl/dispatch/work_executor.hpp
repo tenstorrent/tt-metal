@@ -102,7 +102,6 @@ class WorkExecutor {
         this->work_executor_mode = default_worker_executor_mode();
         this->worker_queue_mode = default_worker_queue_mode();
         this->worker_state = WorkerState::IDLE;
-        this->cpu_core_for_worker = 0;
         this->worker_queue.parent_thread_id = 0;
         this->worker_queue.worker_thread_id = 0;
         set_process_priority(0);
@@ -116,6 +115,7 @@ class WorkExecutor {
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             stop_worker();
         }
+        this->work_executor_mode = WorkExecutorMode::SYNCHRONOUS;
     }
 
     inline void run_worker() {

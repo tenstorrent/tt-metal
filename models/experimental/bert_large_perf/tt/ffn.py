@@ -8,6 +8,7 @@ from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering
 import tt_lib as ttl
+import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.utility_functions import comp_pcc, comp_allclose
 
@@ -22,7 +23,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
     # output = [1, 9, 384, 4096]
     def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
         # profiler.start("___op13_MM_bias_gelu")
-        output = ttl.tensor.matmul(activation, ff1_weighta)
+        output = ttnn.matmul(activation, ff1_weighta)
         output_plus_bias = ttl.tensor.bcast(output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         output_plus_bias_act = ttl.tensor.gelu(output_plus_bias)
         # profiler.end("___op13_MM_bias_gelu")
@@ -34,7 +35,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
     # output = [1, 9, 384, 1024]
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
         # profiler.start("___op14_MM_bias")
-        output = ttl.tensor.matmul(activation, ff2_weighta)
+        output = ttnn.matmul(activation, ff2_weighta)
         output_plus_bias = ttl.tensor.bcast(output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         # profiler.end("___op14_MM_bias")
 

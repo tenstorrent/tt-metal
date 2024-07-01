@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 
 
@@ -31,14 +32,11 @@ def test_bw_bias_gelu(input_shapes, approximate, device):
 
     pyt_y = torch.nn.functional.gelu(in_data, approximate=approximate)
 
-    tt_output_tensor_on_device = tt_lib.tensor.bias_gelu_bw(
-        grad_tensor, input_tensor_a, input_tensor_b, approximate=approximate
-    )
-
+    tt_output_tensor_on_device = ttnn.bias_gelu_bw(grad_tensor, input_tensor_a, input_tensor_b, approximate)
     in_data.retain_grad()
 
     pyt_y.backward(gradient=grad_data)
 
-    golden_tensor = [in_data.grad]
+    golden_tensor = [in_data.grad, in_data.grad]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

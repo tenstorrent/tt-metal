@@ -3,9 +3,18 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        default: 9605916313
+        type: number
   workflow_run:
     workflows:
       - "All post-commit tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 model perf tests"
+      - "(Single-card) Model perf tests"
+      - "(Single-card) Device perf tests"
     types:
       - completed
 
@@ -13,6 +22,7 @@ jobs:
   produce-data:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
@@ -27,18 +37,45 @@ jobs:
           echo "orchestrator: github (Static)"
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
-      - name: Output auxiliary values
+      - name: Output auxiliary values (workflow dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[Info] Workflow run"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1 > workflow.json
+          echo "[Info] Workflow run attempt jobs"
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs > workflow_jobs.json
       - name: Output auxiliary values (workflow_run completed)
         if: ${{ github.event_name == 'workflow_run' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[Info] Triggering Workflow run"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}
+          echo "[Info] Workflow run attempt"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }} > workflow.json
+          echo "[Info] Workflow run attempt jobs"
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
+      - name: Output github context values to file
+        run: |
+          echo '${{ toJSON(github) }}' > github_context.json
+      - name: Create CSVs and show
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pip3 install loguru && python3 .github/scripts/create_pipeline_csvs.py
+      - name: Show directory to see output files
+        run: ls -hal
+      - name: Show CSVs output
+        run: cat *.csv
+      - name: Upload context data, even on failure
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-data
+          path: |
+            if-no-files-found: warn
+            path: |
+              workflow.json
+              workflow_jobs.json
+              github_context.json

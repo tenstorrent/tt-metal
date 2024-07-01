@@ -14,6 +14,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/sliding_window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/reference_sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
@@ -51,6 +52,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/bmm_op.cpp
@@ -79,6 +81,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/softmax/multi_core/softmax_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/softmax/softmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_decode_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/sdpa_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam.cpp
@@ -108,8 +111,11 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_sum_h_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_int_sum_h_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_w_impl/moreh_sum_w_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_w_impl/moreh_int_sum_w_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_nc_impl/moreh_sum_nc_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_nc_impl/moreh_int_sum_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/prod/prod_nc/prod_nc.cpp
@@ -172,6 +178,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_prefix_scan/multi_core_ssm_prefix_scan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_tiled.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_last_dim_two_chunks_tiled.cpp
@@ -224,12 +231,29 @@ target_include_directories(tt_dnn PUBLIC
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
 
-target_precompile_headers(tt_dnn PUBLIC
+target_precompile_headers(tt_dnn PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/format.h
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/tensor.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/types.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/device/device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/jit_build/build.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/program/program.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/host_api.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/buffers/buffer.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tt_dnn/op_library/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/common/core_coord.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/tt_device.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
 )

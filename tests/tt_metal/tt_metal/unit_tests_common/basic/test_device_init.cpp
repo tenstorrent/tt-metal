@@ -71,6 +71,12 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
         GTEST_SKIP();
     }
+
+    //see issue #9594
+    if (arch == tt::ARCH::WORMHOLE_B0 && num_devices > 1) {
+        GTEST_SKIP();
+    }
+
     ASSERT_TRUE(num_devices > 0);
     std::vector<tt::tt_metal::Device *> devices;
     vector<chip_id_t> ids;

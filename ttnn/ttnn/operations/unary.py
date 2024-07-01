@@ -88,6 +88,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
         # Other unaries (composite operations)
         "softplus": torch.nn.functional.softplus,
+        "sigmoid_accurate": torch.sigmoid,
         "acosh": torch.acosh,
         "asinh": torch.asinh,
         "atanh": torch.atanh,
@@ -103,7 +104,6 @@ def register_ttnn_cpp_unary_function(unary_function):
         "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
         "multigammaln": torch_multigammaln,
         "rad2deg": torch.rad2deg,
-        "sigmoid_accurate": torch.sigmoid,
         "sinh": torch.sinh,
         "softsign": torch.nn.functional.softsign,
         "swish": torch.nn.functional.hardswish,
@@ -174,9 +174,11 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.heaviside,
     ttnn._ttnn.operations.unary.leaky_relu,
     # ttnn._ttnn.operations.unary.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    # Other unaries (composite operations)
+    # Unaries using op_chain
     ttnn._ttnn.operations.unary.log_sigmoid,
     ttnn._ttnn.operations.unary.softplus,
+    ttnn._ttnn.operations.unary.sigmoid_accurate,
+    # Other unaries (composite operations - tt_eager dependency)
     ttnn._ttnn.operations.unary.acosh,
     ttnn._ttnn.operations.unary.asinh,
     ttnn._ttnn.operations.unary.atanh,
@@ -192,7 +194,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.mish,
     ttnn._ttnn.operations.unary.multigammaln,
     ttnn._ttnn.operations.unary.rad2deg,
-    ttnn._ttnn.operations.unary.sigmoid_accurate,
     ttnn._ttnn.operations.unary.sinh,
     ttnn._ttnn.operations.unary.softsign,
     ttnn._ttnn.operations.unary.swish,
@@ -229,7 +230,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint8, ttnn.uint16),
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -260,7 +261,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
         return output_tensor
 
     if isinstance(unary_function, ttnn.decorators.Operation):
-        unary_function.__name__ = f"ttnn.{(name)}"
         unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
@@ -346,7 +346,6 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
@@ -430,7 +429,6 @@ def register_ttl_activation_function_with_two_float_params(name, ttl_activation_
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
@@ -550,7 +548,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.

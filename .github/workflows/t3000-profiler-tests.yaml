@@ -1,4 +1,4 @@
-name: "[T3K] T3000 profiler tests"
+name: "(T3K) T3000 profiler tests"
 
 on:
   workflow_dispatch:
@@ -35,7 +35,13 @@ jobs:
       - name: Build tt-metal and libs
         run: |
           ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
           ./tests/scripts/run_profiler_regressions.sh
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U03BJ1L3LUQ # Mo Memarian  

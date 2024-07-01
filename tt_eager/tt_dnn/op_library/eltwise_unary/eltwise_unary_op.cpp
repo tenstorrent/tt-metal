@@ -4,13 +4,9 @@
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 using namespace tt::constants;
 
@@ -69,10 +65,13 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
         case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
+        case UnaryOpType::BITWISE_XOR: defines["SFPU_OP_BITWISE_XOR_INCLUDE"] = "1"; break;
+        case UnaryOpType::BITWISE_NOT: defines["SFPU_OP_BITWISE_NOT_INCLUDE"] = "1"; break;
         case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
+        case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -116,6 +115,14 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        case UnaryOpType::BITWISE_XOR:
+            op_init_and_name = {
+                "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
+            break;
+        case UnaryOpType::BITWISE_NOT:
+            op_init_and_name = {
+                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
+            break;
         case UnaryOpType::RIGHT_SHIFT:
             op_init_and_name = {
                 "right_shift_tile_init();",
@@ -130,6 +137,11 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "remainder_tile_init();",
                 fmt::format("remainder_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
+            break;
+        case UnaryOpType::FMOD:
+            op_init_and_name = {
+                "fmod_tile_init();",
+                fmt::format("fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -345,13 +357,24 @@ namespace tt {
 
 namespace tt_metal {
 
-inline void validate_supported_arch(tt::ARCH arch, UnaryOpType op_type) {
+inline void validate_supported_arch_dtype(tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::REMAINDER:
         case UnaryOpType::FLOOR:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::RIGHT_SHIFT:
             TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+            break;
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::BITWISE_NOT:
+            TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+            TT_FATAL(input_datatype == DataType::INT32, "Data type is not supported for Bitwise operations");
+            TT_FATAL(output_datatype == DataType::INT32, "Data type is not supported for Bitwise operations");
+            break;
+        case UnaryOpType::FMOD:
+            TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+            TT_FATAL(input_datatype == DataType::BFLOAT16, "Data type is not supported for Fmod operations");
+            TT_FATAL(output_datatype == DataType::BFLOAT16, "Data type is not supported for Fmod operations");
             break;
         default:
             return;
@@ -361,10 +384,15 @@ inline void validate_supported_arch(tt::ARCH arch, UnaryOpType op_type) {
 void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto out_mem_config = (!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()) ? optional_output_tensors.at(0).value().memory_config() : this->output_mem_config;
-
+    auto output_datatype = output_dtype;
+    if(!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()){
+        const auto& out = optional_output_tensors.at(0);
+        output_datatype = out->get_dtype();
+    }
     auto arch = input_tensor_a.device()->arch();
+    auto input_datatype = input_tensor_a.get_dtype();
     for (const auto& unary_op : this->op_chain) {
-        validate_supported_arch(arch, unary_op.op_type);
+        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.op_type);
     }
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(
@@ -454,22 +482,44 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 
 // unary op version tie
 template <BcastOpMath OP>
-Tensor tie_binop_to_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
-    Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
+Tensor tie_binop_to_unary(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    const DataType& dtype = output_tensor.has_value() ? output_tensor.value().get_dtype() : input_tensor.get_dtype();
+    Tensor t_value = ttnn::operations::creation::create_scalar(value, dtype, Layout::TILE, input_tensor.device());
     return bcast(queue_id, input_tensor, t_value, OP, BcastOpDim::HW, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
 }
 
-Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return lez(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);
+Tensor lte_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return lez(queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor lte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return lez(sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config);
+Tensor lte_unary(uint8_t queue_id, float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return lez(queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor gte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return gez(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);
+Tensor gte_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return gez(queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor gte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return gez(sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config);
+Tensor gte_unary(uint8_t queue_id, float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return gez(queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return lez(default_queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor lte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return lez(default_queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor gte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return gez(default_queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor gte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return gez(default_queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
 }
 Tensor eq_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
     return eqz(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);

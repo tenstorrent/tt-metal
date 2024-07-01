@@ -156,7 +156,7 @@ class TtMixtralAttention(LightweightModule):
         start_pos,
         current_pos,
         attn_masks,
-        rot_mats,
+        rot_mat,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
@@ -176,17 +176,16 @@ class TtMixtralAttention(LightweightModule):
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
-        rot_mat = rot_mats[start_pos]
         attn_mask_1B4P = attn_masks
         ###
         # QKV matmuls
         ###
 
-        xqkv_fused = ttnn.experimental.operations.primary.matmul(
+        xqkv_fused = ttnn.matmul(
             x_11BH,
             self.wqkv,
-            output_dtype=ttnn.bfloat16,
-            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             program_config=self.model_config["QKV_MM_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
         )
@@ -212,19 +211,19 @@ class TtMixtralAttention(LightweightModule):
         if self.k_mem_config is None:
             self.k_mem_config = k_heads_1B1D.memory_config()
 
-        q_heads_1B4D = ttnn.experimental.operations.primary.matmul(
+        q_heads_1B4D = ttnn.matmul(
             q_heads_1B4D,
             rot_mat,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.q_mem_config,
+            memory_config=self.q_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
             # [seqlen, bsz, padd_heads, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, bsz, padd_heads, head_dim]
         )
-        k_heads_1B1D = ttnn.experimental.operations.primary.matmul(
+        k_heads_1B1D = ttnn.matmul(
             k_heads_1B1D,
             rot_mat,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.k_mem_config,
+            memory_config=self.k_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
 
@@ -257,12 +256,12 @@ class TtMixtralAttention(LightweightModule):
 
         # scores matmul
 
-        attn_1B4P = ttnn.experimental.operations.primary.matmul(
+        attn_1B4P = ttnn.matmul(
             q_heads_1B4D,
             keys_1BDP,
-            output_dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat16,
             program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            output_mem_config=self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len),
+            memory_config=self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len),
             compute_kernel_config=self.compute_kernel_attn,
         )
         q_heads_1B4D.deallocate(True)
@@ -283,11 +282,11 @@ class TtMixtralAttention(LightweightModule):
             values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
-        attn_output_1B4D = ttnn.experimental.operations.primary.matmul(
+        attn_output_1B4D = ttnn.matmul(
             attn_1B4P,
             values_1BPD,
-            output_dtype=ttnn.bfloat16,
-            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
             program_config=self.model_config["VALUES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
             compute_kernel_config=self.compute_kernel_attn,
         )
@@ -308,19 +307,19 @@ class TtMixtralAttention(LightweightModule):
         # Output matmul
         ###
 
-        dense_out_11BH = ttnn.experimental.operations.primary.matmul(
+        dense_out_11BH = ttnn.matmul(
             attn_output_11BH,
             wo,
-            output_mem_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
             # compute_with_storage_grid_size=(8, 8),
             program_config=self.model_config["LM_HEAD_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
-            output_dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b,
         )
         attn_output_11BH.deallocate(True)
         # All gather
         dense_outputs_11BH = ttnn.all_gather(dense_out_11BH, dim=2, num_links=1)
 
         # return the sum of the outputs
-        dense_outputs_11BH = ttnn.experimental.operations.primary.matmul(self.reduce_mask, dense_outputs_11BH)
+        dense_outputs_11BH = ttnn.matmul(self.reduce_mask, dense_outputs_11BH)
         return dense_outputs_11BH

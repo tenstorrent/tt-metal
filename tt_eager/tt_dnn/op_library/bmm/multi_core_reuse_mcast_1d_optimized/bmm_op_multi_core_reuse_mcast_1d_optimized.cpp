@@ -76,17 +76,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-    uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
-    }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
-
-    uint32_t out_block_tiles = per_core_M * per_core_N;
-    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
-    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
-    uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -98,6 +87,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
+
+    uint32_t in1_block_tiles = per_core_N * in0_block_w;
+    uint32_t in1_CB_tiles = in1_block_tiles;
+    if (B * num_blocks > 1) {
+        in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
+    }
+    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
+    uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
@@ -244,6 +245,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_w,               // in0_block_w
             (std::uint32_t)per_core_M,                // in0_block_h
             (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
+            (std::uint32_t) false,                    // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)0,                         // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)0,                         // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
@@ -337,6 +341,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
+    // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
+    // skipping We can use this flag to turn off unnecessary mcast overhead if necessary
     if (in0_mcast_receiver_num_cores == 1) {
         mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
     }
@@ -840,12 +846,30 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+
+    bool extract_shard_sub_blocks = false;
+    uint32_t in0_shard_height_in_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    if (in0_is_sharded) {
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
+        // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
+        // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src
+        // For mcast in1, if we don't need to extract_shard_sub_blocks, set the sharded in0 cb to cb0
+        // For mcast in0, sharded in0 cb is always cb2
+        if (in0_shard_width_in_tiles / in0_block_w > 1) {
+            extract_shard_sub_blocks = true;
+        }
+    }
+
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
@@ -910,6 +934,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)in0_block_w,               // in0_block_w
         (std::uint32_t)per_core_M,                // in0_block_h
         (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
+        (std::uint32_t)extract_shard_sub_blocks,
+        (std::uint32_t)in0_shard_width_in_tiles,
+        (std::uint32_t)in0_shard_height_in_tiles,
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in0 mcast args
@@ -1125,7 +1152,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
-    if (in0_is_sharded) {
+    if (in0_is_sharded and not extract_shard_sub_blocks) {
         src0_cb_config = src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
@@ -1136,6 +1163,23 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in0_single_tile_size,
         in0_CB_size / in0_single_tile_size,
         in0_CB_size);
+
+    uint32_t src2_cb_index = 2;
+    CBHandle cb_src2 = 0;
+    if (in0_is_sharded and extract_shard_sub_blocks) {  // in0_is_sharded is technically redundant
+        tt_metal::CircularBufferConfig src2_cb_config =
+            tt_metal::CircularBufferConfig(in0_CB_size, {{src2_cb_index, in0_data_format}})
+                .set_page_size(src2_cb_index, in0_single_tile_size)
+                .set_globally_allocated_address(*in0_buffer);
+        cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+        log_debug(
+            LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            src2_cb_index,
+            in0_single_tile_size,
+            in0_CB_size / in0_single_tile_size,
+            in0_CB_size);
+    }
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
@@ -1341,7 +1385,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         [mm_kernel_in0_sender_id,
          mm_kernel_in1_sender_writer_id,
          mm_kernel_in1_receiver_writer_id,
+         extract_shard_sub_blocks,
          cb_src0,
+         cb_src2,
          cb_output,
          start_core,
          cores](
@@ -1400,7 +1446,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             }
 
             if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+                if (extract_shard_sub_blocks) {
+                    UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
+                } else {
+                    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+                }
             }
 
             if (out_sharded) {

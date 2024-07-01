@@ -10,6 +10,7 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_height_multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_width_multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/device/topk_op.cpp
 )
 
@@ -17,7 +18,6 @@ add_library(ttnn_lib OBJECT ${TTNN_SRCS})
 target_compile_options(ttnn_lib PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 target_link_libraries(ttnn_lib
     PUBLIC compiler_flags metal_header_directories metal_common_libs
-    PRIVATE reflect::reflect
 )
 target_include_directories(ttnn_lib PUBLIC
     ${UMD_HOME}
@@ -30,18 +30,31 @@ target_include_directories(ttnn_lib PUBLIC
 )
 target_precompile_headers(ttnn_lib PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
 )
 
-# TODO: should be using pybind11_add_module, but right now it introduces many build problems
-# pybinds will always be built as a shared library
-add_library(ttnn SHARED ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp $<TARGET_OBJECTS:ttnn_lib>)
+set(TTNN_FINAL_SRC $<TARGET_OBJECTS:ttnn_lib>)
+set(TTNN_PUBLIC_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/cpp)
+set(TTNN_PUBLIC_LINK_LIBS compiler_flags linker_flags tt_eager) # linker_flags = -rdynamic if tracy enabled
+if(WITH_PYTHON_BINDINGS)
+    # TODO: should be using pybind11_add_module, but right now it introduces many build problems
+    # pybinds will always be built as a shared library
+    list(APPEND TTNN_FINAL_SRC ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp)
+    list(APPEND TTNN_PUBLIC_INCLUDE_DIRS
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
+        ${Python3_INCLUDE_DIRS})
+    list(APPEND TTNN_PUBLIC_LINK_LIBS pch_pybinds)
+endif()
+
+add_library(ttnn SHARED ${TTNN_FINAL_SRC})
 target_compile_options(ttnn PUBLIC -Wno-int-to-pointer-cast -fno-var-tracking)
-target_link_libraries(ttnn PUBLIC compiler_flags linker_flags tt_eager pch_pybinds)     # linker_flags = -rdynamic if tracy enabled
-target_include_directories(ttnn PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
-    ${Python3_INCLUDE_DIRS}
-)
+target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBS})
+target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 
 # Make sure library built is _ttnn.so and that it can find all it's linked libraries
 # ttnn breaks if -fvisibility=hidden, so CXX_VISIBILITY_PRESET set to default

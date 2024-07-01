@@ -36,26 +36,6 @@ include(${PROJECT_SOURCE_DIR}/cmake/macros.cmake)
 CHECK_COMPILERS()
 
 ############################################################################################################################
-# Find all required libraries to build
-############################################################################################################################
-include(${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake)
-
-find_package (Python3 COMPONENTS Interpreter Development)
-find_library(NUMA_LIBRARY NAMES numa)
-if (NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
-endif()
-
-CPMAddPackage(
-  NAME reflect
-  GITHUB_REPOSITORY boost-ext/reflect
-  GIT_TAG v1.1.1
-)
-add_library(reflect INTERFACE)
-target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
-add_library(reflect::reflect ALIAS reflect)
-
-############################################################################################################################
 # Setting build type flags
 #   Will default to assert build, unless CONFIG env variable is set or manually set -DCMAKE_BUILD_TYPE
 ############################################################################################################################
@@ -80,8 +60,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
+option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
+message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
+
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
+option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
 # Default to building everything as a shared lib
 if($ENV{TT_METAL_CREATE_STATIC_LIB})
@@ -97,6 +81,20 @@ set(CMAKE_INSTALL_LIBDIR "${PROJECT_BINARY_DIR}/lib")
 set(CMAKE_INSTALL_BINDIR "${PROJECT_BINARY_DIR}/tmp/bin")
 set(CMAKE_INSTALL_INCLUDEDIR "${PROJECT_BINARY_DIR}/tmp/include")
 set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
+
+############################################################################################################################
+# Find all required libraries to build
+############################################################################################################################
+include(${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake)
+
+if(WITH_PYTHON_BINDINGS)
+    find_package (Python3 COMPONENTS Interpreter Development)
+endif()
+
+find_library(NUMA_LIBRARY NAMES numa)
+if (NOT NUMA_LIBRARY)
+    message(FATAL_ERROR "NUMA library not found")
+endif()
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -127,17 +125,14 @@ endif()
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
 endif()
-if($ENV{ENABLE_PROFILER})
-    message(STATUS "PROFILER ENABLED")
-    target_compile_options(compiler_flags INTERFACE -DPROFILER)
-endif()
-if($ENV{ENABLE_TRACY})
+if(ENABLE_TRACY)
     target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
     target_link_options(linker_flags INTERFACE -rdynamic)
 endif()
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
+target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR})
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
@@ -157,18 +152,20 @@ else()
     )
 endif()
 
-# Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
-add_library(pch_pybinds INTERFACE)
-target_precompile_headers(pch_pybinds INTERFACE
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
-)
+if(WITH_PYTHON_BINDINGS)
+    # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
+    add_library(pch_pybinds INTERFACE)
+    target_precompile_headers(pch_pybinds INTERFACE
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
+    )
+endif()
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if($ENV{ENABLE_TRACY})
+if(ENABLE_TRACY)
     include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 
@@ -198,10 +195,6 @@ install(TARGETS tt_eager
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
-install(TARGETS tt_lib
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-)
 install(TARGETS ttnn_lib
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -211,16 +204,22 @@ install(TARGETS ttnn
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
+if(WITH_PYTHON_BINDINGS)
+    install(TARGETS tt_lib
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tt_build_artifacts
+    )
 
-# Install .so into src files for pybinds implementation
-install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
+    # Install .so into src files for pybinds implementation
+    install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
     DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
     COMPONENT tt_pybinds
-)
-install(FILES ${PROJECT_BINARY_DIR}/lib/_C.so
+    )
+    install(FILES ${PROJECT_BINARY_DIR}/lib/_C.so
     DESTINATION ${PROJECT_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
-)
+    )
+endif()
 
 # Temporary workaround for Issue #8767
 install(DIRECTORY ${PROJECT_BINARY_DIR}/hw/toolchain

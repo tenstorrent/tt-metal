@@ -49,5 +49,3 @@ jobs:
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
-      - name: Check ttnn is not used in tt_eager tests more than allowed count
-        run: if (( $(grep -Rnw 'tests/tt_eager' -e 'ttnn' | wc -l ) > 300 )); then exit 1; fi

@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
+from models.utility_functions import skip_for_grayskull
 
 mem_configs = [
     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
@@ -24,6 +25,7 @@ mem_configs = [
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -36,10 +38,12 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for floor and trunc")
 class TestDiv:
     def test_run_div(
         self,
         accurate_mode,
+        round_mode,
         input_shapes,
         dst_mem_config,
         device,
@@ -47,23 +51,24 @@ class TestDiv:
         if accurate_mode == False:  # If input_b is non-zero tensor
             datagen_func = [
                 generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+                    partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
                 )
             ] + [
                 generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=-1), torch.bfloat16
+                    partial(generation_funcs.gen_rand, low=-1e6, high=-1), torch.bfloat16
                 )
             ]
         else:
             datagen_func = [
                 generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+                    partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
                 )
             ] * 2
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
                 "accurate_mode": accurate_mode,
+                "round_mode": round_mode,
             }
         )
         test_args.update({"output_mem_config": dst_mem_config})

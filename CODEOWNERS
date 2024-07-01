@@ -128,19 +128,18 @@ tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 **/tt_eager/tt_lib/fallback_ops @tt-aho
 
 # TTNN
-ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
 ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
-ttnn/CMakeLists.txt @tt-rkim
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu
+ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
 
 # models
-models/ @boris-drazic
+/models/ @boris-drazic
 models/conv_on_device_utils*.py @tt-nshanker
-models/bert_large_performant @tt-aho @TT-BrianLiu
-models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
+models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat @eyonland @AleksKnezevic @nsmithtt
 models/demos/t3000 @uaydonat @AleksKnezevic @nsmithtt
 models/demos/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
@@ -153,12 +152,11 @@ models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
-models/experimental/
 models/perf/ @boris-drazic @tt-rkim
 
 # docs
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin
-docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
+docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim

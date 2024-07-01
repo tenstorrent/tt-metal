@@ -308,13 +308,13 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 }
 
 inline void run_triscs() {
-    if (mailboxes->launch.enable_triscs) {
+    if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_COMPUTE]) {
         mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
 }
 
 inline void finish_ncrisc_copy_and_run() {
-    if (mailboxes->launch.enable_ncrisc) {
+    if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_DM1]) {
         mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
         l1_to_ncrisc_iram_copy_wait();
@@ -383,8 +383,8 @@ int main() {
             // Run the BRISC kernel
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc);
-            if (mailboxes->launch.enable_brisc) {
+            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_DM0]);
+            if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_DM0]) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();
             } else {
@@ -400,7 +400,7 @@ int main() {
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
                 noc_fast_atomic_increment(
                     noc_index,

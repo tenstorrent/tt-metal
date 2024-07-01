@@ -6,7 +6,7 @@ import os
 import json
 
 from loguru import logger
-from models.utility_functions import comp_pcc, divup, roundup
+from models.utility_functions import comp_pcc, comp_equal, divup, roundup
 from typing import Tuple
 
 
@@ -28,6 +28,14 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
     return pcc_passed, pcc_message
+
+
+def assert_equal(expected_pytorch_result, actual_pytorch_result):
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
+    equal_passed, equal_message = comp_equal(expected_pytorch_result, actual_pytorch_result)
+    return equal_passed, equal_message
 
 
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):

@@ -136,6 +136,10 @@ void DeviceModule(py::module &m_device) {
         Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted.
     )doc");
 
+    m_device.def("GetPCIeDeviceID", &GetPCIeDeviceID, R"doc(
+        Returns associated mmio device of give device id.
+    )doc");
+
     m_device.def("SetDefaultDevice", &AutoFormat::SetDefaultDevice, R"doc(
         Sets the default device to use for ops when inputs aren't on device.
 
@@ -211,7 +215,12 @@ void DeviceModule(py::module &m_device) {
         | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
-    m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
+    m_device.def("DeallocateBuffers",
+    [] (Device* device) {
+        device->push_work([device] () mutable {
+            device->deallocate_buffers();
+        });
+    }, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
     m_device.def("BeginTraceCapture",

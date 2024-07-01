@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -30,14 +31,12 @@ class TtFF1:
 
     def __call__(self, x, prog_config):
         # Assume interleaved input
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
-            fp32_dest_acc_en=USE_ACC,
-            packer_l1_acc=USE_ACC,
             program_config=prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
         )
         x.deallocate()
 
@@ -66,7 +65,7 @@ def run_test_ff1(
     max_dst_size = 4 if USE_ACC else 8
     out_subblock_w = max([i for i in range(1, max_dst_size + 1) if (per_core_N % i) == 0])
 
-    prog_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         # compute_with_storage_grid_size=(8,4),
         compute_with_storage_grid_size=compute_grid,
         in0_block_w=in0_block_w,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size

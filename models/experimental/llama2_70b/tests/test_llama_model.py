@@ -9,7 +9,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
-
+import os
 
 import scipy
 from sklearn.metrics import top_k_accuracy_score
@@ -17,15 +17,14 @@ import numpy as np
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
+    setup_llama_env,
+    check_device_mesh,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
+    MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
@@ -67,31 +66,37 @@ def run_test_LlamaModel_inference(
     pcc,
     model_config,
     n_layers,
-    n_devices,
-    emulated=False,
+    llama_version,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
+    prompt_file=None,
 ):
-    # Prepare paths and devices
-    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
-    )
+    # Load prompt file if provided
+    prompt = None
+    if prompt_file:
+        assert os.path.isfile(prompt_file), "Input file does not exist!"
+        with open(prompt_file, "r") as f:
+            prompt = f.read()
 
+    # Prepare paths and devices
     skip_model_load = should_skip_model_load()
 
     logger.info(f"Running num_layer: {n_layers}")
-    hugging_face_reference_model = Llama.build(
+    hugging_face_reference = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
-    ).model
+    )
+    hugging_face_reference_model = hugging_face_reference.model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
@@ -103,8 +108,6 @@ def run_test_LlamaModel_inference(
         n_layers,
         model_config,
         configuration,
-        batch,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
@@ -114,12 +117,30 @@ def run_test_LlamaModel_inference(
     else:
         generation_start_pos = UNIT_TEST_START_POS
         generation_length = UNIT_TEST_GENERATION_LENGTH
+
+    # Pre-process inputs in prompt mode
+    if prompt:
+        tokenizer = hugging_face_reference.tokenizer
+        tokenized = tokenizer.encode(prompt, bos=True, eos=False)
+        tokenized = torch.tensor(tokenized).unsqueeze(0)
+
+        # Sliding window across sequence dimension for generation_length iterations
+        tokenized = tokenized[:, : (seq_len + generation_length - 1) * batch]
+        tokenized = torch.reshape(tokenized, (batch, (seq_len + generation_length - 1)))
+
+        logger.info("Finished converting prompt to tokens.")
+
     all_tests_pass = True
     all_pccs, all_top1, all_top5 = [], [], []
     for i in range(generation_length):
         # Prepare input
-        pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
+        if prompt:
+            pt_inp_ids = tokenized[:, i : i + seq_len]  # Slide window
+            assert pt_inp_ids.shape == (batch, seq_len), f"Inputs must have shape {(batch, seq_len)}"
+        else:
+            pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
         tt_inp_ids = pt_inp_ids.clone()
+
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
@@ -170,9 +191,11 @@ def run_test_LlamaModel_inference(
         logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] {model_name} Model output Passed!")
+            logger.info(f"[start_pos={start_pos}] {llama_version} Model output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] {model_name} Model output Failed! PCC value is lower than {pcc}")
+            logger.warning(
+                f"[start_pos={start_pos}] {llama_version} Model output Failed! PCC value is lower than {pcc}"
+            )
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -183,15 +206,15 @@ def run_test_LlamaModel_inference(
     pytorch_layer_present = [
         pytorch_model.model.layers[0]
         .attention.cache_k.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
         pytorch_model.model.layers[0]
         .attention.cache_v.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
     ]
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
@@ -205,15 +228,22 @@ def run_test_LlamaModel_inference(
         pcc,
     )
     if all_tests_pass:
-        logger.info(f"{model_name} output Passed!")
+        logger.info(f"{llama_version} output Passed!")
     else:
-        logger.warning(f"{model_name} output Failed!")
         gc.collect()
+        logger.warning(f"{llama_version} output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "llama_version",
+    (
+        ("llama2"),
+        ("llama3"),
+    ),
+)
 @pytest.mark.parametrize(
     "pcc,n_layers",
     (
@@ -231,42 +261,56 @@ def run_test_LlamaModel_inference(
     ids=("1L", "2L", "4L", "6L", "7L", "8L", "10L", "20L", "40L", "80L"),
 )
 @pytest.mark.parametrize(
-    "n_devices, emulated",
+    "batch, seq_len",
+    ((32, 1), (1, 128), (1, 2048), (1, 8192)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+)
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
     (
-        (8, False),
-        (8, True),
+        (32, 2048),
+        (16, 8192),
     ),
     ids=(
-        "8chip-T3000",
-        "8chip-emulated",
+        "short_context",
+        "long_context",
     ),
 )
 @pytest.mark.parametrize(
-    "batch, seq_len",
-    ((32, 1), (1, 128), (1, 2048)),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    "prompt_file",
+    ("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", None),
+    ids=("prompt_input", "rand_input"),
 )
 def test_LlamaModel_inference(
     batch,
     seq_len,
     pcc,
     n_layers,
-    n_devices,
     t3k_device_mesh,
-    emulated,
+    max_batch_size,
+    max_context_len,
+    llama_version,
+    prompt_file,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    if batch > max_batch_size:
+        pytest.skip(f"Decode with {batch} users is not supported with large context")
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    if batch == 1 and seq_len > max_context_len:
+        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_program_cache()
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
+
+    check_device_mesh(t3k_device_mesh, model_config)
 
     run_test_LlamaModel_inference(
         t3k_device_mesh,
@@ -275,6 +319,9 @@ def test_LlamaModel_inference(
         pcc,
         model_config,
         n_layers,
-        n_devices,
-        emulated,
+        llama_version,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
+        prompt_file=prompt_file,
     )

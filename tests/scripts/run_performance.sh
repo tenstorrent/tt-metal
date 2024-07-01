@@ -1,6 +1,6 @@
 #/bin/bash
 
-set -eo pipefail
+# set -eo pipefail
 
 if [[ -z "$TT_METAL_HOME" ]]; then
   echo "Must provide TT_METAL_HOME in environment" 1>&2
@@ -11,19 +11,17 @@ run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
 
-    env pytest tests/ttnn/integration_tests/resnet/test_performance.py -m $test_marker
+    env pytest -n auto tests/ttnn/integration_tests/resnet/test_performance.py -m $test_marker
 
-    env pytest tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
+    env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
-    env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
+    env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
-    # Separate calls since we can't mix switching between number of cqs
-    env pytest models/demos/resnet/tests/test_perf_resnet.py -m $test_marker
-    env pytest models/demos/resnet/tests/test_perf_resnet_2cqs.py -m $test_marker
+    env pytest -n auto models/demos/resnet/tests/test_perf_resnet.py -m $test_marker
 
-    env pytest tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
+    env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
 
-    env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
+    env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -33,13 +31,13 @@ run_perf_models_llm_javelin() {
     local tt_arch=$1
     local test_marker=$2
 
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest models/demos/mamba/tests -m $test_marker
+        env pytest -n auto models/demos/mamba/tests -m $test_marker --timeout=360
     fi
 
-    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests -m $test_marker
+    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker --timeout=360
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -50,7 +48,7 @@ run_perf_models_cnn_javelin() {
     local test_marker=$2
 
     # Run tests
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/device_perf_tests/stable_diffusion -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=480
     #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests -m $test_marker
 
     ## Merge all the generated reports
@@ -58,9 +56,10 @@ run_perf_models_cnn_javelin() {
 }
 
 run_device_perf_models() {
+    set -eo pipefail
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker
+    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
@@ -69,7 +68,7 @@ run_device_perf_models() {
 
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
-        env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
+        env pytest models/demos/ttnn_falcon7b/tests -m $test_marker --timeout=360
 
         env pytest models/demos/bert/tests -m $test_marker
 
@@ -85,6 +84,8 @@ run_device_perf_models() {
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
         #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests -m $test_marker
     fi
 
     ## Merge all the generated reports

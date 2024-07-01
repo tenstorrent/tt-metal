@@ -4,11 +4,6 @@
 
 #include "tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 
-#include "tt_metal/host_api.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
-
-
 namespace tt {
 
 namespace tt_metal {

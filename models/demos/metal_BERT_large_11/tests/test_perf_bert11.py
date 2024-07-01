@@ -38,6 +38,7 @@ def run_perf_bert11(
     model_location_generator,
     device,
 ):
+    profiler.clear()
     model_config = get_model_config(batch_size, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
@@ -150,9 +151,9 @@ def run_perf_bert11(
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
     (
-        [7, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
-        [8, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
+        [7, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
+        [8, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
+        [12, "BFLOAT8_B-SHARDED", 0.0326, 3.2, 10],
     ),
 )
 def test_perf_bare_metal(

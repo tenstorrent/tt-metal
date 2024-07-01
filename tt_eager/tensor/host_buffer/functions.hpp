@@ -8,6 +8,7 @@
 
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
 
@@ -27,6 +28,8 @@ void validate_datatype(const Tensor& tensor) {
         TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
@@ -39,6 +42,7 @@ Buffer<T> get_as(BorrowedBuffer& buffer) {
 
 template <typename T>
 Buffer<T> get_as(const BorrowedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -100,6 +104,8 @@ void validate_datatype(const Tensor& tensor) {
         TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
@@ -151,12 +157,14 @@ namespace host_buffer {
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(OwnedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     auto& owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(const OwnedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     auto owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }

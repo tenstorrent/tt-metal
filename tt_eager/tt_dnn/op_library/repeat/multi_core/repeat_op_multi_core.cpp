@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
     uint32_t single_page_size;
     if (rm_layout) {
         num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], ADDRESS_ALIGNMENT);
+        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt_metal::detail::TileSize(cb_data_format);
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout ? "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-                  : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+                  : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

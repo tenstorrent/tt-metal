@@ -30,7 +30,7 @@ class TtMambaBlock(torch.nn.Module):
             in_proj_weight_name,
             lambda x: x[: self.args.d_inner, :].transpose(-1, -2),
             postfix="ssm",
-            tt_dtype=ttnn.bfloat8_b,
+            tt_dtype=self.configs["dtype"]["weights"],
         )
 
         # mlp wt
@@ -38,12 +38,14 @@ class TtMambaBlock(torch.nn.Module):
             in_proj_weight_name,
             lambda x: x[self.args.d_inner :, :].transpose(-1, -2),
             postfix="mlp",
-            tt_dtype=ttnn.bfloat8_b,
+            tt_dtype=self.configs["dtype"]["weights"],
         )
 
         # down proj wt
         out_proj_weight_name = "mixer.out_proj.weight"
-        self.out_proj_weights = load_fn(out_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=ttnn.bfloat8_b)
+        self.out_proj_weights = load_fn(
+            out_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=self.configs["dtype"]["weights"]
+        )
 
         # conv states
         conv1d_weight_name = "mixer.conv1d.weight"
@@ -78,7 +80,7 @@ class TtMambaBlock(torch.nn.Module):
         self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi3,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -148,7 +150,7 @@ class TtMambaBlock(torch.nn.Module):
         conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(conv_out_with_bias_l1)
 
-        ssm_output = self.tt_ssm(conv_out_after_silu)
+        out = self.tt_ssm(conv_out_after_silu)
 
         residual = ttnn.linear(
             residual_connection,
@@ -161,14 +163,14 @@ class TtMambaBlock(torch.nn.Module):
         )
         ttnn.deallocate(residual_connection)
 
-        out = ttnn.mul(
-            ssm_output,
+        out = ttnn.multiply(
+            out,
             residual,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.configs["dtype"]["activations"],
+            output_tensor=out,
         )
         ttnn.deallocate(residual)
-        ttnn.deallocate(ssm_output)
 
         out_proj = ttnn.linear(
             out,

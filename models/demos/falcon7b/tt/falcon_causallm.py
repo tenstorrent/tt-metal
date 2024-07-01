@@ -94,6 +94,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
+        device_perf_run: bool = False,
     ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().forward(
             input_ids=input_ids,
@@ -103,6 +104,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             layer_past=layer_past,
             layer_past_len=layer_past_len,
             use_cache=use_cache,
+            device_perf_run=device_perf_run,
         )
 
         if llm_mode == "prefill":

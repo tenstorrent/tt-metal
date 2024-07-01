@@ -76,7 +76,7 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
             (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
             (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
-            (data_format[i] == DataFormat::Int32)) {
+            (data_format[i] == DataFormat::UInt8) || (data_format[i] == DataFormat::Int32)) {
             continue;
         }
 
@@ -309,6 +309,8 @@ const DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::Int32;
         } else if(output_format == DataFormat::UInt16){
             pack_src_format = DataFormat::UInt16;
+        } else if(output_format == DataFormat::UInt8){
+            pack_src_format = DataFormat::UInt8;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }

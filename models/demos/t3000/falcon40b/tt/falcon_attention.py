@@ -8,6 +8,9 @@ from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+import ttnn.experimental
+import ttnn.experimental.operations
 
 from models.utility_functions import (
     torch2tt_tensor,
@@ -25,7 +28,7 @@ from ttnn.experimental.operations.primary.transformers import scale_causal_mask_
 
 
 def generate_cos_sin_cache(
-    tt_devices,
+    device_mesh,
     head_dim,
     base_url,
     max_position_embeddings=2048,
@@ -45,46 +48,31 @@ def generate_cos_sin_cache(
     emb = torch.cat((freqs, freqs), dim=-1)
 
     layer_name = f"{base_url}.rotary_embedding_base_{base}_head_dim_{head_dim}_seq_len_{max_position_embeddings}"
-    cos_cached_path = tt_cache_path / f"{layer_name}.cos_cached_{model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
-    if (cos_cached_path).exists():
-        tt_cos_cached_host = ttnn.experimental.tensor.load_tensor(str(cos_cached_path))
-        tt_cos_cached = [
-            tt_cos_cached_host.to(tt_device, model_config["COS_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
-        ]
-    else:
-        tt_cos_cached_host = torch2tt_tensor(
-            emb.cos()[None, None, :, :],
-            None,
-            tt_memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
-            tt_dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
-        )
-        tt_cos_cached = [
-            tt_cos_cached_host.to(tt_device, model_config["COS_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
-        ]
-        ttnn.experimental.tensor.dump_tensor(
-            str(cos_cached_path),
-            tt_cos_cached_host,
-        )
-    sin_cached_path = tt_cache_path / f"{layer_name}.sin_cached_{model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
-    if (sin_cached_path).exists():
-        tt_sin_cached_host = ttnn.experimental.tensor.load_tensor(str(sin_cached_path))
-        tt_sin_cached = [
-            tt_sin_cached_host.to(tt_device, model_config["SIN_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
-        ]
-    else:
-        tt_sin_cached_host = torch2tt_tensor(
-            emb.sin()[None, None, :, :],
-            None,
-            tt_memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
-            tt_dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
-        )
-        tt_sin_cached = [
-            tt_sin_cached_host.to(tt_device, model_config["SIN_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
-        ]
-        ttnn.experimental.tensor.dump_tensor(
-            str(sin_cached_path),
-            tt_sin_cached_host,
-        )
+
+    cos_cached_path = tt_cache_path / f"{layer_name}.cos_cached_{model_config['COS_CACHED_WEIGHTS_DTYPE'].name}"
+
+    tt_cos_cached = ttnn.as_tensor(
+        tensor=emb.cos()[None, None, :, :],
+        dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        cache_file_name=cos_cached_path,
+    )
+
+    sin_cached_path = tt_cache_path / f"{layer_name}.sin_cached_{model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}"
+
+    tt_sin_cached = ttnn.as_tensor(
+        tensor=emb.sin()[None, None, :, :],
+        dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        cache_file_name=sin_cached_path,
+    )
+
     return tt_cos_cached, tt_sin_cached
 
 
@@ -95,7 +83,7 @@ class TtFalconRotaryEmbedding:
 
     def __init__(
         self,
-        tt_devices,
+        device_mesh,
         head_dim,
         base_url,
         layer_num,
@@ -112,7 +100,7 @@ class TtFalconRotaryEmbedding:
             self.tt_cos_cached, self.tt_sin_cached = global_cos_sin_cache
         else:
             self.tt_cos_cached, self.tt_sin_cached = generate_cos_sin_cache(
-                tt_devices,
+                device_mesh,
                 head_dim,
                 f"{base_url}.{layer_num}",
                 max_position_embeddings,
@@ -124,20 +112,17 @@ class TtFalconRotaryEmbedding:
     def __call__(
         self, layer: ttnn.experimental.tensor.Tensor, token_idx: Optional[int] = None
     ) -> ttnn.experimental.tensor.Tensor:
-        seq_len = layer[0].get_legacy_shape()[2]
+        seq_len = layer.get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
-        output = []
-        for i in range(len(layer)):
-            output.append(
-                ttnn.experimental.tensor.rotary_embedding(
-                    layer[i],
-                    self.tt_cos_cached[i],
-                    self.tt_sin_cached[i],
-                    token_idx,
-                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
-                )
-            )
+        output = ttnn.experimental.tensor.rotary_embedding(
+            layer,
+            self.tt_cos_cached,
+            self.tt_sin_cached,
+            token_idx,
+            output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+        )
+
         return output
 
 
@@ -146,7 +131,7 @@ class TtFalconAttention:
 
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -162,10 +147,11 @@ class TtFalconAttention:
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.devices = devices
+        self.num_devices = device_mesh.get_num_devices()
+        self.device_mesh = device_mesh
         self.state_dict = state_dict
         self.model_config = model_config
-        self.num_heads_per_device = self.num_heads // len(devices)
+        self.num_heads_per_device = self.num_heads // device_mesh.get_num_devices()
         self.tt_cache_path = tt_cache_path
         self.max_batch_size = 32
 
@@ -175,8 +161,6 @@ class TtFalconAttention:
                 f" and `num_heads`: {self.num_heads})."
             )
 
-        num_devices = len(devices)
-
         layer_name = f"{base_url}.{layer_num}.self_attention"
         query_key_value_str = f"{layer_name}.query_key_value.weight"
         selfout_str = f"{layer_name}.dense.weight"
@@ -184,63 +168,35 @@ class TtFalconAttention:
         self.query_key_value_weights = []
         self.dense_weights = []
 
-        for i in range(num_devices):
-            query_key_value_path = (
-                tt_cache_path
-                / f"{query_key_value_str}_{i}_{num_devices}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
-            )
-            if (query_key_value_path).exists():
-                self.query_key_value_weights.append(
-                    ttnn.experimental.tensor.load_tensor(str(query_key_value_path)).to(
-                        devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]
-                    )
-                )
-            else:
-                query_key_value_weights_host = torch.transpose(
-                    self.state_dict[query_key_value_str],
-                    -2,
-                    -1,
-                )
-                query_key_value_weights_host = torch2tt_tensor(
-                    torch.chunk(query_key_value_weights_host, num_devices, -1)[i],
-                    None,
-                    tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
-                )
-                self.query_key_value_weights.append(
-                    query_key_value_weights_host.to(devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-                )
-                ttnn.experimental.tensor.dump_tensor(
-                    str(query_key_value_path),
-                    query_key_value_weights_host,
-                )
+        query_key_value_path = (
+            tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}"
+        )
 
-            selfout_path = (
-                tt_cache_path
-                / f"{selfout_str}_{i}_{num_devices}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin"
-            )
-            if (selfout_path).exists():
-                self.dense_weights.append(
-                    ttnn.experimental.tensor.load_tensor(str(selfout_path)).to(
-                        devices[i], self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"]
-                    )
-                )
-            else:
-                dense_weights_host = torch2tt_tensor(
-                    torch.transpose(torch.chunk(self.state_dict[selfout_str], num_devices)[i], -2, -1),
-                    None,
-                    tt_memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
-                )
-                self.dense_weights.append(
-                    dense_weights_host.to(devices[i], self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
-                )
-                ttnn.experimental.tensor.dump_tensor(
-                    str(selfout_path),
-                    dense_weights_host,
-                )
+        self.query_key_value_weights = ttnn.as_tensor(
+            tensor=self.state_dict[query_key_value_str],
+            dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            cache_file_name=query_key_value_path,
+            preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+        )
+
+        selfout_path = tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}"
+
+        self.dense_weights = ttnn.as_tensor(
+            tensor=self.state_dict[selfout_str],
+            dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            cache_file_name=selfout_path,
+            preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+        )
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            self.devices,
+            self.device_mesh,
             self.head_dim,
             base_url,
             layer_num=layer_num,
@@ -249,7 +205,6 @@ class TtFalconAttention:
             tt_cache_path=tt_cache_path,
             global_cos_sin_cache=global_cos_sin_cache,
         )
-
         # Fused to SM
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
@@ -262,42 +217,35 @@ class TtFalconAttention:
             # Preloading the kvcache
             attn_cache_shape = (
                 self.max_batch_size,
-                self.num_kv_heads // len(self.devices),
+                self.num_kv_heads // self.num_devices,
                 self.max_position_embeddings,
                 self.head_dim,
             )
-            kvcache_path = self.tt_cache_path / f"empty_attn_cache{attn_cache_shape}.bin"
+            kv_cache_path = self.tt_cache_path / f"empty_attn_cache{attn_cache_shape}"
             k_cache = []
             v_cache = []
-            if (kvcache_path).exists():
-                for i in range(len(self.devices)):
-                    k_cache.append(
-                        ttnn.experimental.tensor.load_tensor(str(kvcache_path)).to(
-                            self.devices[i], self.model_config["DRAM_MEMCFG"]
-                        )
-                    )
-                    v_cache.append(
-                        ttnn.experimental.tensor.load_tensor(str(kvcache_path)).to(
-                            self.devices[i], self.model_config["DRAM_MEMCFG"]
-                        )
-                    )
-            else:
-                attn_cache = torch.zeros(attn_cache_shape)
-                tt_attn_cache = torch2tt_tensor(
-                    attn_cache,
-                    None,
-                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=ttnn.bfloat8_b,
-                )
-                for i in range(len(self.devices)):
-                    k_cache.append(tt_attn_cache.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                for i in range(len(self.devices)):
-                    v_cache.append(tt_attn_cache.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
-                ttnn.experimental.tensor.dump_tensor(
-                    str(kvcache_path),
-                    tt_attn_cache,
-                )
+            attn_cache = torch.zeros(attn_cache_shape)
+            k_cache = ttnn.as_tensor(
+                tensor=attn_cache,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device_mesh,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                cache_file_name=kv_cache_path,
+            )
+
+            v_cache = ttnn.as_tensor(
+                tensor=attn_cache,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device_mesh,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                cache_file_name=kv_cache_path,
+            )
+
             self.layer_past = (
                 (
                     k_cache,
@@ -315,16 +263,14 @@ class TtFalconAttention:
             assert self.model_config["row_height"] == sequence_size
             if self.model_config["attention_params"]["attention_num_slices"] > 1:
                 # Pre-allocate memory to partially slice and sharde attention
-                self.attn_output = []
-                for i in range(len(self.devices)):
-                    self.attn_output.append(
-                        torch2tt_tensor(
-                            torch.zeros([1, self.num_heads_per_device, sequence_size, self.head_dim]),
-                            self.devices[i],
-                            tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                            tt_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-                        )
-                    )
+                self.attn_output = ttnn.as_tensor(
+                    torch.zeros([1, self.num_heads_per_device, sequence_size, self.head_dim]),
+                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device_mesh,
+                    memory_config=self.model_config["DRAM_MEMCFG"],
+                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                )
 
     def __call__(
         self,
@@ -387,74 +333,52 @@ class TtFalconAttention:
         """
 
         assert not output_attentions
-        batch = hidden_states[0].get_legacy_shape()[0]
-        q_len = hidden_states[0].get_legacy_shape()[2]
+        batch = hidden_states.get_legacy_shape()[0]
+        q_len = hidden_states.get_legacy_shape()[2]
         assert layer_past is not None
 
         # Fused query, key and value projection
-        fused_query_key_value = []
-        for i in range(len(hidden_states)):
-            fused_query_key_value.append(
-                falcon_prefill_matmul(
-                    hidden_states[i],
-                    self.query_key_value_weights[i],
-                    self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    grid=ttnn.CoreGrid(x=8, y=8) if q_len >= 512 else ttnn.CoreGrid(x=8, y=min(q_len // 32, 8)),
-                    transpose_mcast=True,
-                )
-            )
+        fused_query_key_value = falcon_prefill_matmul(
+            hidden_states,
+            self.query_key_value_weights,
+            self.model_config["COMPUTE_KERNEL_CONFIG"],
+            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+            grid=ttnn.CoreGrid(x=8, y=8) if q_len >= 512 else ttnn.CoreGrid(x=8, y=min(q_len // 32, 8)),
+            transpose_mcast=True,
+        )
 
-        # Split query, key and value
-        query_layer = []
-        key_layer = []
-        value_layer = []
-        for i in range(len(fused_query_key_value)):
-            q_layer, k_layer, v_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
-                fused_query_key_value[i],
-                num_heads=self.num_heads // len(self.devices),
-                num_kv_heads=self.num_kv_heads // len(self.devices),
-                transpose_k_heads=False,
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
-            )
-            fused_query_key_value[i].deallocate(True)
-            query_layer.append(q_layer)
-            key_layer.append(k_layer)
-            value_layer.append(v_layer)
+        query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            fused_query_key_value,
+            num_heads=self.num_heads // self.num_devices,
+            num_kv_heads=self.num_kv_heads // self.num_devices,
+            transpose_k_heads=False,
+            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+        )
+        fused_query_key_value.deallocate(True)
 
         # Rotary embeddings
         query_layer = self.rotary_embedding(query_layer)
         key_layer = self.rotary_embedding(key_layer)
 
         # K Cache update
-        for i in range(len(layer_past[0])):
-            ttnn.experimental.tensor.fill_cache(
-                layer_past[0][i],
-                ttnn.experimental.tensor.typecast(key_layer[i], self.model_config["KV_CACHE_DTYPE"]),
-                user_id,
-            )
-
-        # V Cache update
-        for i in range(len(layer_past[1])):
-            ttnn.experimental.tensor.fill_cache(
-                layer_past[1][i],
-                ttnn.experimental.tensor.typecast(value_layer[i], self.model_config["KV_CACHE_DTYPE"]),
-                user_id,
-            )
-
-        # KˆT
-        key_layer_transposed = []
-        for i in range(len(key_layer)):
-            key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
-                    key_layer[i],
-                    -2,
-                    -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-                )
-            )
-            key_layer[i].deallocate(True)
+        ttnn.experimental.tensor.fill_cache(
+            layer_past[0],
+            ttnn.experimental.tensor.typecast(key_layer, self.model_config["KV_CACHE_DTYPE"]),
+            user_id,
+        )
+        ttnn.experimental.tensor.fill_cache(
+            layer_past[1],
+            ttnn.experimental.tensor.typecast(value_layer, self.model_config["KV_CACHE_DTYPE"]),
+            user_id,
+        )
+        key_layer_transposed = ttnn.experimental.tensor.transpose(
+            key_layer,
+            -2,
+            -1,
+            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+        )
+        key_layer.deallocate(True)
 
         slice_size = self.model_config["attention_params"]["attention_slice_size"]
         num_slices = self.model_config["attention_params"]["attention_num_slices"]
@@ -462,127 +386,113 @@ class TtFalconAttention:
         if num_slices > 1:
             for slice_i in range(num_slices):
                 # Partially slice and convert activations to sharded
-                q_slices = []
-                for i in range(len(query_layer)):
-                    q_slices.append(
-                        ttnn.experimental.tensor.interleaved_to_sharded_partial(
-                            query_layer[i],
-                            (8, 8),
-                            [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
-                            num_slices,  # num_slices
-                            slice_i,  # slice_index
-                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                        )
-                    )
-
-                attn_output_slice = self.scaled_dot_product_attention(
-                    q_slices, key_layer_transposed, attention_mask, value_layer, q_len
+                q_slices = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                    query_layer,
+                    (8, 8),
+                    [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
+                    num_slices,
+                    slice_i,
+                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
-
-                # write output slices to attn_output
-                for i in range(len(attn_output_slice)):
-                    ttnn.experimental.tensor.sharded_to_interleaved_partial(
-                        attn_output_slice[i],
-                        self.attn_output[i],
-                        num_slices,
-                        slice_i,
-                        self.model_config["DRAM_MEMCFG"],
-                    )
-                    attn_output_slice[i].deallocate(True)
+                attn_output_slice = self.scaled_dot_product_attention(
+                    q_slices,
+                    key_layer_transposed,
+                    attention_mask,
+                    value_layer,
+                    q_len,
+                )
+                ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                    attn_output_slice,
+                    self.attn_output,
+                    num_slices,
+                    slice_i,
+                    self.model_config["DRAM_MEMCFG"],
+                )
+                attn_output_slice.deallocate(True)
                 attn_output = self.attn_output
+                q_slices.deallocate(True)
         else:
             query_layer = convert_to_layout(
-                query_layer, self.model_config["DRAM_MEMCFG"], self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"]
+                query_layer,
+                self.model_config["DRAM_MEMCFG"],
+                self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"],
             )
-
             attn_output = self.scaled_dot_product_attention(
-                query_layer, key_layer_transposed, attention_mask, value_layer, q_len
+                query_layer,
+                key_layer_transposed,
+                attention_mask,
+                value_layer,
+                q_len,
             )
-
             attn_output = convert_to_layout(
-                attn_output, self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
+                attn_output,
+                self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"],
+                self.model_config["DRAM_MEMCFG"],
             )
 
         # Deallocate query, key, value
-        for i in range(len(query_layer)):
-            query_layer[i].deallocate(True)
-            key_layer_transposed[i].deallocate(True)
-            value_layer[i].deallocate(True)
+        query_layer.deallocate(True)
+        key_layer_transposed.deallocate(True)
+        value_layer.deallocate(True)
 
         # Output projection
-        for i in range(len(attn_output)):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
-                attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-            )
-
+        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output,
+            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+        )
         attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-
-        for i in range(len(attn_output)):
-            attn_output[i] = falcon_prefill_matmul(
-                attn_output[i],
-                self.dense_weights[i],
-                self.model_config["COMPUTE_KERNEL_CONFIG"],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-                overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-                overwrite_subblock_h=1,
-            )
+        attn_output = falcon_prefill_matmul(
+            attn_output,
+            self.dense_weights,
+            self.model_config["COMPUTE_KERNEL_CONFIG"],
+            output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+            overwrite_subblock_h=1,
+        )
         # There are references to tensors in case seq_len > 512
         # so we won't force deallocation
         should_deallocate_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], q_len
         )
         if should_deallocate_tensors:
-            for i in range(len(hidden_states)):
-                hidden_states[i].deallocate(True)
+            hidden_states.deallocate(True)
         layer_present = layer_past if use_cache else None
         return attn_output, layer_present
 
     def scaled_dot_product_attention(self, q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len):
         # Q * KˆT
-        attn_weights = []
-        for i in range(len(q_slices)):
-            attn_weights.append(
-                ttnn.experimental.operations.primary.matmul(
-                    q_slices[i],
-                    key_layer_transposed[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_PROGCFG"],
-                    output_dtype=self.model_config["ATTENTION_DTYPE"],
-                )
-            )
-
+        attn_weights = ttnn.matmul(
+            q_slices,
+            key_layer_transposed,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            program_config=self.model_config["ATTENTION_MM_PROGCFG"],
+            dtype=self.model_config["ATTENTION_DTYPE"],
+        )
         # Softmax
-        for i in range(len(attn_weights)):
-            attn_weights[i] = scale_causal_mask_hw_dims_softmax_in_place(
-                attn_weights[i],
-                self.scalar,
-                attn_mask_slices[i],
-                program_config=self.model_config["SOFTMAX_PROGCFG"],
-            )
-
+        attn_weights = scale_causal_mask_hw_dims_softmax_in_place(
+            attn_weights,
+            self.scalar,
+            attn_mask_slices,
+            program_config=self.model_config["SOFTMAX_PROGCFG"],
+        )
         # Attention score * V
-        attn_output_slice = []
-        for i in range(len(attn_weights)):
-            attn_output_slice.append(
-                ttnn.experimental.operations.primary.matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-                    output_dtype=self.model_config["ATTENTION_OUT_DTYPE"],
-                )
-            )
-            attn_weights[i].deallocate(True)
+        attn_output_slice = ttnn.matmul(
+            attn_weights,
+            value_layer,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
+            dtype=self.model_config["ATTENTION_OUT_DTYPE"],
+        )
+        attn_weights.deallocate(True)
 
         return attn_output_slice
 
@@ -590,7 +500,7 @@ class TtFalconAttention:
         self,
         hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
-        attention_mask: torch.Tensor,
+        attention_mask: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
@@ -604,8 +514,8 @@ class TtFalconAttention:
         """
 
         assert not output_attentions
-        batch = hidden_states[0].get_legacy_shape()[2]
-        q_len = hidden_states[0].get_legacy_shape()[0]
+        batch = hidden_states.get_legacy_shape()[2]
+        q_len = hidden_states.get_legacy_shape()[0]
         padded_layer_past_len = nearest_32(layer_past_len + 1)
         # We always store max_position_embeddings for kv_cache,
         # so we need separate variable to store the actual len of the kv_cache
@@ -614,60 +524,47 @@ class TtFalconAttention:
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
-            for i in range(len(hidden_states)):
-                hidden_states[i] = ttnn.experimental.tensor.sharded_to_interleaved(
-                    hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-                )
-            for i in range(len(hidden_states)):
-                hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                    hidden_states[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
-                )
+            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+                hidden_states,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
+            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+                hidden_states,
+                sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
+            )
 
         #################
         ### FUSED QKV ###
         #################
-        fused_query_key_value = []
-        for i in range(len(hidden_states)):
-            fused_query_key_value.append(
-                ttnn.experimental.operations.primary.matmul_1d(
-                    hidden_states[i],
-                    self.query_key_value_weights[i],
-                    program_config=self.model_config["QKV_MM_PROGCFG"],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                )
-            )
+        fused_query_key_value = ttnn.matmul(
+            hidden_states,
+            self.query_key_value_weights,
+            program_config=self.model_config["QKV_MM_PROGCFG"],
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
 
         ###########
         ### TMs ###
         ###########
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = ttnn.experimental.tensor.sharded_to_interleaved(
-                    fused_query_key_value[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-                )
-            for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                    fused_query_key_value[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
-                )
-
-        query_layer = []
-        key_layer = []
-        value_layer = []
-
-        for i in range(len(fused_query_key_value)):
-            q_layer, k_layer, v_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
-                fused_query_key_value[i],
-                num_heads=self.num_heads // len(self.devices),
-                num_kv_heads=self.num_kv_heads // len(self.devices),
-                transpose_k_heads=False,
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+            fused_query_key_value = ttnn.experimental.tensor.sharded_to_interleaved(
+                fused_query_key_value,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
-            fused_query_key_value[i].deallocate(True)
-            query_layer.append(q_layer)
-            key_layer.append(k_layer)
-            value_layer.append(v_layer)
+            fused_query_key_value = ttnn.experimental.tensor.interleaved_to_sharded(
+                fused_query_key_value,
+                sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
+            )
+        query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            fused_query_key_value,
+            num_heads=self.num_heads // self.num_devices,
+            num_kv_heads=self.num_kv_heads // self.num_devices,
+            transpose_k_heads=False,
+            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+        )
+        fused_query_key_value.deallocate(True)
 
         #########################
         ### ROTARY EMBEDDINGS ###
@@ -678,154 +575,142 @@ class TtFalconAttention:
         ######################
         ### K CACHE UPDATE ###
         ######################
+        # Removed 1 dim from layer_past
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
         if kv_cache_memcfg.is_sharded():
             kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
-            kv_cache_shard_shape[0] = layer_past[0][0].get_legacy_shape()[1] * padded_layer_past_len
+            kv_cache_shard_shape[0] = layer_past[0].get_legacy_shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
-        for i in range(len(key_layer)):
-            ttnn.experimental.tensor.update_cache(layer_past[0][i], key_layer[i], layer_past_len)
-            key_layer[i].deallocate(True)
-        # key and value layers will have kv_seq_len padded to nearest 32
-        for i in range(len(layer_past[0])):
-            key_layer[i] = ttnn.experimental.tensor.unpad(
-                layer_past[0][i],
-                [0, 0, 0, 0],
-                [
-                    batch - 1,
-                    self.num_kv_heads // len(self.devices) - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-            )
-        for i in range(len(key_layer)):
-            key_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                key_layer[i], sharded_mem_config=kv_cache_memcfg
-            )
+        ttnn.experimental.tensor.update_cache(
+            layer_past[0],
+            key_layer,
+            layer_past_len,
+        )
+        key_layer.deallocate(True)
 
+        # key and value layers will have kv_seq_len padded to nearest 32
+        key_layer = ttnn.experimental.tensor.unpad(
+            layer_past[0],
+            [0, 0, 0, 0],
+            [
+                batch - 1,
+                self.num_kv_heads // self.num_devices - 1,
+                padded_layer_past_len - 1,
+                self.head_dim - 1,
+            ],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+        key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            key_layer,
+            sharded_mem_config=kv_cache_memcfg,
+        )
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
         # TODO: Sharded transpose could be in place???
-        key_layer_transposed = []
-        for i in range(len(key_layer)):
-            key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
-                    key_layer[i],
-                    -2,
-                    -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-                )
-            )
-            key_layer[i].deallocate(True)
+        key_layer_transposed = ttnn.experimental.tensor.transpose(
+            key_layer,
+            -2,
+            -1,
+            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+        )
+        key_layer.deallocate(True)
 
-        attn_weights = []
-        for i in range(len(query_layer)):
-            attn_weights.append(
-                ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                    query_layer[i],
-                    key_layer_transposed[i],
-                    compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            )
-            query_layer[i].deallocate(True)
-            key_layer_transposed[i].deallocate(True)
+        attn_weights = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+            query_layer,
+            key_layer_transposed,
+            compute_with_storage_grid_size=self.device_mesh.get_devices()[
+                0
+            ].compute_with_storage_grid_size(),  # Change this
+            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+        )
+        query_layer.deallocate(True)
+        key_layer_transposed.deallocate(True)
 
         ###############
         ### SOFTMAX ###
         ###############
         softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
-        for i in range(len(attn_weights)):
-            attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights[i],
-                self.scalar,
-                attention_mask[i],
-                program_config=self.model_config["SOFTMAX_PROGCFG"],
-                is_causal_mask=True,
-            )
 
+        attn_weights = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            attn_weights,
+            self.scalar,
+            attention_mask,
+            program_config=self.model_config["SOFTMAX_PROGCFG"],
+            is_causal_mask=True,
+        )
         ######################
         ### V CACHE UPDATE ###
         ######################
 
         # Update kv_cache in place
-        for i in range(len(value_layer)):
-            ttnn.experimental.tensor.update_cache(layer_past[1][i], value_layer[i], layer_past_len)
-            value_layer[i].deallocate(True)
-        for i in range(len(layer_past[1])):
-            value_layer[i] = ttnn.experimental.tensor.unpad(
-                layer_past[1][i],
-                [0, 0, 0, 0],
-                [
-                    batch - 1,
-                    self.num_kv_heads // len(self.devices) - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-            )
-        for i in range(len(value_layer)):
-            value_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                value_layer[i], sharded_mem_config=kv_cache_memcfg
-            )
+        ttnn.experimental.tensor.update_cache(
+            layer_past[1],
+            value_layer,
+            layer_past_len,
+        )
+        value_layer.deallocate(True)
+
+        value_layer = ttnn.experimental.tensor.unpad(
+            layer_past[1],
+            [0, 0, 0, 0],
+            [
+                batch - 1,
+                self.num_kv_heads // self.num_devices - 1,
+                padded_layer_past_len - 1,
+                self.head_dim - 1,
+            ],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+        value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            value_layer,
+            sharded_mem_config=kv_cache_memcfg,
+        )
 
         layer_present = layer_past if use_cache else None
-
         ########################
         ### POST-SOFTMAX MM ###
         ########################
-
-        attn_output = []
-        for i in range(len(attn_weights)):
-            attn_output.append(
-                ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            )
-            attn_weights[i].deallocate(True)
-            value_layer[i].deallocate(True)
-
+        attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+            attn_weights,
+            value_layer,
+            compute_with_storage_grid_size=self.device_mesh.get_devices()[0].compute_with_storage_grid_size(),
+            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+        )
+        attn_weights.deallocate(True)
+        value_layer.deallocate(True)
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        for i in range(len(attn_output)):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
-                attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-            )
-        for i in range(len(attn_output)):
-            attn_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(
-                attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
-
+        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output,
+            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+        )
+        attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
+            attn_output,
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
         attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-
-        for i in range(len(attn_output)):
-            attn_output[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
-        for i in range(len(attn_output)):
-            attn_output[i] = ttnn.experimental.operations.primary.matmul_1d(
-                attn_output[i],
-                self.dense_weights[i],
-                program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
+        attn_output = ttnn.experimental.tensor.interleaved_to_sharded(
+            attn_output,
+            sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+        )
+        attn_output = ttnn.matmul(
+            attn_output,
+            self.dense_weights,
+            program_config=self.model_config["SELFOUT_MM_PROGCFG"],
+            memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
 
         return attn_output, layer_present

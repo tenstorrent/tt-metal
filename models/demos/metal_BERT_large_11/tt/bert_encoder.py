@@ -8,6 +8,7 @@ from typing import Optional
 from functools import partial
 
 import tt_lib
+import ttnn
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
 from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
@@ -142,13 +143,13 @@ class TtBertEncoder:
         if "OP7_SELFOUT_CONFIG" in model_config:
 
             def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
-                mha_out = tt_lib.operations.primary.matmul(
+                mha_out = ttnn.linear(
                     mha_res,
                     attention_output_weight,
                     bias=attention_output_bias,
                     program_config=model_config["OP7_SELFOUT_CONFIG"],
-                    output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
-                    output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
+                    memory_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
+                    dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
                 )
                 return mha_out
 

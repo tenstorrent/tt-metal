@@ -44,6 +44,8 @@ Cluster::Cluster() {
 
     this->initialize_ethernet_sockets();
 
+    this->set_tunnels_from_mmio_device();
+
     this->assert_risc_reset();
 }
 
@@ -308,6 +310,7 @@ Cluster::~Cluster() {
     this->device_to_mmio_device_.clear();
     this->device_to_host_mem_channel_.clear();
     this->device_eth_routing_info_.clear();
+    this->tunnels_from_mmio_device.clear();
 }
 
 tt_device &Cluster::get_driver(chip_id_t device_id) const {
@@ -349,8 +352,8 @@ void Cluster::verify_eth_fw() const {
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         // For Blackhole bring up remove AICLK query due to lack of ARC message support
-        log_info(tt::LogDevice, "For Blackhole remove AICLK query due to lack of ARC message support");
-        return 0;
+        log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 800 MHz due to lack of ARC message support");
+        return 800;
     }
     if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
         // get_clocks returns MMIO device ID -> clock frequency
@@ -582,81 +585,93 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
     return connected_chips;
 }
 #define MAX_TUNNEL_DEPTH 4
-std::vector<std::vector<chip_id_t>> Cluster::get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
-    std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
-    const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
-    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
+void Cluster::set_tunnels_from_mmio_device() {
+    for (const auto &[mmio_chip_id, physical_chip_id] : this->cluster_desc_->get_chips_with_mmio()) {
+        std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
+        const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
+        TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
 
-    if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
-        return {};
-    }
-
-    std::set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
-    device_ids.erase(mmio_chip_id);
-
-    if (device_ids.size() == 0) {
-        return {};
-    }
-
-    for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
-        const auto &other_chip_id = std::get<0>(connected_chip_chan);
-        if (device_ids.find(other_chip_id) != device_ids.end()) {
-            //mmio chip is connected to a remote chip in its mmio group.
-            //erase from the pool so multiple ethenret connections to same remote device do not
-            //pollute the counts.
-            device_ids.erase(other_chip_id);
-            std::vector<chip_id_t> first_stop = {other_chip_id};
-            auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
-            TT_ASSERT(it == tunnels_from_mmio.end(),"Duplicate first tunnel stop found when finding FD2 Tunnel devices.");
-            tunnels_from_mmio.push_back(first_stop);
+        if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
+            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
+            continue;
         }
-    }
 
-    log_debug(
-        tt::LogMetal, "Found {} FD Tunnels originating from MMIO Device {}", tunnels_from_mmio.size(), mmio_chip_id);
+        std::set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+        device_ids.erase(mmio_chip_id);
 
-    device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
-    device_ids.erase(mmio_chip_id);
+        if (device_ids.size() == 0) {
+            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
+            continue;
+        }
 
-    for (auto &tunnel : tunnels_from_mmio) {
-        TT_ASSERT(tunnel.size() == 1,"Tunnel depth must be 1 when it has only 1 stop in it.");
-        device_ids.erase(tunnel[0]);
-    }
-
-    bool tunneled_device_hit;
-    for (auto it = device_ids.begin(); it != device_ids.end();) {
-        tunneled_device_hit = false;
-        for (auto &dev_vec : tunnels_from_mmio) {
-            for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(dev_vec.back())) {
-                const auto &other_chip_id = std::get<0>(connected_chip_chan);
-                auto id_iter = device_ids.find(other_chip_id);
-                if (id_iter != device_ids.end()) {
-                    it = device_ids.erase(id_iter);
-                    dev_vec.push_back(other_chip_id);
-                    tunneled_device_hit = true;
-                    break;
-                }
+        for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
+            const auto &other_chip_id = std::get<0>(connected_chip_chan);
+            if (device_ids.find(other_chip_id) != device_ids.end()) {
+                // mmio chip is connected to a remote chip in its mmio group.
+                // erase from the pool so multiple ethenret connections to same remote device do not
+                // pollute the counts.
+                device_ids.erase(other_chip_id);
+                std::vector<chip_id_t> first_stop = {other_chip_id};
+                auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
+                TT_ASSERT(
+                    it == tunnels_from_mmio.end(),
+                    "Duplicate first tunnel stop found when finding FD2 Tunnel devices.");
+                tunnels_from_mmio.push_back(first_stop);
             }
         }
-        TT_ASSERT(tunneled_device_hit || (it == device_ids.end()),"Loop Exit Error.");
-    }
 
-    TT_ASSERT(tunnels_from_mmio.size() != 0,"Must have at least 1 tunnel from MMIO Device.");
-    uint32_t tunnel_depth = tunnels_from_mmio[0].size();
-    log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
+        log_debug(
+            tt::LogMetal,
+            "Found {} FD Tunnels originating from MMIO Device {}",
+            tunnels_from_mmio.size(),
+            mmio_chip_id);
 
-    for (auto &dev_vec : tunnels_from_mmio) {
-        TT_ASSERT(dev_vec.size() == tunnel_depth,"All tunnels from mmio device must have same depth. Found {}. Expected {}.", dev_vec.size(), tunnel_depth);
-        //Now that all remotete chips have been added to respective tunnels,
-        //add mmio device at start of each of the tunnels.
-        if (dev_vec.size() > MAX_TUNNEL_DEPTH) {
-            dev_vec.resize(dev_vec.size() - (dev_vec.size() - MAX_TUNNEL_DEPTH));
+        device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+        device_ids.erase(mmio_chip_id);
+
+        for (auto &tunnel : tunnels_from_mmio) {
+            TT_ASSERT(tunnel.size() == 1, "Tunnel depth must be 1 when it has only 1 stop in it.");
+            device_ids.erase(tunnel[0]);
         }
-        dev_vec.insert(dev_vec.begin(), mmio_chip_id);
-    }
-    return tunnels_from_mmio;
-}
 
+        bool tunneled_device_hit;
+        for (auto it = device_ids.begin(); it != device_ids.end();) {
+            tunneled_device_hit = false;
+            for (auto &dev_vec : tunnels_from_mmio) {
+                for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(dev_vec.back())) {
+                    const auto &other_chip_id = std::get<0>(connected_chip_chan);
+                    auto id_iter = device_ids.find(other_chip_id);
+                    if (id_iter != device_ids.end()) {
+                        it = device_ids.erase(id_iter);
+                        dev_vec.push_back(other_chip_id);
+                        tunneled_device_hit = true;
+                        break;
+                    }
+                }
+            }
+            TT_ASSERT(tunneled_device_hit || (it == device_ids.end()), "Loop Exit Error.");
+        }
+
+        TT_ASSERT(tunnels_from_mmio.size() != 0, "Must have at least 1 tunnel from MMIO Device.");
+        uint32_t tunnel_depth = tunnels_from_mmio[0].size();
+        log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
+
+        for (auto &dev_vec : tunnels_from_mmio) {
+            TT_ASSERT(
+                dev_vec.size() == tunnel_depth,
+                "All tunnels from mmio device must have same depth. Found {}. Expected {}.",
+                dev_vec.size(),
+                tunnel_depth);
+            // Now that all remotete chips have been added to respective tunnels,
+            // add mmio device at start of each of the tunnels.
+            if (dev_vec.size() > MAX_TUNNEL_DEPTH) {
+                dev_vec.resize(dev_vec.size() - (dev_vec.size() - MAX_TUNNEL_DEPTH));
+            }
+            dev_vec.insert(dev_vec.begin(), mmio_chip_id);
+        }
+        this->tunnels_from_mmio_device.insert({mmio_chip_id, tunnels_from_mmio});
+    }
+}
 
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {

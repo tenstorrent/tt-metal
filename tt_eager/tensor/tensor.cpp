@@ -8,17 +8,13 @@
 #include <memory>
 
 #include "common/bfloat16.hpp"
-#include "llrt/llrt.hpp"
-#include "queue/queue.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_impl_wrapper.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tensor/types.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
 
 using namespace tt::constants;
 
@@ -192,6 +188,7 @@ void Tensor::deallocate(bool force) {
                             auto dealloc_lambda = std::make_shared<std::function<void(Device*)>>(
                                 [force, attr = this->tensor_attributes](Device* worker) mutable {
                                     ZoneScopedN("ShardDeallocate");
+                                    TT_ASSERT(std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(attr->storage),__FILE__, __LINE__));
                                     auto& s = std::get<MultiDeviceStorage>(attr->storage);
                                     if (s.has_buffer_for_device(worker)) {
                                         auto& device_buffer = s.get_buffer_for_device(worker);
@@ -454,20 +451,19 @@ Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_c
     uint32_t num_workers = workers_to_use.size();
     for (int worker_index = 0; worker_index < workers_to_use.size(); ++worker_index) {
         auto& worker = workers_to_use[worker_index];
-        worker->push_work(
-            [worker, *this, device_tensor, mem_config, num_workers, worker_index] () mutable {
-                auto shard = get_shard_for_device(*this, worker, worker_index);
-                if (shard.storage_type() == StorageType::OWNED) {
-                    shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
-                }
-                insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-                uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
-                    device_tensor.set_shape(this->get_shape());
-                    device_tensor.set_dtype(this->get_dtype());
-                    device_tensor.set_layout(this->get_layout());
-                    device_tensor.tensor_attributes->metadata_populated = true;
-                }
+        worker->push_work([worker, *this, device_tensor, mem_config, num_workers, worker_index]() mutable {
+            auto shard = get_shard_for_device(*this, worker, worker_index);
+            if (shard.storage_type() == StorageType::OWNED) {
+                shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
+            }
+            insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
+            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
+            if (not num_workers_completed) {
+                device_tensor.set_shape(this->get_shape());
+                device_tensor.set_dtype(this->get_dtype());
+                device_tensor.set_layout(this->get_layout());
+                device_tensor.tensor_attributes->metadata_populated = true;
+            }
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
@@ -569,11 +565,11 @@ Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
             auto& worker = workers[worker_index];
             worker->push_work([*this, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
                 TT_ASSERT(
-                    this->storage_type() == StorageType::OWNED ||
-                    this->storage_type() == StorageType::BORROWED||
+                    this->storage_type() == StorageType::OWNED || this->storage_type() == StorageType::BORROWED ||
                     this->storage_type() == StorageType::MULTI_DEVICE_HOST &&
-                    "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple workers "
-                    "are specified");
+                        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
+                        "workers "
+                        "are specified");
                 ;
                 auto shard = get_shard_for_device(*this, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
@@ -742,7 +738,8 @@ bool Tensor::is_allocated() const {
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 bool is_allocated = true;
                 for (int i = 0; i < storage.num_buffers(); i++) {
-                    is_allocated &= std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
+                    is_allocated &=
+                        std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
                 }
                 return is_allocated;
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
@@ -813,6 +810,8 @@ const Shape Tensor::strides() const { return detail::compute_strides(this->get_l
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
+uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
+
 Tensor create_device_tensor(
     const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
     ZoneScoped;
@@ -832,15 +831,10 @@ Tensor create_device_tensor(
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
         std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        uint32_t packed_size_in_bytes =
+            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
-            packed_size_in_bytes,
-            device,
-            shape,
-            data_type,
-            layout,
-            memory_config,
-            shard_spec_buffer);
+            packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
         return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
     } else {
         uint32_t packed_size_in_bytes =
@@ -851,17 +845,60 @@ Tensor create_device_tensor(
     }
 }
 
+namespace detail {
+template <typename DataType>
 void* get_raw_host_data_ptr(const Tensor& tensor) {
-    const static std::unordered_map<DataType, std::function<void*(const Tensor&)>> dispatch_map = {
-        {DataType::BFLOAT16, &tensor_impl::get_raw_host_data_ptr<bfloat16>},
-        {DataType::FLOAT32, &tensor_impl::get_raw_host_data_ptr<float>},
-        {DataType::INT32, &tensor_impl::get_raw_host_data_ptr<int32_t>},
-        {DataType::UINT32, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
-        {DataType::BFLOAT8_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
-        {DataType::BFLOAT4_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
-        {DataType::UINT16, &tensor_impl::get_raw_host_data_ptr<uint16_t>},
-    };
-    return dispatch_map.at(tensor.get_dtype())(tensor);
+    return std::visit(
+        [](auto&& storage) -> void* {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                auto buffer = owned_buffer::get_as<DataType>(storage.buffer);
+                return buffer.data();
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                if constexpr (
+                    std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
+                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
+                    std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>) {
+                    auto buffer = borrowed_buffer::get_as<DataType>(storage.buffer);
+                    return buffer.data();
+                } else {
+                    TT_THROW("Borrowed storage doesn't support this data type");
+                }
+            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor.get_storage());
+}
+}  // namespace detail
+
+void* get_raw_host_data_ptr(const Tensor& tensor) {
+    switch (tensor.get_dtype()) {
+        case DataType::BFLOAT16:
+            return detail::get_raw_host_data_ptr<bfloat16>(tensor);
+        case DataType::FLOAT32:
+            return detail::get_raw_host_data_ptr<float>(tensor);
+        case DataType::INT32:
+            return detail::get_raw_host_data_ptr<int32_t>(tensor);
+        case DataType::UINT32:
+            return detail::get_raw_host_data_ptr<uint32_t>(tensor);
+        case DataType::BFLOAT8_B:
+            return detail::get_raw_host_data_ptr<uint32_t>(tensor);
+        case DataType::BFLOAT4_B:
+            return detail::get_raw_host_data_ptr<uint32_t>(tensor);
+        case DataType::UINT16:
+            return detail::get_raw_host_data_ptr<uint16_t>(tensor);
+        case DataType::UINT8:
+            return detail::get_raw_host_data_ptr<uint8_t>(tensor);
+        default:
+            TT_THROW("Unsupported data type");
+    }
 }
 
 void memcpy(
@@ -953,18 +990,17 @@ Tensor allocate_tensor_on_device(
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work(
-            [shape, data_type, layout, worker, memory_config, device_tensor, worker_index] () mutable {
-                auto local_tensor = create_device_tensor(shape.value(), data_type, layout, worker, memory_config);
-                insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
+        worker->push_work([shape, data_type, layout, worker, memory_config, device_tensor, worker_index]() mutable {
+            auto local_tensor = create_device_tensor(shape.value(), data_type, layout, worker, memory_config);
+            insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
-                uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
-                    device_tensor.set_shape(ttnn::Shape(shape));
-                    device_tensor.set_dtype(data_type);
-                    device_tensor.set_layout(layout);
-                    device_tensor.tensor_attributes->metadata_populated = true;
-                }
+            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
+            if (not num_workers_completed) {
+                device_tensor.set_shape(ttnn::Shape(shape));
+                device_tensor.set_dtype(data_type);
+                device_tensor.set_layout(layout);
+                device_tensor.tensor_attributes->metadata_populated = true;
+            }
         });
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
@@ -1004,6 +1040,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                             auto host_storage = std::get<BorrowedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.data(); }, host_storage.buffer);
                         } else {
+                            TT_ASSERT(std::holds_alternative<OwnedStorage>(async_safe_tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()),__FILE__, __LINE__));
                             auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
                         }

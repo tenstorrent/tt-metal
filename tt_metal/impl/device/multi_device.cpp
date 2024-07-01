@@ -13,7 +13,6 @@ namespace ttnn {
 
 namespace multi_device {
 
-
 DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size)
     : device_grid(device_grid)
 {
@@ -23,43 +22,46 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
     TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
     TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for DeviceMesh");
 
-
-    //TODO: for DevicePool feature delete CreateDevices and merge with this function
-    //TODO: should there be an explicit CloseDevices call somewhere?
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    std::vector<chip_id_t> mmio_device_ids = {};
     if (is_galaxy) {
-        mmio_device_ids.push_back(0);
-        if (num_requested_devices > 8) {
-            mmio_device_ids.push_back(1);
-        }
-        if (num_requested_devices > 16) {
-            mmio_device_ids.push_back(2);
-        }
-        if (num_requested_devices > 24) {
-            mmio_device_ids.push_back(3);
-        }
-    } else {
-        mmio_device_ids = device_ids;
-    }
-    managed_devices = tt::tt_metal::detail::CreateDevices(mmio_device_ids, 1, l1_small_size, trace_region_size);
-    if (is_galaxy) {
+        // Temp solution until we add algorithmic way to determine chip connectivity
+        // Map col to tunnel depth and row to tunnel count
+        int cluster_tunnel_depth = tt::Cluster::instance().get_mmio_device_max_tunnel_depth(0);
+        int cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count(0);
+        int num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
+        TT_ASSERT(num_cols <= cluster_tunnel_depth and num_rows <= cluster_tunnel_count * num_mmio_devices, "Unsupported Galaxy mesh shape");
+
         DeviceIds galaxy_device_ids;
-        for (const auto &[dev_id, dev]: managed_devices) {
-            galaxy_device_ids.emplace_back(dev_id);
+        for (int mmio_device_id = 0; mmio_device_id < num_mmio_devices; mmio_device_id++) {
+            auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                if (galaxy_device_ids.size() == num_requested_devices) {
+                    break;
+                }
+                int col_idx = 0;
+                for (uint32_t ts = 1; ts < tunnels_from_mmio[t].size(); ts++) {
+                    galaxy_device_ids.push_back(tunnels_from_mmio[t][ts]);
+                    col_idx ++;
+                    if (col_idx == num_cols) {
+                        break;
+                    }
+                }
+            }
         }
+        managed_devices = tt::tt_metal::detail::CreateDevices(galaxy_device_ids, 1, l1_small_size, trace_region_size);
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
         }
     } else {
-      for (int i = 0; i < num_requested_devices; i++) {
+        managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, 1, l1_small_size, trace_region_size);
+        for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
-      }
+        }
     }
-    /*
+
     for (const auto& [dev_id, dev]: mesh_devices) {
-        std::cout << "dev_id " << dev_id << " dev " << dev->id() << std::endl;
-    }*/
+        log_debug(tt::LogMetal, "TTNN Dev {}: Metal Dev {}", dev_id, dev->id());
+    }
 }
 
 

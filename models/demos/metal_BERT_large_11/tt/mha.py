@@ -8,6 +8,7 @@ import torch
 
 from typing import Optional
 import tt_lib
+import ttnn
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
@@ -24,13 +25,13 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     if "OP1_FUSED_QKV_MM_CONFIG" in model_config:
 
         def op1_qkv_fused(activation, qkv_weight, qkv_bias):
-            qkv = tt_lib.operations.primary.matmul(
+            qkv = ttnn.linear(
                 activation,
                 qkv_weight,
                 bias=qkv_bias,
                 program_config=model_config["OP1_FUSED_QKV_MM_CONFIG"],
-                output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
             )
             return qkv
 
@@ -63,12 +64,12 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
 
         def op3_bmm(Q_heads, K_T_heads):
-            qkt = tt_lib.operations.primary.matmul(
+            qkt = ttnn.matmul(
                 Q_heads,
                 K_T_heads,
                 program_config=model_config["OP3_PRE_SOFTMAX_BMM_CONFIG"],
-                output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
             )
             return qkt
 
@@ -104,12 +105,12 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
 
         def op5_bmm(attention_scores, V_heads):
-            weighted_activation = tt_lib.operations.primary.matmul(
+            weighted_activation = ttnn.matmul(
                 attention_scores,
                 V_heads,
                 program_config=model_config["OP5_POST_SOFTMAX_BMM_CONFIG"],
-                output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
             )
 
             return weighted_activation

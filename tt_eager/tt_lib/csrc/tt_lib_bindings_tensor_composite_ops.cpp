@@ -13,40 +13,65 @@ namespace tt::tt_metal::detail {
 void TensorModuleCompositeOPs(py::module& m_tensor) {
     m_tensor.def(
         "pow",
-        py::overload_cast<const Tensor&, float, const MemoryConfig&>(&tt::tt_metal::pow),
+        [](const Tensor& input,
+           const float exponent,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return pow(queue_id, input, exponent, output_mem_config, output_tensor);
+        },
         py::arg("input"),
         py::arg("exponent"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
-                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
+            Returns a tensor filled with power of input ``input`` raised to value of ``exponent``.
 
-                    Output tensor will have BFLOAT16 data type.
+            Input tensor must have BFLOAT16 data type.
 
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+            Output tensor will have BFLOAT16 data type.
 
-                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
-                        "exponent", "exponent value", "float", "positive floating point value", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                "exponent", "exponent value", "float", "positive floating point value", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
+        )doc");
     m_tensor.def(
         "pow",
-        py::overload_cast<const Tensor&, int, const MemoryConfig&>(&tt::tt_metal::pow),
+        [](const Tensor& input,
+           const int exponent,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return pow(queue_id, input, exponent, output_mem_config, output_tensor);
+        },
         py::arg("input"),
         py::arg("exponent"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
-                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
+            Returns a tensor filled with power of input ``input`` raised to value of ``exponent``.
 
-                    Output tensor will have BFLOAT16 data type.
+            Input tensor must have BFLOAT16 data type.
 
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+            Output tensor will have BFLOAT16 data type.
 
-                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
-                        "exponent", "exponent value", "integer", "positive integer value", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                "exponent", "exponent value", "integer", "positive integer value", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
+        )doc");
+
     m_tensor.def(
         "sfpu_eps",
         &tt::tt_metal::sfpu_eps,
@@ -1109,10 +1134,11 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     m_tensor.def(
         "div",
-        &div,
+        py::overload_cast<const Tensor&, const Tensor&, bool, string, const MemoryConfig&>(&div),
         py::arg("input_a").noconvert(),
         py::arg("input_b").noconvert(),
         py::arg("accurate_mode") = false,
+        py::arg("round_mode") = "None",
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
             Performs the element-wise division of ``input_a`` by ``input_b``.
@@ -1128,6 +1154,33 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "accurate_mode", "Mode of Implementation", "bool", "default to false", "No"
+                "round_mode", "Mode of Rounding", "String", "default to None", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def(
+        "div",
+        py::overload_cast<const Tensor&, float, bool, string, const MemoryConfig&>(&div),
+        py::arg("input_a").noconvert(),
+        py::arg("scalar").noconvert(),
+        py::arg("accurate_mode") = false,
+        py::arg("round_mode") = "None",
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+            Performs the element-wise division of  tensor ``input_a`` by ``scalar`` value.
+            If scalar value is non-zero, then ``accurate_mode`` can be ``false``,else set ``accurate_mode`` to ``true``
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "scalar", "Denominator value", "float", "", "Yes"
+                "accurate_mode", "Mode of Implementation", "bool", "default to false", "No"
+                "round_mode", "Mode of Rounding", "String", "default to None", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -1170,6 +1223,38 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
                 "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "value", "Denominator value", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("remainder",&remainder,
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs the element-wise modulus on two tensors ``input_a`` and ``input_b``.Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("fmod",&fmod,
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs the element-wise fmod on two tensors ``input_a`` and ``input_b``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

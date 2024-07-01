@@ -126,8 +126,7 @@ void DevicePool::initialize_device(Device* dev) const {
 }
 
 void DevicePool::activate_device(chip_id_t id) {
-    TT_ASSERT(id < tt::tt_metal::GetNumAvailableDevices(), "Tried to add device id larger than available devices");
-
+    TT_ASSERT(id < tt::Cluster::instance().number_of_devices(), "Tried to add device id larger than available devices");
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
         this->devices.resize(id + 1);
@@ -137,13 +136,20 @@ void DevicePool::activate_device(chip_id_t id) {
         int core_assigned_to_device = this->device_to_core_map.at(id);
         auto dev =
             new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
-        dev->build_firmware();
+        if (!this->firmware_built_keys.contains(dev->build_key())) {
+            dev->build_firmware();
+            this->firmware_built_keys.insert(dev->build_key());
+        }
         this->devices[id] = std::unique_ptr<Device>(dev);
     } else {
         const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not dev->is_initialized()) {
             dev->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
+            if (!this->firmware_built_keys.contains(dev->build_key())) {
+                dev->build_firmware();
+                this->firmware_built_keys.insert(dev->build_key());
+            }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -184,7 +190,6 @@ void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
             }
         }
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
 }
 
 void DevicePool::init_firmware_on_active_devices() const {
@@ -237,7 +242,7 @@ DevicePool::DevicePool(
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
-    for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); i++) {
+    for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
         all_device_ids.emplace_back((chip_id_t)i);
     }
     std::unordered_set<uint32_t> free_cores = {};
