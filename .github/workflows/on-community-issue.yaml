@@ -1,4 +1,4 @@
-name: "Slack Notification on Community Issue"
+name: "Issue Notification"
 
 on:
   issues:
@@ -9,7 +9,9 @@ on:
 jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
-
+    permissions:      
+      issues: write
+      pull-requests: write
     steps:
       - name: Set username and number based on event type
         id: set-variables
@@ -52,7 +54,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           LABELS: community
-      - name: Send Slack Notification
+      - name: Send Notification
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
