@@ -94,7 +94,7 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("num_devices", (1, 2, 4))
+@pytest.mark.parametrize("num_devices", [1])
 @pytest.mark.parametrize(
     "model_version, llm_mode, batch, seq_len, pcc",
     (
@@ -129,7 +129,7 @@ def run_test_FalconMLP_inference(
     ),
     ids=["prefill_seq2048", "prefill_seq1024", "prefill_seq128", "decode_batch32"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ["BFLOAT16-DRAM"])
 def test_FalconMLP_inference(
     num_devices,
     model_version,

@@ -19,7 +19,7 @@ extern uint32_t apply_cnt;
 using namespace ckernel;
 
 // "llk_setup_operands" is the old function name that HLKC emits
-inline void llk_setup_operands(bool apply_delay=false) {
+inline void llk_setup_operands() {
     volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
@@ -37,15 +37,6 @@ inline void llk_setup_operands(bool apply_delay=false) {
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
 
         circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
-    }
-
-    constexpr uint32_t noc_id = 0;
-    uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
-    uint32_t my_logical_x = noc_id_logical_reg & NOC_NODE_ID_MASK;
-    uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-
-    if (apply_delay && (my_logical_y&0x1)) {
-        tiles_proc_delay = 6144*2;  // Delay odd rows of cores
     }
 }
 

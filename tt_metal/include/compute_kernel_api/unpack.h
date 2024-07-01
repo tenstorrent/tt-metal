@@ -50,4 +50,8 @@ ALWI void unpack_reconfig_data_format_srcb(const uint32_t srcb_old_operand, cons
     UNPACK(( llk_unpack_reconfig_data_format_srcb(srcb_old_operand, srcb_new_operand) ));
 }
 
+ALWI void setup_stagger(bool apply_delay) {
+    UNPACK(( llk_setup_stagger(apply_delay) ));
+}
+
 }

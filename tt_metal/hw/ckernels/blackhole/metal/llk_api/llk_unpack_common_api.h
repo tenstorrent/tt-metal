@@ -20,6 +20,9 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
+inline void llk_setup_stagger(bool apply_delay) {
+}
+
 void llk_zero_operand(std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t fifo_base_addr = (cb_interface[operand_id].fifo_limit + 1) - cb_interface[operand_id].fifo_size;

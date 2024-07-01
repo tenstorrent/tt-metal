@@ -128,8 +128,8 @@ ALWI void mm_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, 
  * | rt_dim         | the number of rows of the output matrix in tiles              | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
  * | kt_dim         | the inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
-ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1, bool apply_delay = false) {
-    UNPACK(( llk_setup_operands(true) ));
+ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
+    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
 
