@@ -42,8 +42,8 @@ int main(int argc, char** argv) {
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
-    uint32_t transfer_size;
-    uint32_t page_size;
+    uint32_t transfer_size = 0;
+    uint32_t page_size = 0;
 
     try {
         // Input arguments parsing

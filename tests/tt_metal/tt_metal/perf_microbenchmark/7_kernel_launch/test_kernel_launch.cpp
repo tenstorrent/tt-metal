@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
-    uint32_t num_core_groups;
+    uint32_t num_core_groups = 0;
     uint32_t num_tests = 10;
     bool bypass_check = false;
     try {

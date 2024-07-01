@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_mcast_receiver_grid_diff_coord_end;
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
-    uint32_t in0_sender_num_cores_along_width;
+    uint32_t in0_sender_num_cores_along_width = 0;
 
     // Only used for in0 block sharded
     std::optional<CoreRange> in0_mcast_cores_without_work_and_not_in_receiver_grid;
