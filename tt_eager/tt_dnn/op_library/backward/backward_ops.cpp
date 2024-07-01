@@ -702,14 +702,6 @@ std::vector<Tensor> _lerp_overload(
     grad_tensor.emplace_back(result_2);
     return grad_tensor;
 }
-std::vector<Tensor> lerp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lerp_overload)(grad, input, end, weight, output_mem_config);
-}
 
 std::vector<Tensor> _gelu_bw(
     const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
