@@ -38,6 +38,7 @@ enum class BinaryBackwardOpType {
     MIN_BW,
     MAX_BW,
     DIV_BW,
+    LERP_BW,
 };
 
 
