@@ -680,14 +680,14 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 4:
-        model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 2),
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
         )
     elif num_devices == 8:
-        model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             subblock_w=1,
             block_h=1,

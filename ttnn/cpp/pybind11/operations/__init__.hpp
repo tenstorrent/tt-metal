@@ -16,7 +16,6 @@
 #include "pybind11/operations/kv_cache.hpp"
 #include "pybind11/operations/matmul.hpp"
 #include "pybind11/operations/maxpool2d.hpp"
-#include "pybind11/operations/normalization.hpp"
 #include "pybind11/operations/pool.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/ternary.hpp"
@@ -24,6 +23,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
+#include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 

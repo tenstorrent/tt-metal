@@ -219,7 +219,7 @@ class TtAttention(nn.Module):
         if self.args.FALLBACK_SOFTMAX:
             scores = fallback_ops.softmax(scores, dim=-1)
         else:
-            scores = tt_lib.tensor.softmax(scores, output_mem_config=self.args.out_mem_config)
+            scores = ttnn.softmax(scores, output_mem_config=self.args.out_mem_config)
         output = tt_lib.tensor.bmm(
             scores, value, output_mem_config=self.args.out_mem_config
         )  # (bs, n_local_heads, slen, head_dim)

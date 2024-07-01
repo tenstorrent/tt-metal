@@ -311,7 +311,7 @@ class TtLlamaAttention_optimized:
         softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
 
-        attn_weights = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_weights = ttnn.scale_mask_softmax_in_place(
             attn_weights,
             self.scale,
             attn_masks,

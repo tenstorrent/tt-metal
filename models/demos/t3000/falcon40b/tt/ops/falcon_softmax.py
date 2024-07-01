@@ -28,24 +28,24 @@ class TtFalconSoftmax:
 
         if self.is_sharded:
             # Subtract max value from activation before softmax
-            out = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            out = ttnn.scale_mask_softmax_in_place(
                 x,
                 self.scalar,
                 attention_mask,
                 program_config=softmax_progcfg,
                 # output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-                # program_config=ttnn.experimental.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+                # program_config=ttnn.SoftmaxDefaultProgramConfig(),
                 is_causal_mask=True,
             )
         else:
             # Subtract max value from activation before softmax
-            out = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            out = ttnn.scale_mask_softmax_in_place(
                 x,
                 self.scalar,
                 attention_mask,
                 # program_config=softmax_progcfg,
                 # output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-                program_config=ttnn.experimental.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+                program_config=ttnn.SoftmaxDefaultProgramConfig(),
                 is_causal_mask=True,
             )
 

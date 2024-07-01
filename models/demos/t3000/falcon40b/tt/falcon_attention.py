@@ -635,7 +635,7 @@ class TtFalconAttention:
         softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
 
-        attn_weights = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_weights = ttnn.scale_mask_softmax_in_place(
             attn_weights,
             self.scalar,
             attention_mask,
