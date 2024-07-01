@@ -124,10 +124,10 @@ Example:
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad,
+               const std::optional<ttnn::Tensor>& input_a_grad,
+               const std::optional<ttnn::Tensor>& input_b_grad,
                const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -135,8 +135,8 @@ Example:
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("optional_input_a_grad") = std::nullopt,
-            py::arg("optional_input_b_grad") = std::nullopt,
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -146,9 +146,9 @@ Example:
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+               const std::optional<ttnn::Tensor>& input_a_grad,
+               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -156,8 +156,8 @@ Example:
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("optional_input_a_grad") = std::nullopt,
-            py::arg("optional_input_b_grad") = std::nullopt},
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const binary_backward_operation_t& self,
@@ -167,10 +167,10 @@ Example:
                const float alpha,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad,
+               const std::optional<ttnn::Tensor>& input_a_grad,
+               const std::optional<ttnn::Tensor>& input_b_grad,
                const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -179,8 +179,8 @@ Example:
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("optional_input_a_grad") = std::nullopt,
-            py::arg("optional_input_b_grad") = std::nullopt,
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -191,9 +191,9 @@ Example:
                const float alpha,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+               const std::optional<ttnn::Tensor>& input_a_grad,
+               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -202,8 +202,8 @@ Example:
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("optional_input_a_grad") = std::nullopt,
-            py::arg("optional_input_b_grad") = std::nullopt});
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt});
 }
 
 }  // namespace detail
@@ -345,6 +345,11 @@ void py_module(py::module& module) {
         module,
         ttnn::div_bw,
         R"doc(Performs backward operations for divide of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::mul_bw,
+        R"doc(Performs backward operations for multiply on :attr:`input_tensor_b` , attr:`input_tensor_a` with given attr:`grad_tensor`.)doc");
 
 }
 

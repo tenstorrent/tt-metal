@@ -67,8 +67,8 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         other_tensor,
         alpha,
         are_required_outputs=are_required_outputs,
-        optional_input_a_grad=input_grad,
-        optional_input_b_grad=other_grad,
+        input_a_grad=input_grad,
+        input_b_grad=other_grad,
         queue_id=cq_id,
     )
 
