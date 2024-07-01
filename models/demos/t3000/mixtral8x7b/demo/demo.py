@@ -109,14 +109,14 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     dtype = ttnn.bfloat8_b
 
-    embed_on_host = True  # Do embedding and argmax on host. TODO Seeing bad output when on device
+    embed_on_host = True  # embedding and argmax on host. TODO Seeing bad output when on device
     seqlen = 1  # Generating one token per user at a time
 
     logger.info(f"Reading inputs...")
     if len(user_input) == 1:
-        input_prompts = user_input * 32  # Always process 32 users
+        input_prompts = user_input * batch_size  # Always process 32 users
     else:
-        input_prompts = load_inputs(user_input, 32)
+        input_prompts = load_inputs(user_input, batch_size)
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device_mesh.get_device(0), instruct=instruct_mode)
@@ -145,7 +145,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         input_prompts, tokenizer, model_args, dtype, instruct_mode, device_mesh
     )
 
-    # TODO should we just change the pad after initial pad of the inputs?
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
 
@@ -210,10 +209,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     # Keep track of users that are done generating and stop printing their outputs
     finished_generation = [False] * batch_size
 
-    # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
-    # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
-    ttl.device.SetDefaultDevice(device_mesh.get_device(0))
-
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
         # Check if all users have finished generating (reached EoS token). If so, stop decoding.
@@ -258,6 +253,10 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             # Next PT input embedding
             pt_decode_input = embd(tt_token_batch).view(batch_size, seqlen, -1)
         else:  # Embedding/argmax on device
+            # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
+            # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
+            # ttl.device.SetDefaultDevice(device_mesh.get_device(0))
+
             # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.experimental.tensor.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
@@ -307,6 +306,26 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             for user in range(batch_size):
                 logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
+    # TODO Introduce more robust perplexity and top1/top5 accuracy checks
+    # When running in CI, check the output against the expected output to avoid accuracy regressions
+    if os.getenv("CI") == "true":
+        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
+        with open(expected_output, "r") as f:
+            expected_out = json.load(f)
+        assert (
+            len(expected_out) >= batch_size * 2
+        ), f"expected_outputs.json should have 64 outputs: 32 for general weights and 32 for instruct weights!"
+
+        for i in range(batch_size):
+            user_output = "".join(tokenizer.decode(all_outputs[i]))
+            if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
+                user_expect = expected_out[i + 32]["output_instruct"]
+            else:
+                user_expect = expected_out[i]["output_general"]
+
+            assert user_output == user_expect, f"Output for user {i} does not match expected output!"
+        logger.info("[CI-Only] Output token validation passed!")
+
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
@@ -317,6 +336,23 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     ids=["general_weights", "instruct_weights"],
 )
 def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
+    return run_mixtral_demo(
+        user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
+    )
+
+
+# On CI only run general weights demo
+@pytest.mark.skipif(os.getenv("CI") == "False", reason="CI-only test")
+@pytest.mark.parametrize(
+    "input_prompts, instruct_weights",
+    [
+        ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
+    ],
+    ids=[
+        "general_weights",
+    ],
+)
+def test_mixtral8x7b_demo_CI(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
     return run_mixtral_demo(
         user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
     )
