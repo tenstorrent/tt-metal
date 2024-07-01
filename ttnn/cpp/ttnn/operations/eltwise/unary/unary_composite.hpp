@@ -13,6 +13,80 @@ namespace operations {
 
 namespace unary {
 
+namespace detail {
+
+// TODO: decide on a structure for composite ops
+Tensor _power_fp(uint8_t queue_id, const Tensor& input_a, float exponent, const std::optional<MemoryConfig>& output_mem_config, const std::optional<Tensor>& output_tensor) {
+    TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
+    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
+    if (static_cast<float>(exponent_floor) == exponent) {
+        if(output_tensor.has_value()){
+            ttnn::power(queue_id,input_a, exponent_floor, output_mem_config, output_tensor);
+            return output_tensor.value();
+        }
+        return ttnn::power(queue_id, input_a, exponent_floor, output_mem_config);
+    }
+    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
+    Tensor pow_trunc_log = ttnn::multiply(queue_id, ttnn::log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
+    Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
+    pow_trunc_log.deallocate();
+    float t_nan = std::nanf("");
+    Tensor result = ttnn::multiply(queue_id, ttnn::power(queue_id, input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
+    // To handle negative inputs:
+    // in torch For -ve inputs with float exponent power returns nan
+    auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config() : output_mem_config.value_or(input_a.memory_config());
+    result = tt::tt_metal::where(ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
+    return result;
+}
+
+Tensor power_fp(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config  = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return tt::tt_metal::operation::decorate_as_composite(__func__, _power_fp)(queue_id, input_a, exponent, output_mem_config, optional_output_tensor);
+}
+
+}
+
+struct Power{
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        uint32_t exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return ttnn::power(queue_id, input_tensor, exponent, memory_config, optional_output_tensor);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        uint32_t exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return ttnn::power(DefaultQueueId, input_tensor, exponent, memory_config, optional_output_tensor);
+    }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::power_fp(queue_id, input_tensor, exponent, memory_config, optional_output_tensor);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::power_fp(DefaultQueueId, input_tensor, exponent, memory_config, optional_output_tensor);
+    }
+};
+
 // re-implement tt_eager composite unary op => ttnn composite unary ops.
 Tensor deg2rad(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return ttnn::multiply(queue_id, input_tensor, (float)(M_PI / 180.0), std::nullopt, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
@@ -20,7 +94,19 @@ Tensor deg2rad(uint8_t queue_id, const Tensor& input_tensor, const std::optional
 Tensor rad2deg(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return ttnn::multiply(queue_id, input_tensor, (float)(180.0 / M_PI), std::nullopt, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
 }
+Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
+    Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
+    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
+    return tt::tt_metal::where(ttnn::eqz(queue_id, input_tensor, output_memory_config), t_inf, result, output_memory_config, optional_output_tensor);
+}
+
+// To be used for div op overloading in binary composite
+Tensor div_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return ttnn::multiply(queue_id, input_tensor, (1.0f / value), std::nullopt, memory_config, optional_output_tensor);
+}
 
 // TODO: update these composite unary ops pending decision on TensorAsync implementation.
 
@@ -116,6 +202,8 @@ Tensor triu(
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
+constexpr auto pow = ttnn::register_operation<ttnn::operations::unary::Power>("ttnn::pow");
+
 // Other unaries
 
 // This function is used to transform the arguments of a function before calling it
@@ -159,6 +247,7 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto deg2rad = ttnn::register_operation("ttnn::deg2rad", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::deg2rad));
 constexpr auto rad2deg = ttnn::register_operation("ttnn::rad2deg", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rad2deg));
+constexpr auto rdiv = ttnn::register_operation("ttnn::rdiv", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rdiv));
 
 constexpr auto acosh = ttnn::register_operation("ttnn::acosh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::acosh));
 constexpr auto asinh = ttnn::register_operation("ttnn::asinh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::asinh));
