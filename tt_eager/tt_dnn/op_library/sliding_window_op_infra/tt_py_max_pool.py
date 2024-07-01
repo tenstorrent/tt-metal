@@ -233,7 +233,7 @@ class TTPyMaxPool(TTPyOp):
                 stride_w,
                 pad_h,
                 pad_w,
-                output_mem_config=self.output_sharded_memory_config,
+                memory_config=self.output_sharded_memory_config,
             )
             haloed_act.deallocate()
             return output

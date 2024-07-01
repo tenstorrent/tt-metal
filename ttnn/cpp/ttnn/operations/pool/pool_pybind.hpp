@@ -76,7 +76,8 @@ void py_module(py::module& module) {
         py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1,
         py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::kw_only(),
+        py::arg("memory_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("nblocks") = 1,
         py::arg("use_multicore") = true,
         R"doc(
@@ -96,7 +97,7 @@ void py_module(py::module& module) {
         | pad_w             | padding in width dim          | uint32_t      |             | No       |
         | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
         | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
+        | memory_config     | Output memory config          | MemoryConfig  |             | No       |
         +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 
@@ -116,7 +117,8 @@ void py_module(py::module& module) {
         py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1,
         py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::kw_only(),
+        py::arg("memory_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("nblocks") = 1,
         py::arg("use_multicore") = true,
         R"doc(
@@ -136,7 +138,7 @@ void py_module(py::module& module) {
         | pad_w             | padding in width dim          | uint32_t      |             | No       |
         | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
         | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
+        | memory_config     | output tensor memory config   | MemoryConfig  |             | No       |
         +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 
@@ -144,8 +146,9 @@ void py_module(py::module& module) {
         "average_pool_2d",
         &average_pool_2d,
         py::arg().noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("dtype").noconvert() = std::nullopt,
         R"doc(
         Average Pool 2D
         It operates on tensors whose that have channels as the last dimension
