@@ -97,10 +97,10 @@ class TtMoeLayer(LightweightModule):
         )
         # get weights for top-2 experts
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
-        ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(gate_logits_1SB8, 32)
-        ttl_topk_values = ttnn.add(ttl_topk_values, self.top2_mask_11BB)
-        mask_B2 = ttnn.eq(self.expert_mask_11BB, ttl_topk_indices)
-        weights_1SB1 = ttnn.sum(ttnn.softmax(ttl_topk_values, dim=-1) * mask_B2, dim=3)
+        topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
+        topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
+        mask_B2 = ttnn.eq(self.expert_mask_11BB, topk_indices)
+        weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH)
