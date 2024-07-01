@@ -479,6 +479,7 @@ from ttnn.operations.binary_backward import (
     min_bw,
     max_bw,
     div_bw,
+    lerp_bw,
 )
 
 from ttnn.operations.ternary import (
