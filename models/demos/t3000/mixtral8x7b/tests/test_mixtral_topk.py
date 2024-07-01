@@ -4,7 +4,6 @@
 import os
 import torch
 import pytest
-import numpy as np
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
@@ -17,14 +16,11 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, preprocess_inputs, load_inputs
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
 
 
 class Emb(torch.nn.Module):
@@ -36,17 +32,37 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    valid_pcc = 0.97
+# Expected times for each test: 64seqlen: 11 min, 128seqlen: 22 min, 256seqlen: 44 min
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "iterations, expected_top1, expected_top5",
+    (
+        (64, 0.92, 0.99),
+        (128, 0.92, 0.99),
+        (256, 0.92, 0.99),
+    ),
+    ids=("64seqlen", "128seqlen", "256seqlen"),
+)
+def test_mixtral_model_inference(
+    t3k_device_mesh, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
+):
     dtype = ttnn.bfloat8_b
-    iterations = 10
+    seqlen = 1  # Generating one token per user at a time
+    batch = 32
+    generation_start_pos = 0
+    running_top1 = 0
+    running_top5 = 0
+    inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    prompts = ["Once"] * 32
-    encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
+    # Prepare inputs
+    input_prompts = load_inputs(inputs_file, 32)
+    input_tokens_tt, max_prompt_len, input_mask, input_tokens_pt, input_mask_pt = preprocess_inputs(
+        input_prompts, tokenizer, model_args, dtype, False, t3k_device_mesh
+    )
 
     # Load reference model
     reference_model = Transformer(args=model_args)
@@ -66,29 +82,17 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         dtype=dtype,
     )
 
-    generation_start_pos = 0
-    generation_length = iterations
-    all_tests_pass = True
-
-    seqlen = 1  # Generating one token per user at a time
-    batch = 32
-
     # Select the first token from the prompts for initial decoding
-    encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
-    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
+    pt_decode_input = embd(input_tokens_pt[:, 0]).view(batch, seqlen, -1)
 
-    tt_decode_input = pt_decode_input
-    ref_tokens = []
-    tt_tokens = []
-
-    for i in range(generation_length):
+    for i in range(iterations):
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
         current_pos = start_pos % model_args.sliding_window
 
         decode_input, attn_mask = prepare_inputs_ttnn(
-            tt_decode_input,
+            pt_decode_input,
             model_args.dim,
             start_pos,
             model_args,
@@ -97,53 +101,40 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
 
         # Run TT model
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
-
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
             .view(batch, seqlen, -1)
             .detach()
             .float()
         )
 
-        # Measure PCC
+        # Run reference model
         positions = torch.LongTensor([start_pos])
         ref_output = reference_model(pt_decode_input, positions).detach().float()
 
-        passing, pcc_message = comp_pcc(
-            ref_output.view(batch, seqlen, -1), tt_output_torch.view(batch, seqlen, -1), valid_pcc
-        )
-        logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(pcc_message)
-
-        reference_top1 = np.argmax(ref_output, axis=-1).squeeze()
+        # Measure top-1 and top-5
+        reference_top1 = torch.argmax(ref_output, axis=-1)
         top1_acc = top_k_accuracy_score(
-            reference_top1, tt_output_torch.squeeze(), k=1, labels=np.arange(tt_output_torch.shape[-1])
+            reference_top1.squeeze(), tt_output_torch.squeeze(), k=1, labels=torch.arange(tt_output_torch.shape[-1])
         )
         top5_acc = top_k_accuracy_score(
-            reference_top1, tt_output_torch.squeeze(), k=5, labels=np.arange(tt_output_torch.shape[-1])
+            reference_top1.squeeze(), tt_output_torch.squeeze(), k=5, labels=torch.arange(tt_output_torch.shape[-1])
         )
-        logger.info(f"Mean Top-1: {top1_acc}")
-        logger.info(f"Mean Top-5: {top5_acc}")
+        running_top1 += top1_acc
+        running_top5 += top5_acc
 
-        ref_token_batch = ref_output.squeeze().argmax(axis=-1)
-        tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
-        logger.info(f"ref_output: {tokenizer.decode(ref_token_batch[0].item())}")
-        logger.info(f"tt_output: {tokenizer.decode(tt_token_batch[0].item())}")
-        pt_decode_input = embd(ref_token_batch).view(batch, seqlen, -1)
-        tt_decode_input = pt_decode_input  # teacher forcing for PCC test
+        # Prepare next input - teacher forcing (top-1), after initial prompts are done
+        if i < max_prompt_len:  # Check if user has finished initial prompt or not
+            reference_top1 = torch.where(input_mask_pt[:, i], input_tokens_pt[:, i], reference_top1[:, 0]).unsqueeze(1)
+        pt_decode_input = embd(reference_top1).view(batch, seqlen, -1)
 
-        if passing:
-            logger.info("Mistral Model Passed!")
-        else:
-            logger.warning("Mistral Model Failed!")
-            all_tests_pass = False
+    # Validate accuracy metrics against the expected values
+    final_top1 = running_top1 / iterations
+    final_top5 = running_top5 / iterations
+    logger.info(f"Mean Top-1 accuracy: {final_top1:.4f}")
+    logger.info(f"Mean Top-5 accuracy: {final_top5:.4f}")
 
-    if all_tests_pass:
-        logger.info(f"All {generation_length} Mistral decode iterations Passed!")
-    else:
-        logger.warning("One or more iterations of Mistral decode Failed!")
-        assert (
-            all_tests_pass
-        ), f"PCC value is lower than the expected {valid_pcc} for some of the outputs. Check Warnings!"
+    assert final_top1 >= expected_top1, f"Top-1 accuracy is lower than {expected_top1}"
+    assert final_top5 >= expected_top5, f"Top-5 accuracy is lower than {expected_top5}"

@@ -74,7 +74,7 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights] --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
