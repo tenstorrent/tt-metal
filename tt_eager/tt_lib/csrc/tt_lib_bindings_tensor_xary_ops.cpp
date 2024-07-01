@@ -57,21 +57,16 @@ namespace tt::tt_metal::detail {
             py::arg("input").noconvert(), py::arg("tt_input_dtype"), py::arg("tt_output_dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns tensor with all elements of the input tensor ``{0}`` typecasted.
             Supported typecasts:
-                BFLOAT16 -> UINT32
-                BFLOAT16 -> UINT16
-                UINT16 -> BFLOAT16
-                INT32 -> BFLOAT16
-                BFLOAT16 -> INT32
-                BFLOAT16 -> FLOAT32
-                FLOAT32 -> BFLOAT16
-                UINT16 -> FLOAT32
-                FLOAT32 -> UINT16
-                INT32 -> FLOAT32
-                FLOAT32 -> INT32
-                UINT16 -> BFLOAT8_B
-                BFLOAT8_B -> UINT16
-                INT32 -> BFLOAT8_B
-                BFLOAT8_B -> INT32
+                BFLOAT16 <-> FLOAT32
+                BFLOAT16 <-> INT32
+                BFLOAT16 <-> UINT16
+                BFLOAT16 <-> UINT32
+                FLOAT32 <-> INT32
+                FLOAT32 <-> UINT16
+                FLOAT32 <-> UINT32
+                BFLOAT8_B <-> INT32
+                BFLOAT8_B <-> UINT16
+                BFLOAT8_B <-> UINT32
 
             Input tensor must have tt_input_dtype data type.
 
