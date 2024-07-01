@@ -37,7 +37,9 @@ struct Pad {
         return std::make_tuple(input_tensor);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+
+    // Wrapper for TTDNN
+    static ttnn::Tensor _execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         std::vector<uint32_t> output_padded_shape,
@@ -45,6 +47,11 @@ struct Pad {
         const float value,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
+        const auto input_tensor_shape = input_tensor.get_shape();
+        const auto rank = input_tensor_shape.rank();
+        if (rank != 4) {
+            TT_FATAL("Tensor rank is not 4");
+        }
 
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
@@ -62,6 +69,8 @@ struct Pad {
 
     }
 
+    // This function signature is closer to what the kernel expects
+    // Assuming 4D tensor
     static ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
@@ -69,7 +78,6 @@ struct Pad {
         const Shape input_tensor_start,
         const float value,
         const std::optional<MemoryConfig>& memory_config_arg) {
-
 
         std::vector<uint32_t> output_padded_vector(output_padded_shape.rank());
         std::vector<uint32_t> input_start_vector(output_padded_shape.rank());
@@ -79,10 +87,12 @@ struct Pad {
             input_start_vector[dim] = input_tensor_start[dim];
         }
 
-        return execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, memory_config_arg);
+        return _execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, memory_config_arg);
     }
 
 
+    // This function signature is closer to what the kernel expects
+    // Assuming 4D tensor
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const Shape output_padded_shape,
@@ -91,13 +101,13 @@ struct Pad {
         const std::optional<MemoryConfig>& memory_config_arg) {
 
 
-
         return execute_on_worker_thread(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, memory_config_arg);
 
     }
 
 
-
+    // This function signature is similar to pytorch's signature
+    // Any rank tensor supported
     static ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
@@ -147,7 +157,7 @@ struct Pad {
         std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
 
 
-        auto output_tensor = execute_on_worker_thread(queue_id, input_tensor, output_padded_shape, pad_front_vec, value, memory_config_arg);
+        auto output_tensor = _execute_on_worker_thread(queue_id, input_tensor_4D, output_padded_shape, pad_front_vec, value, memory_config_arg);
 
 
         // output_tensor is currently 4D. We have to squeeze back to the original rank
@@ -172,6 +182,8 @@ struct Pad {
     }
 
 
+    // This function signature is similar to pytorch's signature
+    // Any rank tensor supported
     static ttnn::Tensor execute_on_worker_thread(
       const ttnn::Tensor& input_tensor,
       std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&

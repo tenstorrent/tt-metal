@@ -44,7 +44,7 @@ Keyword Args:
                 uint8_t queue_id) {
                     return self(queue_id, input_tensor, padding, value, memory_config);
                 },
-                py::arg("input_tensor").noconvert(),
+                py::arg("input_tensor"),
                 py::arg("padding"),
                 py::arg("value"),
                 py::kw_only(),
