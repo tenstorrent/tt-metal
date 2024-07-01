@@ -353,6 +353,7 @@ from ttnn.operations.unary import (
     exp,
     exp2,
     expm1,
+    floor,
     glu,
     gelu,
     geglu,
@@ -364,6 +365,7 @@ from ttnn.operations.unary import (
     hardtanh,
     heaviside,
     i0,
+    identity,
     isfinite,
     isinf,
     isnan,
@@ -390,6 +392,8 @@ from ttnn.operations.unary import (
     rad2deg,
     reciprocal,
     relu,
+    relu_max,
+    relu_min,
     reglu,
     relu6,
     rsqrt,
@@ -413,10 +417,10 @@ from ttnn.operations.unary import (
     threshold,
     tril,
     triu,
+    pow,
 )
 
 from ttnn.operations.binary import (
-    pow,
     add,
     add_,
     sub,

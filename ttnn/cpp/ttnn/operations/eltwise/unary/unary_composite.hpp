@@ -18,6 +18,13 @@ namespace unary {
 Tensor deg2rad(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return ttnn::multiply(queue_id, input_tensor, (float)(M_PI / 180.0), std::nullopt, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
 }
+// Tensor deg2rad(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+//     return _deg2rad(queue_id, input_tensor, memory_config, optional_output_tensor);
+// }
+// Tensor deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+//     uint8_t DefaultQueueId = 0;
+//     return _deg2rad(DefaultQueueId, input_tensor, memory_config, optional_output_tensor);
+// }
 Tensor rad2deg(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return ttnn::multiply(queue_id, input_tensor, (float)(180.0 / M_PI), std::nullopt, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
 }

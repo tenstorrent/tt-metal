@@ -15,74 +15,74 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
-        import torch
+# def register_ttl_binary_function(name, ttl_binary_function, doc):
+#     def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
+#         import torch
 
-        name_to_torch_function = {"pow": torch.pow}
-        torch_function = name_to_torch_function[name]
-        return torch_function(input_tensor, parameter)
+#         name_to_torch_function = {"pow": torch.pow}
+#         torch_function = name_to_torch_function[name]
+#         return torch_function(input_tensor, parameter)
 
-    def _binary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+#     def _binary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+#         ttnn.validate_input_tensor(
+#             operation_name,
+#             input_tensor,
+#             ranks=(2, 3, 4),
+#             dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+#             layouts=(ttnn.TILE_LAYOUT,),
+#             can_be_on_device=True,
+#             can_be_on_cpu=False,
+#         )
 
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_binary_validate_input_tensors,
-        golden_function=_golden_function,
-    )
-    def binary_function(
-        input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        output_tensor = ttl_binary_function(input_tensor, parameter, output_mem_config=memory_config)
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
+#     @ttnn.register_operation(
+#         name=f"ttnn.{name}",
+#         validate_input_tensors=_binary_validate_input_tensors,
+#         golden_function=_golden_function,
+#     )
+#     def binary_function(
+#         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+#     ) -> ttnn.Tensor:
+#         original_shape = input_tensor.shape
+#         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+#         output_tensor = ttl_binary_function(input_tensor, parameter, output_mem_config=memory_config)
+#         output_tensor = ttnn.reshape(output_tensor, original_shape)
+#         return output_tensor
 
-    if isinstance(binary_function, ttnn.decorators.Operation):
-        binary_function.decorated_function.__doc__ = doc + (
-            binary_function.__doc__ if binary_function.__doc__ is not None else ""
-        )
+#     if isinstance(binary_function, ttnn.decorators.Operation):
+#         binary_function.decorated_function.__doc__ = doc + (
+#             binary_function.__doc__ if binary_function.__doc__ is not None else ""
+#         )
 
-    setattr(THIS_MODULE, name, binary_function)
-
-
-TTL_BINARY_FUNCTIONS = [
-    (
-        "pow",
-        ttnn.experimental.tensor.pow,
-        r"""pow(input_tensor: ttnn.Tensor, exponent: Union[ttnn.Tensor, float, int]) -> ttnn.Tensor
-
-        Takes the power of each element in input with exponent and returns a tensor with the result.
-
-        .. math::
-            pow(\mathrm{{input\_tensor}}_i, \mathrm{{exponent}})
-
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`exponent`
-
-        Example::
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.pow(tensor, 2)
-
-        """,
-    ),
-]
+#     setattr(THIS_MODULE, name, binary_function)
 
 
-for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
-    register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
+# TTL_BINARY_FUNCTIONS = [
+#     (
+#         "pow",
+#         ttnn.pow,
+#         r"""pow(input_tensor: ttnn.Tensor, exponent: Union[ttnn.Tensor, float, int]) -> ttnn.Tensor
+
+#         Takes the power of each element in input with exponent and returns a tensor with the result.
+
+#         .. math::
+#             pow(\mathrm{{input\_tensor}}_i, \mathrm{{exponent}})
+
+#         Args:
+#             * :attr:`input_tensor`
+#             * :attr:`exponent`
+
+#         Example::
+
+#             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+#             >>> output = ttnn.pow(tensor, 2)
+
+#         """,
+#     ),
+# ]
+
+
+# for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
+#     register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
 
 
 def apply_activations(tensor, activations):

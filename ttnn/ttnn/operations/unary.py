@@ -36,6 +36,12 @@ def register_ttnn_cpp_unary_function(unary_function):
         result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
         return result
 
+    def relu_max(x, *args, upper_limit, **kwargs):
+        return torch.relu(torch.min(x, torch.tensor(upper_limit)))
+
+    def relu_min(x, *args, lower_limit, **kwargs):
+        return torch.max(x, torch.tensor(lower_limit))
+
     name_to_golden_function = {
         "abs": torch.abs,
         "acos": torch.acos,
@@ -46,9 +52,11 @@ def register_ttnn_cpp_unary_function(unary_function):
         "exp2": torch.exp2,
         "expm1": torch.expm1,
         "eqz": lambda x: torch.eq(x, 0),
+        "floor": torch.floor,
         "gez": lambda x: torch.ge(x, 0),
         "gtz": lambda x: torch.gt(x, 0),
         "i0": torch.i0,
+        "identity": torch.clone,
         "isfinite": torch.isfinite,
         "isinf": torch.inf,
         "isnan": torch.isnan,
@@ -65,6 +73,8 @@ def register_ttnn_cpp_unary_function(unary_function):
         "nez": lambda x: torch.ne(x, 0),
         "reciprocal": torch.reciprocal,
         "relu": torch.relu,
+        "relu_max": relu_max,
+        "relu_min": relu_min,
         "relu6": torch.nn.functional.relu6,
         "sigmoid": torch.sigmoid,
         "sign": torch.sign,
@@ -135,9 +145,11 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.exp2,
     ttnn._ttnn.operations.unary.expm1,
     ttnn._ttnn.operations.unary.eqz,
+    ttnn._ttnn.operations.unary.floor,
     ttnn._ttnn.operations.unary.gez,
     ttnn._ttnn.operations.unary.gtz,
     ttnn._ttnn.operations.unary.i0,
+    ttnn._ttnn.operations.unary.identity,
     ttnn._ttnn.operations.unary.isfinite,
     ttnn._ttnn.operations.unary.isinf,
     ttnn._ttnn.operations.unary.isnan,
@@ -153,6 +165,8 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.nez,
     ttnn._ttnn.operations.unary.reciprocal,
     ttnn._ttnn.operations.unary.relu,
+    ttnn._ttnn.operations.unary.relu_max,
+    ttnn._ttnn.operations.unary.relu_min,
     ttnn._ttnn.operations.unary.relu6,
     ttnn._ttnn.operations.unary.sigmoid,
     ttnn._ttnn.operations.unary.sign,
@@ -288,6 +302,15 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
 
 for unary_function_name, ttl_unary_function, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, param)
+
+
+def _golden_function(input_tensor_a, exponent, *args, **kwargs):
+    import torch
+
+    return torch.pow(input_tensor_a, exponent)
+
+
+pow = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.unary.pow)
 
 
 def _is_scalar(value):

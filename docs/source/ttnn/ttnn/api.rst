@@ -96,6 +96,7 @@ Pointwise Unary
    ttnn/exp
    ttnn/exp2
    ttnn/expm1
+   ttnn/floor
    ttnn/geglu
    ttnn/gelu
    ttnn/glu
@@ -127,6 +128,8 @@ Pointwise Unary
    ttnn/prelu
    ttnn/reglu
    ttnn/relu
+   ttnn/relu_max
+   ttnn/relu_min
    ttnn/relu6
    ttnn/rsqrt
    ttnn/sigmoid

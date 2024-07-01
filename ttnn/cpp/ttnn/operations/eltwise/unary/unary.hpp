@@ -145,6 +145,17 @@ struct Softplus {
     }
 
     static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor& input,
+        const float beta,
+        const float threshold,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+        return detail::execute_on_worker_thread(
+            queue_id, input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
+    }
+    static Tensor execute_on_worker_thread(
         const Tensor& input,
         const float beta,
         const float threshold,
@@ -162,6 +173,20 @@ struct Sigmoid_accurate {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+    }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(
+            queue_id, input, {UnaryWithParam(UnaryOpType::NEG),
+                                    UnaryWithParam(UnaryOpType::EXP, 1.0f),
+                                    UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+                                    UnaryWithParam(UnaryOpType::RECIP)},
+                                    memory_config,
+                                    optional_output_tensor);
     }
 
     static Tensor execute_on_worker_thread(
@@ -187,15 +212,116 @@ struct Unary_chain {
     }
 
     static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const Tensor& input_tensor,
         const std::vector<UnaryWithParam>& ops_chain,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+
+        TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
+        return detail::execute_on_worker_thread(
+            queue_id, input_tensor, ops_chain, memory_config, optional_output_tensor);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        const std::vector<UnaryWithParam>& ops_chain,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+
+        TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
         return detail::execute_on_worker_thread(
             DefaultQueueId, input_tensor, ops_chain, memory_config, optional_output_tensor);
     }
 };
 
+struct Identity {
+    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+    }
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+            UnaryOpType op_type = UnaryOpType::IDENTITY;
+            if(input_tensor.get_dtype() == DataType::UINT32) {
+                op_type = UnaryOpType::IDENTITY_UINT32;
+            }
+
+        return detail::execute_on_worker_thread(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    }
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+            UnaryOpType op_type = UnaryOpType::IDENTITY;
+            if(input_tensor.get_dtype() == DataType::UINT32) {
+                op_type = UnaryOpType::IDENTITY_UINT32;
+            }
+
+        return detail::execute_on_worker_thread(DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    }
+};
+
+template <UnaryOpType unary_op_type, typename T = int32_t >
+struct ExecuteUnaryWithIntegerParameter {
+
+    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+    }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        T parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(
+            queue_id, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        T parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(
+            DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+    }
+};
+
+// struct Power{
+
+//     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
+
+//     template <typename... Args>
+//     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+//         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+//     }
+
+//     static Tensor execute_on_worker_thread(
+//         uint8_t queue_id,
+//         const Tensor& input_tensor,
+//         uint32_t exponent,
+//         const std::optional<MemoryConfig>& memory_config = std::nullopt,
+//         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+//         return detail::execute_on_worker_thread(
+//             queue_id, input_tensor, {UnaryWithParam{UnaryOpType::POWER, static_cast<float>(exponent)}}, memory_config, optional_output_tensor);
+//     }
+
+//     static Tensor execute_on_worker_thread(
+//         const Tensor& input_tensor,
+//         uint32_t exponent,
+//         const std::optional<MemoryConfig>& memory_config = std::nullopt,
+//         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+//         return detail::execute_on_worker_thread(
+//             DefaultQueueId, input_tensor, {UnaryWithParam{UnaryOpType::POWER, static_cast<float>(exponent)}}, memory_config, optional_output_tensor);
+//     }
+// };
 
 }  // namespace unary
 }  // namespace operations
@@ -214,6 +340,10 @@ struct Unary_chain {
     constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithFloatParameter< \
         ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
 
+#define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type)                                 \
+    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithIntegerParameter< \
+        ttnn::operations::unary::UnaryOpType::operation_type, data_type>>("ttnn::" #operation_name);
+
 REGISTER_UNARY_OPERATION(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
@@ -223,6 +353,7 @@ REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
 REGISTER_UNARY_OPERATION(eqz, EQZ);
+REGISTER_UNARY_OPERATION(floor, FLOOR);
 REGISTER_UNARY_OPERATION(gez, GEZ);
 REGISTER_UNARY_OPERATION(gtz, GTZ);
 REGISTER_UNARY_OPERATION(i0, I0);
@@ -267,8 +398,20 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_min, RELU_MIN);
+
+// Unaries with integer parameter
+// REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
+REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_left_shift, LEFT_SHIFT, int32_t);
+REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_right_shift, RIGHT_SHIFT, int32_t);
+
+// Unaries used for composite implementation
+REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 
 // Other unaries
+constexpr auto identity = ttnn::register_operation<ttnn::operations::unary::Identity>("ttnn::identity");
+// constexpr auto pow = ttnn::register_operation<ttnn::operations::unary::Power>("ttnn::pow");
 constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
 constexpr auto sigmoid_accurate = ttnn::register_operation<ttnn::operations::unary::Sigmoid_accurate>("ttnn::sigmoid_accurate");
 constexpr auto unary_chain = ttnn::register_operation<ttnn::operations::unary::Unary_chain>("ttnn::unary_chain");
