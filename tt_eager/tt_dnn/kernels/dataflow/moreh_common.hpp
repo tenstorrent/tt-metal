@@ -21,6 +21,15 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
+static inline uint16_t float_to_bfloat16(float val) {
+    union {
+        float f;
+        uint32_t u;
+    } ret;
+    ret.f = val;
+    return uint16_t(ret.u >> 16);
+}
+
 #if defined(FP32_DEST_ACC_EN)
 using FP32_DEST_ACC_FTYPE = float;
 FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(uint16_t val) { return bfloat16_to_float(val); }
@@ -837,4 +846,70 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t &noc
     const uint32_t noc_offset_alilgn_32 = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
 
     noc_offset = noc_offset_alilgn_32;
+}
+
+template<typename T>
+volatile tt_l1_ptr T* get_read_ptr(uint32_t cb_id) {
+
+    auto l1_write_addr = get_read_ptr(cb_id);
+    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_addr);
+    return l1_ptr;
+}
+
+template<typename T>
+volatile tt_l1_ptr T* get_write_ptr(uint32_t cb_id) {
+
+    auto l1_write_addr = get_write_ptr(cb_id);
+    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_addr);
+    return l1_ptr;
+}
+
+// It reads values from one tile.
+template<typename T>
+void read_tile(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t size = 0, uint32_t offset = 0, bool do_reserve = true, bool do_push_back = true) {
+
+    constexpr uint32_t onetile = 1;
+
+    if (do_reserve) cb_reserve_back(cb_id, onetile);
+
+    // If the size is 0, it reads one tile.
+    if (size == 0){
+        size = get_tile_size(cb_id);
+    }
+
+    auto l1_write_addr = get_write_ptr(cb_id);
+    auto noc_addr = get_noc_addr(noc_id, addrgen, offset);
+    noc_async_read(noc_addr, l1_write_addr, size);
+    noc_async_read_barrier();
+
+    if (do_push_back) cb_push_back(cb_id, onetile);
+}
+
+
+// It reads values from a tilized tensor with shape (1, W).
+template<typename T>
+void read_line(uint32_t cb_id, T addrgen, uint32_t num_tiles, bool do_reserve = true, bool do_push_back = true) {
+
+    if (do_reserve) cb_reserve_back(cb_id, num_tiles);
+
+    auto tile_bytes = get_tile_size(cb_id);
+    auto element_size = tile_bytes / 1024;
+    auto noc_read_size = FACE_WIDTH * element_size;
+
+    uint32_t l1_write_addr = get_write_ptr(cb_id);
+
+    for (uint32_t i = 0; i < num_tiles * 2; ++i) {
+        uint32_t noc_id = i / 2;
+        uint32_t noc_offset = 0;
+        if (noc_id * 2 != i) {
+            noc_offset += 256 * element_size;
+        }
+        auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
+        noc_async_read(src_noc_addr, l1_write_addr, noc_read_size);
+        noc_async_read_barrier();
+
+        l1_write_addr += noc_read_size;
+    }
+
+    if (do_push_back) cb_push_back(cb_id, num_tiles);
 }
