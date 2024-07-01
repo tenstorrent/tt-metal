@@ -143,7 +143,7 @@ class MambaTT(torch.nn.Module):
         )
 
         for i, layer in enumerate(self.layers):
-            # print(f"Running layer {i}")
+            print(f"Running layer {i}")
             x = layer(x)
 
         if not self.use_torch_rms_norm:

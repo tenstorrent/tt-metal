@@ -160,7 +160,7 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(delta_t0)
 
-        torch_softplus = False
+        torch_softplus = True
         if torch_softplus:
             delta_t1_torch = ttnn.to_torch(delta_t1)
             ttnn.deallocate(delta_t1)
@@ -258,7 +258,7 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(bbar0)
 
         if self.mode == ModelMode.PREFILL:
-            torch_prefix_scan = True
+            torch_prefix_scan = False
             if torch_prefix_scan:
                 hidden_state1 = self.prefix_scan(abar2, bmulx0)
 
@@ -268,14 +268,8 @@ class TtMambaSSM(torch.nn.Module):
                 hidden_state_ttnn = ttl.operations.primary.transformers.ssm_prefix_scan(
                     abar2, bmulx0, output_mem_config=self.configs["sharded_scan"], output_dtype=ttnn.bfloat8_b
                 )
-                hidden_state_ttnn_to_torch = ttnn.to_torch(hidden_state_ttnn)
-                hidden_state1 = ttnn.from_torch(
-                    hidden_state_ttnn_to_torch,
-                    device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=self.configs["dtype"]["activations"],
-                )
+                hidden_state1 = ttnn.to_memory_config(hidden_state_ttnn, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(hidden_state_ttnn)
             ttnn.deallocate(abar2)
             ttnn.deallocate(bmulx0)
         else:
