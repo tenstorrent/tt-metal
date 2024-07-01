@@ -19,6 +19,7 @@
 #include "tt_numpy/functions.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -120,7 +121,7 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
         Tensor input_tensor_c =
             tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
-        Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
+        Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1024, 1024})));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
