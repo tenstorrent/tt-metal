@@ -1294,17 +1294,6 @@ std::vector<Tensor> celu_bw(
     return operation::decorate_as_composite(__func__, _celu_bw)(grad, input, alpha, output_mem_config);
 }
 
-std::vector<Tensor> _binary_lt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = zeros_like(input, output_mem_config);
-    grad_tensor.emplace_back(zero_input);
-    return grad_tensor;
-}
-std::vector<Tensor> binary_lt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _binary_lt_bw)(grad, input, output_mem_config);
-}
 
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
