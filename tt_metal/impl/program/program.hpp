@@ -36,6 +36,10 @@ struct KernelGroup {
     CoreType core_type;
     CoreRangeSet core_ranges;
     std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX_PROC];
+    uint32_t total_rta_size;
+    uint32_t crta_sizes[DISPATCH_CLASS_MAX_PROC];
+    uint32_t total_crta_size;
     launch_msg_t launch_msg;
 
     KernelGroup();
@@ -50,6 +54,7 @@ struct KernelGroup {
     CoreType get_core_type() const;
 };
 
+// TODO: why is this in program.hpp
 template <typename CoreRangeContainer>
 vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
     // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -130,6 +135,10 @@ class Program {
     void invalidate_circular_buffer_allocation();
 
     void allocate_circular_buffers();
+
+    void finalize_rt_args();
+    bool is_finalized() const { return loaded_onto_device; }
+    void set_finalized() { loaded_onto_device = true; }
 
    private:
     void populate_dispatch_data(Device *device);
