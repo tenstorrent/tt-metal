@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id_ssm.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -195,6 +195,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
             0,
             0,
             0,
+            0,
         };
 
         // Default writer runtime args
@@ -229,6 +230,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
             all_reader_runtime_args[i][1] = src1_buffer->address();
             all_reader_runtime_args[i][2] = num_blocks_per_core;
             all_reader_runtime_args[i][3] = num_blocks_written;
+            all_reader_runtime_args[i][4] = bshape[-1]/TILE_WIDTH;
 
             all_writer_runtime_args[i][0] = dst_buffer->address();
 

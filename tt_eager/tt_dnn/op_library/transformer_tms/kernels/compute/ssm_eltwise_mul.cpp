@@ -29,7 +29,7 @@ void MAIN {
     binary_op_init_common(cb_id_in0, cb_id_in1);
 #endif
 
-constexpr uint32_t input_num_blocks_height = 2;
+constexpr uint32_t input_num_blocks_height = 1;
 
 for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_height; block_h_id++){
 
