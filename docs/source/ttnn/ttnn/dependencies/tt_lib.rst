@@ -844,8 +844,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.sqrt_bw
 
-.. autofunction:: tt_lib.tensor.mul_bw
-
 .. autofunction:: tt_lib.tensor.tan_bw
 
 .. autofunction:: tt_lib.tensor.exp_bw

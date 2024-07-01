@@ -92,65 +92,6 @@ std::vector<Tensor> unary_add_bw(
     return operation::decorate_as_composite(__func__, _unary_add_bw)(grad, input, alpha, output_mem_config);
 }
 
-std::vector<std::optional<Tensor>> _mul_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_a_grad,
-    std::optional<Tensor> input_b_grad) {
-    std::vector<std::optional<Tensor>> result;
-
-    if (are_required_outputs.at(0)) {
-        if(input_a_grad.has_value()) {
-            ttnn::multiply(cq_id, grad, input_b, std::nullopt, std::nullopt, input_a_grad, std::nullopt);
-        } else {
-            input_a_grad = ttnn::multiply(cq_id, grad, input_b, std::nullopt, output_mem_config);
-        }
-        result.emplace_back(input_a_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        if(input_b_grad.has_value()) {
-            ttnn::multiply(cq_id, grad, input_a, std::nullopt, std::nullopt, input_b_grad, std::nullopt);
-        } else {
-            input_b_grad = ttnn::multiply(cq_id, grad, input_a, std::nullopt, output_mem_config);
-        }
-        result.emplace_back(input_b_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-
-    return std::move(result);
-}
-std::vector<std::optional<Tensor>> mul_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_a_grad,
-    std::optional<Tensor> input_b_grad) {
-    return operation::decorate_as_composite(__func__, _mul_bw)(
-        cq_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
-}
-std::vector<std::optional<Tensor>> mul_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_a_grad,
-    std::optional<Tensor> input_b_grad) {
-        uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _mul_bw)(
-        default_queue_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
-}
-
 std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
     TT_FATAL(are_required_outputs.at(0), "input_grad derivative is a required output");

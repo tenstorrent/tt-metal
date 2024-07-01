@@ -60,25 +60,6 @@ std::vector<Tensor> addcdiv_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<std::optional<Tensor>> mul_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_a_grad = std::nullopt,
-    std::optional<Tensor> input_b_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> mul_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_a_grad = std::nullopt,
-    std::optional<Tensor> input_b_grad = std::nullopt);
-
 std::vector<std::optional<Tensor>> exp_bw(
     uint8_t cq_id,
     const Tensor& grad,
