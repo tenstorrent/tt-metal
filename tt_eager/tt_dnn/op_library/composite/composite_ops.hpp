@@ -156,6 +156,21 @@ Tensor div(
     string round_mode = "None",
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor div_trunc(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -178,6 +193,10 @@ Tensor fmod(
 
 Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor frac(
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor round(
     const Tensor& input,
     int64_t decimals = 0,
@@ -191,6 +210,11 @@ Tensor floor_div(
 Tensor floor_div(
     const Tensor& input,
     float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor rfloor_div(
+    float value,
+    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // xlogy(x,y))=x*log(y)

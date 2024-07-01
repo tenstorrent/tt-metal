@@ -299,6 +299,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div
 
+.. autofunction:: tt_lib.tensor.div_trunc
+
+.. autofunction:: tt_lib.tensor.unary_rdiv_trunc
+
 .. autofunction:: tt_lib.tensor.div_no_nan
 
 .. autofunction:: tt_lib.tensor.add_unary
@@ -475,11 +479,17 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.floor
 
+.. autofunction:: tt_lib.tensor.ceil
+
 .. autofunction:: tt_lib.tensor.trunc
+
+.. autofunction:: tt_lib.tensor.frac
 
 .. autofunction:: tt_lib.tensor.round
 
 .. autofunction:: tt_lib.tensor.floor_div
+
+.. autofunction:: tt_lib.tensor.rfloor_div
 
 Tensor relational operations
 ============================
