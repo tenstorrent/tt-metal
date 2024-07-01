@@ -204,6 +204,7 @@ class Shape {
     const uint32_t *end() const;
 
     const Padding &padding() const;
+    Padding &padding();
     const Shape without_padding() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
