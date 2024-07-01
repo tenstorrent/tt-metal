@@ -32,7 +32,7 @@ test_sweep_args = [
 ]
 
 all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
-NUM_REPEATS = 5
+NUM_REPEATS = 15
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
