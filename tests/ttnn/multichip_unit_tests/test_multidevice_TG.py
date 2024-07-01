@@ -50,9 +50,6 @@ def test_galaxy_matmul_1d_fracture(device_mesh):
 
     gt = act_pt @ weights_pt
 
-    act = ttnn.to_device(act, device_mesh)
-    weights = ttnn.to_device(weights, device_mesh)
-
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_dest_acc_en=True,
@@ -122,9 +119,17 @@ class ConcatMesh2DToTensor(MeshToTensor):
 
 
 @pytest.mark.parametrize(
+    "cluster_shape",
+    [
+        (4, 8),
+        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
+    ],
+)
+@pytest.mark.parametrize(
     "device_mesh",
     [
-        32,
+        (4, 8),
+        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
     ],
     indirect=True,
 )
@@ -139,13 +144,6 @@ class ConcatMesh2DToTensor(MeshToTensor):
         (32, 64 * 1024, 16 * 1024),  # Llama3-400B decode FF2
         # (512, 16*1024, 64*1024),# Llama3-400B prefill FF1 # Skipped, OOM
         (512, 64 * 1024, 16 * 1024),  # Llama3-400B prefill FF2
-    ],
-)
-@pytest.mark.parametrize(
-    "cluster_shape",
-    [
-        (8, 4),
-        (4, 8),
     ],
 )
 def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
@@ -170,9 +168,6 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
     )
 
     gt = act_pt @ weights_pt
-
-    act = ttnn.to_device(act, device_mesh)
-    weights = ttnn.to_device(weights, device_mesh)
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
