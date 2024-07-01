@@ -671,6 +671,17 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
             return 0;
     }
 }
+
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_overload_function(BinaryBackwardOpType OpType){
+    switch (OpType) {
+        case BinaryBackwardOpType::LERP_BW:
+            return tt::tt_metal::_lerp_overload;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
 }
 
 

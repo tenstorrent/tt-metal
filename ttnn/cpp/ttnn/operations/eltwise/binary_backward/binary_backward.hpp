@@ -70,6 +70,21 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
 
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, Args &&...args) {
+        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
+    }
+
+    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const Tensor &input_tensor_c_arg,
+        const MemoryConfig &memory_config) {
+
+        auto op_type = utils::get_overload_function(binary_backward_op_type);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, input_tensor_c_arg, memory_config);
+        }
 
     //Type 1: Type 1 with 1 float
     template <typename... Args>
