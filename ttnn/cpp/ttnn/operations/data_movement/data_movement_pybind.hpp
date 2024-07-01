@@ -7,7 +7,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -94,30 +96,7 @@ void bind_upsample(py::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
-void bind_pad(py::module& module) {
-    auto doc =
-        R"doc(pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-Pad tensor with constant value. Padded shape is accumulated if ttnn.pad is called on a tensor with padding.
 
-Args:
-    * :attr:`input_tensor`: input tensor
-    * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
-    * :attr:`value`: value to pad with
-
-Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation)doc";
-
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::pad,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("padding"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("memory_config") = nullopt});
-}
 
 void bind_repeat_interleave(py::module& module) {
     auto doc = R"doc(
@@ -196,7 +175,7 @@ void py_module(py::module& module) {
     bind_permute(module);
     bind_concat(module);
     bind_upsample(module);
-    bind_pad(module);
+    detail::bind_pad(module);
     bind_repeat(module);
     bind_repeat_interleave(module);
 }
