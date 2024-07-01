@@ -61,12 +61,34 @@ Example::
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const TypecastType& self,
+               const ttnn::Tensor& input_tensor,
+               const DataType input_dtype,
+               const DataType output_dtype,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, input_dtype, output_dtype, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("input_dtype"),
+            py::arg("output_dtype"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0}
+
+            );
 }
 
 }  // namespace detail
 
-void py_module(py::module& module) { detail::bind_global_typecast(module); }
+void py_module(py::module& module) {
+    detail::bind_global_typecast(module);
+    }
 
 }  // namespace copy
 }  // namespace operations

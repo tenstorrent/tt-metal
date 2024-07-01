@@ -8,6 +8,7 @@
 #include "device/binary_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -25,7 +26,66 @@ constexpr bool is_associative(BinaryOpType op) {
            op == BinaryOpType::LOGADDEXP ||
            op == BinaryOpType::LOGADDEXP2;
 }
+
+// Tensor - Scalar
+inline Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        BinaryOpType binary_op_type,
+        const ttnn::Tensor &input_tensor,
+        const float scalar,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt) {
+        auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
+        auto output_tensor = input_tensor;
+        if(binary_op_type == BinaryOpType::GT){
+            output_tensor = ttnn::gt_unary(queue_id, input_tensor, scalar, output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::LT){
+            output_tensor = ttnn::lt_unary(queue_id, input_tensor, scalar, output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::NE){
+            output_tensor = ttnn::ne_unary(queue_id, input_tensor, scalar, output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::GTE){
+            output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, input_tensor, scalar, output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::LTE){
+            output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, input_tensor, scalar, output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::EQ){
+            output_tensor = ttnn::eqz(queue_id, ttnn::sub_sfpu(queue_id, input_tensor, scalar, output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else {
+            TT_THROW("Unsupported operation");
+        }
+        return output_tensor;
 }
+
+// Scalar - Tensor
+inline Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        BinaryOpType binary_op_type,
+        const float scalar,
+        const ttnn::Tensor &input_tensor,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt) {
+        auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
+        auto output_tensor = input_tensor;
+        if(binary_op_type == BinaryOpType::GTE){
+            output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, scalar, input_tensor,  output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::LTE){
+            output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, scalar, input_tensor, output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else if(binary_op_type == BinaryOpType::EQ){
+            output_tensor = ttnn::eqz(queue_id, ttnn::sub_sfpu(queue_id, scalar, input_tensor,  output_memory_config), output_memory_config, optional_output_tensor);
+        }
+        else {
+            TT_THROW("Unsupported operation");
+        }
+        return output_tensor;
+}
+} // utils
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct Binary {
@@ -147,6 +207,114 @@ struct Binary {
     }
 };
 
+
+template <BinaryOpType binary_op_type, bool in_place>
+struct RelationalBinary {
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+
+        if(output_dtype.has_value() && optional_output_tensor.has_value()){
+            TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
+        }
+
+        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
+            if(utils::is_associative(binary_op_type)) {
+                const auto input_shape_a = input_tensor_a_arg.get_shape();
+                const auto input_shape_b = input_tensor_b_arg.get_shape();
+                // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
+                if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
+                    return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
+                }
+            }
+            return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
+        }(input_tensor_a_arg, input_tensor_b_arg);
+
+        auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+
+        // TODO(arakhmati): #7731 - remove this!
+        auto repeat_smaller = [&output_memory_config](const auto& first, auto& second){
+            const auto first_shape = first.get_shape();
+            const auto second_shape = second.get_shape();
+
+            // repeats second if it is smaller
+            if (first_shape.rank() == 4 and second_shape.rank() == 4 and
+                first_shape[0] > second_shape[0] and
+                first_shape[-1] == second_shape[-1] and
+                first_shape[-2] == second_shape[-2] and
+                first_shape[-3] == second_shape[-3]) {
+
+                tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
+                Shape repeats({first_shape[0], 1, 1, 1});
+                second = ttnn::repeat(second, repeats, output_memory_config);
+            }
+        };
+        repeat_smaller(input_tensor_a, input_tensor_b);
+        repeat_smaller(input_tensor_b, input_tensor_a);
+
+        DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
+        if(optional_output_tensor.has_value()) {
+            dtype = optional_output_tensor.value().get_dtype();
+        }
+
+        return ttnn::device_operation::run<BinaryDeviceOperation>(
+            queue_id,
+            BinaryDeviceOperation::operation_attributes_t{
+                binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
+            BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt)
+    {
+        return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+            return utils::execute_on_worker_thread(DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
+        }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+            return utils::execute_on_worker_thread(DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
+
+    }
+    // scalar - tensor combination not available on Pytorch for this op
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const float scalar,
+        const ttnn::Tensor &input_tensor_a,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt) {
+            return utils::execute_on_worker_thread(DefaultQueueId, binary_op_type, scalar, input_tensor_a, memory_config, optional_output_tensor);
+
+    }
+};
+
 }  // operations::binary
 
 constexpr auto add =
@@ -167,17 +335,17 @@ constexpr auto multiply_ =
         "ttnn::multiply_");
 
 constexpr auto eq =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::EQ, false>>("ttnn::eq");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>("ttnn::eq");
 constexpr auto ne =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::NE, false>>("ttnn::ne");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>("ttnn::ne");
 constexpr auto ge =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::GTE, false>>("ttnn::ge");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE, false>>("ttnn::ge");
 constexpr auto gt =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::GT, false>>("ttnn::gt");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>("ttnn::gt");
 constexpr auto le =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LTE, false>>("ttnn::le");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE, false>>("ttnn::le");
 constexpr auto lt =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
+    ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
 constexpr auto logical_and =
     ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGICAL_AND, false>>(
         "ttnn::logical_and");

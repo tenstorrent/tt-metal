@@ -82,10 +82,15 @@ enum class UnaryOpType {
     UNARY_LT,
     TILED_PROD,
     TYPECAST,
+    BITWISE_XOR,
+    BITWISE_NOT,
+    BITWISE_AND,
+    BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
     REMAINDER,
+    FMOD,
 };
 
 template <typename T>
@@ -113,9 +118,14 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::BITWISE_NOT:
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER: return true;
+        case UnaryOpType::REMAINDER:
+        case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;

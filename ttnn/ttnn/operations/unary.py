@@ -33,6 +33,12 @@ def register_ttnn_cpp_unary_function(unary_function):
         result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
         return result
 
+    def relu_max(x, *args, upper_limit, **kwargs):
+        return torch.relu(torch.min(x, torch.tensor(upper_limit)))
+
+    def relu_min(x, *args, lower_limit, **kwargs):
+        return torch.max(x, torch.tensor(lower_limit))
+
     name_to_golden_function = {
         "abs": torch.abs,
         "acos": torch.acos,
@@ -43,9 +49,11 @@ def register_ttnn_cpp_unary_function(unary_function):
         "exp2": torch.exp2,
         "expm1": torch.expm1,
         "eqz": lambda x: torch.eq(x, 0),
+        "floor": torch.floor,
         "gez": lambda x: torch.ge(x, 0),
         "gtz": lambda x: torch.gt(x, 0),
         "i0": torch.i0,
+        "identity": torch.clone,
         "isfinite": torch.isfinite,
         "isinf": torch.inf,
         "isnan": torch.isnan,
@@ -62,6 +70,8 @@ def register_ttnn_cpp_unary_function(unary_function):
         "nez": lambda x: torch.ne(x, 0),
         "reciprocal": torch.reciprocal,
         "relu": torch.relu,
+        "relu_max": relu_max,
+        "relu_min": relu_min,
         "relu6": torch.nn.functional.relu6,
         "sigmoid": torch.sigmoid,
         "sign": torch.sign,
@@ -131,9 +141,11 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.exp2,
     ttnn.expm1,
     ttnn.eqz,
+    ttnn.floor,
     ttnn.gez,
     ttnn.gtz,
     ttnn.i0,
+    ttnn.identity,
     ttnn.isfinite,
     ttnn.isinf,
     ttnn.isnan,
@@ -149,6 +161,8 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.nez,
     ttnn.reciprocal,
     ttnn.relu,
+    ttnn.relu_max,
+    ttnn.relu_min,
     ttnn.relu6,
     ttnn.sigmoid,
     ttnn.sign,
@@ -266,6 +280,100 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
 
 for unary_function_name, ttl_unary_function, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, param)
+
+
+def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
+    import torch
+
+    return torch.pow(input_tensor_a, exponent)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.pow, golden_function=_golden_function_pow)
+
+
+def _golden_function_rsub(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.sub(value, input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.rsub, golden_function=_golden_function_rsub)
+
+
+def _golden_function_rdiv(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.div(torch.tensor(value, dtype=input_tensor_a.dtype), input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.rdiv, golden_function=_golden_function_rdiv)
+
+
+def _golden_function_remainder(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.remainder(value, input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.remainder, golden_function=_golden_function_remainder)
+
+
+def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_left_shift(input_tensor_a, shift_amt)
+
+
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.unary.bitwise_left_shift, golden_function=_golden_function_bitwise_left_shift
+)
+
+
+def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_right_shift(input_tensor_a, shift_amt)
+
+
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.unary.bitwise_right_shift, golden_function=_golden_function_bitwise_right_shift
+)
+
+
+def _golden_function_bitwise_and(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_and(input_tensor_a, value)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_and, golden_function=_golden_function_bitwise_and)
+
+
+def _golden_function_bitwise_or(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_or(input_tensor_a, value)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_or, golden_function=_golden_function_bitwise_or)
+
+
+def _golden_function_bitwise_xor(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_xor(input_tensor_a, value)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_xor, golden_function=_golden_function_bitwise_xor)
+
+
+def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.bitwise_not(input_tensor_a, value)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_not, golden_function=_golden_function_bitwise_not)
 
 
 def _is_scalar(value):

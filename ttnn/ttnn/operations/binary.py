@@ -13,58 +13,6 @@ import tt_lib as ttl
 __all__ = []
 
 
-def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
-        import torch
-
-        name_to_torch_function = {"pow": torch.pow}
-        torch_function = name_to_torch_function[name]
-        return torch_function(input_tensor, parameter)
-
-    @ttnn.register_python_operation(
-        name=f"ttnn.{name}",
-        golden_function=_golden_function,
-        doc=doc,
-    )
-    def binary_function(
-        input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        output_tensor = ttl_binary_function(input_tensor, parameter, output_mem_config=memory_config)
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
-
-
-TTL_BINARY_FUNCTIONS = [
-    (
-        "pow",
-        ttnn.experimental.tensor.pow,
-        r"""pow(input_tensor: ttnn.Tensor, exponent: Union[ttnn.Tensor, float, int]) -> ttnn.Tensor
-
-        Takes the power of each element in input with exponent and returns a tensor with the result.
-
-        .. math::
-            pow(\mathrm{{input\_tensor}}_i, \mathrm{{exponent}})
-
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`exponent`
-
-        Example::
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.pow(tensor, 2)
-
-        """,
-    ),
-]
-
-
-for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
-    register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
-
-
 def apply_activations(tensor, activations):
     import torch
 

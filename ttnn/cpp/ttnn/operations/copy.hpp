@@ -6,15 +6,41 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace copy {
 
+namespace detail {
+
+inline Tensor execute_on_worker_thread(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const std::vector<ttnn::operations::unary::UnaryWithParam>& op_chain,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    DataType output_dtype = (op_chain[0].op_type == ttnn::operations::unary::UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
+    bool preserve_fp32_precision = (op_chain[0].op_type == ttnn::operations::unary::UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
+    bool fp32_dest_acc_en = preserve_fp32_precision or
+                            output_dtype == DataType::UINT32 or
+                            output_dtype == DataType::INT32 or
+                            output_dtype == DataType::FLOAT32 or
+                            input_tensor.get_dtype() == DataType::UINT32 or
+                            input_tensor.get_dtype() == DataType::INT32; // MT: Currently only uint32/int32 is moved to
+                                                                          // DST directly, fp32 is converted to fp16b
+
+    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
+    return operation::run(
+               ttnn::operations::unary::Unary{op_chain, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
+               {input_tensor}, {}, {optional_output_tensor}, queue_id).at(0);
+}
+}  // namespace detail
+
 struct Typecast {
     static Tensor execute_on_worker_thread(
-        const uint8_t& queue_id,
+        const uint8_t queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -23,19 +49,13 @@ struct Typecast {
         if(optional_output_tensor.has_value()){
             TT_FATAL(output_dtype == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
         }
-
         DataType input_dtype = input.get_dtype();
-        auto memory_config = memory_config_arg.value_or(input.memory_config());
-        bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
-        bool fp32_dest_acc_en = preserve_fp32_precision or
-                                output_dtype == DataType::UINT32 or
-                                output_dtype == DataType::INT32 or
-                                output_dtype == DataType::FLOAT32 or
-                                input_dtype == DataType::UINT32 or
-                                input_dtype == DataType::INT32;
-        auto unary_op = UnaryWithParam{UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)}};
-        auto eltwise_op = EltwiseUnary{{unary_op}, memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype};
-        return operation::run(eltwise_op, {input}, {}, {optional_output_tensor}, queue_id).at(0);
+        return detail::execute_on_worker_thread(
+            queue_id,
+            input,
+            {ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)})},
+            memory_config_arg,
+            optional_output_tensor);
     }
 
     static Tensor execute_on_worker_thread(
@@ -47,11 +67,38 @@ struct Typecast {
         constexpr uint8_t DefaultQueueId = 0;
         return execute_on_worker_thread(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
     }
+
+// eltwise_typecast implementation in tt_eager :
+// ---------------------------------------------
+// inline Tensor eltwise_typecast(
+//     const Tensor& input_tensor,
+//     uint32_t tt_input_dtype,
+//     uint32_t tt_output_dtype,
+//     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const uint8_t queue_id,
+        const Tensor& input_tensor,
+        const DataType& tt_input_dtype,
+        const DataType& tt_output_dtype,
+        const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        TT_ASSERT(input_tensor.device()->arch() != tt::ARCH::GRAYSKULL, "eltwise_typecast is not currently supported on Grayskull");
+        TT_FATAL(tt_input_dtype == input_tensor.get_dtype(), "input dtype and input tensor's dtype provided should match");
+        if(optional_output_tensor.has_value()){
+            TT_FATAL(tt_output_dtype == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
+        }
+        return detail::execute_on_worker_thread(
+            queue_id,
+            input_tensor,
+            {ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::TYPECAST, {static_cast<float>(tt_input_dtype), static_cast<float>(tt_output_dtype)})},
+            memory_config,
+            optional_output_tensor);
+    }
 };
 }  // namespace copy
 }  // namespace operations
 
-constexpr auto typecast =
-    ttnn::register_operation<ttnn::operations::copy::Typecast>("ttnn::typecast");
+constexpr auto typecast = ttnn::register_operation<ttnn::operations::copy::Typecast>("ttnn::typecast");
 
 }  // namespace ttnn

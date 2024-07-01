@@ -318,30 +318,6 @@ Tensor hardswish(
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 Tensor where(
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const float value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const float value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
     uint8_t queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
@@ -364,6 +340,30 @@ Tensor where(
     std::optional<Tensor> output_tensor = std::nullopt);
 Tensor where(
     uint8_t queue_id,
+    const Tensor& predicate,
+    const float value_true,
+    const float value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    const Tensor& predicate,
+    const Tensor& value_true,
+    const Tensor& value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    const Tensor& predicate,
+    const float value_true,
+    const Tensor& value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    const Tensor& predicate,
+    const Tensor& value_true,
+    const float value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
     const Tensor& predicate,
     const float value_true,
     const float value_false,

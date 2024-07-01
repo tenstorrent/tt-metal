@@ -41,7 +41,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
@@ -57,7 +57,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
@@ -74,7 +74,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
@@ -91,7 +91,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
@@ -107,7 +107,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.experimental.tensor.identity(input_tensor)
+        output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
@@ -260,6 +260,21 @@ def test_signbit(device, h, w):
     run_unary_test_range(device, h, w, ttnn.signbit, torch.signbit, pcc=0.99)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
+def test_floor(device, h, w):
+    run_unary_test_range(device, h, w, ttnn.floor, torch.floor, pcc=0.99)
+
+
+def torch_relu_max(x, upper_limit, *args, **kwargs):
+    return torch.relu(torch.min(x, torch.tensor(upper_limit)))
+
+
+def torch_relu_min(x, lower_limit, *args, **kwargs):
+    return torch.max(x, torch.tensor(lower_limit))
+
+
 def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -281,3 +296,40 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_functio
 @skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_logit(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.logit, torch.logit)
+
+
+@pytest.mark.parametrize("scalar", [0, 1.0, 2])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_pow(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, torch.pow, pcc=0.9)
+
+
+@pytest.mark.parametrize("scalar", [-0.5, -2.0])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_relu_min(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.relu_min, torch_relu_min)
+
+
+@pytest.mark.parametrize("scalar", [7.5, 2.0])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_relu_max(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.relu_max, torch_relu_max)
+
+
+@pytest.mark.parametrize("scalar", [1.5, 2.0])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
+def test_remainder(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.remainder, torch.remainder)
+
+
+@pytest.mark.parametrize("scalar", [1.5, 2.0])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
+def test_fmod(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.fmod, torch.fmod)

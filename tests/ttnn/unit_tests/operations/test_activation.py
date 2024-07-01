@@ -113,7 +113,7 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, t
         torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn_function(input_tensor_a, beta=beta, threshold=threshold)
+    output_tensor = ttnn_function(input_tensor_a, beta=beta, threshold=threshold, queue_id=0)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
