@@ -85,7 +85,11 @@ def _golden_function_backward_with_string(
         pyt_y.backward(gradient=grad_tensor)
         golden_tensor = [sum_result.grad, sum_result.grad]
         return golden_tensor
-    pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
+
+    if torch_op == torch.div:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
+    else:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -183,8 +187,8 @@ concat_bw = ttnn.register_operation(
 )(ttnn._ttnn.operations.binary_backward.concat_bw)
 
 binary_le_bw = ttnn.register_operation(
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.clone, grad, a, b, *args, **kwargs
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.le, grad, a, b, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.binary_le_bw)
 
@@ -199,5 +203,59 @@ bias_gelu_bw = ttnn.register_operation(
         bias_gelu, grad, a, b, value, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.bias_gelu_bw)
+
+binary_gt_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.gt, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_gt_bw)
+
+binary_lt_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.gt, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_lt_bw)
+
+binary_ne_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.ne, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_ne_bw)
+
+binary_ge_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.ge, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_ge_bw)
+
+min_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.min, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.min_bw)
+
+max_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.max, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.max_bw)
+
+div_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_with_string(
+        torch.div, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.div_bw)
+
+lerp_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, weight, *args, **kwargs: _golden_function_backward_with_float(
+        torch.add, grad, a, b, weight, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.lerp_bw)
+
+mul_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.mul, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.mul_bw)
 
 __all__ = []

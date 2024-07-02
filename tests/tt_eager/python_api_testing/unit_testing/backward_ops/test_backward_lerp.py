@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 
 
@@ -22,7 +22,7 @@ def test_bw_lerp(input_shapes, device):
     end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True)
     weight_data, weight_tensor = data_gen_with_range(input_shapes, -201, 201, device, True)
 
-    tt_output_tensor_on_device = tt_lib.tensor.lerp_bw(grad_tensor, input_tensor, end_tensor, weight_tensor)
+    tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight_tensor)
 
     in_data.retain_grad()
     end_data.retain_grad()
@@ -51,7 +51,7 @@ def test_bw_lerp_weight_scalar(input_shapes, weight, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, True)
     end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True)
 
-    tt_output_tensor_on_device = tt_lib.tensor.lerp_bw(grad_tensor, input_tensor, end_tensor, weight)
+    tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight)
 
     in_data.retain_grad()
     end_data.retain_grad()
