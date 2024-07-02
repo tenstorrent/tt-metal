@@ -7,9 +7,10 @@ import pytest
 from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_imagenet_inference
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((8, "models/demos/resnet/demo/images/"),),
+    ((20, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(
     device,
@@ -27,6 +28,18 @@ def test_demo_sample(
         "brown bear, bruin, Ursus arctos",
         "soap dispenser",
         "boa constrictor, Constrictor constrictor",
+        "gorilla, Gorilla gorilla",
+        "sports car, sport car",
+        "toilet tissue, toilet paper, bathroom tissue",
+        "hen-of-the-woods, hen of the woods, Polyporus frondosus, Grifola frondosa",
+        "lakeside, lakeshore",
+        "pirate, pirate ship",
+        "bee eater",
+        "Border collie",
+        "turnstile",
+        "cardoon",
+        "Pembroke, Pembroke Welsh corgi",
+        "Christmas stocking",
     ]
     measurements, predictions = run_resnet_inference(
         batch_size,
@@ -39,13 +52,10 @@ def test_demo_sample(
         assert predicted == expected, "Some predictions are not what we expected!"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    (
-        (8, 400),
-        (16, 200),
-        (20, 250),
-    ),
+    ((20, 250),),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
