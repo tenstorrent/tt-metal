@@ -24,7 +24,7 @@ using namespace tt_metal;
 struct MorehLayerNorm {
     uint32_t normalized_dims;
     float eps;
-    MemoryConfig output_mem_config;
+    MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
     bool compute_mean;
@@ -41,10 +41,10 @@ struct MorehLayerNorm {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "eps", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "eps", "memory_config", "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->normalized_dims), std::cref(this->eps), std::cref(this->output_mem_config),
+            std::cref(this->normalized_dims), std::cref(this->eps), std::cref(this->memory_config),
             std::cref(this->compute_kernel_config));
     }
 };
@@ -69,7 +69,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
@@ -87,7 +87,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
     );
 

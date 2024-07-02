@@ -23,7 +23,7 @@ using namespace tt_metal;
 
 struct MorehLayerNormBackwardInputGrad {
     uint32_t normalized_dims;
-    MemoryConfig output_mem_config;
+    MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
@@ -36,15 +36,15 @@ struct MorehLayerNormBackwardInputGrad {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "memory_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
+        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
     }
 };
 
 struct MorehLayerNormBackwardGammaBetaGrad {
     uint32_t normalized_dims;
-    MemoryConfig output_mem_config;
+    MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
@@ -55,9 +55,9 @@ struct MorehLayerNormBackwardGammaBetaGrad {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "memory_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
+        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
     }
 };
 
@@ -89,7 +89,7 @@ Tensor moreh_layernorm_backward_input_grad(
     uint32_t normalized_dims,
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<const Tensor> gamma = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
@@ -100,7 +100,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     uint32_t normalized_dims,
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward(
@@ -113,7 +113,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
     );
 
