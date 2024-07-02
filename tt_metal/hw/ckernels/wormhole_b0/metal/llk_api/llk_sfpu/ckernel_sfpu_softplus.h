@@ -7,29 +7,72 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_converter.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_log.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
-inline void calculate_softplus_body(vFloat beta, vFloat beta_reciprocal, vFloat threshold) {
-    vFloat a = dst_reg[0];
-    vFloat a_beta = a * beta;
-    v_if(a_beta < threshold) {
-        exp_init<APPROXIMATION_MODE, false>();
-        a = calculate_exponential_body<APPROXIMATION_MODE>(a_beta) + 1.0f;
+inline vFloat softplus(vFloat x) {
+    /*
+     This function implements softplus using piecewise polynomial
+       approximation. The approximation is done using 4 intervals (each branch
+       below) and the coefficients were generated using Remez algorithm:
 
-        log_init<APPROXIMATION_MODE>();
-        dst_reg[0] = a;
-        calculate_log_body<false>(0);
-        a = beta_reciprocal * dst_reg[0];
+       > guess = np.polyfit(x, y, degree)
+       > result = optimize.least_squares(error, guess, args=(x,))
+
+       The intervals and degrees of freedom for each interval was selected
+       based on what gave the best compromise of speed vs. accuracy.
+    */
+    vFloat result;
+    v_if(x < -20.0f) { result = vConst0; }
+    v_elseif(x < -5.0f) {
+        // Coefficients for [-20, -5]
+        result =
+            (((((vConstFloatPrgm0 * x + vConstFloatPrgm1) * x + vConstFloatPrgm2) * x + 5.25169871e-03) * x +
+              3.44602422e-02) *
+                 x +
+             8.83130932e-02);
+    }
+    v_elseif(x < 0.0f) {
+        // Coefficients for [-5, 0]
+        result =
+            ((((((-6.11343628e-05 * x - 9.83003622e-04) * x - 4.84124664e-03) * x + 4.19676832e-03) * x +
+               1.30285097e-01) *
+                  x +
+              5.01969907e-01) *
+                 x +
+             6.93148958e-01);
+    }
+    v_elseif(x < 5.0f) {
+        // Coefficients for [0, 5]
+        result =
+            ((((((-6.11343628e-05 * x + 9.83003622e-04) * x - 4.84124664e-03) * x - 4.19676832e-03) * x +
+               1.30285097e-01) *
+                  x +
+              4.98030093e-01) *
+                 x +
+             6.93148958e-01);
+    }
+    v_else {
+        // Coefficients for [5, 20]
+        result =
+            (((((-2.01778601e-07 * x + 1.41959790e-05) * x - 3.90682149e-04) * x + 5.25169871e-03) * x +
+              9.65539758e-01) *
+                 x +
+             8.83130932e-02);
     }
     v_endif;
-    dst_reg[0] = a;
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void calculate_softplus_body(vFloat beta, vFloat beta_reciprocal, vFloat threshold) {
+    vFloat x = beta * dst_reg[0];
+    v_if(x < threshold) { dst_reg[0] = beta_reciprocal * softplus(x); }
+    v_endif;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
@@ -44,7 +87,11 @@ inline void calculate_softplus(uint param0, uint param1, uint param2) {
 }
 
 template <bool APPROXIMATION_MODE>
-void softplus_init() {}
+void softplus_init() {
+    vConstFloatPrgm0 = 2.01778601e-07;
+    vConstFloatPrgm1 = 1.41959790e-05;
+    vConstFloatPrgm2 = 3.90682149e-04;
+}
 
 }  // namespace sfpu
 }  // namespace ckernel
