@@ -51,8 +51,8 @@ def tt_batch_norm(
         assert batch_size == 1, "in inference mode batch size must be 1!"
         # In prediction mode, use mean and variance obtained by moving average
         var_plus_eps = ttnn.add(eps_tt, running_var)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         x_minus_mean = ttnn.sub(x, running_mean)
         x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
         x_gamma = ttnn.mul(x_div_sqrt, gamma)
@@ -76,8 +76,8 @@ def tt_batch_norm(
 
         # In training mode, the current mean and variance are used
         var_plus_eps = ttnn.add(eps_tt, var_tt)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         sqrt_inv_data = sqrt_inv.cpu().to_torch()
         sqrt_inv_data = torch.Tensor(sqrt_inv_data).reshape((1, 1, H, W))
         sqrt_inv_data = untilize(sqrt_inv_data)

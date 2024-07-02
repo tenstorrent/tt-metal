@@ -6,8 +6,8 @@ import math
 from collections import OrderedDict
 
 import torch
+import ttnn
 from torch import Tensor, nn
-import tt_lib
 
 
 class GELUActivation(nn.Module):
@@ -23,7 +23,7 @@ class GELUActivation(nn.Module):
         if use_gelu_python:
             self.act = self._gelu_python
         else:
-            self.act = tt_lib.tensor.gelu
+            self.act = ttnn.gelu
 
     def _gelu_python(self, input: Tensor) -> Tensor:
         return input * 0.5 * (1.0 + torch.erf(input / math.sqrt(2.0)))
@@ -49,9 +49,7 @@ def get_activation(activation_string):
     if activation_string in ACT2FN:
         return ACT2FN[activation_string]
     else:
-        raise KeyError(
-            f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}"
-        )
+        raise KeyError(f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}")
 
 
 # For backwards compatibility with: from activations import gelu_python

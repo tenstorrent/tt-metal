@@ -6,6 +6,7 @@ import math
 
 import torch
 
+import ttnn
 from tt_lib import tensor, device
 from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
@@ -27,9 +28,9 @@ def softmax(x: tensor.Tensor, stable=False):
         z = tensor.bcast(x, sumsW, BCSUB, BCW)  # x-max(x)
     else:
         z = x
-    numerator = tensor.exp(z)  # exp(z)
+    numerator = ttnn.exp(z)  # exp(z)
     denom1 = tensor.reduce(numerator, RSUM, RW, 1.0)  # torch.sum(x, 3)
-    denom = tensor.recip(denom1)
+    denom = ttnn.reciprocal(denom1)
     output = tensor.bcast(numerator, denom, BCMUL, BCW)
 
     return output

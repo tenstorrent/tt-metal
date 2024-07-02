@@ -40,7 +40,7 @@ class TtLeNet5(nn.Module):
             track_running_stats=True,
         )
 
-        self.relu1 = tt_lib.tensor.relu
+        self.relu1 = ttnn.relu
 
         self.maxp1 = fallback_ops.MaxPool2d(kernel_size=2, stride=2)
 
@@ -66,7 +66,7 @@ class TtLeNet5(nn.Module):
             track_running_stats=True,
         )
 
-        self.relu2 = tt_lib.tensor.relu
+        self.relu2 = ttnn.relu
 
         self.maxp2 = fallback_ops.MaxPool2d(kernel_size=2, stride=2)
 

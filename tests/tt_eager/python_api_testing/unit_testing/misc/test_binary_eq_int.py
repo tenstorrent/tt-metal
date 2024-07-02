@@ -64,7 +64,7 @@ def test_bw_binary_eq_opt_output(input_shapes, device, mem_configs, out_dtype):
     cq_id = 0
     mem_cfg = mem_configs
 
-    tt_lib.tensor.typecast(out_tensor, out_dtype, output_mem_config=mem_cfg)
+    ttnn.typecast(out_tensor, out_dtype, memory_config=mem_cfg)
 
     ttnn.eq(input_tensor, other_tensor, memory_config=mem_cfg, output_tensor=out_tensor, queue_id=cq_id)
 

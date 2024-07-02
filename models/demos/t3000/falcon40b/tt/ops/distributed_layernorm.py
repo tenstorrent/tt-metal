@@ -102,7 +102,7 @@ class TtDistributedLayernorm:
         # AllReduce meanx and meanx2
         # Weighted meanx to number of samples per device
         for i in range(num_devices):
-            meanxs[i] = ttl.tensor.mul_unary(meanxs[i], counts[i])
+            meanxs[i] = ttnn.multiply(meanxs[i], counts[i])
         # AllGather
         meanxs = ttl.tensor.all_gather(
             meanxs,
@@ -122,7 +122,7 @@ class TtDistributedLayernorm:
 
         # Weighted meanx2 to number of samples per device
         for i in range(num_devices):
-            meanx2s[i] = ttl.tensor.mul_unary(meanx2s[i], counts[i])
+            meanx2s[i] = ttnn.multiply(meanx2s[i], counts[i])
         # AllGather
         meanx2s = ttl.tensor.all_gather(
             meanx2s,
@@ -152,11 +152,11 @@ class TtDistributedLayernorm:
         # Normalize the input: x_hat = (xs[i] - mean) / torch.sqrt(var + epsilon)
         denominators = []
         for i in range(num_devices):
-            denominators.append(ttl.tensor.add_unary(var[i], self.ln_eps))
+            denominators.append(ttnn.add(var[i], self.ln_eps))
         for i in range(num_devices):
             denominators[i] = ttl.tensor.pow(denominators[i], 0.5)
         for i in range(num_devices):
-            denominators[i] = ttl.tensor.recip(denominators[i])
+            denominators[i] = ttnn.reciprocal(denominators[i])
 
         nominators = []
         for i in range(num_devices):

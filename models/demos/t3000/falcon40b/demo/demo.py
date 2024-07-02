@@ -527,9 +527,9 @@ def run_falcon_demo_kv(
         "inference_prefill": time_prefill_inference,
         "inference_decode": time_decode_inference,
         "inference_total": time_prefill_inference + time_decode_inference,
-        "inference_throughput_prefill": num_users_generated_prefill / time_prefill_inference
-        if not prefill_on_host
-        else None,
+        "inference_throughput_prefill": (
+            num_users_generated_prefill / time_prefill_inference if not prefill_on_host else None
+        ),
         "inference_throughput_decode": num_tokens_generated_decode / time_decode_inference,
     }
 

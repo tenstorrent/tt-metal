@@ -124,11 +124,11 @@ class TtFalconCausalLM(TtFalconModelShared):
         lm_logits = falcon_prefill_matmul(
             hidden_states,
             self.lm_head_weights,
-            self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"]
-            if need_low_l1_workaround
-            else self.model_config[
-                "COMPUTE_KERNEL_CONFIG"
-            ],  # FP16 accumulation format leads to lower PCC! But can't fit 2k S otherwise atm
+            (
+                self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"]
+                if need_low_l1_workaround
+                else self.model_config["COMPUTE_KERNEL_CONFIG"]
+            ),  # FP16 accumulation format leads to lower PCC! But can't fit 2k S otherwise atm
             output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
             overwrite_per_core_k=1,  # TODO: can we increase this?

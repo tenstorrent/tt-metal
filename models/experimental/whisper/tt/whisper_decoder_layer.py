@@ -223,7 +223,7 @@ class TtWhisperDecoderLayer(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = ttnn.gelu(hidden_states)
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
