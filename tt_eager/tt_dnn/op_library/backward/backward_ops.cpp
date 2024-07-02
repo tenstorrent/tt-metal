@@ -1607,8 +1607,8 @@ std::vector<Tensor> _prod_bw(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
-        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
-                      {0, 32 - (reciprocal_input.get_legacy_shape()[0] % 32)},
+        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, (32 - (reciprocal_input.get_legacy_shape()[0] % 32))},
+                      {0, 0},
                       {0, 0},
                       {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0,  std::nullopt);
