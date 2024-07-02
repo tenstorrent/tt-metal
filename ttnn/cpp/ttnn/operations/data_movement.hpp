@@ -10,7 +10,7 @@
 #include "tt_eager/tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_eager/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_eager/tt_dnn/op_library/upsample/upsample_op.hpp"
+#include "ttnn/cpp/ttnn/operations/upsample/upsample_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 
 #include <ranges>
