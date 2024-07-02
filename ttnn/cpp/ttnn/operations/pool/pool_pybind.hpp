@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/pool/pool.hpp"
-#include "ttnn/operations/pool/maxpool2d.hpp"
+#include "ttnn/operations/pool/maxpool/maxpool2d.hpp"
 
 #include "ttnn/types.hpp"
 

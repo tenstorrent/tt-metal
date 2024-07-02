@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/pool/average_pool.hpp"
+#include "ttnn/cpp/ttnn/operations/pool/avgpool/average_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 
