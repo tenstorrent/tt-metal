@@ -184,6 +184,45 @@ Tensor all_gather(
     return output_tensors.at(0);
 }
 
+Tensor line_all_gather(
+    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
+
+    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
+
+    auto devices = input_tensor.get_workers();
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [dim, num_links, memory_config, devices](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+
+            const auto& input_tensor = input_tensors.at(0);
+            uint32_t num_devices = devices.size();
+
+            uint32_t device_index = 0; // Initialize device index
+            uint32_t receiver_device_id = 0; // Initialize receiver device ID
+            uint32_t sender_device_id = 0; // Initialize sender device ID
+
+            for (uint32_t i = 0; i < num_devices; ++i) {
+                if (devices[i] == input_tensor.device()) {
+                    device_index = i;
+                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
+                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+                    break;
+                }
+            }
+
+            return operation::run(
+                AllGather{
+                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), all_gather_op::Topology::Linear},
+                {input_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+}
+
 } // namespace ccl
 } // namespace operations
 

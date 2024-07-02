@@ -410,14 +410,15 @@ def run_line_all_gather(
     for i, t in enumerate(input_tensors):
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
 
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
-        tt_out_tensors = ttl.tensor.line_all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
+        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
         for d in devices:
             ttl.device.Synchronize(d)
         logger.info(f"Done iteration {i}")
 
-    for i, t in enumerate(tt_out_tensors):
+    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         if input_dtype == ttl.tensor.DataType.BFLOAT16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
