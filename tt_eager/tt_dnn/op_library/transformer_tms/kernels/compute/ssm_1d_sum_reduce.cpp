@@ -54,6 +54,7 @@ FORCE_INLINE void reduce(uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out) {
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
+    uint32_t input_num_blocks_h = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t scalar_cb_id = get_compile_time_arg_val(1);
@@ -65,19 +66,22 @@ void MAIN {
     reduce_init<true>(REDUCE_OP, REDUCE_DIM, input_cb_id, scalar_cb_id);
     reduce_revert_delta<REDUCE_DIM>(intermed_cb_id1);  // Required or else the first tile is wrong
 
-    cb_wait_front(scalar_cb_id, ONE_TILE);
+    for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++){
 
-    for (uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {
-        for (uint32_t slice_idx = 0; slice_idx < TILE_WIDTH; slice_idx++) {
-            unpack_reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
-            pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
-            transpose(input_cb_id, intermed_cb_id0);  // 32 x B
-            unpack_reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
-            reduce(intermed_cb_id0, scalar_cb_id, intermed_cb_id1);  // 1 x B
+        cb_wait_front(scalar_cb_id, ONE_TILE);
+
+        for (uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {
+            for (uint32_t slice_idx = 0; slice_idx < TILE_WIDTH; slice_idx++) {
+                unpack_reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
+                pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
+                transpose(input_cb_id, intermed_cb_id0);  // 32 x B
+                unpack_reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
+                reduce(intermed_cb_id0, scalar_cb_id, intermed_cb_id1);  // 1 x B
+            }
+            // Get full tile back from writer and transpose it
+            pack_reconfig_data_format(intermed_cb_id0, output_cb_id);
+            transpose(intermed_cb_id2, output_cb_id);
         }
-        // Get full tile back from writer and transpose it
-        pack_reconfig_data_format(intermed_cb_id0, output_cb_id);
-        transpose(intermed_cb_id2, output_cb_id);
     }
 }
 }  // namespace NAMESPACE
