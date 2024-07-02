@@ -306,9 +306,19 @@ class resnet50Bottleneck:
                 ttnn.deallocate(x)
         if self.out_in_place:
             # underscore version is in_place = True
-            out = ttnn.add_(out, ds_out, activations=["relu"], memory_config=self.output_memory_config)
+            out = ttnn.add_(
+                out,
+                ds_out,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+                memory_config=self.output_memory_config,
+            )
         else:
-            out = ttnn.add(out, ds_out, activations=["relu"], memory_config=self.output_memory_config)
+            out = ttnn.add(
+                out,
+                ds_out,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+                memory_config=self.output_memory_config,
+            )
         ttnn.deallocate(ds_out)
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
             out = ttnn.experimental.tensor.move_sharded(out)
