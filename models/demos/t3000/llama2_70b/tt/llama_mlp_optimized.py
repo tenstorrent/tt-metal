@@ -28,7 +28,7 @@ class TtLlamaMLP_optimized:
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
-        self.read_cache = False  # read_cache
+        self.read_cache = read_cache
 
         self.hidden_size = hidden_size
 
