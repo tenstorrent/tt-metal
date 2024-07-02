@@ -178,13 +178,6 @@ Tensor maxpool2d_new(const Tensor &input,
 }  // namespace tt_metal
 }  // namespace tt
 
-
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-
-
 namespace ttnn::operations {
 namespace maxpool {
 

@@ -30,7 +30,6 @@ import tt_lib as ttl
 
 import math
 import torch
-from ttnn.operations import pool
 
 
 class TTPyMaxPool(TTPyOp):
@@ -45,7 +44,9 @@ class TTPyMaxPool(TTPyOp):
         deallocate_activation=True,
         act_dtype=None,
         channels=None,
+        pool_op=None,
     ):
+        self.pool_op = pool_op
         if parallel_config_override is None:
             parallel_config_override = {}
         if "max_pool" not in reader_patterns_cache:
@@ -222,7 +223,8 @@ class TTPyMaxPool(TTPyOp):
 
             if self.deallocate_activation:
                 activation.deallocate()
-            output = pool.max_pool2d_v2(
+            # output = pool.max_pool2d_v2(
+            output = self.pool_op(
                 haloed_act,
                 reader_indices,
                 in_n,
