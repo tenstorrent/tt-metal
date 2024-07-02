@@ -632,7 +632,7 @@ void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     constexpr uint32_t latent = 32;
     const auto ashape = input_tensor_a.get_legacy_shape();
     TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Dim 1 and 2 are expected to be 1 in input a!");
-    TT_FATAL((ashape[2] == TILE_HEIGHT), "Batch size must be 32 for input a!");
+    TT_FATAL((ashape[2] % TILE_HEIGHT == 0), "Batch size must be divisible by 32 for input a!");
     TT_FATAL((ashape[3] % TILE_WIDTH == 0), "Final dim must be a multiple of 32!");
     TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
 }
