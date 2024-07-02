@@ -1498,6 +1498,7 @@ void configure_for_single_chip(Device *device,
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
     CoreCoord prefetch_core = {0, 0};
     CoreCoord prefetch_d_core = {3, 0};
@@ -1535,7 +1536,7 @@ void configure_for_single_chip(Device *device,
     llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = 32;
+    uint32_t noc_read_alignment = PCIE_ALIGNMENT;
     uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
     // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
@@ -1850,6 +1851,7 @@ void configure_for_single_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
+         num_compute_cores // max_write_packed_cores
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2068,6 +2070,8 @@ void configure_for_multi_chip(Device *device,
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    TT_ASSERT(num_compute_cores == (device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y));
 
     CoreCoord prefetch_core = {0, 0};
     CoreCoord prefetch_d_core = {3, 0};
@@ -2118,7 +2122,7 @@ void configure_for_multi_chip(Device *device,
     llrt::write_hex_vec_to_core(device_r->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = 32;
+    uint32_t noc_read_alignment = PCIE_ALIGNMENT;
     uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
     // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
@@ -2518,6 +2522,7 @@ void configure_for_multi_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
+         num_compute_cores
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
