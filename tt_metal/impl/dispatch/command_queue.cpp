@@ -333,7 +333,7 @@ void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
 }
 
 template <typename PackedSubCmd>
-uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch_cmd_size, bool no_stride) {
+uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch_cmd_size, uint32_t packed_write_max_unicast_sub_cmds, bool no_stride) {
     static_assert(
         std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
         std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -346,10 +346,11 @@ uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch
     uint32_t max_prefetch_num_packed_cmds =
         no_stride ? (max_prefetch_size - align(data_size * sizeof(uint32_t), L1_ALIGNMENT)) / sub_cmd_sizeB
                   : max_prefetch_size / (align(data_size * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
+
+    uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(CQDispatchWritePackedMulticastSubCmd);
     return min(
         max_prefetch_num_packed_cmds,
-        is_unicast ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS
-                   : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS);
+        is_unicast ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds);
 };
 
 template <typename PackedSubCmd>
@@ -357,10 +358,11 @@ uint32_t insert_write_packed_payloads(
     const uint32_t num_sub_cmds,
     const uint32_t sub_cmd_sizeB,
     const uint32_t max_prefetch_command_size,
+    const uint32_t packed_write_max_unicast_sub_cmds,
     std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
     const uint32_t aligned_sub_cmd_sizeB = align(sub_cmd_sizeB, L1_ALIGNMENT);
     const uint32_t max_packed_sub_cmds_per_cmd =
-        get_max_write_packed_sub_cmds<PackedSubCmd>(aligned_sub_cmd_sizeB, max_prefetch_command_size, false);
+        get_max_write_packed_sub_cmds<PackedSubCmd>(aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
     uint32_t rem_num_sub_cmds = num_sub_cmds;
     uint32_t cmd_payload_sizeB = 0;
     while (rem_num_sub_cmds != 0) {
@@ -384,6 +386,7 @@ void generate_runtime_args_cmds(
     const uint32_t& max_runtime_args_len,
     std::vector<std::reference_wrapper<RuntimeArgsData>>& rt_args_data,
     const uint32_t max_prefetch_command_size,
+    const uint32_t packed_write_max_unicast_sub_cmds,
     const uint32_t id,
     bool no_stride = false) {
     static_assert(
@@ -411,7 +414,7 @@ void generate_runtime_args_cmds(
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     uint32_t max_packed_cmds =
-        get_max_write_packed_sub_cmds<PackedSubCmd>(max_runtime_args_len, max_prefetch_command_size, no_stride);
+        get_max_write_packed_sub_cmds<PackedSubCmd>(max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
         TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
@@ -429,6 +432,7 @@ void generate_runtime_args_cmds(
             rt_payload_sizeB,
             sub_cmds,
             rt_data_and_sizes,
+            packed_write_max_unicast_sub_cmds,
             offset_idx,
             no_stride);
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
@@ -459,6 +463,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+    const uint32_t packed_write_max_unicast_sub_cmds = this->device->compute_with_storage_grid_size().x * this->device->compute_with_storage_grid_size().y;
 
     uint32_t num_processors = unique_processor_to_l1_arg_base_addr.size();
     std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unique_sub_cmds(num_processors);
@@ -570,6 +575,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             unique_max_runtime_args_len[processor_idx],
             unique_rt_args_data[processor_idx],
             max_prefetch_command_size,
+            packed_write_max_unicast_sub_cmds,
             processor_idx,
             false);
     }
@@ -584,6 +590,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     common_max_runtime_args_len[kernel_id],
                     common_rt_args_data[kernel_id],
                     max_prefetch_command_size,
+                    packed_write_max_unicast_sub_cmds,
                     kernel_id,
                     true);
             },
@@ -605,6 +612,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         uint32_t cmd_sequence_sizeB = 0;
         const uint32_t max_prefetch_command_size =
             dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+        const uint32_t packed_write_max_unicast_sub_cmds = this->device->compute_with_storage_grid_size().x * this->device->compute_with_storage_grid_size().y;
 
         for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
             uint32_t num_packed_cmds = 0;
@@ -704,7 +712,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
             aligned_cb_config_size_bytes = align(cb_config_size_bytes, L1_ALIGNMENT);
             cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
-                num_multicast_cb_sub_cmds, cb_config_size_bytes, max_prefetch_command_size, mcast_cb_payload);
+                num_multicast_cb_sub_cmds, cb_config_size_bytes, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, mcast_cb_payload);
         }
 
         // Program Binaries and Go Signals
@@ -861,6 +869,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 multicast_go_signal_sub_cmds.size(),
                 go_signal_sizeB,
                 max_prefetch_command_size,
+                packed_write_max_unicast_sub_cmds,
                 multicast_go_signals_payload);
         }
 
@@ -886,6 +895,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 unicast_go_signal_sub_cmds.size(),
                 go_signal_sizeB,
                 max_prefetch_command_size,
+                packed_write_max_unicast_sub_cmds,
                 unicast_go_signals_payload);
         }
 
@@ -920,7 +930,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
 
             program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, multicast_sub_cmds, sem_data);
+                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, multicast_sub_cmds, sem_data, packed_write_max_unicast_sub_cmds);
         }
 
         // Unicast Semaphore Cmd
@@ -949,7 +959,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
 
             program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, unicast_sub_cmds, sem_data);
+                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, unicast_sub_cmds, sem_data, packed_write_max_unicast_sub_cmds);
         }
 
         // CB Configs commands
@@ -966,6 +976,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     mcast_cb_payload_sizeB,
                     multicast_cb_config_sub_cmds,
                     multicast_cb_config_data,
+                    packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
@@ -1015,6 +1026,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     multicast_go_signal_payload_sizeB,
                     multicast_go_signal_sub_cmds,
                     multicast_go_signal_data,
+                    packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
@@ -1040,6 +1052,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     unicast_go_signal_payload_sizeB,
                     unicast_go_signal_sub_cmds,
                     unicast_go_signal_data,
+                    packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
@@ -1238,13 +1251,15 @@ void EnqueueRecordEventCommand::process() {
     }
 
     uint32_t address = this->command_queue_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+    const uint32_t packed_write_max_unicast_sub_cmds = this->device->compute_with_storage_grid_size().x * this->device->compute_with_storage_grid_size().y;
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_hw_cqs,
         address,
         dispatch_constants::EVENT_PADDED_SIZE,
         packed_event_payload_sizeB,
         unicast_sub_cmds,
-        event_payloads);
+        event_payloads,
+        packed_write_max_unicast_sub_cmds);
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
