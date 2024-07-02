@@ -104,8 +104,8 @@ class TtSwinSelfAttention(nn.Module):
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
         attention_head_size_tt = self.const_tensor(attention_scores.get_legacy_shape(), self.attention_head_size)
-        attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
-        attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
+        attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
+        attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
         attention_scores = ttnn.mul(attention_scores, attention_head_size_tt)
         """

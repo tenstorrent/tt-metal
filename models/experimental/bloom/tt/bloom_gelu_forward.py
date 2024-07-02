@@ -49,7 +49,7 @@ def tt_bloom_gelu_forward(x, device):
     factor3 = ttnn.add(factor3, z, memory_config=mem_config)
 
     sumtanh = ttnn.mul(tt_k3, factor3, memory_config=mem_config)
-    tanh = tt_lib.tensor.tanh(sumtanh, output_mem_config=mem_config)
+    tanh = ttnn.tanh(sumtanh, output_mem_config=mem_config)
 
     k4 = torch.full(tuple(x.get_legacy_shape()), 1.0)
     tt_k4 = bloom_utils.torch2tt_tensor(k4, device)

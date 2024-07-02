@@ -346,9 +346,11 @@ class TtLlamaModel_optimized:
         lm_head_out = ttnn.matmul(
             norm_out_replicated,
             self.lm_head,
-            program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
-            if self.llama3
-            else self.model_config["LM_HEAD_MM_PROGCFG"],
+            program_config=(
+                self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
+                if self.llama3
+                else self.model_config["LM_HEAD_MM_PROGCFG"]
+            ),
             memory_config=self.model_config["DRAM_MEMCFG"],
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],

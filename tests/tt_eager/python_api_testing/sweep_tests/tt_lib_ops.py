@@ -266,7 +266,7 @@ def eltwise_leaky_relu(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.leaky_relu(t0, negative_slope, output_mem_config=output_mem_config)
+    t1 = ttnn.leaky_relu(t0, negative_slope, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -338,7 +338,7 @@ def eltwise_elu(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.elu(t0, alpha, output_mem_config=output_mem_config)
+    t1 = ttnn.elu(t0, alpha, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2543,66 +2543,144 @@ def make_unary_op(ttl_tensor_unop):
     return unary_op
 
 
+def make_unary_op_optional_output(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op_optional_output(
+        x,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        cq_id = 0
+
+        t2 = ttl_tensor_unop(t0, queue_id=cq_id)
+
+        return tt2torch_tensor(t2)
+
+    return unary_op_optional_output
+
+
+def make_unary_op_optional_output_with_scalar(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op_optional_output_with_scalar(
+        x,
+        *args,
+        device,
+        scalar,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        cq_id = 0
+
+        t2 = ttl_tensor_unop(t0, scalar, queue_id=cq_id)
+
+        return tt2torch_tensor(t2)
+
+    return unary_op_optional_output_with_scalar
+
+
+def make_unary_op_optional_output_with_fast_approx(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op_optional_output_with_fast_approx(
+        x,
+        *args,
+        device,
+        fast_and_approx,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        cq_id = 0
+
+        t2 = ttl_tensor_unop(t0, fast_and_approximate_mode=fast_and_approx, queue_id=cq_id)
+
+        return tt2torch_tensor(t2)
+
+    return unary_op_optional_output_with_fast_approx
+
+
 # mean_global = make_unary_op(ttl.tensor.global_mean)
 # var_global = make_unary_op(ttl.tensor.global_var)
 # std_global = make_unary_op(ttl.tensor.global_std)
 normalize_global = make_unary_op(ttl.tensor.normalize_global)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
-eltwise_cos = make_unary_op(ttl.tensor.cos)
-eltwise_sin = make_unary_op(ttl.tensor.sin)
-eltwise_tan = make_unary_op(ttl.tensor.tan)
-eltwise_acos = make_unary_op(ttl.tensor.acos)
-eltwise_asin = make_unary_op(ttl.tensor.asin)
-eltwise_atan = make_unary_op(ttl.tensor.atan)
+eltwise_cos = make_unary_op_optional_output(ttnn.cos)
+eltwise_sin = make_unary_op_optional_output(ttnn.sin)
+eltwise_tan = make_unary_op_optional_output(ttnn.tan)
+eltwise_acos = make_unary_op_optional_output(ttnn.acos)
+eltwise_asin = make_unary_op_optional_output(ttnn.asin)
+eltwise_atan = make_unary_op_optional_output(ttnn.atan)
+eltwise_i0 = make_unary_op_optional_output(ttnn.i0)
+eltwise_log = make_unary_op_optional_output(ttnn.log)
+eltwise_log2 = make_unary_op_optional_output(ttnn.log2)
+eltwise_log10 = make_unary_op_optional_output(ttnn.log10)
+eltwise_logical_not_unary = make_unary_op_optional_output(ttnn.logical_not)
+eltwise_isfinite = make_unary_op_optional_output(ttnn.isfinite)
+eltwise_isinf = make_unary_op_optional_output(ttnn.isinf)
+eltwise_isposinf = make_unary_op_optional_output(ttnn.isposinf)
+eltwise_isneginf = make_unary_op_optional_output(ttnn.isneginf)
+eltwise_isnan = make_unary_op_optional_output(ttnn.isnan)
+eltwise_rsqrt = make_unary_op_optional_output(ttnn.rsqrt)
+eltwise_erfinv = make_unary_op_optional_output(ttnn.erfinv)
+eltwise_erf = make_unary_op_optional_output_with_fast_approx(ttnn.erf)
+eltwise_erfc = make_unary_op_optional_output_with_fast_approx(ttnn.erfc)
+eltwise_gelu = make_unary_op_optional_output_with_fast_approx(ttnn.gelu)
+eltwise_exp = make_unary_op_optional_output(ttnn.exp)
+eltwise_softplus = make_unary_op_optional_output(ttnn.softplus)
 eltwise_atanh = make_unary_op(ttl.tensor.atanh)
 eltwise_cosh = make_unary_op(ttl.tensor.cosh)
 eltwise_sinh = make_unary_op(ttl.tensor.sinh)
-eltwise_tanh = make_unary_op(ttl.tensor.tanh)
+eltwise_tanh = make_unary_op_optional_output(ttnn.tanh)
 eltwise_asinh = make_unary_op(ttl.tensor.asinh)
 eltwise_acosh = make_unary_op(ttl.tensor.acosh)
 eltwise_tanhshrink = make_unary_op(ttl.tensor.tanhshrink)
 eltwise_lgamma = make_unary_op(ttl.tensor.lgamma)
 eltwise_multigammaln = make_unary_op(ttl.tensor.multigammaln)
 eltwise_softsign = make_unary_op(ttl.tensor.softsign)
-eltwise_relu = make_unary_op(ttl.tensor.relu)
-eltwise_relu6 = make_unary_op(ttl.tensor.relu6)
-eltwise_sqrt = make_unary_op(ttl.tensor.sqrt)
+eltwise_relu = make_unary_op_optional_output(ttnn.relu)
+eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
+eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
 eltwise_rad2deg = make_unary_op(ttl.tensor.rad2deg)
 eltwise_deg2rad = make_unary_op(ttl.tensor.deg2rad)
-eltwise_sign = make_unary_op(ttl.tensor.sign)
-eltwise_signbit = make_unary_op(ttl.tensor.signbit)
-eltwise_abs = make_unary_op(ttl.tensor.abs)
-eltwise_exp2 = make_unary_op(ttl.tensor.exp2)
-eltwise_expm1 = make_unary_op(ttl.tensor.expm1)
-eltwise_neg = make_unary_op(ttl.tensor.neg)
-eltwise_recip = make_unary_op(ttl.tensor.recip)
-eltwise_sigmoid = make_unary_op(ttl.tensor.sigmoid)
-eltwise_sigmoid_accurate = make_unary_op(ttl.tensor.sigmoid_accurate)
-eltwise_log_sigmoid = make_unary_op(ttl.tensor.log_sigmoid)
-eltwise_log = make_unary_op(ttl.tensor.log)
-eltwise_log2 = make_unary_op(ttl.tensor.log2)
-eltwise_log10 = make_unary_op(ttl.tensor.log10)
+eltwise_sign = make_unary_op_optional_output(ttnn.sign)
+eltwise_signbit = make_unary_op_optional_output(ttnn.signbit)
+eltwise_abs = make_unary_op_optional_output(ttnn.abs)
+eltwise_exp2 = make_unary_op_optional_output(ttnn.exp2)
+eltwise_expm1 = make_unary_op_optional_output(ttnn.expm1)
+eltwise_neg = make_unary_op_optional_output(ttnn.neg)
+eltwise_recip = make_unary_op_optional_output(ttnn.reciprocal)
+eltwise_sigmoid = make_unary_op_optional_output(ttnn.sigmoid)
+eltwise_sigmoid_accurate = make_unary_op_optional_output(ttnn.sigmoid_accurate)
+eltwise_log_sigmoid = make_unary_op_optional_output(ttnn.log_sigmoid)
 eltwise_swish = make_unary_op(ttl.tensor.swish)
 eltwise_add1 = make_unary_op(ttl.tensor.add1)
 eltwise_log1p = make_unary_op(ttl.tensor.log1p)
-eltwise_erfinv = make_unary_op(ttl.tensor.erfinv)
 eltwise_mish = make_unary_op(ttl.tensor.mish)
 eltwise_hardswish = make_unary_op(ttl.tensor.hardswish)
 eltwise_hardsigmoid = make_unary_op(ttl.tensor.hardsigmoid)
 eltwise_digamma = make_unary_op(ttl.tensor.digamma)
-eltwise_silu = make_unary_op(ttl.tensor.silu)
-eltwise_square = make_unary_op(ttnn.square)
-eltwise_ltz = make_unary_op(ttl.tensor.ltz)
-eltwise_gtz = make_unary_op(ttl.tensor.gtz)
-eltwise_lez = make_unary_op(ttl.tensor.lez)
-eltwise_gez = make_unary_op(ttl.tensor.gez)
-eltwise_nez = make_unary_op(ttl.tensor.nez)
-eltwise_eqz = make_unary_op(ttl.tensor.eqz)
+eltwise_silu = make_unary_op_optional_output(ttnn.silu)
+eltwise_square = make_unary_op_optional_output(ttnn.square)
+eltwise_heaviside = make_unary_op_optional_output_with_scalar(ttnn.heaviside)
+eltwise_ltz = make_unary_op_optional_output(ttnn.ltz)
+eltwise_gtz = make_unary_op_optional_output(ttnn.gtz)
+eltwise_lez = make_unary_op_optional_output(ttnn.lez)
+eltwise_gez = make_unary_op_optional_output(ttnn.gez)
+eltwise_nez = make_unary_op_optional_output(ttnn.nez)
+eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
-# eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 normalize_hw = make_unary_op(ttl.tensor.normalize_hw)
 transpose_wh = make_unary_op(partial(ttl.tensor.transpose, dim0=-2, dim1=-1))
 transpose_hc = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-2))
@@ -2612,24 +2690,6 @@ transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
 transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
 eltwise_floor = make_unary_op(ttl.tensor.floor)
 eltwise_trunc = make_unary_op(ttl.tensor.trunc)
-
-
-@setup_host_and_device
-def eltwise_square(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    cq_id = 0
-
-    t2 = ttnn.square(t0, queue_id=cq_id)
-
-    return tt2torch_tensor(t2)
 
 
 def make_binary_op(ttl_tensor_binop):
@@ -2708,13 +2768,6 @@ eltwise_scatter = make_binary_op(ttl.tensor.scatter)
 eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
 eltwise_remainder = make_binary_op(ttl.tensor.remainder)
 eltwise_fmod = make_binary_op(ttl.tensor.fmod)
-eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
-eltwise_isinf = make_unary_op(ttl.tensor.isinf)
-eltwise_isposinf = make_unary_op(ttl.tensor.isposinf)
-eltwise_isneginf = make_unary_op(ttl.tensor.isneginf)
-eltwise_isnan = make_unary_op(ttl.tensor.isnan)
-eltwise_logical_not_unary = make_unary_op(ttl.tensor.logical_not_unary)
-eltwise_i0 = make_unary_op(ttl.tensor.i0)
 
 
 def make_binary_op_optional_output(ttl_tensor_binop):

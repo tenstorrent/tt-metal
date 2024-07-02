@@ -8,6 +8,7 @@ from torchvision import models
 from typing import List, Union, Dict, cast
 
 import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.helper_funcs import Linear as TtLinear
@@ -74,15 +75,15 @@ class TtVGG(nn.Module):
 
         self.classifier = [
             linear1,
-            tt_lib.tensor.relu,
+            ttnn.relu,
             linear2,
-            tt_lib.tensor.relu,
+            ttnn.relu,
             linear3,
         ]
 
     def forward(self, tt_x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         for layer in self.features:
-            if layer is tt_lib.tensor.relu:
+            if layer is ttnn.relu:
                 tt_x = layer(tt_x, output_mem_config=self.output_mem_config)
             else:
                 tt_x = layer(tt_x)
@@ -146,7 +147,7 @@ def make_layers(
                         padding=1,
                     )
 
-                layers += [conv2d, tt_lib.tensor.relu]
+                layers += [conv2d, ttnn.relu]
             else:
                 assert False, "we do not support batchnorm"
                 layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
