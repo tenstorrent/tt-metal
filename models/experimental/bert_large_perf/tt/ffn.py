@@ -25,7 +25,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
         # profiler.start("___op13_MM_bias_gelu")
         output = ttnn.matmul(activation, ff1_weighta)
         output_plus_bias = ttl.tensor.bcast(output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
-        output_plus_bias_act = ttl.tensor.gelu(output_plus_bias)
+        output_plus_bias_act = ttnn.gelu(output_plus_bias)
         # profiler.end("___op13_MM_bias_gelu")
 
         return output_plus_bias_act

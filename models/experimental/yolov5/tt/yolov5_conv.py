@@ -4,7 +4,7 @@
 
 import torch
 import tt_lib
-
+import ttnn
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
 
@@ -125,6 +125,6 @@ class TtYolov5Conv(torch.nn.Module):
         x = self.conv(x)
 
         if self.act:
-            x = tt_lib.tensor.silu(x)
+            x = ttnn.silu(x)
 
         return x

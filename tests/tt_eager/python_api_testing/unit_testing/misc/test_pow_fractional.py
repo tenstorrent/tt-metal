@@ -34,8 +34,8 @@ def test_pow_fractional_composite(device):
     yt = y
     yt_floor = math.floor(yt)
     yt_trunc = yt - yt_floor
-    pow_trunc_log = ttl.tensor.mul_unary(ttl.tensor.log(xt), yt_trunc)
-    pow_frac = ttl.tensor.exp(pow_trunc_log)
+    pow_trunc_log = ttnn.multiply(ttnn.log(xt), yt_trunc)
+    pow_frac = ttnn.exp(pow_trunc_log)
     xtt = ttnn.mul(ttl.tensor.pow(xt, yt_floor), pow_frac)
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

@@ -5,6 +5,7 @@
 import tt_lib
 import torch
 import torch.nn as nn
+import ttnn
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.experimental.mistral.tt.mistral_transformer_block import TtTransformerBlock
 from models.experimental.mistral.tt.mistral_rms_norm import TtRMSNorm
@@ -107,7 +108,7 @@ class TtTransformer(nn.Module):
             # make the mask banded to account for sliding window
             diagonal = -self.args.sliding_window
             mask = tt_lib.tensor.triu(mask, diagonal)
-            mask = tt_lib.tensor.log(mask)
+            mask = ttnn.log(mask)
             mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config, pad_value=-10000)
 
         positions = torch_to_tt_tensor_rm(positions, self.device, put_on_device=False)

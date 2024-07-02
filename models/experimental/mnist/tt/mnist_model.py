@@ -39,15 +39,15 @@ class TtMnistModel(torch.nn.Module):
 
         x = ttnn.matmul(x, self.fc1_weight)
         x = tt_lib.tensor.bcast(x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
-        x = tt_lib.tensor.relu(x)
+        x = ttnn.relu(x)
 
         x = ttnn.matmul(x, self.fc2_weight)
         x = tt_lib.tensor.bcast(x, self.fc2_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
-        x = tt_lib.tensor.relu(x)
+        x = ttnn.relu(x)
 
         x = ttnn.matmul(x, self.fc3_weight)
         x = tt_lib.tensor.bcast(x, self.fc3_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
-        x = tt_lib.tensor.relu(x)
+        x = ttnn.relu(x)
 
         x = tt_lib.fused_ops.softmax.softmax(x)
         # x = fallback_ops.softmax(x, -1)

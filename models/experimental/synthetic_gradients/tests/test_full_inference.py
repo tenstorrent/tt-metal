@@ -36,8 +36,8 @@ def torchLinear(in_features, out_features, weight, bias):
 def ttBatchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     def batchnorm1d_inference_(X):
         var_plus_eps = ttnn.add(epsilon, running_var)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         x_minus_mean = ttnn.sub(X, running_mean)
         x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
         x_gamma = ttnn.mul(x_div_sqrt, gamma)
@@ -300,13 +300,13 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     output_lin1_tt = linear1_tt(inputs_tt)
     bn1_tt = ttBatchnorm1d_inference(gamma1, beta1, running_mean1_tt, running_var1_tt, eps1_tt)
     output_bn1_tt = bn1_tt(output_lin1_tt)
-    output_layer1_tt = tt_lib.tensor.relu(output_bn1_tt)
+    output_layer1_tt = ttnn.relu(output_bn1_tt)
     # tt layer 2
     linear2_tt = ttLinear(weight2_lin_tt, bias2_lin_tt)
     output_lin2_tt = linear2_tt(output_layer1_tt)
     bn2_tt = ttBatchnorm1d_inference(gamma2, beta2, running_mean2_tt, running_var2_tt, eps2_tt)
     output_bn2_tt = bn2_tt(output_lin2_tt)
-    output_layer2_tt = tt_lib.tensor.relu(output_bn2_tt)
+    output_layer2_tt = ttnn.relu(output_bn2_tt)
 
     # compare
     output_layer1_tt_untilized = untilize(torch.Tensor(output_layer1_tt.cpu().to_torch()))

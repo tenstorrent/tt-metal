@@ -34,8 +34,8 @@ def torchLinear(in_features, out_features, weight, bias):
 def ttBatchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     def batchnorm1d_inference_(X):
         var_plus_eps = ttnn.add(epsilon, running_var)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         x_minus_mean = ttnn.sub(X, running_mean)
         x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
         x_gamma = ttnn.mul(x_div_sqrt, gamma)
@@ -187,7 +187,7 @@ def run_block_inference(in_features, out_features, device):
     output_lin_tt = linear_tt(inputs_tt)
     bn_tt = ttBatchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(output_lin_tt)
-    output_full_tt = tt_lib.tensor.relu(output_bn_tt)
+    output_full_tt = ttnn.relu(output_bn_tt)
 
     # compare
     output_lin_tt_untilized = untilize(torch.Tensor(output_lin_tt.cpu().to_torch()))

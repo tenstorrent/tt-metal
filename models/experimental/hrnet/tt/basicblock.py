@@ -51,11 +51,11 @@ class TtBasicBlock(nn.Module):
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
         out = ttnn.add(out, residual)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         return out

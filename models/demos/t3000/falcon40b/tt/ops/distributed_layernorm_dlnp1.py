@@ -43,11 +43,11 @@ class TtDistributedLayernormDLNP1:
 
         # Weighted meanx to number of samples per device
         for i in range(num_devices):
-            meanxs[i] = ttl.tensor.mul_unary(meanxs[i], counts[i])
+            meanxs[i] = ttnn.multiply(meanxs[i], counts[i])
 
         # Weighted meanx2 to number of samples per device
         for i in range(num_devices):
-            meanx2s[i] = ttl.tensor.mul_unary(meanx2s[i], counts[i])
+            meanx2s[i] = ttnn.multiply(meanx2s[i], counts[i])
 
         output = []
         for i in range(num_devices):

@@ -55,5 +55,5 @@ class TtRobertaIntermediate(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config=self.mem_config)
+            hidden_states = ttnn.gelu(hidden_states, memory_config=self.mem_config)
         return hidden_states

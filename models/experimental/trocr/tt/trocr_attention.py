@@ -116,7 +116,7 @@ class TtTrOCRAttention(nn.Module):
         bsz, tgt_len, embed_dim = hidden_states.get_legacy_shape()[1:]
 
         # get query proj
-        query_states = tt_lib.tensor.mul_unary(self.q_proj(hidden_states), self.scaling)
+        query_states = ttnn.multiply(self.q_proj(hidden_states), self.scaling)
 
         # get key, value proj
         if is_cross_attention and past_key_value is not None:

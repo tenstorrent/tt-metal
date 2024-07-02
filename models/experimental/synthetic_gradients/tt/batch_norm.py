@@ -53,11 +53,11 @@ def batchnorm1d_inference(weight, bias, running_mean, running_var, epsilon: floa
 
     def batchnorm1d_inference_(X):
         var_plus_eps = ttl.tensor.bcast(running_var, epsilon, BCADD, BCHW)
-        sqrt_var = ttl.tensor.sqrt(var_plus_eps)
-        sqrt_inv = ttl.tensor.recip(sqrt_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         x_minus_mean = ttnn.sub(X, running_mean)
-        x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
-        x_gamma = ttnn.mul(x_div_sqrt, gamma)
+        x_div_sqrt = ttnn.multiply(x_minus_mean, sqrt_inv)
+        x_gamma = ttnn.multiply(x_div_sqrt, gamma)
         Y = ttnn.add(x_gamma, beta)
         return Y
 

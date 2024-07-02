@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import tt_lib
+import ttnn
 from models.helper_funcs import Linear
 import tt_lib.fallback_ops as fallback_ops
 
@@ -122,8 +123,8 @@ class TtGPT(nn.Module):
 
             tt_temperature = fallback_ops.full(tt_logits.get_legacy_shape(), temperature)
 
-            tt_temperature = tt_lib.tensor.recip(tt_temperature)
-            tt_logits = ttnn.mul(tt_logits, tt_temperature)
+            tt_temperature = ttnn.reciprocal(tt_temperature)
+            tt_logits = ttnn.multiply(tt_logits, tt_temperature)
 
             logits = tt_to_torch_tensor(tt_logits)
             # optionally crop the logits to only the top k options

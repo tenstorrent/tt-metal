@@ -45,9 +45,9 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
         "inference_prefill",
         "tokens/s",
         measurements["prefill_t/s"],
-        step_warm_up_num_iterations=N_warmup_iter["inference_prefill"]
-        if "inference_prefill" in N_warmup_iter
-        else None,
+        step_warm_up_num_iterations=(
+            N_warmup_iter["inference_prefill"] if "inference_prefill" in N_warmup_iter else None
+        ),
         target=targets["prefill_t/s"] if "prefill_t/s" in targets else None,
     )
     benchmark_data.add_measurement(

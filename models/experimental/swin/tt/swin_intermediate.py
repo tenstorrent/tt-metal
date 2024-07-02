@@ -28,12 +28,8 @@ class TtSwinIntermediate(nn.Module):
         self.device = device
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu
 
-        self.dense_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )
+        self.dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], self.device)
+        self.dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], self.device)
 
     def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = TtLinear(hidden_states, self.dense_weight, self.dense_bias)
@@ -42,5 +38,5 @@ class TtSwinIntermediate(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch_to_tt_tensor_rm(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = ttnn.gelu(hidden_states)
         return hidden_states

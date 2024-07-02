@@ -200,7 +200,7 @@ class TtAttention(nn.Module):
 
         scores = ttnn.matmul(query, key, memory_config=self.args.out_mem_config)
         key.deallocate()
-        scores = tt_lib.tensor.mul_unary(scores, self.scale, output_mem_config=self.args.out_mem_config)
+        scores = ttnn.multiply(scores, self.scale, memory_config=self.args.out_mem_config)
 
         if mask is not None:
             mask = tt_lib.tensor.permute(mask, [2, 3, 0, 1])

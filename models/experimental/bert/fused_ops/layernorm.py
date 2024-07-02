@@ -5,7 +5,7 @@
 import math
 
 import torch
-
+import ttnn
 from tt_lib import tensor, device
 from tt_lib.utils import (
     pad_activation,
@@ -141,8 +141,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
-        var_sqrt = tensor.sqrt(var_plus_eps)
-        inv_sqrt = tensor.recip(var_sqrt)
+        var_sqrt = ttnn.sqrt(var_plus_eps)
+        inv_sqrt = ttnn.reciprocal(var_sqrt)
         if False and refx is not None:
             qq = t2t(inv_sqrt)[0, 0, 0:9, 0]
 
@@ -179,8 +179,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         var_div_n1 = tensor.bcast(var_redHW, var_scaler_, BCMUL, BCHW)  # *= 1/(everything not batch)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
-        var_sqrt = tensor.sqrt(var_plus_eps)
-        inv_sqrt = tensor.recip(var_sqrt)
+        var_sqrt = ttnn.sqrt(var_plus_eps)
+        inv_sqrt = ttnn.reciprocal(var_sqrt)
 
         x_div_sqrt = tensor.bcast(x_minus_mean, inv_sqrt, BCMUL, BCHW)
         x_gamma = tensor.mul(x_div_sqrt, gamma_, BCMUL, BCH)

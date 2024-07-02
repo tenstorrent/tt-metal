@@ -112,7 +112,7 @@ class TtHighResolutionNet(nn.Module):
             padding=1,
             bias=False,
         )
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
 
         self.stage1_cfg = self.cfg["stage1"]
         num_channels = self.stage1_cfg["num_channels"][0]
@@ -200,7 +200,7 @@ class TtHighResolutionNet(nn.Module):
                     bias=False,
                 ),
                 self.ds_bn,
-                tt_lib.tensor.relu,
+                ttnn.relu,
             ]
 
             downsamp_modules.append(downsamp_module)
@@ -228,7 +228,7 @@ class TtHighResolutionNet(nn.Module):
                 bias=True,
             ),
             self.final_bn,
-            tt_lib.tensor.relu,
+            ttnn.relu,
         ]
 
         return incre_modules, downsamp_modules, final_layer
@@ -266,7 +266,7 @@ class TtHighResolutionNet(nn.Module):
                                 bias=False,
                             ),
                             self.bn,
-                            tt_lib.tensor.relu,
+                            ttnn.relu,
                         ]
                     )
                 else:
@@ -300,7 +300,7 @@ class TtHighResolutionNet(nn.Module):
                                 bias=False,
                             ),
                             self.bn,
-                            tt_lib.tensor.relu,
+                            ttnn.relu,
                         ]
                     )
                 merged_list = [item for sublist in conv3x3s for item in sublist]

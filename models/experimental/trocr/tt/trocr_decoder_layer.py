@@ -37,7 +37,7 @@ class TtTrOCRDecoderLayer(nn.Module):
             host=host,
             is_decoder=True,
         )
-        self.activation_fn = tt_lib.tensor.gelu
+        self.activation_fn = ttnn.gelu
 
         self.self_attn_layer_norm_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.self_attn_layer_norm.weight"],

@@ -6,7 +6,7 @@
 
 import torch
 import tt_lib as tt_lib
-
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 if __name__ == "__main__":
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     )
 
     # Run relu on TT accelerator device
-    tt_relu_out = tt_lib.tensor.relu(tt_tensor)
+    tt_relu_out = ttnn.relu(tt_tensor)
 
     # Move TT Tensor tt_relu_out to host and convert it to PyTorch tensor py_relu_out
     tt_relu_out = tt_relu_out.cpu()
@@ -48,10 +48,10 @@ if __name__ == "__main__":
     # Run silu on TT Tensor tt_pow_out
     # This is a fallback op and it will behave like regular ops on TT accelerator device,
     # even though under the hood this op is executed on host.
-    tt_silu_out = tt_lib.tensor.silu(tt_pow_out)
+    tt_silu_out = ttnn.silu(tt_pow_out)
 
     # Run exp on TT accelerator device
-    tt_exp_out = tt_lib.tensor.exp(tt_silu_out)
+    tt_exp_out = ttnn.exp(tt_silu_out)
 
     # Move TT Tensor output from TT accelerator device to host
     tt_output = tt_exp_out.cpu()

@@ -696,9 +696,9 @@ class cross_attention:
                 hidden_states,
                 self.parameters.qkv.weight,
                 program_config=program_config,
-                memory_config=self.l1_interleaved_memory_config
-                if interleaved_out
-                else self.block_sharded_memory_config,
+                memory_config=(
+                    self.l1_interleaved_memory_config if interleaved_out else self.block_sharded_memory_config
+                ),
                 dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )

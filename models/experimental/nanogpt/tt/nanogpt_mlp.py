@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 from models.helper_funcs import Linear
 
 
@@ -36,7 +37,7 @@ class TtMLP(torch.nn.Module):
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         x1 = self.c_fc(x)
-        x2 = tt_lib.tensor.gelu(x1)
+        x2 = ttnn.gelu(x1)
         x3 = self.c_proj(x2)
 
         return x3

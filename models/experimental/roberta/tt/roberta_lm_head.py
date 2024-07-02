@@ -77,7 +77,7 @@ class TtRobertaLMHead(nn.Module):
             torch_x = nn.functional.gelu(torch_input)
             x = torch2tt_tensor(torch_x, self.device)
         else:
-            x = tt_lib.tensor.gelu(tt_input)
+            x = ttnn.gelu(tt_input)
 
         x = self.layer_norm(x)
 

@@ -89,11 +89,11 @@ class TtBottleneck(nn.Module):
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
@@ -104,6 +104,6 @@ class TtBottleneck(nn.Module):
             residual = self.bn_ds(residual)
 
         out = ttnn.add(out, residual)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         return out

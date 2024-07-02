@@ -263,7 +263,7 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         for i in range(len(w1_32chips)):
             for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = tt_lib.tensor.silu(w1_32chips[i][j])
+                w1_32chips[i][j] = ttnn.silu(w1_32chips[i][j])
 
         for FF3_group in self.FF1_groups:
             w3_4chips = []

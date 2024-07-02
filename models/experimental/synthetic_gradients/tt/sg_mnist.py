@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import torch
+import ttnn
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
@@ -131,7 +132,7 @@ class TtMnistModel(nn.Module):
             gamma3, beta3, running_mean3, running_var3, eps, gamma3_shape, device
         )
 
-        self.TtRelu = tt_lib.tensor.relu
+        self.TtRelu = ttnn.relu
 
     # tt forwrd
     def forward(self, X):

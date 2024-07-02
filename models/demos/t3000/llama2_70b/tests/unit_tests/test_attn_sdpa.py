@@ -65,7 +65,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # if attn_mask is not None:
         #     scores = scores + attn_mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
         # scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        attn = tt_lib.tensor.mul_unary(attn, scale)
+        attn = ttnn.multiply(attn, scale)
 
         ## Need to figure out how to broadcast in t dim
         # attn_mask = tt_lib.tensor.repeat(attn_mask, [1, attn.shape()[1], 1, 1])  # this causes memory error as the broadcast result is too big

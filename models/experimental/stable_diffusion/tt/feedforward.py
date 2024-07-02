@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-
+import ttnn
 from typing import Optional
 
 from tt_lib.fallback_ops import fallback_ops
@@ -49,14 +49,14 @@ class TtGEGLU(nn.Module):
         )
 
     def gelu(self, gate: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        return ttl.tensor.gelu(gate)
+        return ttnn.gelu(gate)
 
     def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
         hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states)
         act = self.gelu(gate)
-        return ttnn.mul(hidden_states, act)
+        return ttnn.multiply(hidden_states, act)
 
 
 class TtFeedForward(nn.Module):
