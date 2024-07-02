@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+import ttnn
 import tt_lib
 import torch
 import numpy as np
@@ -993,7 +994,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         else:
             x_padded_shape = list(x.get_legacy_shape())
             x_padded_shape[-1] = roundup(x.get_legacy_shape()[-1], 16)
-            x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
+            x = ttnn.pad(x, ttnn.Shape(x_padded_shape), ttnn.Shape([0, 0, 0, 0]), 0)
         x = conv_on_device(x)
         if channel_transpose:
             x = tt_lib.tensor.transpose(x, -2, -1)

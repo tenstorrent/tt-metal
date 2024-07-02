@@ -14,6 +14,7 @@ using namespace tt::constants;
 namespace tt {
 namespace tt_metal {
 
+//THIS FILE IS DEPRECATED AND WILL BE REMOVED SOON
 inline void log_rt_args(const CoreCoord& core,  vector<uint32_t>& args) {
     for (auto v : args) {
         log_debug(LogOp, "{},{} :: {}", core.x, core.y, v);

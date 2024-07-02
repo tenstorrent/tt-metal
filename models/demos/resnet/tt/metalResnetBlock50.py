@@ -2314,8 +2314,13 @@ class ResNet(nn.Module):
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
         else:
-            x = tt_lib.tensor.pad(
-                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
+            x = ttnn.pad(
+                x,
+                ttnn.Shape(padded_shape),
+                ttnn.Shape([0, 0, 0, 0]),
+                0,
+                output_mem_config=self.memory_config,
+                use_multicore=True,
             )
             x = tt_lib.tensor.tilize(
                 x,
@@ -2360,8 +2365,13 @@ class ResNet(nn.Module):
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
         else:
-            x = tt_lib.tensor.pad(
-                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
+            x = ttnn.pad(
+                x,
+                ttnn.Shape(padded_shape),
+                ttnn.Shape([0, 0, 0, 0]),
+                0,
+                output_mem_config=self.memory_config,
+                use_multicore=True,
             )
             x = tt_lib.tensor.tilize(
                 x,
