@@ -305,7 +305,7 @@ def determine_1x1conv_as_matmul_config(
     conv_parallelization_config, conv_blocking_config, use_1d_systolic_array, fuse_relu, transpose_mcast=True
 ):
     if use_1d_systolic_array:
-        matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=conv_parallelization_config.grid_size,
             in0_block_w=conv_blocking_config.act_block_w_ntiles,
             out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
@@ -325,7 +325,7 @@ def determine_1x1conv_as_matmul_config(
         assert (
             conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0
         ), "Expected act block width to be divisible by act channel num blocks."
-        matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        matmul_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=conv_parallelization_config.grid_size,
             in0_block_w=conv_blocking_config.act_block_w_ntiles
             // grid_size_along_c,  ##conv_parallelization_config.grid_size.y,
@@ -851,15 +851,14 @@ class TTPyCompositeConv(TTPyOp):
 
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation, self.deallocate_activation)
-            output = ttl.operations.primary.matmul(
+            output = ttnn.linear(
                 activation,
                 weight_on_device,
                 bias=bias_on_device,
                 program_config=self.matmul_config,
-                output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-                output_dtype=output_dtype,
+                memory_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+                dtype=output_dtype,
                 compute_kernel_config=compute_kernel_config,
-                # untilize_out=True if fuse_relu else False,
             )
             if self.deallocate_activation:
                 activation.deallocate()

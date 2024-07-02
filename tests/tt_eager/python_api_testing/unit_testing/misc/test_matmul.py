@@ -125,7 +125,7 @@ def test_matmul_1d_in0_batched(
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
-def test_matmul_1d_fp32_acc_l1(
+def test_linear_fp32_acc_l1(
     device,
     packer_l1_acc,
     fp32_acc_mode,

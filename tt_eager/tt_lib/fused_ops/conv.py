@@ -6,6 +6,7 @@ from typing import List, Union
 from .. import tensor, operations
 from ..utils import _nearest_32, _nearest_y
 import torch
+import ttnn
 from loguru import logger
 
 
@@ -131,15 +132,14 @@ def resnet50_1x1_conv_as_matmul(
 
     def conv_(activation):
         # conv1x1 stride 1 padding 0, use matmul op
-        output = operations.primary.matmul(
+        output = ttnn.linear(
             activation,
             weight_on_device,
             bias=bias_on_device,
             program_config=matmul_program_config,
-            output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
-            untilize_out=untilize_out,
         )
 
         return output
@@ -450,13 +450,13 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
     def conv_(activation):
         # downsample op
         output = tensor.downsample(activation, downsample_params, output_dtype=output_dtype)
-        output = operations.primary.matmul(
+        output = ttnn.linear(
             output,
             weight_on_device,
             bias=bias_on_device,
             program_config=matmul_program_config,
-            output_mem_config=out_sharded_mem_config,
-            output_dtype=output_dtype,
+            memory_config=out_sharded_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
 
