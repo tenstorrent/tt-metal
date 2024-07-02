@@ -300,7 +300,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en){
+    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
         if (options.preserve_fp32_precision) {
             unpack_conditional_dst_format = DataFormat::Float32;
         } else {
