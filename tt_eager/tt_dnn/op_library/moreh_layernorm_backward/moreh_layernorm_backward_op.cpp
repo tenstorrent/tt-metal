@@ -133,7 +133,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate_with_output_tensors(
 
 std::vector<Shape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    // Not Implemented
+    TT_FATAL(false, "The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
     return {};
 }
 
@@ -144,7 +144,7 @@ std::vector<Tensor> MorehLayerNormBackwardGammaBetaGrad::create_output_tensors(
         return {output_tensors.at(0).value(), output_tensors.at(1).value()};
     }
 
-    TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
+    TT_FATAL(false, "Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
     return {};
 }
 
