@@ -6,6 +6,7 @@
 
 #include <numeric>
 
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -19,28 +20,6 @@ namespace tt_metal {
 //                         FastReduceNC
 ////////////////////////////////////////////////////////////////////////////
 namespace {
-    inline void check_tensor(
-        const Tensor& tensor,
-        const std::string& op_name,
-        Layout layout = Layout::TILE) {
-        TT_FATAL(tensor.get_layout() == layout, "{} only supports tiled layout.", op_name);
-        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B, "{} only supports data type {} and {}.", DataType::BFLOAT16, DataType::BFLOAT8_B);
-        TT_FATAL(
-            tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
-        TT_FATAL(
-            tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
-    }
-
-inline void check_tensor(
-    std::optional<Tensor> tensor,
-    const std::string& op_name,
-    tt_metal::DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::TILE) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name, data_type, layout);
-}
 
 Tensor _fast_reduce_nc(
     const Tensor& input,
@@ -79,8 +58,8 @@ void FastReduceNC::validate_with_output_tensors(
     auto& output = output_tensors.at(0);
 
     // validate tensor
-    check_tensor(input, "input");
-    check_tensor(output, "output");
+    tt::operations::primary::check_tensor(input, "FastReduceNC", "input");
+    tt::operations::primary::check_tensor(output, "FastReduceNC", "output");
 
     // validate input dim
     auto input_shape = input.get_legacy_shape();

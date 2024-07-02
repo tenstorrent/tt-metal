@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 
@@ -17,19 +18,6 @@ using namespace tt::tt_metal;
 namespace tt {
 namespace operations {
 namespace primary {
-
-namespace {
-
-inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
-
-}  // namespace
 
 void MorehAdam::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
@@ -46,13 +34,13 @@ void MorehAdam::validate_with_output_tensors(
 
     const auto& max_exp_avg_sq_in = optional_input_tensors.at(0);
 
-    check_tensor(param_in, "moreh_adam");
-    check_tensor(grad, "moreh_adam");
-    check_tensor(exp_avg_in, "moreh_adam");
-    check_tensor(exp_avg_sq_in, "moreh_adam");
+    check_tensor(param_in, "moreh_adam", "param_in");
+    check_tensor(grad, "moreh_adam", "grad");
+    check_tensor(exp_avg_in, "moreh_adam", "exp_avg_in");
+    check_tensor(exp_avg_sq_in, "moreh_adam", "exp_avg_sq_in");
 
     if (max_exp_avg_sq_in.has_value()) {
-        check_tensor(max_exp_avg_sq_in.value(), "moreh_adam");
+        check_tensor(max_exp_avg_sq_in.value(), "moreh_adam", "max_exp_avg_sq_in");
     }
 
     const auto& param_out = output_tensors.at(0);
@@ -61,16 +49,16 @@ void MorehAdam::validate_with_output_tensors(
     const auto& max_exp_avg_sq_out = output_tensors.at(3);
 
     if (param_out.has_value()) {
-        check_tensor(param_out.value(), "moreh_adam");
+        check_tensor(param_out.value(), "moreh_adam", "param_out");
     }
     if (exp_avg_out.has_value()) {
-        check_tensor(exp_avg_out.value(), "moreh_adam");
+        check_tensor(exp_avg_out.value(), "moreh_adam", "exp_avg_out");
     }
     if (exp_avg_sq_out.has_value()) {
-        check_tensor(exp_avg_sq_out.value(), "moreh_adam");
+        check_tensor(exp_avg_sq_out.value(), "moreh_adam", "exp_avg_sq_out");
     }
     if (max_exp_avg_sq_out.has_value()) {
-        check_tensor(max_exp_avg_sq_out.value(), "moreh_adam");
+        check_tensor(max_exp_avg_sq_out.value(), "moreh_adam", "max_exp_avg_sq_out");
     }
 }
 
