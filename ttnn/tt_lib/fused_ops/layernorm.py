@@ -4,6 +4,7 @@
 
 import torch
 
+import ttnn
 from tt_lib import tensor, device
 from tt_lib.utils import (
     pad_activation,
@@ -115,7 +116,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
-        var = tensor.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
+        var = ttnn.multiply(x_minus_mean, x_minus_mean)  # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
 
         scaler = 1 / W
@@ -125,8 +126,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
-        var_sqrt = tensor.sqrt(var_plus_eps)
-        inv_sqrt = tensor.recip(var_sqrt)
+        var_sqrt = ttnn.sqrt(var_plus_eps)
+        inv_sqrt = ttnn.reciprocal(var_sqrt)
         if False and refx is not None:
             qq = t2t(inv_sqrt)[0, 0, 0:9, 0]
 
@@ -156,19 +157,19 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         hmaskt = tensor.tilize(hmasku)  # tilize the mask
         x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW)  # zero out (x-m) for h>=H_, h<H
 
-        var = tensor.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
+        var = ttnn.multiply(x_minus_mean, x_minus_mean)  # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
         var_redHW = tensor.reduce(var_redW, RSUM, RH, 1.0)  # sum[(x-m)^2]
         var_div_n1 = tensor.bcast(var_redHW, var_scaler_, BCMUL, BCHW)  # *= 1/(everything not batch)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
-        var_sqrt = tensor.sqrt(var_plus_eps)
-        inv_sqrt = tensor.recip(var_sqrt)
+        var_sqrt = ttnn.sqrt(var_plus_eps)
+        inv_sqrt = ttnn.reciprocal(var_sqrt)
 
         x_div_sqrt = tensor.bcast(x_minus_mean, inv_sqrt, BCMUL, BCHW)
-        x_gamma = tensor.mul(x_div_sqrt, gamma_, BCMUL, BCH)
+        x_gamma = ttnn.multiply(x_div_sqrt, gamma_, BCMUL, BCH)
         if beta_ is not None:
-            x_beta = tensor.add(x_gamma, beta_, BCADD, BCH)
+            x_beta = ttnn.add(x_gamma, beta_, BCADD, BCH)
             return x_beta
         else:
             return x_gamma

@@ -172,7 +172,7 @@ class TtTrOCRDecoder(nn.Module):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if inputs_embeds is None:
-            inputs_embeds = tt_lib.tensor.mul_unary(self.embed_tokens(input_ids), self.embed_scale)
+            inputs_embeds = ttnn.multiply(self.embed_tokens(input_ids), self.embed_scale)
 
         if self.config.use_learned_position_embeddings:
             embed_pos = self.embed_positions(input, past_key_values_length=past_key_values_length)

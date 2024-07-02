@@ -8,6 +8,7 @@ from loguru import logger
 from pathlib import Path
 import sys
 import torch
+import ttnn
 
 from models.experimental.yolov3.tt.yolov3_conv2d import TtConv2D
 from models.experimental.yolov3.reference.models.common import autopad
@@ -63,4 +64,4 @@ class TtConv(nn.Module):
             raise NotImplementedError
 
     def forward(self, x):
-        return tt_lib.tensor.silu(self.conv(x))
+        return ttnn.silu(self.conv(x))

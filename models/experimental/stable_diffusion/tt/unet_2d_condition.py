@@ -24,6 +24,7 @@ from models.experimental.stable_diffusion.tt.unet_2d_blocks import (
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
+import ttnn
 
 
 def get_down_block(
@@ -409,7 +410,7 @@ class UNet2DConditionModel(nn.Module):
         if self.use_fallback_ops:
             self.conv_act = fallback_ops.silu
         else:
-            self.conv_act = ttl.tensor.silu
+            self.conv_act = ttnn.silu
 
         conv_out_w = state_dict[f"{self.base_address_with_dot}conv_out.weight"]
         conv_out_b = state_dict[f"{self.base_address_with_dot}conv_out.bias"]

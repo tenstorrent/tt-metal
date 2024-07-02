@@ -29,7 +29,7 @@ class TtT5DenseActDense(nn.Module):
 
         # self.dropout = nn.Dropout(dropout_rate)
         # activation function
-        self.act = tt_lib.tensor.relu
+        self.act = ttnn.relu
 
     def forward(self, hidden_states):
         hidden_states = ttnn.matmul(hidden_states, self.out_proj_wi)

@@ -101,8 +101,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         v = shape(self.value_linear(value))
 
         dim_per_head_tensor = self.const_tensor(q.get_legacy_shape(), dim_per_head)
-        dim_per_head_tensor = tt_lib.tensor.sqrt(dim_per_head_tensor)
-        dim_per_head_tensor = tt_lib.tensor.recip(dim_per_head_tensor)
+        dim_per_head_tensor = ttnn.sqrt(dim_per_head_tensor)
+        dim_per_head_tensor = ttnn.reciprocal(dim_per_head_tensor)
 
         q = ttnn.mul(q, dim_per_head_tensor)
         scores = ttnn.matmul(q, tt_lib.tensor.transpose(k, -2, -1))

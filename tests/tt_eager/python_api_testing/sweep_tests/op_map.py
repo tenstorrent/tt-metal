@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import partial
-
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests import (
     pytorch_ops,
     tt_lib_ops,
@@ -303,10 +303,6 @@ op_map = {
     "eltwise-log1p": {
         "tt_op": tt_lib_ops.eltwise_log1p,
         "pytorch_op": pytorch_ops.log1p,
-    },
-    "eltwise-add1": {
-        "tt_op": tt_lib_ops.eltwise_add1,
-        "pytorch_op": pytorch_ops.add1,
     },
     "eltwise-neg": {
         "tt_op": tt_lib_ops.eltwise_neg,

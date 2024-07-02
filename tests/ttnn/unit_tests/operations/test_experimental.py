@@ -19,12 +19,13 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((1, 1, height, width), -1, 1, dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn.experimental.tensor.exp)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-    output_tensor = ttnn.experimental.tensor.exp(input_tensor)
-
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.exp(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)

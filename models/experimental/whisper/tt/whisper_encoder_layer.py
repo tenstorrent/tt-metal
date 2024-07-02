@@ -6,6 +6,7 @@ from functools import partial
 import tt_lib
 import torch
 import torch.nn as nn
+import ttnn
 from typing import Tuple
 
 from transformers import WhisperConfig
@@ -157,7 +158,7 @@ class TtWhisperEncoderLayer(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = ttnn.gelu(hidden_states)
 
         hidden_states = linear(hidden_states, self.fc2_weight, self.fc2_bias)
         hidden_states = ttnn.add(hidden_states, residual)

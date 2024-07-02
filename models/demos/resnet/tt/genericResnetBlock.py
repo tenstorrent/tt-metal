@@ -127,7 +127,7 @@ class Bottleneck(nn.Module):
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -285,7 +285,7 @@ class BasicBlock(nn.Module):
         )
         self.bn1.eval()
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
 
         conv2_weight = state_dict[f"{base_address}.conv2.weight"]
         conv2_bias = None
@@ -463,7 +463,7 @@ class ResNet(nn.Module):
                 padding=3,
             )
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
         self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(
