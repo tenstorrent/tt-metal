@@ -58,6 +58,8 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     (
         (32, 1024, 32),
         (32, 163840, 32),
+        (128, 1024, 32),
+        (64, 163840, 32),
     ),
 )
 def test_ssm_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, device):
@@ -70,9 +72,12 @@ def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT16
 
     for _ in range(2):
+        H, W, latent = 32, 163840, 32
+        run_ssm_1d_sum_reduce(H, W, latent, dtype, mem_config, mem_config, device)
+        H, W, latent = 64, 163840, 32
         run_ssm_1d_sum_reduce(H, W, latent, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2
