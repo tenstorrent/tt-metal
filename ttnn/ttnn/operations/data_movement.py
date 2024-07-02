@@ -119,48 +119,10 @@ def _golden_function(tensors, dim=0, **_):
     return torch.concat(tensors, dim)
 
 
-def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs):
-    for input_tensor in tensors:
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32),
-            layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-
-doc = r"""
-concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-Concats :attr:`tensors` in the given :attr:`dim`.
-
-Args:
-    * :attr:`tensors`: the tensors to be concatenated.
-    * :attr:`dim`: the concatenating dimension.
-
-Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-
-Example::
-
-    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
-    >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-"""
-ttnn.register_operation(
-    name="ttnn.concat",
-    validate_input_tensors=_concat_validate_input_tensors,
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.data_movement.concat,
     golden_function=_golden_function,
-    doc=doc,
-)(ttnn._ttnn.operations.data_movement.concat)
+)
 
 
 def _golden_function(tensor, repeats, dim=0, **_):
