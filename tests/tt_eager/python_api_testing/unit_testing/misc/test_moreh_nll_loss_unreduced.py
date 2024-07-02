@@ -93,7 +93,7 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     # run torch
-    (torch_input, torch_target, torch_weight, torch_output) = get_torch_tensors(shape)
+    (torch_input, torch_target, torch_weight, _) = get_torch_tensors(shape)
     if none_weight:
         torch_weight = None
 
