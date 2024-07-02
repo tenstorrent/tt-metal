@@ -46,12 +46,12 @@ void MorehNllLossUnreducedBackward::validate_with_output_tensors(
     TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors");
     TT_FATAL(optional_input_tensors.size() == 1, "Must have 1 optional input tensors");
 
-    auto& target_tensor = input_tensors.at(0);
-    auto& output_grad_tensor = input_tensors.at(1);
+    const auto& target_tensor = input_tensors.at(0);
+    const auto& output_grad_tensor = input_tensors.at(1);
 
-    auto& weight_tensor = optional_input_tensors.at(0);
+    const auto& weight_tensor = optional_input_tensors.at(0);
 
-    auto& input_grad_tensor = output_tensors.at(0);
+    const auto& input_grad_tensor = output_tensors.at(0);
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss_unreduced need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
@@ -109,10 +109,10 @@ operation::ProgramWithCallbacks MorehNllLossUnreducedBackward::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& target = input_tensors.at(0);
-    auto& output_grad = input_tensors.at(1);
+    const auto& target = input_tensors.at(0);
+    const auto& output_grad = input_tensors.at(1);
 
-    auto& weight = optional_input_tensors.at(0);
+    const auto& weight = optional_input_tensors.at(0);
 
     auto& input_grad = output_tensors.at(0);
 
