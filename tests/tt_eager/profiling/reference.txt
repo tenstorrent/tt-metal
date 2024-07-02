@@ -276,7 +276,7 @@ tt_lib.tensor.normalize_global,40,6.47,6.89,57.57,6.9
 tt_lib.tensor.normalize_hw,40,5.46,5.73,6.18,5.69
 tt_lib.tensor.ones,40,0.84,0.91,1.45,0.0
 tt_lib.tensor.ones_like,40,1.7,1.84,2.89,1.88
-ttnn.pad,40,0.39,0.45,2.75,0.47
+ttnn.pad,40,0.49,0.57,2.68,0.55
 tt_lib.tensor.permute,40,1.59,1.68,2.03,1.71
 tt_lib.tensor.polar_binary,40,3.87,4.01,4.49,4.04
 tt_lib.tensor.polygamma,40,32.9,37.71,38.15,37.56
