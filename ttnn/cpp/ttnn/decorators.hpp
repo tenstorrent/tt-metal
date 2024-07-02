@@ -153,16 +153,19 @@ constexpr auto validate(const char* cpp_fully_qualified_name, args_t&&... args) 
 
 template <typename... args_t>
 auto map_launch_op_args_to_execute_on_worker_thread_args(
-    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors, args_t&&... args) {
+    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors, const OptionalTensors& optional_output_tensors, args_t&&... args) {
     auto input_tensor_index = 0;
     auto optional_input_tensor_index = 0;
+    auto optional_output_tensor_index = 0;
     return std::tuple{
-        [&input_tensor_index, &input_tensors, &optional_input_tensor_index, &optional_input_tensors](auto&& arg) {
+        [&input_tensor_index, &input_tensors, &optional_input_tensor_index, &optional_input_tensors, &optional_output_tensor_index, &optional_output_tensors](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, Tensor>) {
                 return input_tensors.at(input_tensor_index++);
             } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
                 return optional_input_tensors.at(optional_input_tensor_index++);
+            } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
+                return optional_output_tensors.at(optional_output_tensor_index++);
             } else {
                 return arg;
             }
@@ -242,18 +245,18 @@ struct operation_t {
                 detail::create_async_output_tensors<concrete_operation_t, execute_on_worker_thread_return_t>(
                     input_tensors, optional_input_tensors);
 
-            // TODO: add support for optional_output_tensors
-            // auto optional_output_tensors = extract_args_to_vector(std::forward<args_t>(args)...,
-            // std::optional<ttnn::Tensor>);
+
+            const OptionalTensors optional_output_tensors =
+                detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
 
             bool enable_autoformat = false;
             operation::launch_op(
                 [cpp_fully_qualified_name = this->cpp_fully_qualified_name, args...](
                     const Tensors& input_tensors,
                     const OptionalConstTensors& optional_input_tensors,
-                    const OptionalTensors&) mutable -> Tensors {
+                    const OptionalTensors& optional_output_tensors) mutable -> Tensors {
                     auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                        input_tensors, optional_input_tensors, std::forward<args_t>(args)...);
+                        input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
                     return std::apply(
                         [cpp_fully_qualified_name](auto&&... args) -> Tensors {
                             detail::validate<concrete_operation_t>(
@@ -267,7 +270,7 @@ struct operation_t {
                 input_tensors,
                 output_tensors,
                 optional_input_tensors,
-                {},
+                optional_output_tensors,
                 enable_autoformat);
 
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);

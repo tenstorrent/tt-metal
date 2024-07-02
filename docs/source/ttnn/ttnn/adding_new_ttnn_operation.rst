@@ -29,7 +29,7 @@ C++ Implementation
 ------------------
 
 Step 1: Implement device operation (Optional)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In order to add a new device operation, follow the directory structure shown below:
 
@@ -99,6 +99,6 @@ Finally, call the module defined in `examples/example/example_pybind.hpp` wherev
 
 
 Step 2: Register the operation in Python
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 TODO: Add the description of how to register the operation in Python.
