@@ -65,6 +65,28 @@ void py_bind_all_gather(py::module& module) {
             >>> output = ttnn.all_gather(tensor, dim=0)
 
         )doc");
+
+    detail::bind_ccl_operation(
+        module,
+        ttnn::line_all_gather,
+        R"doc(line_all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
+
+        Args:
+            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
+            * :attr:`dim` (int)
+
+        Keyword Args:
+            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+        Example:
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.line_all_gather(tensor, dim=0)
+
+        )doc");
 }
 
 }  // namespace ccl
