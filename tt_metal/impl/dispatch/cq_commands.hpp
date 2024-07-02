@@ -181,15 +181,17 @@ struct CQDispatchWritePackedMulticastSubCmd {
     uint32_t num_mcast_dests;
 } __attribute__((packed));
 
-constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS = 108;  // GS 120 - 1 row TODO: this should be a compile time arg passed in from host
-constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS = CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(CQDispatchWritePackedMulticastSubCmd);
-
 struct CQDispatchWritePackedLargeSubCmd {
     uint32_t noc_xy_addr;
     uint32_t addr;
     uint16_t length;          // multiples of L1 cache line alignment
     uint16_t num_mcast_dests;
 } __attribute__((packed));
+
+inline __attribute__((always_inline)) uint32_t get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
+    uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(CQDispatchWritePackedMulticastSubCmd);
+    return packed_write_max_multicast_sub_cmds;
+}
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;

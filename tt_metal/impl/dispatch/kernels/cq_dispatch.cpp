@@ -41,8 +41,9 @@ constexpr uint32_t split_prefetch = get_compile_time_arg_val(15);
 constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
 constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
 constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(19);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(20);
+constexpr uint32_t packed_write_max_unicast_sub_cmds = get_compile_time_arg_val(19); // Number of cores in compute grid
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(20);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -77,11 +78,12 @@ static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
+uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS *
     sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t);
 constexpr uint32_t max_write_packed_cmd =
-    CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS *
+    packed_write_max_unicast_sub_cmds *
     sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t);
 constexpr uint32_t l1_cache_elements = (max_write_packed_cmd > max_write_packed_large_cmd) ?
     max_write_packed_cmd : max_write_packed_large_cmd;
@@ -532,7 +534,7 @@ void process_write_packed(uint32_t flags) {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
     uint32_t count = cmd->write_packed.count;
-    ASSERT(count <= (mcast ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS));
+    ASSERT(count <= (mcast ? packed_write_max_multicast_sub_cmds : packed_write_max_unicast_sub_cmds));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(

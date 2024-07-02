@@ -402,6 +402,7 @@ class DeviceCommand {
         uint32_t payload_sizeB,
         const std::vector<PackedSubCmd> &sub_cmds,
         const std::vector<std::pair<const void *, uint32_t>> &data_collection,
+        uint32_t packed_write_max_unicast_sub_cmds,
         const uint32_t offset_idx = 0,
         const bool no_stride = false) {
         static_assert(
@@ -409,7 +410,8 @@ class DeviceCommand {
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
         bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
-        constexpr uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS;
+        uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+        uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds;
         TT_FATAL(
             num_sub_cmds <= max_num_packed_sub_cmds,
             "Max number of packed sub commands are {} but requesting {}",

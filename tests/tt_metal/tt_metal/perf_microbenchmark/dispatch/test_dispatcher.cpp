@@ -382,6 +382,8 @@ int main(int argc, char **argv) {
         CoreCoord phys_spoof_prefetch_core = device->worker_core_from_logical_core(spoof_prefetch_core);
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
+        uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t l1_buf_base = align(DISPATCH_L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
@@ -466,8 +468,9 @@ int main(int argc, char **argv) {
              0,    // prefetch noc_xy
              0,    // prefetch_local_downstream_sem_addr
              0,    // prefetch_downstream_buffer_pages
+             num_compute_cores, // max_write_packed_cores
              true, // is_dram_variant
-             true, // is_host_variant
+             true // is_host_variant
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,
