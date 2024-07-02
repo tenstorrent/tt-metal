@@ -88,7 +88,12 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t cb_zeros_id = tt::CB::c_intermed6;
     const auto cb_zeros = create_circular_buffer(cb_zeros_id, 1, intermediary_tile_size, intermediary_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id};
+    const uint32_t cb_h_acc_id = tt::CB::c_intermed7;
+    const uint32_t num_chunks_per_row = ceil(float(total_tiles_per_row) / 32.0f);
+    const auto cb_h_acc =
+        create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
+
+    std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_zeros_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id};
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
@@ -100,7 +105,8 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
         cb_h_id,
         cb_tilize_out_id,
         cb_out_id,
-        cb_zeros_id};
+        cb_zeros_id,
+        cb_h_acc_id};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
