@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-docs:

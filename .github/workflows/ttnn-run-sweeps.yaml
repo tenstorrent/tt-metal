@@ -7,7 +7,12 @@ on:
   workflow_call:
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '["grayskull"]'
@@ -37,13 +42,13 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.arch }}.tar
       - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run ttnn sweeps
         timeout-minutes: 30
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps
+          ./scripts/docker/run_docker_cmd.sh -e LOGURU_LEVEL=DEBUG -- \
+            /bin/bash -c "source python_env/bin/activate \
+            && ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps"
       - name: Assert that csvs exist in expected ttnn results folder
         run: ls -hal tests/ttnn/sweep_tests/results/*.csv
       - name: Upload ttnn sweep reports csvs
