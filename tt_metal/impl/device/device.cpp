@@ -147,10 +147,8 @@ void Device::initialize_cluster() {
     if (llrt::OptionsG.get_clear_l1()) {
         this->clear_l1_state();
     }
-#ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
-#endif
 }
 
 void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {

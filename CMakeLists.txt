@@ -69,7 +69,7 @@ option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
 message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
-option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
+
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
 
@@ -121,7 +121,13 @@ endif()
 ############################################################################################################################
 add_library(stdlib INTERFACE)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_link_libraries(stdlib INTERFACE c++ c++abi)
+    find_library(LIBC++ c++)
+    find_library(LIBC++ABI c++abi)
+    if(NOT LIBC++ OR NOT LIBC++ABI)
+        message(FATAL_ERROR "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH")
+    endif()
+    
+    target_link_libraries(stdlib INTERFACE ${LIBC++} ${LIBC++ABI})
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
 else()
     target_link_libraries(stdlib INTERFACE stdc++)
@@ -147,9 +153,6 @@ add_library(compiler_flags INTERFACE)
 target_link_libraries(compiler_flags INTERFACE compiler_warnings stdlib)
 target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
-if(TT_METAL_VERSIM_DISABLED)
-    target_compile_options(compiler_flags INTERFACE -DTT_METAL_VERSIM_DISABLED)
-endif()
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
 endif()
@@ -160,7 +163,7 @@ endif()
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR} ${flatbuffers_SOURCE_DIR}/include ${nanomsg_SOURCE_DIR}/include)
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()

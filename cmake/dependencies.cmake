@@ -56,3 +56,38 @@ CPMAddPackage(
   GITHUB_REPOSITORY boost-ext/reflect
   GIT_TAG v1.1.1
 )
+
+############################################################################################################################
+# Packages needed for tt-metal simulator
+#   NNG for IPC/TCP communication
+#   Google Flatbuffers for serialization
+#   libuv for process mgmt
+############################################################################################################################
+CPMAddPackage(
+  NAME nanomsg
+  GITHUB_REPOSITORY nanomsg/nng
+  GIT_TAG v1.8.0
+  OPTIONS
+      "BUILD_SHARED_LIBS ON"
+      "NNG_TESTS OFF"
+      "NNG_TOOLS OFF"
+)
+CPMAddPackage(
+  NAME flatbuffers
+  GITHUB_REPOSITORY google/flatbuffers
+  GIT_TAG v24.3.25
+  OPTIONS
+      "FLATBUFFERS_BUILD_FLATC OFF"
+      "FLATBUFFERS_BUILD_TESTS OFF"
+      "FLATBUFFERS_INSTALL OFF"
+      "FLATBUFFERS_BUILD_FLATLIB OFF"
+      "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+      "FLATBUFFERS_STRICT_MODE ON"
+)
+CPMAddPackage(
+  NAME libuv
+  GITHUB_REPOSITORY libuv/libuv
+  GIT_TAG v1.48.0
+  OPTIONS
+      "LIBUV_BUILD_TESTS OFF"
+)

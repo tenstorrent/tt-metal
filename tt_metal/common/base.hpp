@@ -42,10 +42,8 @@ namespace tt
 */
 enum class TargetDevice : uint8_t
 {
-    Model = 0,
-    Versim = 1,
-    Silicon = 2,
-    Golden = 3,
+    Silicon = 0,
+    Simulator = 1,
     Invalid = 0xFF,
 };
 

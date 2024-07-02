@@ -13,7 +13,7 @@
 // clang-format off
 #include "llrt/tt_cluster.hpp"
 #include "tensix.h"
-#include "tt_metal/third_party/umd/device/device_api.h"
+#include "tt_metal/third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "llrt_common/tiles.hpp"
 #include "llrt/tt_memory.h"
