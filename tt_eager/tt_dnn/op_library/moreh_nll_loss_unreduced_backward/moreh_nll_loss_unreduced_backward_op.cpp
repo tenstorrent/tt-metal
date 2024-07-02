@@ -102,7 +102,7 @@ std::vector<Tensor> MorehNllLossUnreducedBackward::create_output_tensors(
     }
 
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->input_grad_mem_config);
+        *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->memory_config);
 }
 
 operation::ProgramWithCallbacks MorehNllLossUnreducedBackward::create_program(
@@ -132,7 +132,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const Tensor& output_grad_tensor,
     const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
-    const MemoryConfig& input_grad_mem_config,
+    const MemoryConfig& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
@@ -145,14 +145,14 @@ Tensor moreh_nll_loss_unreduced_backward(
         operation::get_workers_for_op_output({target_tensor, output_grad_tensor}, {weight_tensor}))};
 
     operation::launch_op(
-        [ignore_index, input_grad_mem_config, all_cores, kernel_config_val](
+        [ignore_index, memory_config, all_cores, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehNllLossUnreducedBackward{
                     .ignore_index = ignore_index,
-                    .input_grad_mem_config = input_grad_mem_config,
+                    .memory_config = memory_config,
                     .core_range = all_cores,
                     .compute_kernel_config = kernel_config_val},
                 input_tensors,

@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl(
 struct MorehNllLossUnreducedBackward {
     int32_t ignore_index;
 
-    const MemoryConfig input_grad_mem_config;
+    const MemoryConfig memory_config;
     const CoreRange core_range;  // unused for now
     const DeviceComputeKernelConfig compute_kernel_config;
 
@@ -43,10 +43,10 @@ struct MorehNllLossUnreducedBackward {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("ignore_index", "input_grad_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("ignore_index", "memory_config", "compute_kernel_config");
     const auto attribute_values() const { return std::make_tuple(
         std::cref(this->ignore_index),
-        std::cref(this->input_grad_mem_config),
+        std::cref(this->memory_config),
         std::cref(this->compute_kernel_config)
         ); }
 };
@@ -57,7 +57,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const Tensor &output_grad_tensor,
     const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
-    const MemoryConfig &input_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig &memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary

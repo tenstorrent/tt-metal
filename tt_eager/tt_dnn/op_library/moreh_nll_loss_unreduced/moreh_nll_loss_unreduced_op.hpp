@@ -22,7 +22,7 @@ Tensor moreh_nll_loss_unreduced(
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> output_tensor,
     const int32_t ignore_index,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig &memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary

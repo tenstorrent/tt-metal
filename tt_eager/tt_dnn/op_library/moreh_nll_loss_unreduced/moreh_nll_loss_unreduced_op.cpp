@@ -23,7 +23,7 @@ Tensor moreh_nll_loss_unreduced(
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> output_tensor,
     const int32_t ignore_index,
-    const MemoryConfig& output_mem_config,
+    const MemoryConfig& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     const Tensor& result = moreh_nll_loss_step2(
         input_tensor,
@@ -32,7 +32,7 @@ Tensor moreh_nll_loss_unreduced(
         std::nullopt,
         ignore_index,
         "sum",
-        output_mem_config,
+        memory_config,
         compute_kernel_config);
 
     return result;
