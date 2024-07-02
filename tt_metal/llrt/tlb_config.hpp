@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "third_party/umd/device/device_api.h"
+#include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
 
