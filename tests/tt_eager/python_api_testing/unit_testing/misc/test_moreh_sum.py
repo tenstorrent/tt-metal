@@ -6,6 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
+
 import tt_lib as ttl
 from models.utility_functions import (
     comp_allclose_and_pcc,
@@ -352,7 +353,7 @@ def moreh_sum_backward(input_shape, dim, keep_batch_dim, use_provide_output, com
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
             tt_output_grad,
-            tt_input,
+            input=tt_input,
             dim=dim,
             keep_batch_dim=keep_batch_dim,
             input_grad=tt_input_grad,
@@ -494,7 +495,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
             tt_output_grad,
-            tt_input,
+            input=tt_input,
             dim=dim,
             input_grad=tt_input_grad,
             compute_kernel_config=compute_kernel_config,

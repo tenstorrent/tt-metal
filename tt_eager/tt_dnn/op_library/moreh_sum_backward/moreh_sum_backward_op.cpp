@@ -17,16 +17,21 @@ namespace primary {
 //                         MorehSumBackward
 ////////////////////////////////////////////////////////////////////////////
 void MorehSumBackward::validate_with_output_tensors(
-    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &output_grad = input_tensors.at(0);
-    const auto &input = input_tensors.at(1);
     auto &input_grad = output_tensors.at(0);
 
     // validate tensor
     check_tensor(output_grad, "moreh_sum_backward", "output_grad");
-    check_tensor(input, "moreh_sum_backward", "input");
     check_tensor(input_grad, "moreh_sum_backward", " input_grad");
 
+    if (input_tensors.size() == 1) {
+        return;
+    }
+
+    const auto &input = input_tensors.at(1);
+    check_tensor(input, "moreh_sum_backward", "input");
     const auto &input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input_shape.without_padding();
     auto input_rank = input_shape.rank();
@@ -86,6 +91,7 @@ std::vector<Tensor> MorehSumBackward::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
+    TT_FATAL(input_tensors.size() == 2);
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->input_grad_mem_config);
 }
@@ -100,18 +106,24 @@ operation::ProgramWithCallbacks MorehSumBackward::create_program(
 
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
-    const Tensor &input,
+    const std::optional<const Tensor> input,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
     const bool keep_batch_dim,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
-    std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    TT_FATAL((input.has_value() || input_grad.has_value()), "either input or input_grad must have a value");
+    uint32_t rank = input.has_value() ? input->get_legacy_shape().rank() : input_grad->get_legacy_shape().rank();
+    std::vector<int64_t> dims = get_dim(dim, rank);
     std::sort(dims.begin(), dims.end());
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, input}))};
-    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+    std::vector<Tensor> input_tensors = { output_grad };
+    if (input) {
+        input_tensors.emplace_back(*input);
+    }
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad}))};
+    auto kernel_config_val = init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     operation::launch_op(
         [dims, keep_batch_dim, input_grad_mem_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
@@ -123,7 +135,7 @@ Tensor moreh_sum_backward(
                 optional_input_tensors,
                 optional_output_tensors);
         },
-        {output_grad, input},
+        input_tensors,
         output_tensors,
         {},
         {input_grad});
