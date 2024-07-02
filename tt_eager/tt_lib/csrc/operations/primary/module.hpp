@@ -41,7 +41,6 @@
 #include "tt_dnn/op_library/prod/prod_nc_op.hpp"
 #include "tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
-#include "tt_dnn/op_library/topk/topk_op.hpp"
 
 namespace py = pybind11;
 
@@ -1103,14 +1102,6 @@ void py_module(py::module& m_primary) {
         py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a getitem operation. Returns an output tensor.");
-
-    m_primary.def(
-        "topk",
-        &tt::tt_metal::topk,
-        py::arg("input_tensor").noconvert(),
-        py::arg("k").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Get the Top K values and their indices in the input tensor");
 }
 
 }  // namespace
