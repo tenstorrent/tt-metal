@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
 
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
-    const Tensor &input,
+    const std::optional<const Tensor> input = std::nullopt,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
     const bool keep_batch_dim = false,
     const std::optional<const Tensor> input_grad = std::nullopt,
