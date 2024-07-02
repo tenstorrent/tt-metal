@@ -355,7 +355,7 @@ ttnn.sub_bw,40,1.79,1.92,2.24,1.94
 tt_lib.tensor.sub_unary,40,1.0,1.09,1.35,1.09
 tt_lib.tensor.subalpha,40,2.29,2.48,2.9,2.53
 ttnn.subalpha_bw,40,1.8,1.95,2.34,1.97
-tt_lib.tensor.sum_dim_0,16,7.68,8.73,1051.6,8.46
+tt_lib.tensor.sum_dim_0,16,8.71,9.37,1051.56,9.78
 tt_lib.tensor.sum_dim_1,40,3.35,3.55,13.25,3.55
 tt_lib.tensor.sum_dim_2,40,0.87,0.91,1.2,0.97
 tt_lib.tensor.sum_dim_3,40,0.85,0.91,1.22,0.97
