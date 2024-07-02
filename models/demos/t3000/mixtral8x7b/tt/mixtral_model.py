@@ -10,14 +10,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule, 
 
 
 class TtTransformer(LightweightModule):
-    def __init__(
-        self,
-        device_mesh,
-        state_dict,
-        args,
-        dtype,
-        layers,
-    ):
+    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos=0):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
@@ -64,23 +57,19 @@ class TtTransformer(LightweightModule):
 
         self.compute_kernel = self.args.get_compute_kernel_config()
 
-        self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh)
+        self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh, start_pos)
 
     def forward(
-        self,
-        x,
-        start_pos,
-        current_pos,
-        attn_masks,
+        self, x, start_pos, current_pos, attn_masks, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
     ):
-        if start_pos > 0:
-            # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
-            prev_rot_mat = self.current_rot_mat
-            self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
-            prev_rot_mat.deallocate(True)
         for i, layer in enumerate(self.layers):
-            x = layer(x, start_pos, current_pos, attn_masks, self.current_rot_mat)
+            if mode == "decode":
+                rot_mats = self.current_rot_mat
+            x = layer(x, start_pos, current_pos, attn_masks, rot_mats, transformation_mats, user_id, mode)
         attn_masks.deallocate(True)
+
+        if mode == "prefill":
+            return x
 
         x_norm = self.norm(x)
         outputs = ttnn.matmul(
@@ -91,5 +80,9 @@ class TtTransformer(LightweightModule):
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
+        # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
+        prev_rot_mat = self.current_rot_mat
+        self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
+        prev_rot_mat.deallocate(True)
 
         return outputs
