@@ -30,6 +30,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
     const bool output_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
+    auto ashape = a.get_legacy_shape();
     auto num_output_blocks_total = a.get_legacy_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
 
     const bool row_major = false;
@@ -105,7 +106,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     // Reuse the reader from reduce since we want the same behavior
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_1d_sum_reduce.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -138,20 +139,20 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
                              g1_numcores = g1_numcores,
                              g2_numcores = g2_numcores,
                              num_blocks_per_core_group_1 = num_blocks_per_core_group_1,
-                             num_blocks_per_core_group_2 = num_blocks_per_core_group_2](
-                                Program& program, const Tensor& a, const Tensor& output) {
+                             num_blocks_per_core_group_2 = num_blocks_per_core_group_2,
+                             ashape = ashape](Program& program, const Tensor& a, const Tensor& output) {
         tt_metal::Buffer* input_buffer = a.buffer();
         tt_metal::Buffer* output_buffer = output.buffer();
 
         uint32_t num_blocks_per_core = 0;
 
         std::vector<std::vector<uint32_t>> reader_runtime_args = {
-            cores.size(), {0, 0, 0}};  // (src_addr, num_tiles, start_id)
+            cores.size(), {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
 
         std::vector<std::vector<uint32_t>> writer_runtime_args = {
-            cores.size(), {0, 0, 0}};  // (dst_addr, num_tiles, start_id)
+            cores.size(), {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
 
-        std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0}};
+        std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
 
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
             const CoreCoord& core = cores.at(i);
@@ -165,12 +166,17 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
             reader_runtime_args[i][0] = input_buffer->address();
             reader_runtime_args[i][1] = num_blocks_per_core * LATENT_DIM;
             reader_runtime_args[i][2] = num_blocks_written * LATENT_DIM;
+            reader_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+            reader_runtime_args[i][4] = ashape[-1] / TILE_WIDTH;
 
             writer_runtime_args[i][0] = output_buffer->address();
             writer_runtime_args[i][1] = num_blocks_per_core;
             writer_runtime_args[i][2] = num_blocks_written;
+            writer_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+            writer_runtime_args[i][4] = ashape[-1] / (LATENT_DIM * TILE_WIDTH);
 
             compute_runtime_args[i][0] = num_blocks_per_core;
+            compute_runtime_args[i][1] = ashape[2] / TILE_HEIGHT;
 
             num_blocks_written += num_blocks_per_core;
         }
