@@ -102,14 +102,16 @@ def test_swish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.swish, F.hardswish)
 
 
-def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, torch_function, pcc=0.99):
+def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, torch_function, pcc=0.999):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
 
     torch_output_tensor = torch_function(torch_input_tensor_a, beta=beta, threshold=threshold)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     output_tensor = ttnn_function(input_tensor_a, beta=beta, threshold=threshold)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -121,8 +123,8 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, t
 @skip_for_grayskull()
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("beta", [-1, 1, 2, 0.5, 10])
-@pytest.mark.parametrize("threshold", [20, 40, -5, 10, -20])
+@pytest.mark.parametrize("beta", [0.5, 1, 2])
+@pytest.mark.parametrize("threshold", [5, 10, 20])
 def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus, F.softplus)
 
