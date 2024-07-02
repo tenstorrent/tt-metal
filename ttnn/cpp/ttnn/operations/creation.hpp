@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tensor/types.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
+#include "ttnn/experimental//tensor/tensor.hpp"
+#include "ttnn/experimental//tensor/tensor_utils.hpp"
+#include "ttnn/experimental//tensor/types.hpp"
+#include "ttnn/experimental//tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"

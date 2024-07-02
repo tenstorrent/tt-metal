@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 namespace ttnn {
 namespace operations {

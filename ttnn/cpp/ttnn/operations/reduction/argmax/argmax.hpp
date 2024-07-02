@@ -8,7 +8,7 @@
 #include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
 
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "device/argmax_op.hpp"
 

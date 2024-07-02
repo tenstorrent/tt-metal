@@ -5,8 +5,8 @@
 #pragma once
 
 #include "device/unary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/downsample/downsample_op.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"

@@ -7,10 +7,10 @@
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
-#include "tt_eager/tensor/types.hpp"
-#include "tt_eager/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
+#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
 

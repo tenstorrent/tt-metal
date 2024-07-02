@@ -10,14 +10,14 @@
 #include "ttnn/operations/core.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul.hpp"
 #include "ttnn/types.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/experimental//tensor/tensor_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/math.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_eager/tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/pad/pad_op.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/conv/optimized_conv_op.hpp"
+#include "ttnn/experimental//tensor/tensor.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 
 namespace ttnn {
 

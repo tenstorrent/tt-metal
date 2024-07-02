@@ -5,8 +5,8 @@
 #pragma once
 
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 
 namespace ttnn {
 namespace types {

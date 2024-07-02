@@ -5,8 +5,8 @@
 #include <algorithm>
 
 #include "binary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

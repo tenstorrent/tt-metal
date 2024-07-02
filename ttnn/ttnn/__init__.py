@@ -134,9 +134,11 @@ if CONFIG_OVERRIDES is not None:
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
-import tt_lib as _tt_lib
+from _ttnn_experimental import tensor, device, profiler, operations
 
-_tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
+# import tt_lib as _tt_lib
+
+# _tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
 import ttnn._ttnn
 
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")

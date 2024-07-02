@@ -6,8 +6,8 @@
 
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
-#include "tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
-#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "ttnn/experimental//tt_dnn/op_library/layernorm/layernorm_op.hpp"
 
 namespace ttnn {
 namespace operations {

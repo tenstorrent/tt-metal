@@ -9,7 +9,7 @@ set(TTNN_UNIT_TESTS_SRC
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
 
-target_link_libraries(unit_tests_ttnn PUBLIC test_common_libs ttnn_lib tt_metal tt_eager)
+target_link_libraries(unit_tests_ttnn PUBLIC test_common_libs ttnn tt_metal)
 target_include_directories(unit_tests_ttnn PRIVATE
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

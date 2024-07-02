@@ -75,5 +75,5 @@ if not os.path.exists(build_soft_link) and os.path.exists(build_soft_link_src):
     os.symlink(build_soft_link_src, build_soft_link)
 
 _check_so_rpath_in_build_lib()
-_check_so_rpath("_C", site_pkgs_tt_lib / "build" / "lib")
-from ._C import tensor, device, profiler, operations
+_check_so_rpath("_ttnn", site_pkgs_tt_lib / "build" / "lib")
+from _ttnn_experimental import tensor, device, profiler, operations
