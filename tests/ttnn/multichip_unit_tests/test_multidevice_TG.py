@@ -96,7 +96,7 @@ class ShardTensor2dMesh(TensorToMesh):
     def config(self):
         return {
             "strategy": "shard",
-            "shard_dim": f"{self.dims[0]}",
+            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
         }
 
 
@@ -161,7 +161,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
     )
     weights = ttnn.from_torch(
         weights_pt,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
         mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(2, 3), cluster_shape=cluster_shape),
@@ -180,12 +180,75 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
         weights,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=4, x=8),
+        use_1d_systolic_array=True if M == 32 else False,
         compute_kernel_config=compute_kernel_attn,
     )
 
     out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
-    out = torch.sum(out, dim=1)
+    out = torch.sum(out, dim=1, keepdim=True)
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
-    print(out_pcc)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
+
+
+@pytest.mark.parametrize(
+    "cluster_shape",
+    [
+        (4, 8),
+        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
+    ],
+)
+@pytest.mark.parametrize(
+    "device_mesh",
+    [
+        (4, 8),
+        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "M,N",
+    [
+        (32, 32768),  # Llama3-70B decode FF1
+        (512, 32768),  # Llama3-70B prefill FF1
+        (32, 64 * 1024),  # Llama3-400B decode FF1
+        # (512, 64*1024),# Llama3-400B prefill FF1 # Skipped, OOM
+    ],
+)
+def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
+    from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+
+    FF1_pt = torch.randn(1, 1, M, N)
+    FF3_pt = torch.randn(1, 1, M, N)
+
+    FF1 = ttnn.from_torch(
+        FF1_pt,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+    )
+
+    FF3 = ttnn.from_torch(
+        FF3_pt,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+    )
+
+    gt = FF1_pt * FF3_pt
+
+    out = ttnn.mul(
+        FF1,
+        FF3,
+        dtype=ttnn.bfloat16,
+    )
+
+    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
+    out = out[:, 0:1, :, :]  # select the first column
+
+    out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99999)
+    logger.info(f"PCC value: {out_pcc}")
     assert out_pass
