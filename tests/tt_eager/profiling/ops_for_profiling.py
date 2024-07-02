@@ -423,15 +423,15 @@ def angle_bw(x, y):
 all_binary_ops = [
     {
         "op": ttnn.add,
-        "name": "tt_lib.tensor.add",
+        "name": "ttnn.add",
     },
     {
         "op": ttnn.sub,
-        "name": "tt_lib.tensor.sub",
+        "name": "ttnn.sub",
     },
     {
         "op": ttnn.mul,
-        "name": "tt_lib.tensor.mul",
+        "name": "ttnn.mul",
     },
     {
         "op": tt_lib.tensor.div,
@@ -442,16 +442,16 @@ all_binary_ops = [
         "name": "tt_lib.tensor.hypot",
     },
     {
-        "op": tt_lib.tensor.squared_difference,
-        "name": "tt_lib.tensor.squared_difference",
+        "op": ttnn.squared_difference,
+        "name": "ttnn.squared_difference",
     },
     {
-        "op": tt_lib.tensor.logaddexp,
-        "name": "tt_lib.tensor.logaddexp",
+        "op": ttnn.logaddexp,
+        "name": "ttnn.logaddexp",
     },
     {
-        "op": tt_lib.tensor.logaddexp2,
-        "name": "tt_lib.tensor.logaddexp2",
+        "op": ttnn.logaddexp2,
+        "name": "ttnn.logaddexp2",
     },
     {
         "op": tt_lib.tensor.atan2,
@@ -459,7 +459,7 @@ all_binary_ops = [
     },
     {
         "op": ttnn.logical_xor,
-        "name": "tt_lib.tensor.logical_xor",
+        "name": "ttnn.logical_xor",
     },
     {
         "op": subalpha,
@@ -470,16 +470,16 @@ all_binary_ops = [
         "name": "tt_lib.tensor.addalpha",
     },
     {
-        "op": tt_lib.tensor.ldexp,
-        "name": "tt_lib.tensor.ldexp",
+        "op": ttnn.ldexp,
+        "name": "ttnn.ldexp",
     },
     {
         "op": ttnn.bias_gelu,
-        "name": "tt_lib.tensor.bias_gelu",
+        "name": "ttnn.bias_gelu",
     },
     {
         "op": ttnn.logical_and,
-        "name": "tt_lib.tensor.logical_and",
+        "name": "ttnn.logical_and",
     },
     {
         "op": tt_lib.tensor.assign,
@@ -491,31 +491,31 @@ all_binary_ops = [
     },
     {
         "op": ttnn.logical_or,
-        "name": "tt_lib.tensor.logical_or",
+        "name": "ttnn.logical_or",
     },
     {
         "op": ttnn.gt,
-        "name": "tt_lib.tensor.gt",
+        "name": "ttnn.gt",
     },
     {
         "op": ttnn.ge,
-        "name": "tt_lib.tensor.gte",
+        "name": "ttnn.ge",
     },
     {
         "op": ttnn.lt,
-        "name": "tt_lib.tensor.lt",
+        "name": "ttnn.lt",
     },
     {
         "op": ttnn.le,
-        "name": "tt_lib.tensor.lte",
+        "name": "ttnn.le",
     },
     {
         "op": ttnn.eq,
-        "name": "tt_lib.tensor.eq",
+        "name": "ttnn.eq",
     },
     {
-        "op": tt_lib.tensor.ne,
-        "name": "tt_lib.tensor.ne",
+        "op": ttnn.ne,
+        "name": "ttnn.ne",
     },
     {
         "op": where_binary_1,
@@ -723,14 +723,6 @@ all_binary_ops = [
     {
         "op": clamp_max_bw,
         "name": "tt_lib.tensor.clamp_max_bw",
-    },
-    {
-        "op": tt_lib.tensor.binary_le_bw,
-        "name": "tt_lib.tensor.binary_le_bw",
-    },
-    {
-        "op": tt_lib.tensor.binary_le_bw,
-        "name": "tt_lib.tensor.binary_le_bw",
     },
     {
         "op": gelu_bw_none,
@@ -1260,14 +1252,14 @@ def untilize_with_unpadding(x):
 def pad(x):
     shape = x.get_legacy_shape()
 
-    output_tensor_shape = (
-        shape[-4],
-        shape[-3],
-        shape[-2] + 32,
-        shape[-1] + 32,
-    )
+    padding = [
+        (0, 0),
+        (0, 0),
+        (0, 32),
+        (0, 32),
+    ]
 
-    tt_lib.tensor.pad(x, output_tensor_shape=output_tensor_shape, input_tensor_start=(0, 0, 0, 0), pad_value=1)
+    ttnn.pad(x, padding, 1)
 
 
 def unpad(x):
@@ -1741,7 +1733,7 @@ all_unary_ops = [
     },
     {
         "op": ttnn.square,
-        "name": "tt_lib.tensor.square",
+        "name": "ttnn.square",
     },
     {
         "op": tt_lib.tensor.neg,
@@ -1979,7 +1971,7 @@ all_unary_ops = [
     },
     {
         "op": pad,
-        "name": "tt_lib.tensor.pad",
+        "name": "ttnn.pad",
     },
     {
         "op": unpad,
@@ -2509,7 +2501,7 @@ def lamb_optimizer(x, y, z):
 
 
 def addalpha_bw(x, y, z):
-    tt_lib.tensor.addalpha_bw(x, y, z, alpha=5)
+    ttnn.addalpha_bw(x, y, z, alpha=5)
 
 
 def addcmul_bw(x, y, z):
@@ -2525,11 +2517,11 @@ def where_bw(x, y, z):
 
 
 def bias_gelu_bw_none(x, y, z):
-    tt_lib.tensor.bias_gelu_bw(x, y, z, approximate="none")
+    ttnn.bias_gelu_bw(x, y, z, "none")
 
 
 def bias_gelu_bw_tanh(x, y, z):
-    tt_lib.tensor.bias_gelu_bw(x, y, z, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, z, "tanh")
 
 
 def lerp_bw_1(x, y, z):
@@ -2541,7 +2533,7 @@ def lerp_bw_2(x, y, z):
 
 
 def concat_bw_0(x, y, z):
-    tt_lib.tensor.concat_bw(x, y, z, 0)
+    ttnn.concat_bw(x, y, z, 0)
 
 
 def concat_bw_0_shape_func(input_shape):
@@ -2550,7 +2542,7 @@ def concat_bw_0_shape_func(input_shape):
 
 
 def concat_bw_1(x, y, z):
-    tt_lib.tensor.concat_bw(x, y, z, 1)
+    ttnn.concat_bw(x, y, z, 1)
 
 
 def concat_bw_1_shape_func(input_shape):
@@ -2559,7 +2551,7 @@ def concat_bw_1_shape_func(input_shape):
 
 
 def concat_bw_2(x, y, z):
-    tt_lib.tensor.concat_bw(x, y, z, 2)
+    ttnn.concat_bw(x, y, z, 2)
 
 
 def concat_bw_2_shape_func(input_shape):
@@ -2568,7 +2560,7 @@ def concat_bw_2_shape_func(input_shape):
 
 
 def concat_bw_3(x, y, z):
-    tt_lib.tensor.concat_bw(x, y, z, 3)
+    ttnn.concat_bw(x, y, z, 3)
 
 
 def concat_bw_3_shape_func(input_shape):
@@ -2577,7 +2569,7 @@ def concat_bw_3_shape_func(input_shape):
 
 
 def subalpha_bw(x, y, z):
-    tt_lib.tensor.subalpha_bw(x, y, z, alpha=3)
+    ttnn.subalpha_bw(x, y, z, alpha=3)
 
 
 def primary_moreh_norm_backward(x, y, z):
@@ -2664,7 +2656,7 @@ all_ternary_ops = [
     },
     {
         "op": addalpha_bw,
-        "name": "tt_lib.tensor.addalpha_bw",
+        "name": "ttnn.addalpha_bw",
     },
     {
         "op": addcmul_bw,
@@ -2675,12 +2667,12 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.addcdiv_bw",
     },
     {
-        "op": tt_lib.tensor.binary_assign_bw,
-        "name": "tt_lib.tensor.binary_assign_bw",
+        "op": ttnn.binary_assign_bw,
+        "name": "ttnn.binary_assign_bw",
     },
     {
-        "op": tt_lib.tensor.binary_eq_bw,
-        "name": "tt_lib.tensor.binary_eq_bw",
+        "op": ttnn.binary_eq_bw,
+        "name": "ttnn.binary_eq_bw",
     },
     {
         "op": tt_lib.tensor.div_bw,
@@ -2700,8 +2692,8 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.min_bw",
     },
     {
-        "op": tt_lib.tensor.add_bw,
-        "name": "tt_lib.tensor.add_bw",
+        "op": ttnn.add_bw,
+        "name": "ttnn.add_bw",
     },
     # {
     #     "op": tt_lib.tensor.embedding_bw,
@@ -2712,32 +2704,36 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.where_bw",
     },
     {
-        "op": tt_lib.tensor.sub_bw,
-        "name": "tt_lib.tensor.sub_bw",
+        "op": ttnn.sub_bw,
+        "name": "ttnn.sub_bw",
     },
     {
-        "op": tt_lib.tensor.rsub_bw,
-        "name": "tt_lib.tensor.rsub_bw",
+        "op": ttnn.rsub_bw,
+        "name": "ttnn.rsub_bw",
     },
     {
-        "op": tt_lib.tensor.atan2_bw,
-        "name": "tt_lib.tensor.atan2_bw",
+        "op": ttnn.atan2_bw,
+        "name": "ttnn.atan2_bw",
     },
     {
-        "op": tt_lib.tensor.hypot_bw,
-        "name": "tt_lib.tensor.hypot_bw",
+        "op": ttnn.hypot_bw,
+        "name": "ttnn.hypot_bw",
+    },
+    {
+        "op": ttnn.binary_le_bw,
+        "name": "ttnn.binary_le_bw",
     },
     {
         "op": bias_gelu_bw_none,
-        "name": "tt_lib.tensor.bias_gelu_bw_none",
+        "name": "ttnn.bias_gelu_bw_none",
     },
     {
         "op": bias_gelu_bw_tanh,
-        "name": "tt_lib.tensor.bias_gelu_bw_tanh",
+        "name": "ttnn.bias_gelu_bw_tanh",
     },
     {
-        "op": tt_lib.tensor.squared_difference_bw,
-        "name": "tt_lib.tensor.squared_difference_bw",
+        "op": ttnn.squared_difference_bw,
+        "name": "ttnn.squared_difference_bw",
     },
     {
         "op": lerp_bw_1,
@@ -2748,44 +2744,44 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.lerp_bw_tensor_weight",
     },
     {
-        "op": tt_lib.tensor.ldexp_bw,
-        "name": "tt_lib.tensor.ldexp_bw",
+        "op": ttnn.ldexp_bw,
+        "name": "ttnn.ldexp_bw",
     },
     {
-        "op": tt_lib.tensor.xlogy_bw,
-        "name": "tt_lib.tensor.xlogy_bw",
+        "op": ttnn.xlogy_bw,
+        "name": "ttnn.xlogy_bw",
     },
     {
-        "op": tt_lib.tensor.logaddexp_bw,
-        "name": "tt_lib.tensor.logaddexp_bw",
+        "op": ttnn.logaddexp_bw,
+        "name": "ttnn.logaddexp_bw",
     },
     {
-        "op": tt_lib.tensor.logaddexp2_bw,
-        "name": "tt_lib.tensor.logaddexp2_bw",
+        "op": ttnn.logaddexp2_bw,
+        "name": "ttnn.logaddexp2_bw",
     },
     {
         "op": concat_bw_0,
-        "name": "tt_lib.tensor.concat_bw_dim_0",
+        "name": "ttnn.concat_bw_dim_0",
         "shape_func": concat_bw_0_shape_func,
     },
     {
         "op": concat_bw_1,
-        "name": "tt_lib.tensor.concat_bw_dim_1",
+        "name": "ttnn.concat_bw_dim_1",
         "shape_func": concat_bw_1_shape_func,
     },
     {
         "op": concat_bw_2,
-        "name": "tt_lib.tensor.concat_bw_dim_2",
+        "name": "ttnn.concat_bw_dim_2",
         "shape_func": concat_bw_2_shape_func,
     },
     {
         "op": concat_bw_3,
-        "name": "tt_lib.tensor.concat_bw_dim_3",
+        "name": "ttnn.concat_bw_dim_3",
         "shape_func": concat_bw_3_shape_func,
     },
     {
         "op": subalpha_bw,
-        "name": "tt_lib.tensor.subalpha_bw",
+        "name": "ttnn.subalpha_bw",
     },
     {
         "op": primary_moreh_norm_backward,
