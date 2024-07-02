@@ -31,7 +31,6 @@
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
-#include "tt_dnn/op_library/upsample/upsample_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_lib_bindings.hpp"
@@ -784,26 +783,7 @@ void TensorModule(py::module& m_tensor) {
         +----------+----------------------------+------------+-------------------------------+----------+
     )doc");
 
-    // Upsample
-    m_tensor.def(
-        "upsample",
-        &upsample,
-        py::arg("input").noconvert(),
-        py::arg("scale_factor_h").noconvert(),
-        py::arg("scale_factor_w").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        UpSample 2D
-        It operates on tensors whose that have channels as the last dimension
-
-        +----------+----------------------------+------------+-------------------------------+----------+
-        | Argument | Description                | Data type  | Valid range                   | Required |
-        +==========+============================+============+===============================+==========+
-        | act      | Input activations tensor   | Tensor     |                               | Yes      |
-        +----------+----------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def(
+        m_tensor.def(
         "max_pool2d",
         &max_pool2d,
         py::arg("input").noconvert(),
