@@ -145,22 +145,20 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     device_ids = ttnn.get_device_ids()
 
-    if isinstance(request.param, tuple):
-        try:
-            grid_dims = request.param
-            assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
-            device_grid = ttnn.DeviceGrid(*grid_dims)
-            num_devices_requested = grid_dims[0] * grid_dims[1]
-            assert num_devices_requested <= len(device_ids), "Requested more devices than available."
-        except (ValueError, AttributeError, AssertionError) as e:
-            pytest.fail(f"Invalid device mesh grid shape: {e}")
+    try:
+        param = request.param
+    except (ValueError, AttributeError):
+        param = len(device_ids)  # Default to using all available devices
+
+    if isinstance(param, tuple):
+        grid_dims = param
+        assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
+        device_grid = ttnn.DeviceGrid(*grid_dims)
+        num_devices_requested = grid_dims[0] * grid_dims[1]
+        assert num_devices_requested <= len(device_ids), "Requested more devices than available."
     else:
-        try:
-            num_devices_requested = min(request.param, len(device_ids))
-            device_grid = ttnn.DeviceGrid(1, num_devices_requested)
-        except (ValueError, AttributeError):
-            num_devices_requested = len(device_ids)
-            device_grid = ttnn.DeviceGrid(1, num_devices_requested)
+        num_devices_requested = min(param, len(device_ids))
+        device_grid = ttnn.DeviceGrid(1, num_devices_requested)
 
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
