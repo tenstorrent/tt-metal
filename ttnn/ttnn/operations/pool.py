@@ -137,7 +137,13 @@ global_avg_pool2d = ttnn.register_operation(golden_function=_golden_function)(
     ttnn._ttnn.operations.pool.global_avg_pool2d
 )
 
-max_pool2d = ttnn._ttnn.operations.pool.max_pool2d
-average_pool_2d = ttnn._ttnn.operations.pool.average_pool_2d
+max_pool2d = ttnn.register_operation(
+    name="ttnn.max_pool2d", is_method=True, validate_input_tensors=lambda *args, **kwargs: None
+)(ttnn._ttnn.operations.pool.max_pool2d)
+
+
+average_pool_2d = ttnn.register_operation(
+    name="ttnn.average_pool_2d", is_method=True, validate_input_tensors=lambda *args, **kwargs: None
+)(ttnn._ttnn.operations.pool.average_pool_2d)
 
 __all__ = []

@@ -45,7 +45,7 @@ def run_max_pool_on_device_wrapper(
             stride,
             padding,
             padding,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             nblocks=nblocks,
             use_multicore=True,
         )
