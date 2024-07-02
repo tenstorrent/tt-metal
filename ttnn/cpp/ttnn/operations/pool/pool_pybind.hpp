@@ -9,10 +9,12 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/pool/pool.hpp"
+#include "ttnn/operations/pool/maxpool2d.hpp"
+
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
-
+using array2_t = std::array<uint32_t, 2>;
 namespace ttnn {
 namespace operations {
 namespace pool {
@@ -141,7 +143,31 @@ void py_module(py::module& module) {
         | memory_config     | output tensor memory config   | MemoryConfig  |             | No       |
         +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
-
+    module.def(
+        "maxpool2d",
+        [](const ttnn::Tensor& input_tensor,
+            uint32_t batch_size,
+            uint32_t input_height,
+            uint32_t input_width,
+            uint32_t channels,
+            array2_t kernel_size,
+            array2_t stride,
+            array2_t padding,
+            array2_t dilation,
+            Device& device) -> Tensor {
+            return ttnn::operations::maxpool2d::maxpool2d(input_tensor, batch_size, input_height, input_width, channels, kernel_size, stride, padding, dilation, device);
+        },
+        py::kw_only(),
+        py::arg("input_tensor"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("channels"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("device"));
     module.def(
         "average_pool_2d",
         &average_pool_2d,
