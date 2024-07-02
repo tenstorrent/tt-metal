@@ -6,7 +6,10 @@
 
 #include "tt_eager/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
+
+#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+
+#include "device/pad_op.hpp"
 
 #include <ranges>
 
@@ -18,7 +21,7 @@ namespace data_movement {
 constexpr uint8_t DefaultQueueId = 0;
 
 
-struct Pad {
+struct ExecutePad {
 
 
     // Wrapper for TTDNN
@@ -28,6 +31,7 @@ struct Pad {
         std::vector<uint32_t> output_padded_shape,
         std::vector<uint32_t> input_tensor_start,
         const float value,
+        const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
         const auto input_tensor_shape = input_tensor.get_shape();
@@ -39,14 +43,8 @@ struct Pad {
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
         auto output_tensor = operation::run(
-            tt::tt_metal::Pad{
-                .output_tensor_shape=tt::tt_metal::Shape(output_padded_shape),
-                .input_tensor_start=tt::tt_metal::Shape(input_tensor_start),
-                .pad_value=value,
-                .output_mem_config=memory_config,
-                .use_multicore=true
-            },
-            {input_tensor}).front();
+            Pad{tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value, memory_config, use_multicore},
+            {input_tensor}, {}, {}, queue_id).front();
 
         return output_tensor;
 
@@ -60,6 +58,7 @@ struct Pad {
         const Shape output_padded_shape,
         const Shape input_tensor_start,
         const float value,
+        const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
         std::vector<uint32_t> output_padded_vector(output_padded_shape.rank());
@@ -70,22 +69,7 @@ struct Pad {
             input_start_vector[dim] = input_tensor_start[dim];
         }
 
-        return _execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, memory_config_arg);
-    }
-
-
-    // This function signature is closer to what the kernel expects
-    // Assuming 4D tensor
-    static ttnn::Tensor execute_on_worker_thread(
-        const ttnn::Tensor& input_tensor,
-        const Shape output_padded_shape,
-        const Shape input_tensor_start,
-        const float value,
-        const std::optional<MemoryConfig>& memory_config_arg) {
-
-
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, memory_config_arg);
-
+        return _execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, use_multicore, memory_config_arg);
     }
 
 
@@ -96,6 +80,7 @@ struct Pad {
         const ttnn::Tensor& input_tensor,
         std::vector<std::pair<uint32_t, uint32_t>> padding,
         const float value,
+        const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
         const int original_rank = input_tensor.get_shape().rank();
@@ -140,7 +125,7 @@ struct Pad {
         std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
 
 
-        auto output_tensor = _execute_on_worker_thread(queue_id, input_tensor_4D, output_padded_shape, pad_front_vec, value, memory_config_arg);
+        auto output_tensor = _execute_on_worker_thread(queue_id, input_tensor_4D, output_padded_shape, pad_front_vec, value, use_multicore, memory_config_arg);
 
 
         // output_tensor is currently 4D. We have to squeeze back to the original rank
@@ -161,20 +146,6 @@ struct Pad {
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
 
         return output_tensor;
-
-    }
-
-
-    // This function signature is similar to pytorch's signature
-    // Any rank tensor supported
-    static ttnn::Tensor execute_on_worker_thread(
-      const ttnn::Tensor& input_tensor,
-      std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&
-      const float value,
-      const std::optional<MemoryConfig>& memory_config_arg) {
-
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, padding, value, memory_config_arg);
-
     }
 
 
@@ -183,6 +154,6 @@ struct Pad {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::Pad>("ttnn::pad");
+constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::ExecutePad>("ttnn::pad");
 
 }  // namespace ttnn

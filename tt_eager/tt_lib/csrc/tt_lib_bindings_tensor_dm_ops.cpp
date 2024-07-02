@@ -282,6 +282,8 @@ namespace tt::tt_metal::detail{
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             py::arg("use_multicore") = false,
             R"doc(
+
+            THIS IS DEPRECATED AND WILL BE REMOVED SOON, PLEASE USE THE TTNN VERSION OF THIS OP
             Pad TT Tensor with given pad value ``arg2``.
 
             The input tensor must be in ROW_MAJOR or TILE layout.

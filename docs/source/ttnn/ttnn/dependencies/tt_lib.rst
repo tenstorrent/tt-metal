@@ -527,8 +527,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 
-.. autofunction:: tt_lib.tensor.pad
-
 .. autofunction:: tt_lib.tensor.unpad
 
 .. autofunction:: tt_lib.tensor.clone

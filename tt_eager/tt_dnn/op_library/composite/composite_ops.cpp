@@ -1395,8 +1395,8 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig
     const Shape start_index = {0, 0, 0, 0};
     ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);
 
-    Tensor index = ttnn::pad(ones_like(input_tensor_4D, output_mem_config), input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
-    Tensor temp_a = ttnn::pad(input_tensor_4D,input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
+    Tensor index = ttnn::pad(0, ones_like(input_tensor_4D, output_mem_config), input_b.shape(), ttnn::Shape(start_index), 0, false, std::nullopt);
+    Tensor temp_a = ttnn::pad(0, input_tensor_4D,input_b.shape(), ttnn::Shape(start_index), 0, false, std::nullopt);
     return where(index, temp_a, input_b, output_mem_config);
 }
 Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
