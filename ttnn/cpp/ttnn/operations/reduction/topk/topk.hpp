@@ -13,8 +13,6 @@
 #include "device/topk_op.hpp"
 #include "ttnn/cpp/ttnn/types.hpp"
 
-constexpr uint8_t DefaultQueueId = 0;
-
 template <class Tuple,
    class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
 std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple)
@@ -23,8 +21,6 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple)
         return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...};
     }, std::forward<Tuple>(tuple));
 }
-
-
 namespace ttnn {
 namespace operations::reduction {
 
@@ -67,6 +63,7 @@ struct ExecuteTopK {
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+        constexpr uint8_t DefaultQueueId = 0;
         return execute_on_worker_thread(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
 

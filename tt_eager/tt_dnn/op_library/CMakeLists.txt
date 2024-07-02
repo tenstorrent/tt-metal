@@ -215,8 +215,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/topk/topk_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/topk/single_core/single_core_topk.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
