@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn/cpp/pybind11/decorators.hpp"
+
+#include "{{ snake_operation_name }}.hpp"
+#include <optional>
+
+namespace {{ full_namespace }}::detail {
+namespace py = pybind11;
+
+void bind_{{ category }}_{{ operation_name }}_operation(py::module& module) {
+    auto doc =
+        R"doc({{ snake_operation_name }}(INPUTS) -> ttnn.Tensor
+            DESCRIPTION
+
+            Args:
+                * :attr:`input_tensor`: Input Tensor for {{ snake_operation_name }}.
+
+            Keyword Args:
+                * :attr:`memory_config`: Memory Config of the output tensors
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+        )doc";
+
+    using OperationType = decltype(ttnn::{{ snake_operation_name }});
+    bind_registered_operation(
+        module,
+        ttnn::{{ snake_operation_name }},
+        doc,
+        ttnn::pybind_overload_t{
+            [] (const OperationType& self,
+                args) {
+                    return self(args);
+                },
+                py::arg("input_tensor").noconvert(),
+                py::kw_only(),
+                py::arg("memory_config") = std::nullopt,
+                py::arg("queue_id") = 0});
+}
+
+
+}  // namespace {{ full_namespace }}::detail
