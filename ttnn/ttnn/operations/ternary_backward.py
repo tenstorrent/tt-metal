@@ -42,5 +42,11 @@ addcdiv_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.ternary_backward.addcdiv_bw)
 
+where_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, c, alpha, *args, **kwargs: _golden_function_backward(
+        torch.where, grad, a, b, c, alpha, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.ternary_backward.where_bw)
+
 
 __all__ = []

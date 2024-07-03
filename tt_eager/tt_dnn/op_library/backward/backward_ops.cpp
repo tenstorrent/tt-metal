@@ -301,66 +301,6 @@ std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _tan_bw)(grad, input, output_mem_config);
 }
 
-std::vector<std::optional<Tensor>> _where_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
-        } else {
-            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
-        }
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
-        } else {
-            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
-        }
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    return std::move(result);
-}
-
-std::vector<std::optional<Tensor>> where_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _where_bw)(queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
-std::vector<std::optional<Tensor>> where_bw(
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _where_bw)(default_queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
 
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
