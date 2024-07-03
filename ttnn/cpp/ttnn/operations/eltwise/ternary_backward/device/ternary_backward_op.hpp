@@ -13,6 +13,7 @@ namespace ttnn::operations::ternary_backward {
 
 enum class TernaryBackwardOpType {
     ADDCMUL_BW,
+    ADDCDIV_BW
 };
 
 

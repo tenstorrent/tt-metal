@@ -36,5 +36,11 @@ addcmul_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.ternary_backward.addcmul_bw)
 
+addcdiv_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, c, alpha, *args, **kwargs: _golden_function_backward(
+        torch.addcdiv, grad, a, b, c, alpha, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.ternary_backward.addcdiv_bw)
+
 
 __all__ = []
