@@ -223,7 +223,11 @@ class Cluster {
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
+    // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns Wormhole chip board type.
+    BoardType get_board_type(chip_id_t chip_id) const;
 
    private:
     Cluster();
