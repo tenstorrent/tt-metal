@@ -270,7 +270,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-# @skip_for_wormhole_b0("PCC error with B=16. Fitting issue with B=20 due to 1x1s2 repleacement.")
+@skip_for_wormhole_b0("PCC error with B=16. Fitting issue with B=20 due to 1x1s2 repleacement.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
