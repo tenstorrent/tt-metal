@@ -500,7 +500,7 @@ class TtT5Attention(nn.Module):
         # scores = torch.matmul(query_states, key_states.transpose(3, 2))
         # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
         transposed_key_states = tt_lib.tensor.transpose(key_states, -2, -1)
-        scores = tt_lib.tensor.bmm(query_states, transposed_key_states, self.mem_config)
+        scores = ttnn.matmul(query_states, transposed_key_states, memory_config=self.mem_config)
 
         if (
             position_bias is None
@@ -557,7 +557,7 @@ class TtT5Attention(nn.Module):
         if layer_head_mask is not None:
             attn_weights = ttnn.mul(attn_weights, layer_head_mask, self.mem_config)
 
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
+        attn_output = ttnn.matmul(attn_weights, value_states, memory_config=self.mem_config)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
         attn_output = ttnn.matmul(attn_output, self.o_weights, memory_config=self.mem_config)
 

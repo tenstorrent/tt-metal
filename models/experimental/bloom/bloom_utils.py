@@ -5,6 +5,7 @@
 import torch
 import json
 import tt_lib
+import ttnn
 
 from models.generation_utils import get_logits_processor
 
@@ -57,14 +58,14 @@ def tt_matmul(t1, t2, device, on_torch=False):
         res = torch.matmul(t1, t2, output_mem_config=mem_config)
         return torch2tt_tensor(res, device)
     else:
-        return tt_lib.tensor.bmm(t1, t2, mem_config)
+        return ttnn.matmul(t1, t2, mem_config)
 
 
 def tt_bmm(t1, t2, device, on_torch=False):
     if on_torch:
         return tt_matmul(t1, t2, device)
     else:
-        return tt_lib.tensor.bmm(t1, t2, mem_config)
+        return ttnn.matmul(t1, t2, mem_config)
 
 
 def read_model_config(json_file):

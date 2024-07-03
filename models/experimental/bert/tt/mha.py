@@ -11,6 +11,7 @@ from transformers import BertForQuestionAnswering
 import numpy as np
 
 import tt_lib as ttl
+import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax
@@ -98,7 +99,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         V_heads = make_attention_heads(V)
         K_T_heads = ttl.tensor.transpose(K_heads, -2, -1)
 
-        qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
+        qkt = ttnn.matmul(Q_heads, K_T_heads)
 
         # Attention scores computation
         (
@@ -121,7 +122,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
 
         # Apply attention to value matrix
-        weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
+        weighted_activation = ttnn.matmul(attention_scores, V_heads)
         return unmake_attention_heads(
             weighted_activation
         )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]

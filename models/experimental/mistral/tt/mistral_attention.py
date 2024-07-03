@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple
 import tt_lib
+import ttnn
 from tt_lib import fallback_ops
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
@@ -197,7 +198,7 @@ class TtAttention(nn.Module):
 
         query = format_tensor(query, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
 
-        scores = tt_lib.tensor.bmm(query, key, output_mem_config=self.args.out_mem_config)
+        scores = ttnn.matmul(query, key, memory_config=self.args.out_mem_config)
         key.deallocate()
         scores = tt_lib.tensor.mul_unary(scores, self.scale, output_mem_config=self.args.out_mem_config)
 
@@ -220,8 +221,8 @@ class TtAttention(nn.Module):
             scores = fallback_ops.softmax(scores, dim=-1)
         else:
             scores = tt_lib.tensor.softmax(scores, output_mem_config=self.args.out_mem_config)
-        output = tt_lib.tensor.bmm(
-            scores, value, output_mem_config=self.args.out_mem_config
+        output = ttnn.matmul(
+            scores, value, memory_config=self.args.out_mem_config
         )  # (bs, n_local_heads, slen, head_dim)
 
         value.deallocate()

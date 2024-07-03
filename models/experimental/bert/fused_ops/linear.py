@@ -4,6 +4,7 @@
 
 from typing import List, Union, Optional
 from tt_lib import tensor
+from ttnn import matmul
 
 
 def Linear(
@@ -27,7 +28,7 @@ def Linear(
 
     def linear_(activation):
         weight_T = tensor.transpose(weight, -2, -1)
-        output = tensor.matmul(activation, weight_T)
+        output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:
             output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)

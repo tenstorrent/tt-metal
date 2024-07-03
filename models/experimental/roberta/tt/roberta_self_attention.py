@@ -151,7 +151,7 @@ class TtRobertaSelfAttention(nn.Module):
         # Take the dot product between "query" and "key" to get the raw attention scores.
         key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed, output_mem_config=self.mem_config)
+        attention_scores = ttnn.matmul(query_layer, key_layer_transposed, memory_config=self.mem_config)
 
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             """
@@ -222,7 +222,7 @@ class TtRobertaSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.mem_config)
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, self.mem_config)
+        context_layer = ttnn.matmul(attention_probs, value_layer, memory_config=self.mem_config)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
 
         # TODO left here. Finish porting and re-test everything. See other TODO s
