@@ -8,8 +8,8 @@ import json
 import os
 import pathlib
 import pprint
-import subprocess
 from typing import Optional
+from types import ModuleType
 
 from loguru import logger
 
@@ -133,12 +133,6 @@ if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
-
-import tt_lib as _tt_lib
-
-_tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
-import ttnn._ttnn
-
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
@@ -243,8 +237,16 @@ from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
 
+
+begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
+end_trace_capture = ttnn._ttnn.operations.core.end_trace_capture
+execute_trace = ttnn._ttnn.operations.core.execute_trace
+release_trace = ttnn._ttnn.operations.core.release_trace
+
+
 from ttnn.decorators import (
     register_operation,
+    attach_golden_function,
     query_registered_operations,
     register_pre_operation_hook,
     register_post_operation_hook,
@@ -252,270 +254,58 @@ from ttnn.decorators import (
     get_fallback_function,
 )
 
-import ttnn.experimental
-import ttnn.experimental.golden_functions
 
-from ttnn.operations.core import (
-    from_torch,
-    to_torch,
-    to_device,
-    from_device,
-    to_layout,
-    to_dtype,
-    reshape,
-    to_memory_config,
-    deallocate,
-    reallocate,
-    load_tensor,
-    dump_tensor,
-    unsqueeze_to_4D,
-    squeeze,
-    clone,
-    as_tensor,
-    allocate_tensor_on_device,
-    copy_host_to_device_tensor,
-)
+def auto_register_ttnn_cpp_operations(module):
+    for attribute_name in dir(module):
+        attribute = getattr(module, attribute_name)
+        if hasattr(attribute, "__ttnn_operation__") and attribute.__ttnn_operation__ is None:
+            setattr(module, attribute_name, ttnn.register_operation()(attribute))
+        elif isinstance(attribute, ModuleType):
+            auto_register_ttnn_cpp_operations(attribute)
+
+
+auto_register_ttnn_cpp_operations(ttnn._ttnn)
+
+import ttnn.experimental_operations
+import ttnn.experimental_operations.golden_functions
+
+import ttnn.operations
+
+sub = ttnn.subtract
+sub_ = ttnn.subtract_
+mul = ttnn.multiply
+mul_ = ttnn.multiply_
+
+
+def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
+    return ttnn.leaky_relu(*args, **kwargs)
+
+
+# TODO: pybind the overloaded operators below
+ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
+ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
+ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
+ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
+ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
+ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: ttnn.eq(self, *args, **kwargs)
+ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ttnn.ne(self, *args, **kwargs)
+ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: ttnn.gt(self, *args, **kwargs)
+ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs)
+ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
+ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
+ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
 
 from ttnn.operations.matmul import (
-    matmul,
-    linear,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
 )
 
-from ttnn.operations.embedding import (
-    embedding,
-)
-
-from ttnn.operations.comparison import (
-    pearson_correlation_coefficient,
-)
-
-from ttnn.operations.creation import (
-    arange,
-    empty,
-    empty_like,
-    full,
-    full_like,
-    ones,
-    ones_like,
-    zeros,
-    zeros_like,
-)
-
-from ttnn.operations.reduction import (
-    std,
-    var,
-    max,
-    min,
-    sum,
-    mean,
-    argmax,
-    topk,
-)
-
-from ttnn.operations.losses import (
-    l1_loss,
-    mse_loss,
-)
-
-from ttnn.operations.data_movement import (
-    concat,
-    pad,
-    permute,
-    repeat_interleave,
-    repeat,
-    upsample,
-)
-
-from ttnn.operations.unary import (
-    abs,
-    acos,
-    acosh,
-    asin,
-    asinh,
-    atan,
-    atanh,
-    cbrt,
-    celu,
-    clip,
-    cos,
-    cosh,
-    deg2rad,
-    digamma,
-    elu,
-    eqz,
-    erf,
-    erfc,
-    erfinv,
-    exp,
-    exp2,
-    expm1,
-    glu,
-    gelu,
-    geglu,
-    gez,
-    gtz,
-    hardshrink,
-    hardsigmoid,
-    hardswish,
-    hardtanh,
-    heaviside,
-    i0,
-    isfinite,
-    isinf,
-    isnan,
-    isneginf,
-    isposinf,
-    leaky_relu,
-    lez,
-    logical_not,
-    ltz,
-    lgamma,
-    log,
-    log10,
-    log1p,
-    log2,
-    log_sigmoid,
-    logit,
-    log_sigmoid,
-    mish,
-    multigammaln,
-    neg,
-    nez,
-    polygamma,
-    prelu,
-    rad2deg,
-    reciprocal,
-    relu,
-    reglu,
-    relu6,
-    rsqrt,
-    sigmoid,
-    sigmoid_accurate,
-    sign,
-    signbit,
-    silu,
-    sin,
-    sinh,
-    softplus,
-    softshrink,
-    softsign,
-    sqrt,
-    square,
-    swiglu,
-    swish,
-    tan,
-    tanh,
-    tanhshrink,
-    threshold,
-    tril,
-    triu,
-)
-
-from ttnn.operations.binary import (
-    pow,
-    add,
-    add_,
-    sub,
-    sub_,
-    subtract,
-    subtract_,
-    mul,
-    mul_,
-    multiply,
-    multiply_,
-    ldexp,
-    logical_and,
-    logical_or,
-    logical_xor,
-    logaddexp,
-    logaddexp2,
-    xlogy,
-    nextafter,
-    polyval,
-    maximum,
-    minimum,
-    atan2,
-    hypot,
-    squared_difference,
-    gt,
-    ge,
-    lt,
-    le,
-    eq,
-    ne,
-    isclose,
-    bias_gelu,
-    divide,
-)
-
-
-from ttnn.operations.binary_backward import (
-    atan2_bw,
-    embedding_bw,
-    addalpha_bw,
-    subalpha_bw,
-    sub_bw,
-    xlogy_bw,
-    hypot_bw,
-    ldexp_bw,
-    logaddexp_bw,
-    logaddexp2_bw,
-    squared_difference_bw,
-    add_bw,
-    binary_eq_bw,
-    binary_assign_bw,
-    concat_bw,
-    binary_le_bw,
-    rsub_bw,
-    bias_gelu_bw,
-    binary_gt_bw,
-    binary_lt_bw,
-    binary_ne_bw,
-    binary_ge_bw,
-    min_bw,
-    max_bw,
-    div_bw,
-    lerp_bw,
-    mul_bw,
-)
-
-from ttnn.operations.ternary import (
-    addcdiv,
-    addcmul,
-    mac,
-    where,
-    lerp,
-)
-
 from ttnn.operations.normalization import (
-    softmax,
-    layer_norm,
-    rms_norm,
-    group_norm,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
-    get_group_norm_cores_accross_channel,
 )
-
-from ttnn.operations.trace import (
-    begin_trace_capture,
-    end_trace_capture,
-    execute_trace,
-    release_trace,
-)
-
-from ttnn.operations.ccl import all_gather
-
-from ttnn.operations import transformer
-from ttnn.operations import kv_cache
-from ttnn.operations.conv2d import Conv2d, conv2d, Conv2dConfig, get_conv_output_dim
-from ttnn.operations.pool import (
-    MaxPool2d,
-    global_avg_pool2d,
-)
-from ttnn.operations.copy import typecast
+from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim
+from ttnn.operations.pool import MaxPool2d

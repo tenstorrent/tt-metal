@@ -114,9 +114,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     raise NotImplementedError
 
 
-ttnn.Tensor.__getitem__ = __getitem__
-
-
 def _preprocess_shape(input_shape, shape):
     if isinstance(shape, tuple):
         if not (0 <= shape.count(-1) <= 1):
@@ -190,7 +187,7 @@ Example::
 # Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
 # Shape([1, 128, 28, 28]) <-> (-1, 128)
 # Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
-reshape = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.reshape",
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
@@ -199,10 +196,14 @@ reshape = ttnn.register_operation(
 )(ttnn._ttnn.operations.core.reshape)
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
+ttnn.register_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
+@ttnn.register_operation(
+    name="ttnn.squeeze",
+)
 def squeeze(tensor, dim):
+    r"""squeeze(tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor"""
     if dim != 0:
         raise RuntimeError("Only dim=0 is supported for squeeze operation!")
     if tensor.shape[0] != 1:
@@ -443,7 +444,7 @@ Example::
     Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
 """
 
-to_device = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.to_device",
     validate_input_tensors=_to_device_validate_input_tensors,
     golden_function=_golden_function,
@@ -494,18 +495,18 @@ Example::
 """
 
 
-from_device = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.from_device",
     validate_input_tensors=_from_device_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
-allocate_tensor_on_device = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.allocate_tensor_on_device",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_device)
 
-copy_host_to_device_tensor = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
@@ -526,30 +527,30 @@ Example::
     >>> ttnn.deallocate(tensor)
 """
 
-deallocate = ttnn.register_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
+ttnn.register_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
 
 
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-to_memory_config = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.core.to_memory_config
-)
+ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_memory_config, golden_function=_golden_function)
 
 
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-to_layout = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.core.to_layout)
+ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_layout, golden_function=_golden_function)
 
 
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-to_dtype = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.core.to_dtype)
+# TODO: Merge to_dtype and typecast
+ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_dtype, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn._ttnn.operations.copy.typecast, golden_function=_golden_function)
 
 
 def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -607,9 +608,7 @@ def _golden_function(input_tensor):
     return input_tensor
 
 
-reallocate = ttnn.register_operation(name="ttnn.reallocate", golden_function=_golden_function)(
-    ttnn._ttnn.operations.core.reallocate
-)
+ttnn.register_operation(name="ttnn.reallocate", golden_function=_golden_function)(ttnn._ttnn.operations.core.reallocate)
 
 
 @ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=lambda *args, **kwargs: None)

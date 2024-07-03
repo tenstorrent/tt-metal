@@ -48,6 +48,6 @@ struct GlobalAveragePool2D {
 }  // namespace operations
 
 constexpr auto global_avg_pool2d =
-    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::pool::global_avg_pool2d");
+    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::global_avg_pool2d");
 
 }  // namespace ttnn

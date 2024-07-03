@@ -106,8 +106,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-add = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add)
-add_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add_)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.add, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.add_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
@@ -115,8 +115,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-subtract = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract)
-subtract_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract_)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.subtract, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.subtract_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
@@ -124,19 +124,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-multiply = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.multiply)
-multiply_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.multiply_)
-
-sub = subtract
-mul = multiply
-sub_ = subtract_
-mul_ = multiply_
-
-ttnn.Tensor.__add__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
-ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
-ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: sub(self, *args, **kwargs)
-ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
-ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.multiply, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.multiply_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -145,7 +134,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.eq(input_tensor_a, input_tensor_b)
 
 
-eq = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.eq)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.eq, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -154,7 +143,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ne(input_tensor_a, input_tensor_b)
 
 
-ne = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ne)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ne, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -163,7 +152,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.gt(input_tensor_a, input_tensor_b)
 
 
-gt = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.gt)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.gt, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -172,7 +161,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ge(input_tensor_a, input_tensor_b)
 
 
-ge = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ge)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ge, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -181,7 +170,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.lt(input_tensor_a, input_tensor_b)
 
 
-lt = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.lt)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.lt, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -190,7 +179,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.le(input_tensor_a, input_tensor_b)
 
 
-le = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.le)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.le, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -199,7 +188,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logical_and(input_tensor_a, input_tensor_b)
 
 
-logical_and = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logical_and)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_and, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -208,15 +197,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logical_or(input_tensor_a, input_tensor_b)
 
 
-logical_or = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logical_or)
-
-
-ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: eq(self, *args, **kwargs)
-ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ne(self, *args, **kwargs)
-ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: gt(self, *args, **kwargs)
-ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ge(self, *args, **kwargs)
-ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: lt(self, *args, **kwargs)
-ttnn.Tensor.__le__ = lambda self, *args, **kwargs: le(self, *args, **kwargs)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_or, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -225,7 +206,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ldexp(input_tensor_a, input_tensor_b)
 
 
-ldexp = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ldexp)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ldexp, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -234,7 +215,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logaddexp(input_tensor_a, input_tensor_b)
 
 
-logaddexp = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logaddexp, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -243,7 +224,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logaddexp2(input_tensor_a, input_tensor_b)
 
 
-logaddexp2 = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp2)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logaddexp2, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -252,7 +233,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.divide(input_tensor_a, input_tensor_b)
 
 
-divide = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.divide)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.divide, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -261,7 +242,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.nn.functional.gelu(torch.add(x, y))
 
 
-bias_gelu = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.bias_gelu)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.bias_gelu, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -270,9 +251,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.squared_difference(input_tensor_a, input_tensor_b)
 
 
-squared_difference = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary.squared_difference
-)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.squared_difference, golden_function=_golden_function)
 
 
 def torch_squared_difference(x, y, *args, **kwargs):

@@ -263,9 +263,10 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return torch_function(input_tensor)
 
 
-where = ttnn.register_operation(
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.ternary.where,
     golden_function=_golden_function,
-)(ttnn._ttnn.operations.ternary.where)
+)
 
 
 def _golden_function(
