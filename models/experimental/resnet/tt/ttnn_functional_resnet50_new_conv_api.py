@@ -203,26 +203,26 @@ class resnet50Bottleneck:
         logger.debug(
             f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
         )
-        if (
-            is_wormhole_b0()
-            and (batch_size == 20)  ## or batch_size == 16)
-            and input_height == 56
-            and self.conv1_input_channels == 256
-            and self.conv1_output_channels == 128
-        ):
-            # TODO: fix the need to do the reshard here
-            ## reshard to 49 cores
-            ## TensorMemoryLayout::HEIGHT_SHARDED;(grid={[(x=0;y=0) - (x=7;y=5)]; [(x=0;y=6) - (x=0;y=6)]}; shape={1280; 256}; orientation=ShardOrientation::ROW_MAJOR; halo=false
-            mem_config = ttnn.create_sharded_memory_config_(
-                ttnn.Shape([batch_size * input_height * input_width, 256]),
-                (ttnn.CoreGrid(x=8, y=6), ttnn.CoreGrid(x=1, y=7)),
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                tile_layout=True,
-            )
-            x_resharded = ttnn.to_memory_config(x, mem_config)
-            ttnn.deallocate(x)
-            x = ttnn.reallocate(x_resharded)
+        # if (
+        #     is_wormhole_b0()
+        #     and (batch_size == 20)  ## or batch_size == 16)
+        #     and input_height == 56
+        #     and self.conv1_input_channels == 256
+        #     and self.conv1_output_channels == 128
+        # ):
+        #     # TODO: fix the need to do the reshard here
+        #     ## reshard to 49 cores
+        #     ## TensorMemoryLayout::HEIGHT_SHARDED;(grid={[(x=0;y=0) - (x=7;y=5)]; [(x=0;y=6) - (x=0;y=6)]}; shape={1280; 256}; orientation=ShardOrientation::ROW_MAJOR; halo=false
+        #     mem_config = ttnn.create_sharded_memory_config_(
+        #         ttnn.Shape([batch_size * input_height * input_width, 256]),
+        #         (ttnn.CoreGrid(x=8, y=6), ttnn.CoreGrid(x=1, y=7)),
+        #         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
+        #         tile_layout=True,
+        #     )
+        #     x_resharded = ttnn.to_memory_config(x, mem_config)
+        #     ttnn.deallocate(x)
+        #     x = ttnn.reallocate(x_resharded)
 
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
@@ -826,16 +826,40 @@ class resnet50:
             transpose_shards=transpose_shards,
         )
 
+        if is_wormhole_b0() and batch_size == 16:
+            xshape = x.shape_without_padding()
+            ## NOTE: using multicore untilize_with_unpadding results in PCC error
+            x = ttnn.experimental.tensor.untilize_with_unpadding(
+                x,
+                [xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1],
+                ttnn.L1_MEMORY_CONFIG,
+                use_multicore=False,
+            )
+            x = ttnn.experimental.tensor.tilize_with_val_padding(
+                x,
+                xshape,
+                0,
+                output_mem_config=ttnn.L1_MEMORY_CONFIG,
+                use_multicore=True,
+            )
+
         layer4_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
 
-        reshard = False
-        height_shard = False
-        if is_first_run:
-            reshard = True
-            height_shard = False
+        if is_wormhole_b0():
+            shard_config = ttnn.create_sharded_memory_config_(
+                layer4_module1_input_shape,
+                ttnn.CoreGrid(x=8, y=7),
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+            )
+            x = ttnn.to_memory_config(x, shard_config)
         else:
-            if is_wormhole_b0() and batch_size == 16:
+            reshard = False
+            height_shard = False
+            if is_first_run:
                 reshard = True
+                height_shard = False
             else:
                 x = ttnn.to_memory_config(x, ops_parallel_config["layer4_module1_input"])
 
