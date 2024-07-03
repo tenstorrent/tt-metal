@@ -131,21 +131,25 @@ struct CoreRange {
         std::set<size_t> xs = {this->start.x, this->end.x};
         std::set<size_t> ys = {this->start.y, this->end.y};
 
-        if (this->start.x < cr.start.x < this->end.x)
+        if (this->start.x < cr.start.x && cr.start.x < this->end.x) {
             xs.insert(cr.start.x);
-        if (this->start.x < cr.end.x < this->end.x)
+        }
+        if (this->start.x < cr.end.x && cr.end.x < this->end.x) {
             xs.insert(cr.end.x);
-        if (this->start.y < cr.start.y < this->end.y)
+        }
+        if (this->start.y < cr.start.y && cr.start.y < this->end.y) {
             ys.insert(cr.start.y);
-        if (this->start.y < cr.end.y < this->end.y)
+        }
+        if (this->start.y < cr.end.y && cr.end.y < this->end.y) {
             ys.insert(cr.end.y);
+        }
 
         std::vector<size_t> vxs(xs.begin(), xs.end());
         std::vector<size_t> vys(ys.begin(), ys.end());
         std::set<CoreRange> ret;
         for (unsigned i = 0; i < vxs.size() - 1; i++) {
             for (unsigned j = 0; j < vys.size() - 1; j++) {
-                CoreRange r({vxs[i], vys[i]}, {vxs[i + 1], vys[i + 1]});
+                CoreRange r({vxs[i], vys[j]}, {vxs[i + 1], vys[j + 1]});
                 if (r.start != irect.value().start || r.end != irect.value().end)
                     ret.insert(r);
             }
