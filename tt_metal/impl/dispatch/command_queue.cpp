@@ -188,7 +188,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
             this->buffer.page_size();
         if (this->buffer.page_size() % this->buffer.alignment() != 0 and
             this->buffer.page_size() != this->buffer.size()) {
-            // If page size is not 32B-aligned, we cannot do a contiguous write
+            // If page size is not aligned, we cannot do a contiguous write
             uint32_t src_address_offset = unpadded_src_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += this->padded_page_size) {
@@ -826,7 +826,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
             cmd_sequence_sizeB += align(
-                CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd))) +
                     kernel_bins_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
                 PCIE_ALIGNMENT);
             cmd_sequence_sizeB += align(
@@ -1222,7 +1222,7 @@ void EnqueueRecordEventCommand::process() {
         packed_write_sizeB +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event
                               // payload
         align(
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE + dispatch_constants::EVENT_PADDED_SIZE,
+            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE,
             PCIE_ALIGNMENT);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
