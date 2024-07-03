@@ -19,6 +19,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
+    skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 
 from models.experimental.resnet.tt.ttnn_functional_resnet50_large_new_conv_api import resnet50
@@ -261,6 +263,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
+@skip_for_wormhole_b0("Only works with Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
