@@ -58,8 +58,8 @@ void FastReduceNC::validate_with_output_tensors(
     auto& output = output_tensors.at(0);
 
     // validate tensor
-    tt::operations::primary::check_tensor(input, "FastReduceNC", "input");
-    tt::operations::primary::check_tensor(output, "FastReduceNC", "output");
+    tt::operations::primary::check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    tt::operations::primary::check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // validate input dim
     auto input_shape = input.get_legacy_shape();
