@@ -12,7 +12,6 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-#include "pybind11/operations/embedding.hpp"
 #include "pybind11/operations/kv_cache.hpp"
 #include "pybind11/operations/matmul.hpp"
 #include "pybind11/operations/maxpool2d.hpp"
@@ -27,6 +26,7 @@
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
+#include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
 
 
 namespace py = pybind11;

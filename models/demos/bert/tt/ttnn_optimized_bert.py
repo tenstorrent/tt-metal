@@ -190,7 +190,7 @@ def bert(
         input_ids,
         parameters.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
-        pad_token=config.pad_token_id,
+        padding_idx=config.pad_token_id,
     )
     ttnn.deallocate(input_ids)
 
