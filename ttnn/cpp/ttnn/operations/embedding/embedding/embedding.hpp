@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_eager/tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "ttnn/cpp/ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
@@ -14,8 +14,6 @@ namespace ttnn {
 namespace operations {
 
 namespace embedding {
-
-using EmbeddingsType = tt::tt_metal::EmbeddingsType;
 
 struct Embedding {
     static inline Tensor execute_on_worker_thread(
@@ -44,7 +42,7 @@ struct Embedding {
 
         bool tilized = layout == ttnn::TILE_LAYOUT;
         auto embeddings = operation::run(
-                              tt::tt_metal::Embeddings{
+                              Embeddings{
                                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
                                   .tilized = tilized,
                                   .embeddings_type = embeddings_type,
