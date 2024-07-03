@@ -181,9 +181,8 @@ class Conv2d:
         torch_out = torch_out.reshape(1, 1, -1, self.out_channels)
         return torch_out
 
-    @ttnn.register_operation(
+    @ttnn.register_python_operation(
         name="ttnn.Conv2d.__call__",
-        validate_input_tensors=lambda *args, **kwargs: None,
         is_method=True,
         golden_function=_golden_function_conv2d,
     )
@@ -193,9 +192,8 @@ class Conv2d:
     def _golden_function_copy_input(self, input):
         return input
 
-    @ttnn.register_operation(
+    @ttnn.register_python_operation(
         name="ttnn.Conv2d.copy_input_to_device",
-        validate_input_tensors=lambda *args, **kwargs: None,
         golden_function=_golden_function_copy_input,
         is_method=True,
     )
@@ -205,9 +203,8 @@ class Conv2d:
     def _golden_function_copy_output(self, output):
         return output
 
-    @ttnn.register_operation(
+    @ttnn.register_python_operation(
         name="ttnn.Conv2d.copy_output_from_device",
-        validate_input_tensors=lambda *args, **kwargs: None,
         golden_function=_golden_function_copy_output,
         is_method=True,
     )
@@ -416,19 +413,7 @@ def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_con
     return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
 
-def _conv_op_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
-@ttnn.register_operation(name="ttnn.conv2d", validate_input_tensors=_conv_op_validate_input_tensors)
+@ttnn.register_python_operation(name="ttnn.conv2d")
 def conv2d(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded

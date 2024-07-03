@@ -231,38 +231,10 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
     return output
 
 
-def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weight=None, bias=None, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16,),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        weight,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16,),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        bias,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16,),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-
-
-ttnn.attach_golden_function(ttnn._ttnn.operations.normalization.group_norm, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.normalization.group_norm,
+    golden_function=_golden_function,
+    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
+)
 
 __all__ = []
