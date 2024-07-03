@@ -190,7 +190,7 @@ class TtLlamaMLP_optimized:
             x,
             self.w3,
             program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
         )
         x.deallocate(True)
@@ -216,7 +216,7 @@ class TtLlamaMLP_optimized:
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         return hidden_states
