@@ -50,7 +50,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_disabled-sampling-tt-70b-T3000-80L-decode_only-text_completion-llama2]
     ```
 
-4. **[TODO: UPDATE COMMAND TO INCLUDE LLAMA2/3] Run the performance test:**
+4. **Run the performance test:**
 
     The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
     For best performance numbers, we recommend building `tt-metal` with `CONFIG=Release` env var, and ensuring the host's CPU governors are set to `performance`.
