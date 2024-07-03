@@ -23,7 +23,12 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 def generate_vectors(test_module, arch):
     parameters = test_module.parameters
 
-    vectors = permutations(parameters)
+    vectors = []
+    for batch in parameters:
+        batch_vectors = list(permutations(parameters[batch]))
+        for v in batch_vectors:
+            v["batch_name"] = batch
+        vectors += batch_vectors
     return vectors
 
 
@@ -39,8 +44,6 @@ def export_test_vectors(vectors):
     client = MongoClient(MONGO_CONNECTION_STRING)
     db = client.test_vectors
 
-    parameter_names = get_parameter_names(vectors[0])
-    batch_id = str(shortuuid.uuid())
     # TODO: Duplicate batch check?
 
     table_name = MODULE_NAME + "_test_vectors"
@@ -54,7 +57,6 @@ def export_test_vectors(vectors):
         serialized_vectors.append(dict())
         serialized_vectors[i]["sweep_name"] = MODULE_NAME
         serialized_vectors[i]["timestamp"] = current_time
-        serialized_vectors[i]["batch_id"] = batch_id
         for elem in vectors[i].keys():
             serialized_vectors[i][elem] = serialize(vectors[i][elem])
 
@@ -68,7 +70,10 @@ def generate_tests(module_name, arch):
 
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
-            vectors = generate_vectors(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR), arch)
+            test_module = importlib.import_module(
+                "sweeps." + str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
+            )
+            vectors = generate_vectors(test_module, arch)
             validate_vectors(vectors)
             export_test_vectors(vectors)
     else:
