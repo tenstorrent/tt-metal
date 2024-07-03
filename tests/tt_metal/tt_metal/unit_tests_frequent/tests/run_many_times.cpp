@@ -121,9 +121,13 @@ TEST(Common, AllCoresRunManyTimes) {
         log_info(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        vector<Device*> devices_;
+        std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 0; id < num_devices; id++) {
-            auto* device = tt::tt_metal::CreateDevice(id);
+            chip_ids.push_back(id);
+        }
+        vector<Device*> devices_;
+        auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        for (const auto &[id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
 
@@ -133,9 +137,7 @@ TEST(Common, AllCoresRunManyTimes) {
         }
 
         // Close all devices
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
-        }
+        tt::tt_metal::detail::CloseDevices(reserved_devices_);
     }
 
 }
