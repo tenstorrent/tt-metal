@@ -119,7 +119,7 @@ auto bind_registered_operation(
 
     const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
 
-    py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
+    py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str(), py::dynamic_attr());
 
     py_operation.doc() = append_input_tensor_schemas_to_doc(operation, doc).c_str();
 
@@ -143,6 +143,7 @@ auto bind_registered_operation(
         ...);
 
     module.attr(operation.name().c_str()) = operation;  // Bind an instance of the operation to the module
+    module.attr(operation.name().c_str()).attr("__name__") = operation.name().c_str();
 
     return py_operation;
 }
@@ -157,7 +158,7 @@ auto bind_registered_operation(
 
     const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
 
-    py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
+    py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str(), py::dynamic_attr());
 
     py_operation.doc() = doc;
 
@@ -185,6 +186,7 @@ auto bind_registered_operation(
         ...);
 
     module.attr(operation.name().c_str()) = operation;  // Bind an instance of the operation to the module
+    module.attr(operation.name().c_str()).attr("__name__") = operation.name().c_str();
 
     return py_operation;
 }
