@@ -73,15 +73,23 @@ OPS_CSV_HEADER = [
 ]
 
 
+def csv_header_format(header):
+    return header.replace("_", " ").upper()
+
+
 def import_tracy_op_logs():
     logger.info(f"Importing ops logs")
-    tracyOpTimesLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_TIMES_FILE_NAME)
-    tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
-
     ops = {}
     signposts = {}
     signpostsCount = 0
     cached_ops = {}
+
+    tracyOpTimesLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_TIMES_FILE_NAME)
+    tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
+
+    if not os.path.isfile(tracyOpTimesLog) or not os.path.isfile(tracyOpDataLog):
+        return ops, signposts
+
     with open(tracyOpDataLog, "r", newline="") as csvFile:
         opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
         opsData = []
@@ -201,6 +209,97 @@ def append_device_data(ops, deviceLogFolder):
     return deviceOps
 
 
+def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameAppend):
+    deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
+    devicePreOpTime = {}
+    deviceOps = {}
+    i = 0
+    rowDicts = []
+
+    outFolder = PROFILER_OUTPUT_DIR
+    if outputFolder:
+        outFolder = outputFolder
+
+    name = OUT_NAME
+    outFolder = os.path.abspath(outFolder)
+
+    if nameAppend:
+        name += f"_{nameAppend}"
+        outFolder = os.path.join(outFolder, nameAppend)
+
+    if date:
+        dateStr = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
+        name += f"_{dateStr}"
+        outFolder = os.path.join(outFolder, dateStr)
+
+    allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
+    logger.info(f"Copying runtime artifacts")
+    os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
+    if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
+        os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+
+    if os.path.isfile(deviceTimesLog):
+        logger.info(f"Getting device only ops data")
+        setup = device_post_proc_config.default_setup()
+        setup.deviceInputLog = deviceTimesLog
+        deviceData = import_log_run_stats(setup)
+        logger.info(f"Generating device op report ...")
+        freq = deviceData["deviceInfo"]["freq"]
+        for device in deviceData["devices"]:
+            deviceOps[device] = []
+            deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+            for deviceOpTime in deviceOpsTime:
+                rowDict = {csv_header_format("global_call_count"): i}
+                i += 1
+                deviceOp = {}
+                cores = set()
+                for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
+                    if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                        if core not in cores:
+                            cores.add(core)
+                deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
+                deviceOp["device_time"] = {
+                    analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
+                }
+                deviceOp["global_call_count"] = i
+                for analysis, data in deviceOp["device_time"].items():
+                    for sample in data:
+                        sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
+                deviceOps[device].append(deviceOp)
+
+                for analysis, analysisData in deviceOp["device_time"].items():
+                    headerField = f"{csv_header_format(analysis)} [ns]"
+                    assert len(analysisData) == 1, "Unexpected device data format"
+                    rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                    if analysis == "device_fw_duration":
+                        rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
+                        rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                        if device in devicePreOpTime.keys():
+                            rowDict["OP TO OP LATENCY [ns]"] = round(
+                                1000 * (analysisData[0]["start_cycle"] - devicePreOpTime[device]) / freq
+                            )
+                        else:
+                            rowDict["OP TO OP LATENCY [ns]"] = 0
+                        devicePreOpTime[device] = analysisData[0]["end_cycle"]
+                rowDicts.append(rowDict)
+
+        with open(allOpsCSVPath, "w") as allOpsCSV:
+            allHeaders = []
+            for header in OPS_CSV_HEADER:
+                if header in rowDicts[-1].keys():
+                    allHeaders.append(header)
+            writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+            writer.writeheader()
+            for rowDict in rowDicts:
+                for field, fieldData in rowDict.items():
+                    rowDict[field] = str(fieldData).replace(",", ";")
+                writer.writerow(rowDict)
+        logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+    else:
+        logger.info("No device logs found")
+    return deviceOps
+
+
 def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
@@ -218,6 +317,7 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
         dateStr = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
         name += f"_{dateStr}"
         outFolder = os.path.join(outFolder, dateStr)
+    allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
 
     logger.info(f"Copying runtime artifacts")
     os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
@@ -300,9 +400,6 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                             tensorCSVData[ioType]["headers"].append(header)
                 if count > tensorCSVData[ioType]["maxCount"]:
                     tensorCSVData[ioType]["maxCount"] = count
-
-        def csv_header_format(header):
-            return header.replace("_", " ").upper()
 
         def row_compare(row):
             ret = 0
@@ -425,9 +522,12 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
 def process_ops(output_folder, name_append, date):
     ops, signposts = import_tracy_op_logs()
 
-    deviceOps = append_device_data(ops, PROFILER_LOGS_DIR)
+    if ops:
+        deviceOps = append_device_data(ops, PROFILER_LOGS_DIR)
+        generate_reports(ops, deviceOps, signposts, output_folder, date, name_append)
 
-    generate_reports(ops, deviceOps, signposts, output_folder, date, name_append)
+    else:
+        deviceOps = get_device_data_generate_report(PROFILER_LOGS_DIR, output_folder, date, name_append)
 
 
 @click.command()
