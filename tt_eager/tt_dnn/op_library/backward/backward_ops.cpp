@@ -503,21 +503,6 @@ std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _exp2_bw)(grad, input, output_mem_config);
 }
 
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result_1 = ttnn::multiply(grad, sub_unary(1.0, weight, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_1);
-    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_2);
-    return grad_tensor;
-}
-
 std::vector<Tensor> _gelu_bw(
     const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

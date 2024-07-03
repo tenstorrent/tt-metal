@@ -18,4 +18,4 @@ enum class TernaryBackwardOpType {
 };
 
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::ternary_backward
