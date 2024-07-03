@@ -682,8 +682,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores{{}};
-    uint32_t weights_mcast_sender_semaphore;
-    uint32_t weights_mcast_receiver_semaphore;
+    uint32_t weights_mcast_sender_semaphore{};
+    uint32_t weights_mcast_receiver_semaphore{};
     uint32_t act_mcast_sender_semaphore = 0;
     uint32_t act_mcast_receiver_semaphore = 0;
     std::vector<uint32_t> act_mcast_noc_y;

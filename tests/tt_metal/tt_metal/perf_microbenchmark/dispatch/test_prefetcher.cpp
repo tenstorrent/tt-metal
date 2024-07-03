@@ -227,7 +227,7 @@ void add_prefetcher_packed_paged_read_cmd(vector<uint32_t>& cmds,
                                           vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
                                           uint32_t length) {
 
-    CQPrefetchCmd cmd;
+    CQPrefetchCmd cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
 
     uint32_t stride = sub_cmds.size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) + sizeof(CQPrefetchCmd);
@@ -241,11 +241,12 @@ void add_prefetcher_packed_paged_read_cmd(vector<uint32_t>& cmds,
         cmds.push_back(*ptr++);
     }
 
-    for (int i = 0; i < sub_cmds.size(); i++) {
-        uint32_t *ptr = (uint32_t *)&sub_cmds[i];
-        for (int j = 0; j < sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t); j++) {
-            cmds.push_back(*ptr++);
-        }
+    constexpr size_t uint32_count = sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
+    std::vector<uint32_t> tmp_buffer(uint32_count);
+
+    for (const auto& sub_cmd : sub_cmds) {
+        std::memcpy(tmp_buffer.data(), &sub_cmd, sizeof(CQPrefetchRelayPagedPackedSubCmd));
+        cmds.insert(cmds.end(), tmp_buffer.begin(), tmp_buffer.end());
     }
 
     for (int i = 0; i < (aligned_stride - stride) / sizeof(uint32_t); i++) {
