@@ -86,13 +86,8 @@ def _golden_function(start: int, end: int, step: int, **_):
     return torch.arange(start, end, step)
 
 
-def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.arange",
-    validate_input_tensors=_arange_validate_input_tensors,
     golden_function=_golden_function,
 )
 def arange(

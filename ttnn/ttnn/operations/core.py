@@ -15,27 +15,6 @@ import ttnn
 import ttnn.decorators
 
 
-def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
 def _golden_function(input_tensor: ttnn.Tensor, slices):
     output_tensor = input_tensor[slices]
     if output_tensor.ndim == 0:
@@ -43,9 +22,8 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     return output_tensor
 
 
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.Tensor.__getitem__",
-    validate_input_tensors=_getitem_validate_input_tensors,
     is_method=True,
     golden_function=_golden_function,
 )
@@ -187,7 +165,7 @@ Example::
 # Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
 # Shape([1, 128, 28, 28]) <-> (-1, 128)
 # Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.reshape",
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
@@ -196,10 +174,10 @@ ttnn.register_operation(
 )(ttnn._ttnn.operations.core.reshape)
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-ttnn.register_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
+ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.squeeze",
 )
 def squeeze(tensor, dim):
@@ -215,26 +193,11 @@ def squeeze(tensor, dim):
     return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
 
 
-def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
-    import torch
-
-    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
-    if len(tensor.shape) not in ranks:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.int16, ttnn.uint8, torch.int32, torch.int64, torch.float16)
-    if tensor.dtype not in dtypes:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
-    # if not tensor.is_contiguous():
-    #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
-
-
 def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.from_torch", validate_input_tensors=_from_torch_validate_input_tensors, golden_function=_golden_function
-)
+@ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
@@ -300,27 +263,6 @@ def from_torch(
     return tensor
 
 
-def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
     if torch_rank is None:
         return tensor
@@ -342,9 +284,7 @@ class TorchTensor(torch.Tensor):
         return super().__torch_function__(func, types, args, kwargs)
 
 
-@ttnn.register_operation(
-    name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors, golden_function=_golden_function
-)
+@ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
     *,
@@ -396,27 +336,6 @@ def to_torch(
     return tensor
 
 
-def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        tensor,
-        ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
@@ -444,33 +363,11 @@ Example::
     Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
 """
 
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.to_device",
-    validate_input_tensors=_to_device_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
 )(ttnn._ttnn.operations.core.to_device)
-
-
-def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        tensor,
-        ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -495,18 +392,17 @@ Example::
 """
 
 
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.from_device",
-    validate_input_tensors=_from_device_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_device",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_device)
 
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
@@ -527,7 +423,7 @@ Example::
     >>> ttnn.deallocate(tensor)
 """
 
-ttnn.register_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
+ttnn.register_python_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -553,34 +449,11 @@ ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_dtype, golden_function
 ttnn.attach_golden_function(ttnn._ttnn.operations.copy.typecast, golden_function=_golden_function)
 
 
-def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.clone", validate_input_tensors=_clone_validate_input_tensors, golden_function=_golden_function
-)
+@ttnn.register_python_operation(name="ttnn.clone", golden_function=_golden_function)
 def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
     """
     clone(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: DataType) -> ttnn.Tensor
@@ -608,10 +481,12 @@ def _golden_function(input_tensor):
     return input_tensor
 
 
-ttnn.register_operation(name="ttnn.reallocate", golden_function=_golden_function)(ttnn._ttnn.operations.core.reallocate)
+ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_function)(
+    ttnn._ttnn.operations.core.reallocate
+)
 
 
-@ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=lambda *args, **kwargs: None)
+@ttnn.register_python_operation(name="ttnn.load_tensor")
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
@@ -621,7 +496,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
     return ttl.tensor.load_tensor(str(file_name), device)
 
 
-@ttnn.register_operation(name="ttnn.dump_tensor", validate_input_tensors=lambda *args, **kwargs: None)
+@ttnn.register_python_operation(name="ttnn.dump_tensor")
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distribute: Dict[str, str] = None) -> None:
     if distribute is None:
         distribute = dict()
@@ -629,20 +504,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
     ttl.tensor.dump_tensor(str(file_name), tensor, distribute)
 
 
-def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
-    import torch
-
-    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
-    if len(tensor.shape) not in ranks:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.uint8, torch.int16, torch.int32, torch.int64, torch.float16)
-    if tensor.dtype not in dtypes:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
-    # if not tensor.is_contiguous():
-    #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
-
-
-@ttnn.register_operation(name="ttnn.as_tensor", validate_input_tensors=_as_tensor_validate_input_tensors)
+@ttnn.register_python_operation(name="ttnn.as_tensor")
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
     dtype: Optional[ttnn.DataType] = None,
