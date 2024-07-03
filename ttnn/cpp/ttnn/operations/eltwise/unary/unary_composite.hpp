@@ -238,5 +238,19 @@ constexpr auto trunc = ttnn::register_operation<operations::unary::ExecuteUnaryC
 constexpr auto var_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>("ttnn::var_hw");
 constexpr auto std_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>>("ttnn::std_hw");
 constexpr auto normalize_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>("ttnn::normalize_hw");
+constexpr auto tanhshrink = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::TANHSHRINK>>("ttnn::tanhshrink");
+constexpr auto acosh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ACOSH>>("ttnn::acosh");
+constexpr auto asinh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ASINH>>("ttnn::asinh");
+constexpr auto atanh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ATANH>>("ttnn::atanh");
+constexpr auto cbrt = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::CBRT>>("ttnn::cbrt");
+constexpr auto cosh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::COSH>>("ttnn::cosh");
+constexpr auto digamma = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::DIGAMMA>>("ttnn::digamma");
+constexpr auto lgamma = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::LGAMMA>>("ttnn::lgamma");
+constexpr auto log1p = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::LOG1P>>("ttnn::log1p");
+constexpr auto mish = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::MISH>>("ttnn::mish");
+constexpr auto multigammaln = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>("ttnn::multigammaln");
+constexpr auto sinh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SINH>>("ttnn::sinh");
+constexpr auto softsign= ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SOFTSIGN>>("ttnn::softsign");
+constexpr auto swish = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SWISH>>("ttnn::swish");
 
 }  // namespace ttnn
