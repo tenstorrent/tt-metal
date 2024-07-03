@@ -115,7 +115,7 @@ def resnet50_1x1_conv_as_matmul(
     )
     bias_on_device = bias_.to(device)
     if isinstance(matmul_config, dict):
-        matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
             in0_block_w=matmul_config["in0_block_w"],
             out_subblock_h=matmul_config["out_subblock_h"],
@@ -434,7 +434,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
     )
     bias_on_device = bias_.to(device)
     if isinstance(matmul_config, dict):
-        matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
             in0_block_w=matmul_config["in0_block_w"],
             out_subblock_h=matmul_config["out_subblock_h"],

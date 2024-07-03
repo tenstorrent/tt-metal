@@ -576,7 +576,7 @@ def test_matmul_no_mcast_fp32_input_output(
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32])
 @pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
-def test_matmul_untilize_output(
+def test_matmul_no_untilize_output_param(
     device,
     packer_l1_acc,
     fp32_acc_mode,
@@ -663,14 +663,13 @@ def test_matmul_untilize_output(
                 packer_l1_acc=packer_l1_acc,
             )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
-            untilize_out=True,
         )
         if out_sharded:
             output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)

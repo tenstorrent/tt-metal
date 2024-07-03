@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_lib_bindings.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 
@@ -11,30 +10,6 @@ namespace tt::tt_metal::detail
 {
     void TensorModuleCustomAndBMMOPs( py::module & m_tensor)
     {
-        // *** matrix multiplication ***
-        m_tensor.def("bmm",
-        [](const Tensor& input_a,
-           const Tensor& input_b,
-           const MemoryConfig& output_mem_config,
-           std::optional<const DeviceComputeKernelConfig> kernel_config,
-           const bool untilize_out) {
-            return tt::operations::primary::matmul(input_a, input_b, /*bias=*/std::nullopt, /*program_config=*/std::nullopt, output_mem_config, /*output_dtype=*/std::nullopt, kernel_config, untilize_out, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*input_b_is_batched=*/true);
-        },
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false,  R"doc(
-            Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
-
-            Both input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "First tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, S]", "Yes"
-                "input_b", "Second tensor to multiply", "Tensor", "Tensor of shape [W, Z, S, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         // Custom Generic NLP TMs
         // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
         m_tensor.def("nlp_create_qkv_heads_falcon7b", &nlp_create_qkv_heads_falcon7b,
@@ -62,12 +37,6 @@ namespace tt::tt_metal::detail
         m_tensor.def("nlp_concat_heads", &nlp_concat_heads,
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
-        )doc");
-
-        // Custom Resnet matmuls
-        m_tensor.def("resnet_matmul", &resnet_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("math_fidelity").noconvert() = MathFidelity::LoFi, R"doc(
-            Perform a resnet_matmul with fused bias.
         )doc");
 
         m_tensor.def("create_qkv_heads", &create_qkv_heads,
