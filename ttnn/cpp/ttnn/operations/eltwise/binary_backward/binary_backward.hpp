@@ -70,6 +70,21 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
 
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, Args &&...args) {
+        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
+    }
+
+    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const Tensor &input_tensor_c_arg,
+        const MemoryConfig &memory_config) {
+
+        auto op_type = utils::get_overload_function(binary_backward_op_type);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, input_tensor_c_arg, memory_config);
+        }
 
     //Type 1: Type 1 with 1 float
     template <typename... Args>
@@ -114,12 +129,12 @@ struct ExecuteBinaryBackward {
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type3(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 3 : type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -134,12 +149,12 @@ struct ExecuteBinaryBackward {
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type3_wo_qid(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -156,12 +171,12 @@ struct ExecuteBinaryBackward {
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type2(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 2 : type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -177,12 +192,12 @@ struct ExecuteBinaryBackward {
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type2_wo_qid(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
 };
@@ -205,6 +220,14 @@ constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward:
 constexpr auto binary_le_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LE_BW>>("ttnn::binary_le_bw");
 constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
 constexpr auto bias_gelu_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
+constexpr auto binary_gt_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GT_BW>>("ttnn::binary_gt_bw");
+constexpr auto binary_lt_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LT_BW>>("ttnn::binary_lt_bw");
+constexpr auto binary_ne_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_NE_BW>>("ttnn::binary_ne_bw");
+constexpr auto binary_ge_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GE_BW>>("ttnn::binary_ge_bw");
+constexpr auto min_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>("ttnn::min_bw");
+constexpr auto max_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>("ttnn::max_bw");
+constexpr auto div_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::DIV_BW>>("ttnn::div_bw");
+constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>("ttnn::lerp_bw");
 
 //type 2
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
@@ -212,5 +235,6 @@ constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backwar
 //type 3
 constexpr auto add_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADD_BW>>("ttnn::add_bw");
 constexpr auto binary_eq_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_EQ_BW>>("ttnn::binary_eq_bw");
+constexpr auto mul_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 
 }  // namespace ttnn

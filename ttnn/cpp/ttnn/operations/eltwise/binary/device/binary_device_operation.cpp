@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_op.hpp"
-
+#include "binary_device_operation.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -15,7 +14,10 @@ namespace utils {
 using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
-    BinaryOpType op_type, const std::optional<DataType> input_dtype, const std::optional<DataType> output_dtype, const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations) {
+    BinaryOpType op_type,
+    const std::optional<DataType> input_dtype,
+    const std::optional<DataType> output_dtype,
+    const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -103,8 +105,7 @@ std::map<string, string> get_defines(
     }
 
     if(input_dtype.has_value() && output_dtype.has_value() &&
-        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
+        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
@@ -117,13 +118,20 @@ std::map<string, string> get_defines(
         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT16) ||
         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B))){
+        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
+        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT16) ||
+        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT32) ||
+        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
+        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
+        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B))){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
         auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
-        defines.insert({"SFPU_OP_CHAIN_0",
-                        fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
+        defines.insert(
+            {"SFPU_OP_CHAIN_0",
+             fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
         defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
     }
 
@@ -143,9 +151,9 @@ std::map<string, string> get_defines(
 
 }  // namespace utils
 
-Binary::program_factory_t Binary::select_program_factory(
+BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    ZoneScopedN("Binary::select_program_factory");
+    ZoneScopedN("BinaryDeviceOperation::select_program_factory");
     const auto& input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
     const auto& input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
 
@@ -166,16 +174,16 @@ Binary::program_factory_t Binary::select_program_factory(
             return BroadcastWidthMultiCore{};
         }
     }
-    TT_THROW("ttnn::operations::binary::Binary: unsupported broadcast");
+    TT_THROW("ttnn::operations::binary::BinaryDeviceOperation: unsupported broadcast");
 }
 
-void Binary::validate_on_program_cache_miss(
+void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
 
-    Binary::validate_on_program_cache_hit(attributes, tensor_args);
+    BinaryDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device(),
@@ -243,7 +251,8 @@ void Binary::validate_on_program_cache_miss(
             "ignored");
     }
 }
-void Binary::validate_on_program_cache_hit(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void BinaryDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
@@ -265,22 +274,24 @@ void Binary::validate_on_program_cache_hit(const operation_attributes_t& attribu
     if (batch_size_0_a != batch_size_0_b) {
         TT_ASSERT(
             batch_size_0_a > batch_size_0_b and batch_size_0_b == 1,
-            "ttnn::operations::binary::Binary: batch size mismatch");
+            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
     }
     if (batch_size_1_a != batch_size_1_b) {
         TT_ASSERT(
             batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
-            "ttnn::operations::binary::Binary: batch size mismatch");
+            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
     }
     if (height_a != height_b) {
-        TT_ASSERT(height_a > height_b and height_b == 1, "ttnn::operations::binary::Binary: height mismatch");
+        TT_ASSERT(
+            height_a > height_b and height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
     }
     if (width_a != width_b) {
-        TT_ASSERT(width_a > width_b and width_b == 1, "ttnn::operations::binary::Binary: width mismatch");
+        TT_ASSERT(
+            width_a > width_b and width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
     }
 }
 
-Binary::shape_return_value_t Binary::compute_output_shapes(
+BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
     const auto input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
@@ -303,7 +314,7 @@ Binary::shape_return_value_t Binary::compute_output_shapes(
     return ttnn::Shape::from_vector(output_shape, output_shape_with_tile_padding);
 }
 
-Binary::tensor_return_value_t Binary::create_output_tensors(
+BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -361,15 +372,27 @@ Binary::tensor_return_value_t Binary::create_output_tensors(
     }
 }
 
-tt::stl::hash::hash_t Binary::compute_program_hash(
+tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     auto program_factory = select_program_factory(attributes, tensor_args);
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()),__FILE__, __LINE__));
-    operation::Hash hash = operation::hash_operation<Binary>(
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
+        fmt::format(
+            "Unexpected type {} in {}:{} ",
+            tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()),
+            __FILE__,
+            __LINE__));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_b.get_storage()),
+        fmt::format(
+            "Unexpected type {} in {}:{} ",
+            tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()),
+            __FILE__,
+            __LINE__));
+    operation::Hash hash = operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),
         input_tensor_a.dtype(),
@@ -379,7 +402,7 @@ tt::stl::hash::hash_t Binary::compute_program_hash(
     return hash;
 }
 
-operation::OpPerformanceModel Binary::create_op_performance_model(
+operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -399,7 +422,7 @@ operation::OpPerformanceModel Binary::create_op_performance_model(
     // TODO: update OpPerformanceModel to work on variadic arguments
     operation::OpPerformanceModel result({input_tensor_a, input_tensor_b}, {output_tensor}, ideal_eltwise_cycles);
 #if 0
-        tt::log_info(tt::LogOp, "Binary PerfModel:");
+        tt::log_info(tt::LogOp, "BinaryDeviceOperation PerfModel:");
         tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
         tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
 #endif

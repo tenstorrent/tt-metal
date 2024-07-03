@@ -23,6 +23,10 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if transpose_a:
+        input_tensor_a = input_tensor_a.transpose(-1, -2)
+    if transpose_b:
+        input_tensor_b = input_tensor_b.transpose(-1, -2)
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if activation == "gelu":
@@ -44,6 +48,8 @@ def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
     *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
     core_grid: Optional[ttnn.CoreGrid] = None,
@@ -141,6 +147,8 @@ def matmul(
     return ttnn._ttnn.operations.matmul.matmul(
         input_tensor_a,
         input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
         memory_config=memory_config,
         dtype=dtype,
         program_config=program_config,
@@ -153,6 +161,10 @@ def matmul(
 def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=None, **kwargs):
     import torch
 
+    if transpose_a:
+        input_tensor_a = input_tensor_a.transpose(-1, -2)
+    if transpose_b:
+        input_tensor_b = input_tensor_b.transpose(-1, -2)
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if bias is not None:
@@ -182,6 +194,8 @@ def linear(
     input_tensor_b: ttnn.Tensor,
     *,
     bias: Optional[ttnn.Tensor] = None,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
     core_grid: Optional[ttnn.CoreGrid] = None,
@@ -228,6 +242,8 @@ def linear(
         input_tensor_a,
         input_tensor_b,
         bias=bias,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
         memory_config=memory_config,
         dtype=dtype,
         program_config=program_config,

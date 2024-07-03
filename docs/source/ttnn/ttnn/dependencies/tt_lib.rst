@@ -406,6 +406,10 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.bitwise_xor
 
 .. autofunction:: tt_lib.tensor.bitwise_not
+    
+.. autofunction:: tt_lib.tensor.bitwise_and
+
+.. autofunction:: tt_lib.tensor.bitwise_or
 
 .. autofunction:: tt_lib.tensor.right_shift
 
@@ -840,17 +844,9 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
-.. autofunction:: tt_lib.tensor.div_bw
-
 .. autofunction:: tt_lib.tensor.rdiv_bw
 
 .. autofunction:: tt_lib.tensor.sqrt_bw
-
-.. autofunction:: tt_lib.tensor.mul_bw
-
-.. autofunction:: tt_lib.tensor.max_bw
-
-.. autofunction:: tt_lib.tensor.min_bw
 
 .. autofunction:: tt_lib.tensor.tan_bw
 
@@ -900,8 +896,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.lerp_bw
-
 .. autofunction:: tt_lib.tensor.hardsigmoid_bw
 
 .. autofunction:: tt_lib.tensor.i0_bw
@@ -948,13 +942,9 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.celu_bw
 
-.. autofunction:: tt_lib.tensor.binary_lt_bw
-
 .. autofunction:: tt_lib.tensor.log10_bw
 
 .. autofunction:: tt_lib.tensor.log1p_bw
-
-.. autofunction:: tt_lib.tensor.binary_ne_bw
 
 .. autofunction:: tt_lib.tensor.erf_bw
 
@@ -975,10 +965,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.silu_bw
 
 .. autofunction:: tt_lib.tensor.selu_bw
-
-.. autofunction:: tt_lib.tensor.binary_ge_bw
-
-.. autofunction:: tt_lib.tensor.binary_gt_bw
 
 .. autofunction:: tt_lib.tensor.square_bw
 

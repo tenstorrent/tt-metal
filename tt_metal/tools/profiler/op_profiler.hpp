@@ -385,7 +385,13 @@ inline std::string op_meta_data_serialized_json(
 
     j["optional_input_tensors"] = std::vector<json>{};
 
-    auto perfModel = operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+    auto perfModel = [&]() {
+        if constexpr (requires { operation_t::create_op_performance_model; }) {
+            return operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+        } else {
+            return operation::OpPerformanceModel{};
+        }
+    }();
     j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
     j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
     j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();

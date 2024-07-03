@@ -57,7 +57,7 @@ std::map<string, string> get_defines(
 
 }  // namespace utils
 
-struct Binary {
+struct BinaryDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
         bool in_place;
@@ -75,7 +75,7 @@ struct Binary {
     using tensor_return_value_t = Tensor;
 
     struct ElementWiseMultiCore {
-        struct cached_program_attributes_t {
+        struct shared_variables_t {
             KernelHandle binary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
             KernelHandle eltwise_binary_kernel_id;
@@ -87,7 +87,7 @@ struct Binary {
             uint32_t src1_single_tile_size;
             uint32_t dst_single_tile_size;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<cached_program_attributes_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
@@ -102,13 +102,13 @@ struct Binary {
     };
 
     struct BroadcastWidthMultiCore {
-        struct cached_program_attributes_t {
+        struct shared_variables_t {
             KernelHandle binary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
             KernelHandle bcast_kernel_id;
             CoreCoord compute_with_storage_grid_size;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<cached_program_attributes_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
@@ -123,13 +123,13 @@ struct Binary {
     };
 
     struct BroadcastHeightMultiCore {
-        struct cached_program_attributes_t {
+        struct shared_variables_t {
             KernelHandle binary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
             KernelHandle bcast_kernel_id;
             CoreCoord compute_with_storage_grid_size;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<cached_program_attributes_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
@@ -144,7 +144,7 @@ struct Binary {
     };
 
     struct BroadcastHeightAndWidthMultiCore {
-        struct cached_program_attributes_t {
+        struct shared_variables_t {
             KernelHandle binary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
             KernelHandle bcast_kernel_id;
@@ -155,7 +155,7 @@ struct Binary {
             uint32_t dst_single_tile_size;
             CBHandle cb_output;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<cached_program_attributes_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,

@@ -41,6 +41,7 @@ def run_resnet_imagenet_inference(
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
+    profiler.clear()
 
     # set up huggingface model - TT model will use weights from this model
     torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -213,20 +214,22 @@ def run_resnet_inference(
     return measurements, predictions
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
     (
-        (8, 400),
         (16, 200),
+        (20, 160),
     ),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((8, "models/demos/resnet/demo/images/"),),
+    ((20, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(
     device,

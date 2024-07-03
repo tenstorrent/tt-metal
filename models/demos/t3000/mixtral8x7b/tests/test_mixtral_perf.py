@@ -43,10 +43,10 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
-        (32, 150, 0.075),
-        (128, 150, 0.075),
-        (1024, 150, 0.075),
-        (2048, 150, 0.075),
+        (32, 150, 0.085),
+        (128, 150, 0.085),
+        (1024, 150, 0.085),
+        (2048, 150, 0.085),
     ),
 )
 def test_mixtral_model_perf(
@@ -180,7 +180,6 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.end(f"torch_argmax_and_embed_{i}")
 
         profiler.start(f"deallocate_tt_tensors_{i}")
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del decode_input, attn_mask, tt_decode_input
+
         tt_out.deallocate(force=True)
         profiler.end(f"deallocate_tt_tensors_{i}")

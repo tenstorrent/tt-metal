@@ -221,7 +221,7 @@ class ResNet50TestInfra:
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
         ## ttnn
-        # breakpoint()
+
         self.ttnn_resnet50_model = resnet50(
             device=device, parameters=parameters, batch_size=batch_size, model_config=model_config
         )
@@ -270,20 +270,29 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-@skip_for_wormhole_b0("In progress. Skipping for now.")
-@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
+# @skip_for_wormhole_b0("PCC error with B=16. Fitting issue with B=20 due to 1x1s2 repleacement.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
-        # (8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        (
+            8,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.LoFi,
+        ),  ## memory config issue due to l4m1 downsample reshard
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
 def test_resnet_50(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
+    if batch_size == 8:
+        pytest.skip("Skipping batch size 8 due to memory config issue")
+    if is_wormhole_b0() and batch_size == 20:
+        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
     enable_memory_reports()
     test_infra.preprocess_torch_input()

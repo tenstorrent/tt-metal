@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include "binary_op.hpp"
+#include "binary_device_operation.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -245,7 +245,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
-Binary::ElementWiseMultiCore::cached_program_t Binary::ElementWiseMultiCore::create(
+BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperation::ElementWiseMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -425,7 +425,7 @@ Binary::ElementWiseMultiCore::cached_program_t Binary::ElementWiseMultiCore::cre
          dst_single_tile_size}};
 }
 
-void Binary::ElementWiseMultiCore::override_runtime_arguments(
+void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -434,23 +434,23 @@ void Binary::ElementWiseMultiCore::override_runtime_arguments(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
 
-    const auto& program_attributes = cached_program.program_attributes;
+    const auto& shared_variables = cached_program.shared_variables;
 
     set_eltwise_binary_runtime_args<false>(
         cached_program.program,
         input_tensor_a,
         input_tensor_b,
         output_tensor,
-        program_attributes.binary_reader_kernel_id,
-        program_attributes.unary_writer_kernel_id,
-        program_attributes.eltwise_binary_kernel_id,
-        program_attributes.cb_src0,
-        program_attributes.cb_src1,
-        program_attributes.cb_output,
-        program_attributes.compute_with_storage_grid_size,
-        program_attributes.src0_single_tile_size,
-        program_attributes.src1_single_tile_size,
-        program_attributes.dst_single_tile_size);
+        shared_variables.binary_reader_kernel_id,
+        shared_variables.unary_writer_kernel_id,
+        shared_variables.eltwise_binary_kernel_id,
+        shared_variables.cb_src0,
+        shared_variables.cb_src1,
+        shared_variables.cb_output,
+        shared_variables.compute_with_storage_grid_size,
+        shared_variables.src0_single_tile_size,
+        shared_variables.src1_single_tile_size,
+        shared_variables.dst_single_tile_size);
 }
 
 }  // namespace ttnn::operations::binary

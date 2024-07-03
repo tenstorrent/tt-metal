@@ -538,6 +538,18 @@ def bitwise_not(x, *args, **kwargs):
     return result
 
 
+def bitwise_and(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_and(x, value)
+    return result
+
+
+def bitwise_or(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_or(x, value)
+    return result
+
+
 def right_shift(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.bitwise_right_shift(x, value)
@@ -1417,8 +1429,6 @@ def eltwise_identity(x, *args, **kwargs):
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     if tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
     elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
@@ -1444,6 +1454,18 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
         return x.to(torch.bfloat16).to(torch.int32)
     elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
         return x.to(torch.bfloat16)
     else:
         return x

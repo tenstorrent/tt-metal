@@ -7,6 +7,7 @@ import math
 from torch import nn
 from typing import List, Optional, Tuple
 
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 import ttnn
 
 from models.utility_functions import (
@@ -234,11 +235,12 @@ class TtFalconAttentionPrefill(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    core_grid=get_falcon_default_core_grid(hidden_states[i].device()),
                 )
             )
 
@@ -359,11 +361,12 @@ class TtFalconAttentionPrefill(nn.Module):
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.matmul(
                 attn_output[i],
                 self.dense_weights[i],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                core_grid=get_falcon_default_core_grid(attn_output[i].device()),
             )
 
         return attn_output, layer_present
@@ -670,11 +673,12 @@ class TtFalconAttentionDecode(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    core_grid=get_falcon_default_core_grid(hidden_states[i].device()),
                 )
             )
 
@@ -982,11 +986,12 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.matmul(
                 attn_output[i],
                 self.dense_weights[i],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                core_grid=get_falcon_default_core_grid(attn_output[i].device()),
             )
 
         return attn_output, layer_present

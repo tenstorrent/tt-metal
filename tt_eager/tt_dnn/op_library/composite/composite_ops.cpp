@@ -18,7 +18,6 @@
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -1394,8 +1393,10 @@ Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     const Shape start_index = {0, 0, 0, 0};
-    Tensor index = pad(ones_like(input_a, output_mem_config), input_b.get_legacy_shape(), start_index, 0);
-    Tensor temp_a = pad(input_a, input_b.get_legacy_shape(), start_index, 0);
+    ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);
+
+    Tensor index = ttnn::pad(ones_like(input_tensor_4D, output_mem_config), input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
+    Tensor temp_a = ttnn::pad(input_tensor_4D,input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
     return where(index, temp_a, input_b, output_mem_config);
 }
 Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {

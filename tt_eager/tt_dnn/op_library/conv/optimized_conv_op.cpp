@@ -370,7 +370,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
-        } else {
+        } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
@@ -379,12 +379,19 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
             uint32_t num_weight_slices_width = weight_matrix_width_ntiles / this->parallelization_config.per_core_out_matrix_width_ntiles ;
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
-            CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
+            log_debug(LogOp, "Total active num cores: {}", total_active_num_cores);
+            log_debug(LogOp, "Parallelization config grid size: {}", this->parallelization_config.grid_size.str());
+            uint32_t num_cores_x = this->parallelization_config.grid_size.x;
+            uint32_t num_cores_y = this->parallelization_config.grid_size.y;
+            CoreRangeSet shard_grid = CoreRangeSet({{{0, 0}, {num_cores_x - 1, num_cores_y - 1}}});
+            log_debug(LogOp, "Calculated shard_grid: {}", shard_grid.str());
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->output_mem_config.shard_spec.value().orientation};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+        } else {
+            TT_FATAL(false, "Unsupported shard scheme");
         }
 
     }
