@@ -255,7 +255,7 @@ void Buffer::allocate() {
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
-    TT_ASSERT(this->buffer_type_ == BufferType::DRAM, "Expected DRAM buffer!");
+    TT_ASSERT(this->is_dram(), "Expected DRAM buffer!");
     return this->device_->dram_channel_from_bank_id(bank_id);
 }
 

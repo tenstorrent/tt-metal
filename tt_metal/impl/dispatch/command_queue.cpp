@@ -64,7 +64,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     src_page_index(src_page_index),
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
     TT_ASSERT(
-        buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
+        buffer.is_dram() or buffer.is_l1(),
         "Trying to read an invalid buffer");
 
     this->device = device;
