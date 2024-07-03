@@ -76,18 +76,6 @@ def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return input_tensor.permute(order).contiguous().clone()
 
 
-def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 doc = r"""
 permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
 
@@ -105,9 +93,8 @@ Example::
     [1, 1, 32, 64]
 
 """
-ttnn.register_operation(
+ttnn.register_python_operation(
     name="ttnn.permute",
-    validate_input_tensors=_permute_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
 )(ttnn._ttnn.operations.data_movement.permute)

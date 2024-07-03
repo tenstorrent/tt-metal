@@ -9,9 +9,6 @@ import tt_lib as ttl
 
 import ttnn
 
-
-THIS_MODULE = sys.modules[__name__]
-
 __all__ = []
 
 
@@ -31,46 +28,36 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         torch_function = name_to_golden_function_function[name]
         return torch_function(input_tensor)
 
-    def _ternary_validate_input_tensors(operation_name, input, input1, input2, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input1,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-            can_be_a_scalar=True,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input2,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-            can_be_a_scalar=True,
-        )
+    doc = __doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
+            Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
+
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`input_tensor1`
+                * :attr:`input_tensor2`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor, tensor1, tensor2)
+
+            """
+
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_ternary_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def ternary_function(
         input: ttnn.Tensor,
-        input1: [ttnn.Tensor, float],
-        input2: [ttnn.Tensor, float],
+        input1: Union[ttnn.Tensor, float],
+        input2: Union[ttnn.Tensor, float],
         *,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
@@ -98,31 +85,6 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    if isinstance(ternary_function, ttnn.decorators.Operation):
-        ternary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
-
-            .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`input_tensor1`
-                * :attr:`input_tensor2`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{name}(tensor, tensor1, tensor2)
-
-            {ternary_function.__doc__}
-
-            """
-    setattr(THIS_MODULE, name, ternary_function)
-
 
 TTL_TERNARY_FUNCTIONS = [
     ("mac", ttl.tensor.mac),
@@ -148,39 +110,32 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         torch_function = name_to_golden_function_function[name]
         return torch_function(input_tensor, parameter)
 
-    def _ternary_validate_input_tensors(operation_name, input_tensor, input_tensor1, input_tensor2, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor1,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor2,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
+            Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
+
+            .. math::
+                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`input_tensor1`
+                * :attr:`input_tensor2`
+                * :attr:`{param}`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
+
+            """
+
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_ternary_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def ternary_function(
         input_tensor: ttnn.Tensor,
@@ -219,30 +174,6 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    if isinstance(ternary_function, ttnn.decorators.Operation):
-        ternary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
-
-            .. math::
-                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`input_tensor1`
-                * :attr:`input_tensor2`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
-
-            """
-    setattr(THIS_MODULE, name, ternary_function)
-
 
 TTL_TERNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
     ("addcmul", ttl.tensor.addcmul, "addcmul", "value"),
@@ -277,30 +208,8 @@ def _golden_function(
     return torch.lerp(input_tensor_a, input_tensor_b, weight)
 
 
-def _validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name=f"ttnn.lerp",
-    validate_input_tensors=_validate_input_tensors,
     golden_function=_golden_function,
 )
 def lerp(

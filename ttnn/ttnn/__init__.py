@@ -233,7 +233,6 @@ from ttnn.core import (
 )
 
 import ttnn.reflection
-from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
 
@@ -245,7 +244,8 @@ release_trace = ttnn._ttnn.operations.core.release_trace
 
 
 from ttnn.decorators import (
-    register_operation,
+    register_python_operation,
+    register_cpp_operation,
     attach_golden_function,
     query_registered_operations,
     register_pre_operation_hook,
@@ -259,7 +259,7 @@ def auto_register_ttnn_cpp_operations(module):
     for attribute_name in dir(module):
         attribute = getattr(module, attribute_name)
         if hasattr(attribute, "__ttnn_operation__") and attribute.__ttnn_operation__ is None:
-            setattr(module, attribute_name, ttnn.register_operation()(attribute))
+            setattr(module, attribute_name, ttnn.register_cpp_operation()(attribute))
         elif isinstance(attribute, ModuleType):
             auto_register_ttnn_cpp_operations(attribute)
 

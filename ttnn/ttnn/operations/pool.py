@@ -14,8 +14,6 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     SlidingWindowOpParams,
 )
 
-THIS_MODULE = sys.modules[__name__]
-
 __all__ = []
 
 
@@ -98,21 +96,16 @@ class MaxPool2d:
             channels=channels,
         )
 
-    @ttnn.register_operation(
-        name="ttnn.MaxPool2d.__call__", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
-    )
+    @ttnn.register_python_operation(name="ttnn.MaxPool2d.__call__", is_method=True)
     def __call__(self, activation: ttnn.Tensor):
         return self.max_pool(activation)
 
-    @ttnn.register_operation(
-        name="ttnn.MaxPool2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
-    )
+    @ttnn.register_python_operation(name="ttnn.MaxPool2d.copy_input_to_device", is_method=True)
     def copy_input_to_device(self, input: ttnn.Tensor):
         return self.max_pool.copy_input_to_device(input)
 
-    @ttnn.register_operation(
+    @ttnn.register_python_operation(
         name="ttnn.MaxPool2d.copy_output_from_device",
-        validate_input_tensors=lambda *args, **kwargs: None,
         is_method=True,
     )
     def copy_output_from_device(self, output: ttnn.Tensor):

@@ -39,9 +39,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return output_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.matmul", validate_input_tensors=lambda *args, **kwargs: None, golden_function=_golden_function
-)
+@ttnn.register_python_operation(name="ttnn.matmul", golden_function=_golden_function)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -184,9 +182,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=No
     return output_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.linear", validate_input_tensors=lambda *args, **kwargs: None, golden_function=_golden_function
-)
+@ttnn.register_python_operation(name="ttnn.linear", golden_function=_golden_function)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,

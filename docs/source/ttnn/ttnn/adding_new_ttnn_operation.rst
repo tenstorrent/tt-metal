@@ -39,25 +39,32 @@ In order to add a new device operation, follow the directory structure shown bel
 `ttnn/cpp/ttnn/operations/<category>/<operation_name>/device/<program_factory_0>_program_factory.cpp`
 
 .. note::
- Add as many program factories as needed
+ Add as many program factories as needed. But the minimum requirement is one program factory.
 
 A concrete example of a device operation can be found in `ttnn/cpp/ttnn/operations/examples/example/device`
 
-`ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.hpp`:
-
 .. literalinclude::  examples/example/device/example_device_operation.hpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.hpp
 
-`ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp`:
 
 .. literalinclude::  examples/example/device/example_device_operation.cpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp
 
-`ttnn/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp`:
 
 .. literalinclude::  examples/example/device/single_core_program_factory.cpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp
 
-`ttnn/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp`:
 
 .. literalinclude::  examples/example/device/multi_core_program_factory.cpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp
 
 
 Step 2: Implement the operation in C++
@@ -69,9 +76,10 @@ In order to add a new operation, add the following file:
 
 A concrete example:
 
-`ttnn/cpp/ttnn/operations/examples/example/example.hpp`:
-
 .. literalinclude::  examples/example/example.hpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example.hpp
 
 
 Python Implementation
@@ -87,13 +95,16 @@ In order to add a python binding for the operation, follow the directory structu
 
 A concrete example:
 
-`ttnn/python/ttnn/operations/examples/example/example_pybind.hpp`:
-
 .. literalinclude::  examples/example/example_pybind.hpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/python/ttnn/operations/examples/example/example_pybind.hpp
 
-`ttnn/python/ttnn/operations/examples/examples_pybind.hpp`:
 
-.. literalinclude::  examples/example/example_pybind.hpp
+.. literalinclude::  examples/examples_pybind.hpp
+   :language: cpp
+   :linenos:
+   :caption: ttnn/python/ttnn/operations/examples/examples_pybind.hpp
 
 Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
 

@@ -8,9 +8,6 @@ import tt_lib as ttl
 
 import ttnn
 
-
-THIS_MODULE = sys.modules[__name__]
-
 __all__ = []
 
 
@@ -25,31 +22,27 @@ def register_ttl_loss_function(name, ttl_loss_function):
         torch_function = name_to_golden_function_function[name]
         return torch_function(reduction=loss_mode)(input_tensor_a, input_tensor_b)
 
-    def _loss_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_a,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_b,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_loss_validate_input_tensors,
-        golden_function=_golden_function,
-    )
+            Applies {name} to :attr:`input_tensor_a` and :attr:`input_tensor_b` with loss_mode :attr:`loss_mode`.
+
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor_a`
+                * :attr:`input_tensor_b`
+                * :attr:`loss_mode`
+
+            Example::
+
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor1, tensor2, mode)
+
+            """
+
+    @ttnn.register_python_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)
     def loss_function(
         input_tensor_a: ttnn.Tensor,
         input_tensor_b: ttnn.Tensor,
@@ -77,30 +70,6 @@ def register_ttl_loss_function(name, ttl_loss_function):
 
         output_tensor = ttnn.unsqueeze_to_4D(output_tensor)
         return output_tensor
-
-    if isinstance(loss_function, ttnn.decorators.Operation):
-        loss_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies {name} to :attr:`input_tensor_a` and :attr:`input_tensor_b` with loss_mode :attr:`loss_mode`.
-
-            .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
-
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b`
-                * :attr:`loss_mode`
-
-            Example::
-
-                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{name}(tensor1, tensor2, mode)
-
-            {loss_function.__doc__}
-
-            """
-    setattr(THIS_MODULE, name, loss_function)
 
 
 TTL_UNARY_FUNCTIONS = [
