@@ -158,31 +158,42 @@ class TtFalconModelShared:
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
-            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
-            attention_mask_bool = attention_mask_bool.triu(diagonal=1)
-
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
             if attention_mask_memconfig.is_sharded():
                 attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
                 attn_mask_shard_shape[-1] = sequence_size
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-            # TODO: set use_device_tilizer to True and remove tilize below
-            # Check if then layout is ttnn.RowMajor or Tile as argument
-            tt_attention_mask = ttnn.as_tensor(
-                tensor=attention_mask_bool,
-                dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device_mesh,
-                memory_config=attention_mask_memconfig,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
-                preprocess=lambda x: (x * -1e5).expand(-1, self.num_devices, -1, -1),
-            )
-            tt_attention_mask = ttnn.experimental.tensor.tilize(
-                tt_attention_mask,
-                output_mem_config=attention_mask_memconfig,
-                output_dtype=self.model_config["ATTN_MASK_DTYPE"],
-            )
+            attn_mask_torch = torch.full((batch_size, 1, sequence_size, sequence_size), torch.finfo(torch.float32).min)
+            attn_mask_torch = torch.triu(attn_mask_torch, diagonal=1)
+
+            if sequence_size > 8192:
+                # Use tilize on host for now to avoid missing support for multi-paged buffer with page size > 64KB
+                tt_attention_mask = ttnn.from_torch(
+                    attn_mask_torch,
+                    device=self.device_mesh,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                )
+            else:
+                # TODO: set use_device_tilizer to True and remove tilize below
+                # Check if then layout is ttnn.RowMajor or Tile as argument
+                tt_attention_mask = ttnn.as_tensor(
+                    tensor=attn_mask_torch,
+                    dtype=ttnn.bfloat16,  # subsequent tilize op expects bfloat16 inputs
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device_mesh,
+                    memory_config=attention_mask_memconfig,
+                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                )
+                tt_attention_mask = ttnn.experimental.tensor.tilize(
+                    tt_attention_mask,
+                    output_mem_config=attention_mask_memconfig,
+                    output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                )
+
             # Genereate ln output tensors for prefill if not existing
             do_generate_ln_tensors = (
                 sequence_size > self.model_config["layernorm_params"]["slice_size"]

@@ -404,6 +404,10 @@ def run_test_FalconCausalLM_end_to_end(
         ("prefill", 1, 128, 0),
         ("prefill", 1, 2048, 0),
         # ("prefill", 1, 8192, 0),  # Do not run in CI: takes too long
+        # ("prefill", 1, 16384, 0),
+        # ("prefill", 1, 32768, 0),
+        # ("prefill", 1, 131072, 0),
+        # ("prefill", 1, 262144, 0),
         ("decode", 32, 1, 128),
     ),
     ids=[
@@ -412,6 +416,10 @@ def run_test_FalconCausalLM_end_to_end(
         "prefill_seq128",
         "prefill_seq2048",
         # "prefill_seq8192",
+        # "prefill_seq16k",
+        # "prefill_seq32k",
+        # "prefill_seq120k",
+        # "prefill_seq240k",
         "decode_batch32",
     ],
 )
