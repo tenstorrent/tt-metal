@@ -29,6 +29,7 @@ from tt_lib.utils import (
 )
 
 import tt_lib as ttl
+import ttnn
 import torch
 import math
 import warnings

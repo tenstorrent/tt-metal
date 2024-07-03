@@ -2700,7 +2700,7 @@ eltwise_bias_gelu = make_binary_op_ttnn(ttnn.bias_gelu)
 eltwise_min = make_binary_op(ttl.tensor.min)
 eltwise_max = make_binary_op(ttl.tensor.max)
 
-matmul = make_binary_op(ttnn.matmul)
+matmul = make_binary_op_ttnn(ttnn.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 
 eltwise_scatter = make_binary_op(ttl.tensor.scatter)
