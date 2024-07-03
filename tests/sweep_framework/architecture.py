@@ -24,3 +24,12 @@ def str_to_arch(arch: str):
         return Arch.BLACKHOLE
     else:
         return Arch.INVALID
+
+
+def tt_smi_path(arch: Arch):
+    if arch == Arch.GRAYSKULL:
+        return "/home/software/syseng/gs/tt-smi"
+    elif arch == Arch.WORMHOLE or arch == Arch.WORMHOLE_B0:
+        return "/home/software/syseng/wh/tt-smi"
+    else:
+        return "/home/software/syseng/bh/tt-smi"

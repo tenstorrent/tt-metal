@@ -32,3 +32,10 @@ def deserialize(object):
             return eval(object)
         except:
             return str(object)
+
+
+def deserialize_vector(test_vector):
+    param_names = test_vector.keys()
+    test_vector = [deserialize(test_vector[elem]) for elem in test_vector]
+    test_vector = dict(zip(param_names, test_vector))
+    return test_vector
