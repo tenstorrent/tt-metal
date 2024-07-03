@@ -80,6 +80,11 @@ void py_module(py::module& module) {
         ttnn::addcmul_bw,
         R"doc(Performs backward operations for addcmul of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_ternary_backward(
+        module,
+        ttnn::addcdiv_bw,
+        R"doc(Performs backward operations for addcdiv of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace ternary_backward
