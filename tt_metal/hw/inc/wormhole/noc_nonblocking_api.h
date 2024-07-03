@@ -15,6 +15,10 @@ const uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
 const uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 const uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
 
+constexpr uint32_t NOC_ADDR_COORD_SHIFT = 32; // address is lower 36 bits and upper bits are the coordinates, 32 bits in lo reg and rest goes to mid
+const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_MID;
+const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_MID;
+
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
@@ -55,7 +59,7 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, src_addr >> 32);
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
   noc_reads_num_issued[noc] += 1;
@@ -81,7 +85,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(uint32_t noc, u
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, dest_addr >> 32);
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
   if (posted) {
@@ -105,7 +109,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(ui
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, dest_addr >> 32);
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
   noc_nonposted_writes_num_issued[noc] += 1;
@@ -122,7 +126,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(uint32_t
   while (!noc_cmd_buf_ready(noc, cmd_buf));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, dest_addr >> 32);
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
   noc_nonposted_writes_num_issued[noc] += num_times_to_write;
   noc_nonposted_writes_acked[noc] += num_times_to_write;
 }
@@ -151,16 +155,16 @@ inline __attribute__((always_inline)) void noc_init() {
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
 
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(xy_local_addr >> 32));
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(xy_local_addr >> 32));
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
     uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, (uint32_t)(&atomic_ret_val));
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(atomic_ret_addr >> 32));
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
 
     uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(xy_local_addr >> 32));
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
   }
 }
 
@@ -248,7 +252,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(uint32_t noc
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, dest_addr >> 32);
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
   if (posted) {
@@ -262,7 +266,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(uint32_t noc
 inline __attribute__((always_inline)) void noc_fast_atomic_increment(uint32_t noc, uint32_t cmd_buf, uint64_t addr, uint32_t vc, uint32_t incr, uint32_t wrap, bool linked, bool posted = false) {
   while (!noc_cmd_buf_ready(noc, cmd_buf));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
-  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32));
+  NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL,
                         NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                         (linked ? NOC_CMD_VC_LINKED : 0x0) |
