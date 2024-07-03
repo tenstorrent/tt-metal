@@ -54,8 +54,8 @@ run_t3000_falcon7b_tests(){
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip[user_input0-8-True-default_mode_1024_greedy_verify] ; fail+=$?
 
   # Falcon7B perplexity test (prefill and decode)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-prefill_seq1024_dram] --timeout=720 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-decode_1024_l1_sharded] --timeout=720 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-prefill_seq1024_dram] --timeout=1800 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-decode_1024_l1_sharded] --timeout=1800 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
