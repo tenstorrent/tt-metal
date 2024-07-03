@@ -14,6 +14,7 @@ from models.utility_functions import (
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.swin_utils import meshgrid
 import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -100,7 +101,7 @@ class TtSwinSelfAttention(nn.Module):
         # Take the dot product between "query" and "key" to get the raw attention scores.
         key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
+        attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
         attention_head_size_tt = self.const_tensor(attention_scores.get_legacy_shape(), self.attention_head_size)
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
@@ -158,7 +159,7 @@ class TtSwinSelfAttention(nn.Module):
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
+        context_layer = ttnn.matmul(attention_probs, value_layer)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
 
         new_context_layer_shape = tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)

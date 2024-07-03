@@ -167,7 +167,7 @@ class TtWhisperAttention(nn.Module):
 
         key_states_transposed = tt_lib.tensor.transpose(key_states, -2, -1)
         src_len = key_states.get_legacy_shape()[-2]
-        attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
+        attn_weights = ttnn.matmul(query_states, key_states_transposed)
 
         if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -226,7 +226,7 @@ class TtWhisperAttention(nn.Module):
 
         attn_probs = attn_weights
 
-        attn_output = tt_lib.tensor.bmm(attn_probs, value_states)
+        attn_output = ttnn.matmul(attn_probs, value_states)
         value_states.deallocate()
 
         if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:

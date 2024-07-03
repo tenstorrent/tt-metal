@@ -140,7 +140,7 @@ class TtViTSelfAttention(nn.Module):
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         key_layer_T = tt_lib.tensor.transpose(key_layer, -2, -1, self.out_mem_config_l1)
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_T, self.out_mem_config_l1)
+        attention_scores = ttnn.matmul(query_layer, key_layer_T, memory_config=self.out_mem_config_l1)
 
         attention_scores = tt_lib.tensor.bcast(
             attention_scores,
@@ -157,7 +157,7 @@ class TtViTSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.out_mem_config_l1)
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
+        context_layer = ttnn.matmul(attention_probs, value_layer)
 
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (1,) + tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)

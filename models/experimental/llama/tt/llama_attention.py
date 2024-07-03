@@ -245,7 +245,7 @@ class TtLlamaAttention(nn.Module):
         query_states_tt = torch_to_tt_tensor_rm(query_states, self.device)
 
         key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt, -2, -1)
-        mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
+        mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
         attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
@@ -275,7 +275,7 @@ class TtLlamaAttention(nn.Module):
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
         attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
+        attn_output = ttnn.matmul(attn_weights, value_states)
 
         if attn_output.get_legacy_shape() != [bsz, self.num_heads, q_len, self.head_dim]:
             raise ValueError(
