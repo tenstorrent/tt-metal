@@ -334,7 +334,7 @@ tt_lib.tensor.sin,40,0.85,0.89,1.23,0.96
 tt_lib.tensor.sin_bw,40,1.66,1.77,2.03,1.77
 tt_lib.tensor.sinh,40,4.24,4.5,4.92,4.49
 tt_lib.tensor.sinh_bw,40,30.39,33.77,35.76,34.29
-tt_lib.tensor.softplus,40,0.71,0.9,1.15,0.91
+tt_lib.tensor.softplus,40,0.81,0.9,1.0,0.87
 tt_lib.tensor.softplus_bw,40,10.46,11.82,12.84,11.81
 tt_lib.tensor.softshrink,40,6.1,6.56,7.06,6.46
 tt_lib.tensor.softshrink_bw,40,11.76,12.3,13.69,12.4
