@@ -18,6 +18,15 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     uint32_t num_harvested_rows = mask_bitset.count();
 
     std::string product_name = get_product_name(arch, num_harvested_rows);
+    if (tt::Cluster::instance().is_galaxy_cluster()) {
+        if (tt::Cluster::instance().get_board_type(device_id) == BoardType::N150) {
+            //some Galaxy machines are setup with N150s that have 0 harvested rows.
+            //get_product_name ( ) returns those chips as galaxy. Override that to nebula_x1.
+            product_name = "nebula_x1";
+        } else {
+            TT_ASSERT(tt::Cluster::instance().get_board_type(device_id) == BoardType::GALAXY, "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
+        }
+    }
 
     if (num_harvested_rows > 2) {
         TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
