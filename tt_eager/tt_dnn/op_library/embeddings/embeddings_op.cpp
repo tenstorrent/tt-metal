@@ -509,24 +509,32 @@ operation::ProgramWithCallbacks embeddings_(
     }
 }
 
-void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
+void Embeddings::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR);
+    DataType output_dtype = this->output_dtype;
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        const auto output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto& out_tensor = output_tensors.at(0).value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
+        output_dtype = out_tensor.get_dtype();
+    }
     TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16);
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
+    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
+    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 
     TT_FATAL(weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {
         TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0);
         TT_FATAL(weights.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     } else {
-        TT_FATAL(this->output_dtype != DataType::BFLOAT8_B);
+        TT_FATAL(output_dtype != DataType::BFLOAT8_B);
     }
     TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     switch (this->embeddings_type) {
@@ -547,8 +555,11 @@ std::vector<Shape> Embeddings::compute_output_shapes(const std::vector<Tensor> &
     return {output_shape};
 }
 
-std::vector<Tensor> Embeddings::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> Embeddings::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto &weight_tensor = input_tensors.at(1);
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
     if (!tilized) {
         return operation::generic_create_output_tensors(
             *this, input_tensors, this->output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
