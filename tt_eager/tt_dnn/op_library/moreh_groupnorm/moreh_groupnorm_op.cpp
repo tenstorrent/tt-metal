@@ -8,32 +8,13 @@
 #include <vector>
 
 #include "tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 namespace tt {
 
 namespace operations {
 
 namespace primary {
-
-namespace {
-
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
-
-inline void check_tensor(std::optional<Tensor> tensor, const std::string &op_name) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name);
-}
-
-}  // namespace
 
 void MorehGroupNorm::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors,
@@ -48,14 +29,14 @@ void MorehGroupNorm::validate_with_output_tensors(
     auto gamma = optional_input_tensors.at(0);
     auto beta = optional_input_tensors.at(1);
 
-    check_tensor(input, "moreh_groupnorm");
+    check_tensor(input, "moreh_groupnorm", "input");
 
-    check_tensor(output, "moreh_groupnorm");
-    check_tensor(mean, "moreh_groupnorm");
-    check_tensor(rstd, "moreh_groupnorm");
+    check_tensor(output, "moreh_groupnorm", "output");
+    check_tensor(mean, "moreh_groupnorm", "mean");
+    check_tensor(rstd, "moreh_groupnorm", "rstd");
 
-    check_tensor(gamma, "moreh_groupnorm");
-    check_tensor(beta, "moreh_groupnorm");
+    check_tensor(gamma, "moreh_groupnorm", "gamma");
+    check_tensor(beta, "moreh_groupnorm", "beta");
 
     // input (N, C, H, W)
     auto C = input.get_legacy_shape()[1];

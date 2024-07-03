@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 namespace tt {
 
@@ -11,26 +12,6 @@ using namespace constants;
 
 namespace operations {
 namespace primary {
-
-namespace {
-
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_FATAL(tensor.get_layout() == Layout::TILE, "{} only supports tiled layout.", op_name);
-    TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16, "{} only supports bfloat16.", op_name);
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
-    TT_FATAL(
-        tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
-}
-
-inline void check_tensor(std::optional<Tensor> tensor, const std::string &op_name) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name);
-}
-
-}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////
 //                         MorehSumBackward
@@ -42,9 +23,9 @@ void MorehSumBackward::validate_with_output_tensors(
     auto &input_grad = output_tensors.at(0);
 
     // validate tensor
-    check_tensor(output_grad, "moreh_sum_backward output_grad");
-    check_tensor(input, "moreh_sum_backward input");
-    check_tensor(input_grad, "moreh_sum_backward input_grad");
+    check_tensor(output_grad, "moreh_sum_backward", "output_grad");
+    check_tensor(input, "moreh_sum_backward", "input");
+    check_tensor(input_grad, "moreh_sum_backward", " input_grad");
 
     const auto &input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input_shape.without_padding();

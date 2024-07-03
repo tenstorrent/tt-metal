@@ -31,31 +31,6 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-// TODO: move these check functions to a common header.
-inline void check_tensor(
-    const Tensor& tensor,
-    const std::string& op_name,
-    DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::TILE) {
-    TT_FATAL(tensor.get_layout() == layout, "{} only supports tiled layout.", op_name);
-    TT_FATAL(tensor.get_dtype() == data_type, "{} only supports data type {}.", op_name, data_type);
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
-    TT_FATAL(
-        tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
-}
-
-inline void check_tensor(
-    std::optional<Tensor> tensor,
-    const std::string& op_name,
-    tt_metal::DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::TILE) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name, data_type, layout);
-}
-
 inline Shape compute_output_shape(
     const Shape& input_shape, const Shape& other_shape, bool transpose_input, bool transpose_other) {
     const auto& input_shape_wo_padding = input_shape.without_padding();
@@ -209,10 +184,10 @@ void MorehMatmul::validate_with_output_tensors(
     const auto& output = output_tensors.at(0);
 
     // validate tensor
-    check_tensor(input, "input");
-    check_tensor(other, "other");
-    check_tensor(output, "output");
-    check_tensor(bias, "bias");
+    check_tensor(input, "moreh_matmul", "input");
+    check_tensor(other, "moreh_matmul", "other");
+    check_tensor(output, "moreh_matmul", "output");
+    check_tensor(bias, "moreh_matmul", "bias");
 
     // check matrix dims
     const auto& input_shape = input.get_legacy_shape().without_padding();

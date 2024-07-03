@@ -126,6 +126,22 @@ struct CircularBufferArg {
     tt::DataFormat data_format,
     CircularBufferArg arg);
 
+void check_tensor(
+    const Tensor& tensor,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
+    Layout layout = Layout::TILE,
+    bool check_dtype = true,
+    bool check_layout = true);
+
+void check_tensor(std::optional<Tensor> tensor,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
+    Layout layout = Layout::TILE,
+    bool check_dtype = true,
+    bool check_layout = true);
 
 struct CallbackArgMap {
     std::map<uint32_t, uint32_t> input;

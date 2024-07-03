@@ -6,8 +6,8 @@
 
 #include <numeric>
 
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -20,36 +20,6 @@ namespace primary {
 //                         MorehSum
 ////////////////////////////////////////////////////////////////////////////
 namespace {
-// TODO: move these check functions to a common header.
-inline void check_tensor(
-    const Tensor& tensor,
-    const std::string& op_name,
-    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
-    Layout layout = Layout::TILE) {
-    TT_FATAL(tensor.get_layout() == layout, "{} only supports tiled layout.", op_name);
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
-
-    bool dtype_supported = false;
-    for (const auto& data_type : data_types) {
-        if (tensor.get_dtype() == data_type) {
-            dtype_supported = true;
-            break;
-        }
-    }
-    TT_FATAL(dtype_supported, "{} only supports specific data types.", op_name);
-}
-
-inline void check_tensor(
-    std::optional<Tensor> tensor,
-    const std::string& op_name,
-    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
-    Layout layout = Layout::TILE) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name, data_types, layout);
-}
 
 inline void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     const auto rank = shape.rank();
@@ -179,8 +149,8 @@ void MorehSum::validate_with_output_tensors(
     const auto& input = input_tensors.at(0);
     auto& output = output_tensors.at(0);
 
-    check_tensor(input, "input", {DataType::BFLOAT16, DataType::INT32});
-    check_tensor(output, "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
 
     validate_input_tensor_with_dim(input, this->dim);
 

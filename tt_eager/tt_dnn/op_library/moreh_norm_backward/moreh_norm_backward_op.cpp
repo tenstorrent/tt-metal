@@ -24,27 +24,16 @@ namespace operations {
 
 namespace primary {
 
-namespace {
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
-}  // namespace
-
 void MorehNormBackward::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &input = input_tensors.at(0);
     const auto &output = input_tensors.at(1);
     const auto &output_grad = input_tensors.at(2);
     const auto &input_grad = input_tensors.at(3);
 
-    check_tensor(input, "moreh_norm_backward");
-    check_tensor(output, "moreh_norm_backward");
-    check_tensor(output_grad, "moreh_norm_backward");
-    check_tensor(input_grad, "moreh_norm_backward");
+    check_tensor(input, "moreh_norm_backward", "input");
+    check_tensor(output, "moreh_norm_backward", "output");
+    check_tensor(output_grad, "moreh_norm_backward", "output_grad");
+    check_tensor(input_grad, "moreh_norm_backward", "input_grad");
 }
 
 std::vector<Shape> MorehNormBackward::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }

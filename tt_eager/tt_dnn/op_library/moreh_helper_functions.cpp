@@ -7,6 +7,8 @@
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 namespace tt {
 namespace operations {
 namespace primary {
@@ -193,6 +195,59 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         cb_id = tt_metal::CreateCircularBuffer(program, _core_range.value(), cb_config);
     }
     return cb_id;
+}
+
+void check_tensor(
+    const Tensor& tensor,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType> &data_types,
+    Layout layout,
+    bool check_dtype,
+    bool check_layout) {
+    if (check_layout) {
+        TT_FATAL(tensor.get_layout() == layout, "{} {} only supports {} layout.", op_name, tensor_name, magic_enum::enum_name(layout));
+    }
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
+    TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
+
+    if (check_dtype) {
+        bool dtype_supported = false;
+        for (const auto& data_type : data_types) {
+            if (tensor.get_dtype() == data_type) {
+                dtype_supported = true;
+                break;
+            }
+        }
+        if (!dtype_supported) {
+            std::string dtype_string = "[";
+            bool is_first = true;
+            for (const auto& data_type : data_types) {
+                if (!is_first) {
+                    dtype_string += ", ";
+                }
+                dtype_string += fmt::format("{}", magic_enum::enum_name(data_type));
+                is_first = false;
+            }
+            dtype_string += "]";
+
+            TT_FATAL(dtype_supported, "{} {} only supports specific data types. {} ", op_name, tensor_name, dtype_string);
+        }
+    }
+}
+
+void check_tensor(
+    std::optional<Tensor> tensor,
+    const std::string& op_name,
+    const std::string& tensor_name,
+    const std::initializer_list<DataType> &data_types,
+    Layout layout,
+    bool check_dtype,
+    bool check_layout) {
+    if (!tensor.has_value()) {
+        return;
+    }
+    check_tensor(tensor.value(), op_name, tensor_name, data_types, layout, check_dtype, check_layout);
 }
 
 }  // namespace primary

@@ -8,32 +8,13 @@
 #include <vector>
 
 #include "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 namespace tt {
 
 namespace operations {
 
 namespace primary {
-
-namespace {
-
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
-
-inline void check_tensor(std::optional<Tensor> tensor, const std::string &op_name) {
-    if (!tensor.has_value()) {
-        return;
-    }
-    check_tensor(tensor.value(), op_name);
-}
-
-}  // namespace
 
 void MorehGroupNormBackwardInputGrad::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors,
@@ -48,14 +29,14 @@ void MorehGroupNormBackwardInputGrad::validate_with_output_tensors(
 
     auto gamma = optional_input_tensors.at(0);
 
-    check_tensor(output_grad, "moreh_groupnorm_backward_input_grad");
-    check_tensor(input, "moreh_groupnorm_backward_input_grad");
-    check_tensor(mean, "moreh_groupnorm_backward_input_grad");
-    check_tensor(rstd, "moreh_groupnorm_backward_input_grad");
+    check_tensor(output_grad, "moreh_groupnorm_backward_input_grad", "output_grad");
+    check_tensor(input, "moreh_groupnorm_backward_input_grad", "input");
+    check_tensor(mean, "moreh_groupnorm_backward_input_grad", "mean");
+    check_tensor(rstd, "moreh_groupnorm_backward_input_grad", "rstd");
 
-    check_tensor(input_grad, "moreh_groupnorm_backward_input_grad");
+    check_tensor(input_grad, "moreh_groupnorm_backward_input_grad", "input_grad");
 
-    check_tensor(gamma, "moreh_groupnorm_backward_input_grad");
+    check_tensor(gamma, "moreh_groupnorm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
     auto C = output_grad.get_legacy_shape()[1];
@@ -156,13 +137,13 @@ void MorehGroupNormBackwardGammaBetaGrad::validate_with_output_tensors(
     auto &gamma_grad = output_tensors.at(0);
     auto &beta_grad = output_tensors.at(1);
 
-    check_tensor(output_grad, "moreh_groupnorm_backward_gamma_beta_grad");
-    check_tensor(input, "moreh_groupnorm_backward_gamma_beta_grad");
-    check_tensor(mean, "moreh_groupnorm_backward_gamma_beta_grad");
-    check_tensor(rstd, "moreh_groupnorm_backward_gamma_beta_grad");
+    check_tensor(output_grad, "moreh_groupnorm_backward_gamma_beta_grad", "output_grad");
+    check_tensor(input, "moreh_groupnorm_backward_gamma_beta_grad", "input");
+    check_tensor(mean, "moreh_groupnorm_backward_gamma_beta_grad", "mean");
+    check_tensor(rstd, "moreh_groupnorm_backward_gamma_beta_grad", "rstd");
 
-    check_tensor(gamma_grad, "moreh_groupnorm_backward_gamma_beta_grad");
-    check_tensor(beta_grad, "moreh_groupnorm_backward_gamma_beta_grad");
+    check_tensor(gamma_grad, "moreh_groupnorm_backward_gamma_beta_grad", "gamma_grad");
+    check_tensor(beta_grad, "moreh_groupnorm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
     auto C = output_grad.get_legacy_shape()[1];

@@ -28,15 +28,6 @@ namespace primary {
 
 namespace {
 
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
-
 inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
     auto output_shape = input_shape;
@@ -78,8 +69,8 @@ void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &input = input_tensors.at(0);
     const auto &output = input_tensors.at(1);
 
-    check_tensor(input, "moreh_norm");
-    check_tensor(output, "moreh_norm");
+    check_tensor(input, "moreh_norm", "input");
+    check_tensor(output, "moreh_norm", "output");
 }
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
