@@ -15,14 +15,6 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<Tensor> addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> unary_mul_bw(
     const Tensor& grad,
     const Tensor& input,
