@@ -64,6 +64,54 @@ std::vector<Tensor> _addcdiv_bw(
     return grad_tensor;
 }
 
+std::vector<std::optional<Tensor>> _where_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& condition,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
+        } else {
+            input_grad = tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
+        } else {
+            other_grad = tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config);
+        }
+        result.emplace_back(other_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    return std::move(result);
+}
+
+std::vector<std::optional<Tensor>> _where_bw_overload(
+    const Tensor& grad,
+    const Tensor& condition,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    uint8_t default_queue_id = 0;
+    return _where_bw(default_queue_id, condition, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type(TernaryBackwardOpType OpType){
     switch (OpType) {
         case TernaryBackwardOpType::ADDCMUL_BW:
@@ -76,6 +124,25 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
+std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt(TernaryBackwardOpType OpType){
+    switch (OpType) {
+        case TernaryBackwardOpType::WHERE_BW:
+            return _where_bw;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
+std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt_wo_qid(TernaryBackwardOpType OpType){
+    switch (OpType) {
+        case TernaryBackwardOpType::WHERE_BW:
+            return _where_bw_overload;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
 
 }
 
