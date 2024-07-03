@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 
 namespace ttnn {
 
@@ -86,6 +87,36 @@ struct Power{
         return detail::power_fp(DefaultQueueId, input_tensor, exponent, memory_config, optional_output_tensor);
     }
 };
+template <UnaryCompositeOpType unary_comp_op_type>
+struct Unary_composite_ops
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = UnaryCompositeFunction::get_function_type1(unary_comp_op_type);
+            return op_type(input_tensor, memory_config);
+        }
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float value_1,
+        float value_2,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = UnaryCompositeFunction::get_function_type2(unary_comp_op_type);
+            return op_type(input_tensor, value_1, value_2, memory_config);
+        }
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        int value_1,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = UnaryCompositeFunction::get_function_type3(unary_comp_op_type);
+            return op_type(input_tensor, value_1, memory_config);
+        }
+};
 
 // re-implement tt_eager composite unary op => ttnn composite unary ops.
 Tensor deg2rad(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
@@ -111,27 +142,7 @@ Tensor div_unary(uint8_t queue_id, const Tensor& input_tensor, float value, cons
 // TODO: update these composite unary ops pending decision on TensorAsync implementation.
 
 // TODO: implement these composite unary ops with optional output tensor and queue id.
-Tensor acosh(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::acosh(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
 
-Tensor asinh(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::asinh(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-
-Tensor atanh(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::atanh(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-
-Tensor cbrt(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::cbrt(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor cosh(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::cosh(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor digamma(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::digamma(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
 Tensor hardswish(
     uint8_t queue_id,
     const Tensor& input_tensor,
@@ -156,30 +167,7 @@ Tensor hardtanh(
     const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return tt::tt_metal::hardtanh(input_tensor, low, high, memory_config.value_or(input_tensor.memory_config()));
 }
-Tensor lgamma(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::lgamma(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor log1p(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::log1p(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor mish(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::mish(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor multigammaln(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::multigammaln(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor sinh(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::sinh(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor softsign(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::softsign(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor swish(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::swish(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor tanhshrink(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::tanhshrink(input_tensor, memory_config.value_or(input_tensor.memory_config()));
-}
+
 Tensor tril(
     uint8_t queue_id,
     const Tensor& input_tensor,
@@ -249,27 +237,29 @@ constexpr auto deg2rad = ttnn::register_operation("ttnn::deg2rad", TO_LAMBDA_WIT
 constexpr auto rad2deg = ttnn::register_operation("ttnn::rad2deg", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rad2deg));
 constexpr auto rdiv = ttnn::register_operation("ttnn::rdiv", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rdiv));
 
-constexpr auto acosh = ttnn::register_operation("ttnn::acosh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::acosh));
-constexpr auto asinh = ttnn::register_operation("ttnn::asinh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::asinh));
-constexpr auto atanh = ttnn::register_operation("ttnn::atanh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::atanh));
-constexpr auto cbrt = ttnn::register_operation("ttnn::cbrt", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::cbrt));
-constexpr auto cosh = ttnn::register_operation("ttnn::cosh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::cosh));
-constexpr auto digamma = ttnn::register_operation("ttnn::digamma", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::digamma));
+
 constexpr auto hardswish = ttnn::register_operation("ttnn::hardswish", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardswish));
 constexpr auto hardsigmoid =
     ttnn::register_operation("ttnn::hardsigmoid", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardsigmoid));
 constexpr auto hardtanh = ttnn::register_operation("ttnn::hardtanh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardtanh));
-constexpr auto lgamma = ttnn::register_operation("ttnn::lgamma", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::lgamma));
-constexpr auto log1p = ttnn::register_operation("ttnn::log1p", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::log1p));
-constexpr auto mish = ttnn::register_operation("ttnn::mish", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::mish));
-constexpr auto multigammaln =
-    ttnn::register_operation("ttnn::multigammaln", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::multigammaln));
-constexpr auto sinh = ttnn::register_operation("ttnn::sinh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::sinh));
-constexpr auto softsign = ttnn::register_operation("ttnn::softsign", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::softsign));
-constexpr auto swish = ttnn::register_operation("ttnn::swish", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::swish));
-constexpr auto tanhshrink =
-    ttnn::register_operation("ttnn::tanhshrink", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::tanhshrink));
+
 constexpr auto tril = ttnn::register_operation("ttnn::tril", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::tril));
 constexpr auto triu = ttnn::register_operation("ttnn::triu", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::triu));
+
+// newly imported
+constexpr auto tanhshrink = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::TANHSHRINK>>("ttnn::tanhshrink");
+constexpr auto acosh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ACOSH>>("ttnn::acosh");
+constexpr auto asinh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ASINH>>("ttnn::asinh");
+constexpr auto atanh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::ATANH>>("ttnn::atanh");
+constexpr auto cbrt = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::CBRT>>("ttnn::cbrt");
+constexpr auto cosh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::COSH>>("ttnn::cosh");
+constexpr auto digamma = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::DIGAMMA>>("ttnn::digamma");
+constexpr auto lgamma = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::LGAMMA>>("ttnn::lgamma");
+constexpr auto log1p = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::LOG1P>>("ttnn::log1p");
+constexpr auto mish = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::MISH>>("ttnn::mish");
+constexpr auto multigammaln = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>("ttnn::multigammaln");
+constexpr auto sinh = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SINH>>("ttnn::sinh");
+constexpr auto softsign= ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SOFTSIGN>>("ttnn::softsign");
+constexpr auto swish = ttnn::register_operation<ttnn::operations::unary::Unary_composite_ops<ttnn::operations::unary::UnaryCompositeOpType::SWISH>>("ttnn::swish");
 
 }  // namespace ttnn
