@@ -25,56 +25,53 @@ def git_hash():
         raise RuntimeError("Couldn't get git hash!") from e
 
 
-def run(test_module, test_vector, queue):
+def run(test_module, input_queue, output_queue):
     device = ttnn.open_device(0)
-    test_vector = deserialize_vector(test_vector)
     try:
-        status, message = test_module.run(**test_vector, device=device)
-    except Exception as e:
-        status, message = False, str(e)
-    ttnn.close_device(device)
-    queue.put([status, message])
-
-
-def execute_test(test_module, test_vector):
-    result = dict()
-
-    q = Queue()
-    p = Process(target=run, args=(test_module, test_vector, q))
-    try:
-        p.start()
-        response = q.get(block=True, timeout=5)
-        status, message = response[0], response[1]
-        if not status:
-            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-        else:
-            result["status"] = TestStatus.PASS
-        result["test_output"] = message
+        while True:
+            test_vector = input_queue.get(block=True, timeout=1)
+            test_vector = deserialize_vector(test_vector)
+            try:
+                status, message = test_module.run(**test_vector, device=device)
+            except Exception as e:
+                status, message = False, str(e)
+            output_queue.put([status, message])
     except Empty as e:
-        print(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-        p.terminate()
-        smi_dir = architecture.tt_smi_path(ARCH)
-        smi_process = subprocess.run([smi_dir, "-tr", "0"])
-        if smi_process.returncode == 0:
-            print("TT-SMI Reset Complete Successfully")
-        result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
-    except Exception as e:
-        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-        result["exception"] = str(e)
-
-    result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return result
+        ttnn.close_device(device)
+        exit(0)
 
 
-def execute_tests(test_module, test_vectors):
-    tests_run = 0
+def execute_batch(test_module, test_vectors):
     results = []
+    input_queue = Queue()
+    output_queue = Queue()
+    p = None
     for test_vector in test_vectors:
-        tests_run += 1
-        result = execute_test(test_module, test_vector)
-        results.append(result)
+        result = dict()
+        if p is None:
+            p = Process(target=run, args=(test_module, input_queue, output_queue))
+            p.start()
+        try:
+            input_queue.put(test_vector)
+            response = output_queue.get(block=True, timeout=5)
+            status, message = response[0], response[1]
+            result["status"] = TestStatus.PASS if status else TestStatus.FAIL_ASSERT_EXCEPTION
+            result["message"] = message
+        except Empty as e:
+            print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+            p.terminate()
+            p = None
+            smi_dir = architecture.tt_smi_path(ARCH)
+            smi_process = subprocess.run([smi_dir, "-tr", "0"])
+            if smi_process.returncode == 0:
+                print("SWEEPS: TT-SMI Reset Complete Successfully")
+            result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
+        result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    print("TESTS RUN: ", tests_run)
+        results.append(result)
+    if p is not None:
+        p.join()
+
     return results
 
 
@@ -103,15 +100,21 @@ def run_sweeps(module_name, batch_name):
             test_module = importlib.import_module("sweeps." + sweep_name)
             collection_name = sweep_name + "_test_vectors"
             collection = db[collection_name]
-
+            print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
-                test_vectors = list(collection.find())
-                if len(test_vectors) == 0:
+                batches = list(collection.distinct("batch_name"))
+                if len(batches) == 0:
                     continue
 
-                header_info, test_vectors = sanitize_inputs(test_vectors)
-                results = execute_tests(test_module, test_vectors)
-                export_test_results(header_info, results)
+                for batch in batches:
+                    print(f"SWEEPS: Executing tests for module {sweep_name}, batch {batch}.")
+                    test_vectors = list(collection.find({"batch_name": batch}))
+
+                    header_info, test_vectors = sanitize_inputs(test_vectors)
+                    results = execute_batch(test_module, test_vectors)
+                    print(f"SWEEPS: Completed tests for module {sweep_name}, batch {batch}.")
+                    print(f"SWEEPS: Tests Executed - {len(results)}")
+                    export_test_results(header_info, results)
             except Exception as e:
                 print(e)
                 continue
@@ -123,19 +126,26 @@ def run_sweeps(module_name, batch_name):
 
         try:
             if not batch_name:
-                test_vectors = list(collection.find())
+                try:
+                    batches = list(collection.distinct("batch_name"))
+                    if len(batches) == 0:
+                        return
+
+                    for batch in batches:
+                        test_vectors = list(collection.find({"batch_name": batch}))
+
+                        header_info, test_vectors = sanitize_inputs(test_vectors)
+                        results = execute_batch(test_module, test_vectors)
+                        export_test_results(header_info, results)
+                except Exception as e:
+                    print(e)
+                    return
             else:
-                test_vectors = list(collection.find({"batch_name": batch_name}))
+                test_vectors = list(collection.find({"batch_name": batch}))
 
-            if len(test_vectors) == 0:
-                return
-
-            header_info, test_vectors = sanitize_inputs(test_vectors)
-            # param_names = test_vectors[0].keys()
-            # test_vectors = [[deserialize(vector[elem]) for elem in vector] for vector in test_vectors]
-            # test_vectors = [dict(zip(param_names, vector)) for vector in test_vectors]
-            results = execute_tests(test_module, test_vectors)
-            export_test_results(header_info, results)
+                header_info, test_vectors = sanitize_inputs(test_vectors)
+                results = execute_batch(test_module, test_vectors)
+                export_test_results(header_info, results)
         except Exception as e:
             print(e)
 
