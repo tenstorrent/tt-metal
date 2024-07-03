@@ -62,12 +62,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Record the completion of the write event
     ttnn::record_event(device->command_queue(io_cq), write_event);
     // Host stalls until write is completed, before sending workload
-    ttnn::event_synchronize(write_event);
+    ttnn::event_synchronize(device, write_event);
     // Dispatch workload. Preallocated output_tensor is populated by op/
     ttnn::run_operation(workload_dispatch_cq, op, {input_tensor}, {}, {output_tensor}).at(0);
     // Record completion of workload
     ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
-    ttnn::event_synchronize(workload_event);
+    ttnn::event_synchronize(device, workload_event);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
     // Ensure that reference count book keeping is done correctly
@@ -121,7 +121,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::write_buffer(io_cq, input_tensor, {host_data}); // Write using cq 1
             ttnn::record_event(device->command_queue(io_cq), write_event); // Record write on cq 1
             // Wait until cq 1 write is complete
-            ttnn::event_synchronize(write_event);
+            ttnn::wait_for_event(device->command_queue(workload_dispatch_cq), write_event);
             auto op0 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT}}};
             auto op1 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::NEG}}};
             // Run operation on cq 0
@@ -133,7 +133,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // Record cq 0 prog execution
             ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
             // Wait until cq 0 prog execution is done
-            ttnn::event_synchronize(workload_event);
+            ttnn::wait_for_event(device->command_queue(io_cq), workload_event);
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
             for (int i = 0; i < buf_size_datums; i++) {
