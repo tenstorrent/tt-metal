@@ -242,6 +242,7 @@ Pointwise Ternary
    ttnn/where
    ttnn/addcmul_bw
    ttnn/addcdiv_bw
+   ttnn/where_bw
 
 Losses
 ======

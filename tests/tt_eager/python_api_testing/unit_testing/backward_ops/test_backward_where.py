@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -28,7 +29,7 @@ def test_bw_where(input_shapes, device):
     other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -4, 4, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
+    tt_output_tensor_on_device = ttnn.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
 
     in_data.retain_grad()
     other_data.retain_grad()
@@ -73,7 +74,7 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
 
     cq_id = 0
 
-    tt_output_tensor_on_device = tt_lib.tensor.where_bw(
+    tt_output_tensor_on_device = ttnn.where_bw(
         grad_tensor,
         condition_tensor,
         input_tensor,
