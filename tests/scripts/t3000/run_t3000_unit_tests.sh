@@ -99,7 +99,10 @@ run_t3000_mixtral_tests() {
   pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
   pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
   pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
-
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention_prefill.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder_prefill.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
