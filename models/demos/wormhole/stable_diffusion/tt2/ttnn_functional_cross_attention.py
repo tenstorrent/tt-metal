@@ -7,7 +7,7 @@ import ttnn
 import torch
 import os
 import tt_lib as ttl
-from ttnn.operations.core import squeeze, unsqueeze_to_4D
+from ttnn import squeeze, unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     is_tile_dim_alligned,
     round_up_to_tile_dim,

@@ -109,19 +109,19 @@ std::string append_input_tensor_schemas_to_doc(
     }
 }
 
-template <auto id, typename concrete_operation_t, typename... overload_t>
-auto bind_registered_operation(
-    py::module& module,
-    const operation_t<id, concrete_operation_t>& operation,
-    const std::string& doc,
-    overload_t&&... overloads) {
-    using registered_operation_t = operation_t<id, concrete_operation_t>;
+auto bind_registered_operation_helper(
+    py::module& module, const auto& operation, const std::string& doc, auto attach_call_operator) {
+    using registered_operation_t = std::decay_t<decltype(operation)>;
 
     const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
 
     py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
 
-    py_operation.doc() = append_input_tensor_schemas_to_doc(operation, doc).c_str();
+    if constexpr (requires { append_input_tensor_schemas_to_doc(operation, doc); }) {
+        py_operation.doc() = append_input_tensor_schemas_to_doc(operation, doc).c_str();
+    } else {
+        py_operation.doc() = doc;
+    }
 
     py_operation.def_property_readonly(
         "name",
@@ -133,18 +133,34 @@ auto bind_registered_operation(
         [](const registered_operation_t& self) -> const std::string { return self.python_fully_qualified_name(); },
         "Fully qualified name of the api");
 
-    py_operation.def_property_readonly(
-        "__ttnn__", [](const registered_operation_t& self) { return std::nullopt; });  // Identifier for the operation
+    py_operation.def_property_readonly("__ttnn_operation__", [](const registered_operation_t& self) {
+        return std::nullopt;
+    });  // Attribute to identify of ttnn operations
 
-    (
-        [&py_operation](auto&& overload) {
-            add_operator_call<registered_operation_t, concrete_operation_t>(py_operation, overload);
-        }(overloads),
-        ...);
+    attach_call_operator(py_operation);
 
     module.attr(operation.name().c_str()) = operation;  // Bind an instance of the operation to the module
 
     return py_operation;
+}
+
+template <auto id, typename concrete_operation_t, typename... overload_t>
+auto bind_registered_operation(
+    py::module& module,
+    const operation_t<id, concrete_operation_t>& operation,
+    const std::string& doc,
+    overload_t&&... overloads) {
+    using registered_operation_t = operation_t<id, concrete_operation_t>;
+
+    auto attach_call_operator = [&](auto& py_operation) {
+        (
+            [&py_operation](auto&& overload) {
+                add_operator_call<registered_operation_t, concrete_operation_t>(py_operation, overload);
+            }(overloads),
+            ...);
+    };
+
+    return bind_registered_operation_helper(module, operation, doc, attach_call_operator);
 }
 
 template <auto id, typename lambda_t, typename... overload_t>
@@ -155,38 +171,19 @@ auto bind_registered_operation(
     overload_t&&... overloads) {
     using registered_operation_t = lambda_operation_t<id, lambda_t>;
 
-    const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
+    auto attach_call_operator = [&](auto& py_operation) {
+        (
+            [&py_operation](auto&& overload) {
+                std::apply(
+                    [&py_operation, &overload](auto&&... args) {
+                        py_operation.def("__call__", overload.function, args...);
+                    },
+                    overload.args.value);
+            }(overloads),
+            ...);
+    };
 
-    py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
-
-    py_operation.doc() = doc;
-
-    py_operation.def_property_readonly(
-        "name",
-        [](const registered_operation_t& self) -> const std::string { return self.name(); },
-        "Shortened name of the api");
-
-    py_operation.def_property_readonly(
-        "python_fully_qualified_name",
-        [](const registered_operation_t& self) -> const std::string { return self.python_fully_qualified_name(); },
-        "Fully qualified name of the api");
-
-    py_operation.def_property_readonly(
-        "__ttnn__", [](const registered_operation_t& self) { return std::nullopt; });  // Identifier for the
-
-    (
-        [&py_operation](auto&& overload) {
-            std::apply(
-                [&py_operation, &overload](auto&&... args) {
-                    py_operation.def("__call__", overload.function, args...);
-                },
-                overload.args.value);
-        }(overloads),
-        ...);
-
-    module.attr(operation.name().c_str()) = operation;  // Bind an instance of the operation to the module
-
-    return py_operation;
+    return bind_registered_operation_helper(module, operation, doc, attach_call_operator);
 }
 
 }  // namespace decorators

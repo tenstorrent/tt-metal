@@ -9,7 +9,7 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
-import ttnn.experimental as tt_lib
+from ttnn import experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger

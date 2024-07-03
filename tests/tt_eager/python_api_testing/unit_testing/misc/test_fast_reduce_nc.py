@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn.experimental as ttl
+from ttnn import experimental as ttl
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc, skip_for_grayskull
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (

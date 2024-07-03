@@ -7,7 +7,6 @@ from typing import Optional, Tuple
 
 import ttnn
 from ttnn import ReplicateTensorToMesh
-import ttnn.experimental
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP

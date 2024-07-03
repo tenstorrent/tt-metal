@@ -59,11 +59,12 @@ def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
     return output_tensor
 
 
-pad = ttnn.register_operation(
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.data_movement.pad,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-)(ttnn._ttnn.operations.data_movement.pad)
+)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
@@ -104,7 +105,7 @@ Example::
     [1, 1, 32, 64]
 
 """
-permute = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
     golden_function=_golden_function,
@@ -154,7 +155,7 @@ Example::
     [1, 1, 32, 64]
 
 """
-concat = ttnn.register_operation(
+ttnn.register_operation(
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
     golden_function=_golden_function,
@@ -168,16 +169,14 @@ def _golden_function(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(tensor, repeats, dim=dim)
 
 
-repeat_interleave = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.data_movement.repeat_interleave
-)
+ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.repeat_interleave, golden_function=_golden_function)
 
 
 def _golden_function(tensor, shape, **_):
     return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
-repeat = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.data_movement.repeat)
+ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.repeat, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
@@ -189,8 +188,9 @@ def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float
     return ret
 
 
-upsample = ttnn.register_operation(
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.data_movement.upsample,
     golden_function=_golden_function,
-)(ttnn._ttnn.operations.data_movement.upsample)
+)
 
 __all__ = []

@@ -5,7 +5,7 @@
 from loguru import logger
 import math
 import torch
-import ttnn.experimental as tt_lib
+from ttnn import experimental as tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh
 from models.utility_functions import nearest_32

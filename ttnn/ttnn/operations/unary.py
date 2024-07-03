@@ -113,16 +113,15 @@ def register_ttnn_cpp_unary_function(unary_function):
     }
 
     golden_keys = set(name_to_golden_function.keys())
-    function_names = {function.name for function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS}
+    function_names = {function.__name__.split(".")[-1] for function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS}
     if golden_keys != function_names:
         raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
 
     def _golden_function(input_tensor: ttnn.Tensor, **_):
-        torch_function = name_to_golden_function[unary_function.name]
+        torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
         return torch_function(input_tensor)
 
-    operation = ttnn.register_operation(golden_function=_golden_function)(unary_function)
-    setattr(THIS_MODULE, unary_function.name, operation)
+    ttnn.attach_golden_function(unary_function, golden_function=_golden_function)
 
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
@@ -203,11 +202,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
-
-
-def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    leaky_relu = getattr(THIS_MODULE, "leaky_relu")
-    return leaky_relu(*args, **kwargs)
 
 
 def _is_scalar(value):

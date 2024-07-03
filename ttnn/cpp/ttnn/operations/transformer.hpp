@@ -337,21 +337,21 @@ struct ExecuteAttentionSoftmax {
 namespace transformer {
 
 constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation(
-    "ttnn::transfomer::split_query_key_value_and_split_heads",
+    "ttnn::transformer::split_query_key_value_and_split_heads",
     TO_LAMBDA(ttnn::operations::transformer::split_query_key_value_and_split_heads));
 
 constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
-    "ttnn::transfomer::concatenate_heads");
+    "ttnn::transformer::concatenate_heads");
 
 constexpr auto rotary_embedding = ttnn::register_operation<ttnn::operations::transformer::ExecuteRotaryEmbedding>(
-    "ttnn::transfomer::rotary_embedding");
+    "ttnn::transformer::rotary_embedding");
 
 constexpr auto attention_softmax =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(
-        "ttnn::transfomer::attention_softmax");
+        "ttnn::transformer::attention_softmax");
 constexpr auto attention_softmax_ =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
-        "ttnn::transfomer::attention_softmax_");
+        "ttnn::transformer::attention_softmax_");
 
 }  // namespace transformer
 

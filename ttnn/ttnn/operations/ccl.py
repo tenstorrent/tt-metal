@@ -16,6 +16,6 @@ def _validate_input_tensors(operation_name, tensor, *args, **kwargs):
         raise RuntimeError(f"{operation_name} requires input tensors to be multi-device tensor")
 
 
-all_gather = ttnn.register_operation(validate_input_tensors=_validate_input_tensors)(
+ttnn.register_operation(name="ttnn.all_gather", validate_input_tensors=_validate_input_tensors)(
     ttnn._ttnn.operations.ccl.all_gather
 )

@@ -23,7 +23,6 @@ from ttnn.device import (
     is_grayskull,
     is_wormhole_b0,
 )
-import ttnn.experimental
 
 
 def _nearest_32(x):

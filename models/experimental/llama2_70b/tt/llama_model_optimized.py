@@ -6,7 +6,7 @@ from loguru import logger
 from typing import List
 from tqdm import tqdm
 import torch
-import ttnn.experimental as tt_lib
+from ttnn import experimental as tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 

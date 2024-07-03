@@ -132,7 +132,7 @@ def apis():
     class Api:
         python_fully_qualified_name: str
         is_experimental: bool
-        is_cpp_function: bool
+        is_cpp_operation: bool
         golden_function: callable
 
         @classmethod
@@ -140,14 +140,14 @@ def apis():
             return cls(
                 python_fully_qualified_name=operation.python_fully_qualified_name,
                 is_experimental=operation.is_experimental,
-                is_cpp_function=operation.is_cpp_function,
+                is_cpp_operation=operation.is_cpp_operation,
                 golden_function=operation.golden_function,
             )
 
     apis = [Api.from_registered_operation(api) for api in ttnn.query_registered_operations(include_experimental=True)]
 
     df = pd.DataFrame(apis)
-    df.sort_values(by=["is_experimental", "is_cpp_function", "python_fully_qualified_name"], inplace=True)
+    df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
     df["has_fallback"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
     return render_template(
         "apis.html",
@@ -156,7 +156,7 @@ def apis():
             justify="center",
             columns=[
                 "python_fully_qualified_name",
-                "is_cpp_function",
+                "is_cpp_operation",
                 "is_experimental",
                 "has_fallback",
             ],
