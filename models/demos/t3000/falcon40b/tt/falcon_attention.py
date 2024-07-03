@@ -9,8 +9,6 @@ from typing import Optional, Tuple
 
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
-import ttnn.experimental
-import ttnn.experimental.operations
 
 from models.utility_functions import (
     torch2tt_tensor,

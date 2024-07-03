@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-import ttnn.experimental as tt_lib
+from ttnn import experimental as tt_lib
 import tt_lib as ttl
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor

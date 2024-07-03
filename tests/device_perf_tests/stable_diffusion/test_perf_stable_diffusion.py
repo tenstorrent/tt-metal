@@ -29,7 +29,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from ttnn.operations.core import unsqueeze_to_4D
+from ttnn import unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import TtLMSDiscreteScheduler
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor

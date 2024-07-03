@@ -133,8 +133,6 @@ def _golden_function(input_tensor: ttnn.Tensor):
     return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
 
 
-global_avg_pool2d = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.pool.global_avg_pool2d
-)
+ttnn.attach_golden_function(ttnn._ttnn.operations.pool.global_avg_pool2d, golden_function=_golden_function)
 
 __all__ = []

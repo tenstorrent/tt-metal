@@ -36,8 +36,8 @@ namespace ttnn {
 namespace operations {
 
 void py_module(py::module& module) {
-    auto m_example = module.def_submodule("example", "example operation");
-    examples::py_module(m_example);
+    auto m_examples = module.def_submodule("examples", "examples of operations");
+    examples::py_module(m_examples);
 
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);

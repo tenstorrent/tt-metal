@@ -86,8 +86,8 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
 
 
 void py_module(py::module& module) {
-    detail::bind_fill_cache_for_user_(module, ttnn::fill_cache_for_user_);
-    detail::bind_update_cache_for_token_(module, ttnn::update_cache_for_token_);
+    detail::bind_fill_cache_for_user_(module, ttnn::kv_cache::fill_cache_for_user_);
+    detail::bind_update_cache_for_token_(module, ttnn::kv_cache::update_cache_for_token_);
 }
 
 }  // namespace kv_cache
