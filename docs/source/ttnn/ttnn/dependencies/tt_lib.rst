@@ -821,8 +821,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.prod_bw
 
-.. autofunction:: tt_lib.tensor.addcmul_bw
-
 .. autofunction:: tt_lib.tensor.addcdiv_bw
 
 .. autofunction:: tt_lib.tensor.conj_bw
