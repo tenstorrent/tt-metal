@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "device/ternary_backward_op.cpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 
@@ -16,46 +15,6 @@ namespace operations::ternary_backward {
 template <TernaryBackwardOpType ternary_backward_op_type>
 struct ExecuteTernaryBackward {
 
-    static inline const std::array<TensorSchema, 4> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false}};
-    }
-
     static inline std::vector<ttnn::Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
         const auto& input_tensor = input_tensors.at(0);
@@ -65,10 +24,6 @@ struct ExecuteTernaryBackward {
     }
 
     //Type 1: 3 inputs, 1 grad tensor, 1 float
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
-    }
 
     static std::vector<ttnn::Tensor> execute_on_worker_thread(
         const Tensor &grad_tensor_arg,
@@ -82,10 +37,6 @@ struct ExecuteTernaryBackward {
         }
 
     //Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
-    }
 
     static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         uint8_t queue_id,
@@ -104,10 +55,6 @@ struct ExecuteTernaryBackward {
     }
 
     //type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, std::vector<bool> are_required_outputs, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
-    }
 
     static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         const Tensor &grad_tensor_arg,
@@ -126,7 +73,7 @@ struct ExecuteTernaryBackward {
 
 };
 
-}  // operations::ternary
+}  // operations::ternary_backward
 
 //type 1
 constexpr auto addcmul_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackward<operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>("ttnn::addcmul_bw");

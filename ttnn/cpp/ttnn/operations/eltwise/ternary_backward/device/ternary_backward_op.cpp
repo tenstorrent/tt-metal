@@ -6,8 +6,6 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -111,6 +109,20 @@ std::vector<std::optional<Tensor>> _where_bw_overload(
     return _where_bw(default_queue_id, condition, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
+// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
+std::vector<Tensor> _lerp_overload(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& end,
+    const Tensor& weight,
+    const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result_1 = ttnn::multiply(grad, sub_unary(1.0, weight, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_1);
+    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_2);
+    return grad_tensor;
+}
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type(TernaryBackwardOpType OpType){
     switch (OpType) {

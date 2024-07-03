@@ -43,7 +43,7 @@ Example:
     >>> tensor3 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
     >>> output = {1}(grad_tensor, tensor1, tensor2, tensor3)
 )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
 
