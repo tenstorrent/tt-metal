@@ -157,7 +157,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op7_bmm(Q_heads, K_T_heads):
         # profiler.start("___op7_bmm")
-        qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
+        qkt = ttnn.matmul(Q_heads, K_T_heads)
         # profiler.end("___op7_bmm")
 
         return qkt
@@ -187,7 +187,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op9_bmm(attention_scores, V_heads):
         # profiler.start("___op9_bmm")
-        weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
+        weighted_activation = ttnn.matmul(attention_scores, V_heads)
         # profiler.end("___op9_bmm")
 
         return weighted_activation

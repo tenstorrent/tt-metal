@@ -13,7 +13,7 @@ from typing import List
 from loguru import logger
 
 hardcoded_matmul_config_linear = {
-    1: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -24,7 +24,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    8: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -35,7 +35,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    16: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    16: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -46,7 +46,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    20: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    20: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -82,13 +82,13 @@ def ResnetLinear(
     bias = bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
 
     def linear_(act):
-        output = ttnn.experimental.operations.primary.matmul_1d(
+        output = ttnn.linear(
             act,
             weight,
             bias=bias,
             program_config=matmul_config,
-            output_mem_config=output_mem_config,
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            memory_config=output_mem_config,
+            dtype=model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
         )
         return output

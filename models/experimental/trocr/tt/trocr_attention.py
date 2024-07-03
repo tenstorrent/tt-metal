@@ -157,7 +157,7 @@ class TtTrOCRAttention(nn.Module):
 
         src_len = key_states.get_legacy_shape()[2]
         key_states = tt_lib.tensor.transpose(key_states, -2, -1)
-        attn_weights = tt_lib.tensor.bmm(query_states, key_states)
+        attn_weights = ttnn.matmul(query_states, key_states)
 
         if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -201,7 +201,7 @@ class TtTrOCRAttention(nn.Module):
         else:
             attn_weights_reshaped = None
 
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
+        attn_output = ttnn.matmul(attn_weights, value_states)
 
         if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
             raise ValueError(

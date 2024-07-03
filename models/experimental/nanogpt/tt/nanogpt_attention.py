@@ -4,6 +4,7 @@
 
 import torch.nn as nn
 import tt_lib
+import ttnn
 import math
 from tt_lib.fallback_ops import fallback_ops
 from models.helper_funcs import Linear
@@ -101,7 +102,7 @@ class TtCausalSelfAttention(nn.Module):
 
         # manual implementation of attention
         key_layer_transposed = tt_lib.tensor.transpose(k, -2, -1)
-        att = tt_lib.tensor.bmm(q, key_layer_transposed)
+        att = ttnn.matmul(q, key_layer_transposed)
 
         const_att = self.const_tensor(att.get_legacy_shape(), 1.0 / math.sqrt(k.get_legacy_shape()[-1]))
 
@@ -116,7 +117,7 @@ class TtCausalSelfAttention(nn.Module):
             tt_att
         )  # Using tt_lib.tensor.softmax reduces pcc from 0.99 to 0.98 for whole model
 
-        tt_y = tt_lib.tensor.bmm(tt_att, v)
+        tt_y = ttnn.matmul(tt_att, v)
 
         tt_y = tt_lib.tensor.transpose(tt_y, 1, -2)
         tt_y = tt_lib.tensor.reshape(tt_y, 1, B, T, C)
