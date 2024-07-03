@@ -6,7 +6,7 @@
 
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "ttnn/cpp/ttnn/operations/embedding/embedding/embedding.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
