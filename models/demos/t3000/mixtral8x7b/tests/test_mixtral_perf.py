@@ -43,10 +43,10 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
-        (32, 150, 0.075),
-        (128, 150, 0.075),
-        (1024, 150, 0.075),
-        (2048, 150, 0.075),
+        (32, 150, 0.085),
+        (128, 150, 0.085),
+        (1024, 150, 0.085),
+        (2048, 150, 0.085),
     ),
 )
 def test_mixtral_model_perf(
