@@ -35,7 +35,7 @@ def Linear(
 
     def linear_(activation):
         assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"
-        output = ttnn.matmul(activation, weight_T, output_mem_config)
+        output = ttnn.matmul(activation, weight_T, memory_config=output_mem_config)
 
         if bias is not None:
             output_plus_bias = tensor.bcast(
