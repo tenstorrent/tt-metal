@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.cpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_eager/tt_dnn/op_library/backward/backward_ops.cpp"
@@ -745,7 +746,7 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_overload_function(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::LERP_BW:
-            return tt::tt_metal::_lerp_overload;
+            return ttnn::operations::ternary_backward::utils::_lerp_overload;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
