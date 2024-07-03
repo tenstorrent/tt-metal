@@ -74,8 +74,6 @@ def run(
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
-    if broadcast == "h":
-        time.sleep(30)
     input_shape_a = (*batch_sizes, height, width)
     input_shape_b = (*batch_sizes, height, width)
     if broadcast == "hw":
