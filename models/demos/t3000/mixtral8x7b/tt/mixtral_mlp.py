@@ -63,6 +63,10 @@ class TtMixtralMLP(LightweightModule):
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
+            elif seq_len == 128:
+                pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
+                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
+                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
             else:
                 pc_1 = None
                 pc_2 = None
