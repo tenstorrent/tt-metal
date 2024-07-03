@@ -77,42 +77,24 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     logger.info(f"v_heads_tt: {v_heads_tt.memory_config()}")
 
     # torch operation
-    q_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :batch, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim),
-            torch.zeros(seq_len, batch, 32 - n_local_heads, head_dim),
-        ],
-        dim=-2,
-    )
-    k_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :batch, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
-                seq_len, batch, n_local_kv_heads, head_dim
-            ),
-            torch.zeros(seq_len, batch, 32 - n_local_kv_heads, head_dim),
-        ],
-        dim=-2,
-    )
-    v_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :batch, head_dim * (n_local_heads + n_local_kv_heads) :].view(
-                seq_len, batch, n_local_kv_heads, head_dim
-            ),
-            torch.zeros(seq_len, batch, 32 - n_local_kv_heads, head_dim),
-        ],
-        dim=-2,
+    q_heads_torch = proj_output[:, :, :batch, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
+    k_heads_torch = proj_output[
+        :, :, :batch, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)
+    ].view(seq_len, batch, n_local_kv_heads, head_dim)
+    v_heads_torch = proj_output[:, :, :batch, head_dim * (n_local_heads + n_local_kv_heads) :].view(
+        seq_len, batch, n_local_kv_heads, head_dim
     )
 
     # compare
-    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)
+    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)[..., :n_local_heads, :]
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_q}")
 
-    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)
+    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)[..., :n_local_kv_heads, :]
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_k}")
 
-    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)
+    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)[..., :n_local_kv_heads, :]
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_v}")
 
@@ -200,42 +182,24 @@ def run_test_create_min_width_shard(
     logger.info(f"v_heads_tt: {v_heads_tt.memory_config()}")
 
     # torch operation
-    q_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim),
-            torch.zeros(seq_len, batch, 32 - n_local_heads, head_dim),
-        ],
-        dim=-2,
+    q_heads_torch = proj_output[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
+    k_heads_torch = proj_output[:, :, :, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
+        seq_len, batch, n_local_kv_heads, head_dim
     )
-    k_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
-                seq_len, batch, n_local_kv_heads, head_dim
-            ),
-            torch.zeros(seq_len, batch, 32 - n_local_kv_heads, head_dim),
-        ],
-        dim=-2,
-    )
-    v_heads_torch = torch.cat(
-        [
-            proj_output[:, :, :, head_dim * (n_local_heads + n_local_kv_heads) :].view(
-                seq_len, batch, n_local_kv_heads, head_dim
-            ),
-            torch.zeros(seq_len, batch, 32 - n_local_kv_heads, head_dim),
-        ],
-        dim=-2,
+    v_heads_torch = proj_output[:, :, :, head_dim * (n_local_heads + n_local_kv_heads) :].view(
+        seq_len, batch, n_local_kv_heads, head_dim
     )
 
     # compare
-    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)
+    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)[..., :n_local_heads, :]
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch)
     logger.info(f"PCC value: {output_pcc_q}")
 
-    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)
+    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)[..., :n_local_kv_heads, :]
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch)
     logger.info(f"PCC value: {output_pcc_k}")
 
-    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)
+    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)[..., :n_local_kv_heads, :]
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch)
     logger.info(f"PCC value: {output_pcc_v}")
 
