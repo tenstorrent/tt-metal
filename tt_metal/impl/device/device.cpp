@@ -1642,7 +1642,6 @@ bool Device::close() {
     detail::EnableAllocs(this);
 
     this->deallocate_buffers();
-    watcher_detach(this);
 
     std::unordered_set<CoreCoord> not_done_dispatch_cores;
     std::unordered_set<CoreCoord> cores_to_skip;
@@ -1737,6 +1736,7 @@ bool Device::close() {
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
     DprintServerDetach(this);
+    watcher_detach(this);
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
