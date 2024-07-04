@@ -302,6 +302,7 @@ Vision
    :maxdepth: 1
 
    ttnn/upsample
+   ttnn/downsample
 
 KV Cache
 ========
