@@ -227,9 +227,6 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetIntraCoreStrideInSh
         uint32_t ring_size = 8;
         auto stride = ttnn::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
         ASSERT_EQ(stride, 3);
-    }
-    {
-        uint32_t input_shard_grid_size = 16;
         uint32_t num_workers = 4;
         uint32_t ring_size = 8;
         auto stride = ttnn::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
