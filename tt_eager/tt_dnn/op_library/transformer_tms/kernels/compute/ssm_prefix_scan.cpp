@@ -25,9 +25,7 @@ constexpr uint32_t cb_h = get_compile_time_arg_val(7);
 constexpr uint32_t cb_tilize_out = get_compile_time_arg_val(8);
 constexpr uint32_t cb_out = get_compile_time_arg_val(9);
 
-constexpr uint32_t cb_zeros = get_compile_time_arg_val(10);
-
-constexpr uint32_t cb_h_acc = get_compile_time_arg_val(11);
+constexpr uint32_t cb_h_acc = get_compile_time_arg_val(10);
 
 // This function relies on untilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
