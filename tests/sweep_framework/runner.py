@@ -7,15 +7,17 @@ import sys
 import pathlib
 import importlib
 import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+import uuid
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from ttnn import *
-from pymongo import MongoClient
 from serialize import *
 from test_status import TestStatus
 import architecture
+from elasticsearch import Elasticsearch
+
+ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
 
 def git_hash():
@@ -76,21 +78,19 @@ def execute_batch(test_module, test_vectors):
 
 
 def sanitize_inputs(test_vectors):
-    info_column_names = ["sweep_name", "batch_name"]
+    info_field_names = ["sweep_name", "batch_name", "vector_id"]
     header_info = []
     for vector in test_vectors:
         header = dict()
-        for col in info_column_names:
-            header[col] = vector.pop(col)
+        for field in info_field_names:
+            header[field] = vector.pop(field)
         vector.pop("timestamp")
-        header["vector_id"] = vector.pop("_id")
         header_info.append(header)
     return header_info, test_vectors
 
 
 def run_sweeps(module_name, batch_name):
-    client = MongoClient(MONGO_CONNECTION_STRING)
-    db = client.test_vectors
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
@@ -98,17 +98,23 @@ def run_sweeps(module_name, batch_name):
         for file in sorted(sweeps_path.glob("*.py")):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
             test_module = importlib.import_module("sweeps." + sweep_name)
-            collection_name = sweep_name + "_test_vectors"
-            collection = db[collection_name]
+            vector_index = sweep_name + "_test_vectors"
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
-                batches = list(collection.distinct("batch_name"))
+                response = client.search(
+                    index=vector_index, aggregations={"batches": {"terms": {"field": "batch_name.keyword"}}}
+                )
+                batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
                 if len(batches) == 0:
                     continue
 
                 for batch in batches:
                     print(f"SWEEPS: Executing tests for module {sweep_name}, batch {batch}.")
-                    test_vectors = list(collection.find({"batch_name": batch}))
+                    response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
+                    test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
+                    test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
+                    for i in range(len(test_ids)):
+                        test_vectors[i]["vector_id"] = test_ids[i]
 
                     header_info, test_vectors = sanitize_inputs(test_vectors)
                     results = execute_batch(test_module, test_vectors)
@@ -121,19 +127,21 @@ def run_sweeps(module_name, batch_name):
 
     else:
         test_module = importlib.import_module("sweeps." + module_name)
-        collection_name = module_name + "_test_vectors"
-        collection = db[collection_name]
+        vector_index = module_name + "_test_vectors"
 
         try:
             if not batch_name:
                 try:
-                    batches = list(collection.distinct("batch_name"))
+                    response = client.search(
+                        index=vector_index, aggregations={"batches": {"terms": {"field": "batch_name.keyword"}}}
+                    )
+                    batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
                     if len(batches) == 0:
                         return
 
                     for batch in batches:
-                        test_vectors = list(collection.find({"batch_name": batch}))
-
+                        response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
+                        test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
                         header_info, test_vectors = sanitize_inputs(test_vectors)
                         results = execute_batch(test_module, test_vectors)
                         export_test_results(header_info, results)
@@ -141,7 +149,8 @@ def run_sweeps(module_name, batch_name):
                     print(e)
                     return
             else:
-                test_vectors = list(collection.find({"batch_name": batch}))
+                response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
+                test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
 
                 header_info, test_vectors = sanitize_inputs(test_vectors)
                 results = execute_batch(test_module, test_vectors)
@@ -154,10 +163,9 @@ def run_sweeps(module_name, batch_name):
 
 # Export test output (msg), status, exception (if applicable), git hash, timestamp, test vector, test UUID?,
 def export_test_results(header_info, results):
-    client = MongoClient(MONGO_CONNECTION_STRING)
-    db = client.test_results
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
     sweep_name = header_info[0]["sweep_name"]
-    collection = db[sweep_name + "_test_results"]
+    results_index = sweep_name + "_test_results"
 
     try:
         git = git_hash()
@@ -166,12 +174,11 @@ def export_test_results(header_info, results):
     except:
         pass
 
-    serialized_results = []
     for i in range(len(results)):
-        serialized_results.append(header_info[i])
+        result = header_info[i]
         for elem in results[i].keys():
-            serialized_results[i][elem] = serialize(results[i][elem])
-    collection.insert_many(serialized_results)
+            result[elem] = serialize(results[i][elem])
+        client.index(index=results_index, id=uuid.uuid4(), body=result)
 
     client.close()
 
@@ -182,7 +189,9 @@ if __name__ == "__main__":
         description="Run test vector suites from generated vector database.",
     )
 
-    parser.add_argument("--mongo", required=False, help="Mongo Connection String for the vector and results database.")
+    parser.add_argument(
+        "--elastic", required=False, help="Elastic Connection String for the vector and results database."
+    )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--batch-name", required=False, help="Batch of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
@@ -199,8 +208,8 @@ if __name__ == "__main__":
         print("ERROR: Module name is required if batch id is specified.")
         exit(1)
 
-    global MONGO_CONNECTION_STRING
-    MONGO_CONNECTION_STRING = args.mongo if args.mongo else "mongodb://localhost:27017"
+    global ELASTIC_CONNECTION_STRING
+    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
 
     global ARCH
     ARCH = architecture.str_to_arch(args.arch)
