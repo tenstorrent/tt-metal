@@ -60,13 +60,11 @@ ttnn::Tensor matmul(
 
     const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
     const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
-    const auto a_padded_shape = input_tensor_a_shape.with_tile_padding();
-    const auto b_padded_shape = input_tensor_b_shape.with_tile_padding();
 
-    const auto padded_width_a = a_padded_shape[-1];
-    const auto padded_height_b = b_padded_shape[-2];
+    const auto width_a = input_tensor_a_shape[-1];
+    const auto height_b = input_tensor_b_shape[-2];
 
-    if (padded_width_a != padded_height_b) {
+    if (width_a != height_b) {
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
 
