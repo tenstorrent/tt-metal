@@ -6,7 +6,7 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 
@@ -33,7 +33,7 @@ Tensor get_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     Shape t_Shape = input.get_legacy_shape();
     Shape start = {0, 0, 0, 0} ;
     Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] / 2) - 1};
-    Tensor r_tensor = unpad(input, start, end, output_mem_config);
+    Tensor r_tensor = ttnn::slice(input, start, end, output_mem_config);
     return r_tensor;
 }
 
@@ -41,7 +41,7 @@ Tensor get_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
     Shape t_Shape = input.get_legacy_shape();
     Shape start = {0, 0, 0, (t_Shape[3] / 2)};
     Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] - 1)};
-    Tensor i_tensor = unpad(input, start, end, output_mem_config);
+    Tensor i_tensor = ttnn::slice(input, start, end, output_mem_config);
     return i_tensor;
 }
 
