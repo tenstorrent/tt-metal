@@ -37,7 +37,7 @@ Example:
 
     >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
     >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
->>> output = {1}(grad_tensor, input)
+    >>> output = {1}(grad_tensor, input)
 )doc",
         operation.name(),
         operation.python_fully_qualified_name(),
@@ -85,6 +85,11 @@ void py_module(py::module& module) {
         module,
         ttnn::unary_mul_bw,
         R"doc(Performs backward operations for multiply on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::clamp_min_bw,
+        R"doc(Performs backward operations for clamp min value on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
 
 }
 
