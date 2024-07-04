@@ -24,6 +24,7 @@
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
@@ -50,6 +51,9 @@ void py_module(py::module& module) {
 
     auto m_ternary_backward = module.def_submodule("ternary_backward", "ternary_backward operations");
     ternary_backward::py_module(m_ternary_backward);
+    
+    auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
+    unary_backward::py_module(m_unary_backward);
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);

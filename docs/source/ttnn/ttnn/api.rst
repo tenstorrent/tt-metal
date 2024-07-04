@@ -166,6 +166,7 @@ Pointwise Unary
    ttnn/triu
    ttnn/tanhshrink
    ttnn/threshold
+   ttnn/unary_mul_bw
 
 Pointwise Binary
 ================
