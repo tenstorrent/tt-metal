@@ -15,6 +15,18 @@ def serialize(object):
         for i in range(len(attr_names)):
             serialized_object[attr_names[i]] = serialize(attr_values[i])
         return serialized_object
+    elif type(object) == ttnn.CoreRange:
+        serialized_object = dict()
+        serialized_object["type"] = "tt_lib.tensor.CoreRange"
+        serialized_object["start"] = f"ttnn.CoreCoord({object.start.x}, {object.start.y})"
+        serialized_object["end"] = f"ttnn.CoreCoord({object.end.x}, {object.end.y})"
+        return serialized_object
+    elif type(object) == ttnn.CoreRangeSet:
+        serialized_object = dict()
+        serialized_object["type"] = "tt_lib.tensor.CoreRangeSet"
+        core_ranges = [serialize(core_set) for core_set in object.core_ranges()]
+        serialized_object["core_ranges"] = core_ranges
+        return serialized_object
     else:
         return str(object)
 
@@ -23,6 +35,11 @@ def deserialize(object):
     if isinstance(object, dict):
         type = eval(object["type"])
         object.pop("type")
+        if type == ttnn.CoreRangeSet:
+            core_ranges = set()
+            for core_range in object["core_ranges"]:
+                core_ranges.add(deserialize(core_range))
+            return ttnn.CoreRangeSet(core_ranges)
         deserialized_parameters = dict()
         for elem in object:
             deserialized_parameters[elem] = deserialize(object[elem])
