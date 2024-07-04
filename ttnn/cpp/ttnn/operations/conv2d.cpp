@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+//conv2d.cpp
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "ttnn/cpp/ttnn/operations/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
@@ -698,7 +698,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         Tensor matmul_input = input_tensor_post_tm;
         if (stride[0] > 1) {
             // run downsample
-            matmul_input = tt::tt_metal::downsample(
+            matmul_input = ttnn::operations::data_movement::downsample(
                 input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
             if (conv_config.deallocate_activation) {
                 // input_tensor_post_tm.deallocate();

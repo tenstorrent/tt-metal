@@ -51,7 +51,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/downsample/downsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/optimized_conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv/optimized_conv_op.cpp
