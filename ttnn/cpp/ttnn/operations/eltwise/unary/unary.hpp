@@ -9,7 +9,6 @@
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
 
 namespace ttnn {
 
@@ -18,23 +17,6 @@ namespace operations {
 namespace unary {
 
 namespace detail {
-
-inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
-    return {ttnn::TensorSchema{
-        2,
-        4,
-        {ttnn::bfloat16, ttnn::bfloat8_b},
-        {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-        true,
-        false,
-        false,
-        false}};
-}
-
-template <typename... Args>
-inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-    return std::forward_as_tuple(input_tensor);
-}
 
 inline Tensor execute_on_worker_thread(
     uint8_t queue_id,
@@ -61,12 +43,6 @@ inline Tensor execute_on_worker_thread(
 
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
     static Tensor execute_on_worker_thread(
         uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
@@ -81,13 +57,6 @@ struct ExecuteUnary {
 
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFastAndApproximateMode {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
-
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor& input_tensor,
@@ -95,7 +64,11 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            queue_id, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+            queue_id,
+            input_tensor,
+            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+            memory_config,
+            optional_output_tensor);
     }
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
@@ -103,19 +76,16 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+            DefaultQueueId,
+            input_tensor,
+            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+            memory_config,
+            optional_output_tensor);
     }
 };
 
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
-
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor& input_tensor,
@@ -123,7 +93,11 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            queue_id, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+            queue_id,
+            input_tensor,
+            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+            memory_config,
+            optional_output_tensor);
     }
 
     static Tensor execute_on_worker_thread(
@@ -132,18 +106,15 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
+            DefaultQueueId,
+            input_tensor,
+            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+            memory_config,
+            optional_output_tensor);
     }
 };
 
 struct Softplus {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
-
     static Tensor execute_on_worker_thread(
         const Tensor& input,
         const float beta,
@@ -152,40 +123,32 @@ struct Softplus {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
         return detail::execute_on_worker_thread(
-            DefaultQueueId, input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
+            DefaultQueueId,
+            input,
+            {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
+            memory_config,
+            optional_output_tensor);
     }
 };
 
 struct Sigmoid_accurate {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
-
     static Tensor execute_on_worker_thread(
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            DefaultQueueId, input, {UnaryWithParam(UnaryOpType::NEG),
-                                    UnaryWithParam(UnaryOpType::EXP, 1.0f),
-                                    UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-                                    UnaryWithParam(UnaryOpType::RECIP)},
-                                    memory_config,
-                                    optional_output_tensor);
+            DefaultQueueId,
+            input,
+            {UnaryWithParam(UnaryOpType::NEG),
+             UnaryWithParam(UnaryOpType::EXP, 1.0f),
+             UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+             UnaryWithParam(UnaryOpType::RECIP)},
+            memory_config,
+            optional_output_tensor);
     }
 };
 
 struct Unary_chain {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    }
-
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const std::vector<UnaryWithParam>& ops_chain,
@@ -195,7 +158,6 @@ struct Unary_chain {
             DefaultQueueId, input_tensor, ops_chain, memory_config, optional_output_tensor);
     }
 };
-
 
 }  // namespace unary
 }  // namespace operations

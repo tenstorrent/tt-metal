@@ -195,7 +195,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.ternary.where,
+    ttnn.where,
     golden_function=_golden_function,
 )
 

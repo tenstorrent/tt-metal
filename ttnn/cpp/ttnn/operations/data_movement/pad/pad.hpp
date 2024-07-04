@@ -19,23 +19,6 @@ constexpr uint8_t DefaultQueueId = 0;
 
 
 struct Pad {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2,  // min rank
-            4,  // max rank
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::uint16, ttnn::int32, ttnn::uint32},
-            {ttnn::TILE_LAYOUT},
-            true,   // can_be_on_device
-            false,  // can_be_on_cpu
-            false,  // can_be_scalar
-            false   // is_optional}
-        }};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
-    }
 
 
     // Wrapper for TTDNN

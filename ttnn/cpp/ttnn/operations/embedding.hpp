@@ -8,7 +8,6 @@
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
 
 namespace ttnn {
 
@@ -19,18 +18,6 @@ namespace embedding {
 using EmbeddingsType = tt::tt_metal::EmbeddingsType;
 
 struct Embedding {
-    static const std::array<ttnn::TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2, 2, {ttnn::uint32, ttnn::bfloat16}, {ttnn::ROW_MAJOR_LAYOUT}, true, false, false, false},
-            ttnn::TensorSchema{2, 4, {ttnn::bfloat16}, {ttnn::ROW_MAJOR_LAYOUT}, true, false, false, false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, const Tensor& weight, Args&&... args) {
-        return std::forward_as_tuple(input_tensor, weight);
-    }
-
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,

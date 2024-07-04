@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
 
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 
@@ -25,15 +24,6 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteTopK {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{4, 4, {ttnn::bfloat8_b, ttnn::bfloat16}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
-
     static inline std::vector<Tensor> execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor &input_tensor,
@@ -48,11 +38,6 @@ struct ExecuteTopK {
         {},
         optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value()) : std::vector<std::optional<Tensor>>{},
         queue_id);
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
     }
 
     static inline auto execute_on_worker_thread(

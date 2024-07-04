@@ -21,27 +21,13 @@
 #include "ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "ttnn/op_library/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/validation.hpp"
 
 namespace ttnn {
 
 namespace operations {
 namespace core {
 
-static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
-    ttnn::TensorSchema{
-        1,
-        8,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint8, ttnn::uint16, ttnn::uint32, ttnn::int32, ttnn::float32},
-        {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-        true,
-        true,
-        false,
-        false},
-};
-
 inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    ttnn::validate_input_tensor("ttnn.reshape", tensor, reshape_input_schemas[0]);
 
     auto tensor_shape = tensor.get_shape();
     if (tensor_shape == shape) {

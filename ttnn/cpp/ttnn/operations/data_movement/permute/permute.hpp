@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
 #include "tt_eager/tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
@@ -135,23 +134,6 @@ Tensor permute_launch(const Tensor &a, std::vector<std::int64_t> dims, const Mem
 }
 
 struct Permute {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2,  // min rank
-            4,  // max rank
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::uint16, ttnn::int32, ttnn::uint32, ttnn::float32},
-            {ttnn::TILE_LAYOUT},
-            true,   // can_be_on_device
-            true,  // can_be_on_cpu
-            false,  // can_be_scalar
-            false   // is_optional}
-        }};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
 
     static inline ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
@@ -211,11 +193,6 @@ struct Permute {
         }
 
         return output_tensor;
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
     }
 
     static inline auto execute_on_worker_thread(
