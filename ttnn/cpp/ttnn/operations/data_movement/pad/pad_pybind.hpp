@@ -17,22 +17,28 @@ namespace py = pybind11;
 void bind_pad(py::module& module) {
     auto doc =
         R"doc(
-            pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+            pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int] output_padded_shape: ttnn.Shape, input_tensor_start: ttnn.Shape, value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            pad(input_tensor: ttnn.Tensor, output_tensor_shape::  ttnn.Shape, input_tensor_start:: ttnn.Shape, value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-Pad tensor with constant value. Padded shape is accumulated if ttnn.pad is called on a tensor with padding. This version of the API only works with 4D tensors.
+            Returns a padded tensor, with a specified value at the specified location.
 
-Args:
-    * :attr:`input_tensor`: input tensor
-    * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
-    * :attr:`output_tensor_shape`: Final shape of padded tensor. This along with input_tensor_start can be used instead of padding.
-    * :attr:`input_tensor_start`: Shape describing where to start padding. This along with output_tensor_shape can be used instead of padding.
-    * :attr:`value`: value to pad with
+            Equivalent pytorch code:
 
-Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-    * :attr:`queue_id` (Optional[uint8]): command queue id
-    )doc";
+            .. code-block:: python
+
+                torch.pad(input_tensor, padding, value)
+                torch.pad(input_tensor, output_tensor_shape, input_tensor_start, value)
+
+            Args:
+                * :attr:`input_tensor`: Input Tensor.
+                * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
+                * :attr:`output_tensor_shape`: Final shape of padded tensor. This along with input_tensor_start is mutually exclusive from padding. 
+                * :attr:`input_tensor_start`: Shape describing where to start padding. This along with output_tensor_shape is mutually exclusive from padding.
+                * :attr:`value`: value to pad with
+
+            Keyword Args:
+                * :attr:`memory_config`: Memory Config of the output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+        )doc";
 
     using OperationType = decltype(ttnn::pad);
     ttnn::bind_registered_operation(
