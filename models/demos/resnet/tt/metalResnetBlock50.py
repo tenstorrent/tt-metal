@@ -2319,7 +2319,7 @@ class ResNet(nn.Module):
                 ttnn.Shape(padded_shape),
                 ttnn.Shape([0, 0, 0, 0]),
                 0,
-                output_mem_config=self.memory_config,
+                memory_config=self.memory_config,
                 use_multicore=True,
             )
             x = tt_lib.tensor.tilize(
@@ -2370,7 +2370,7 @@ class ResNet(nn.Module):
                 ttnn.Shape(padded_shape),
                 ttnn.Shape([0, 0, 0, 0]),
                 0,
-                output_mem_config=self.memory_config,
+                memory_config=self.memory_config,
                 use_multicore=True,
             )
             x = tt_lib.tensor.tilize(
