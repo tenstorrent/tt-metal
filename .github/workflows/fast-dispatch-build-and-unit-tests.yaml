@@ -28,11 +28,13 @@ jobs:
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
         test-group: [
-          {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 5 --group 1 },
-          {name: eager unit tests 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 5 --group 2 },
-          {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 5 --group 3 },
-          {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 5 --group 4 },
-          {name: eager unit tests 5, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 5 --group 5 },
+          {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
+          {name: eager unit tests 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
+          {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
+          {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
+          {name: eager unit tests 5, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
+          {name: eager unit tests 6, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
+          {name: eager unit tests 7, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
           {name: eager trace tests, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/trace_testing/ -xvvv},
           {name: sweep, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv},
         ]
