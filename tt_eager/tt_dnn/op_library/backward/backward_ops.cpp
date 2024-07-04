@@ -429,19 +429,6 @@ std::vector<Tensor> clamp_bw(
     return operation::decorate_as_composite(__func__, _clamp_bw)(grad, input, min, max, output_mem_config);
 }
 
-std::vector<Tensor> _clamp_min_bw(
-    const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor minT = gte_unary(input, min, output_mem_config);
-    Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> clamp_min_bw(
-    const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _clamp_min_bw)(grad, input, min, output_mem_config);
-}
-
 std::vector<Tensor> _clamp_max_bw(
     const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

@@ -167,6 +167,7 @@ Pointwise Unary
    ttnn/tanhshrink
    ttnn/threshold
    ttnn/unary_mul_bw
+   ttnn/clamp_min_bw
 
 Pointwise Binary
 ================
