@@ -101,24 +101,24 @@ def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, num_devices, model_config):
                 )
             )
         for i in range(num_devices):
-            ln_output[i] = ttnn.experimental.operations.primary.layernorm(
+            ln_output[i] = ttnn.layer_norm(
                 ln_output[i],
-                ln_eps,
-                ln_gamma[i],
-                ln_betta[i],
-                model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][h_dim],
-                model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][h_dim],
-                model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][h_dim],
+                epsilon=ln_eps,
+                weight=ln_gamma[i],
+                bias=ln_betta[i],
+                memory_config=model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][h_dim],
+                program_config=model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][h_dim],
+                compute_kernel_config=model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][h_dim],
             )
         for i in range(num_devices):
             ln_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(ln_output[i])
     else:
         for i in range(num_devices):
             ln_output.append(
-                ttnn.experimental.tensor.layernorm(
+                ttnn.layer_norm(
                     ln_input[i],
-                    ln_eps,
-                    output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
+                    epsilon=ln_eps,
+                    memory_config=model_config["LN_F_OUTPUT_MEMCFG"],
                 )
             )
         for i in range(num_devices):

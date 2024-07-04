@@ -335,21 +335,21 @@ class TtFalconDecoderLayer:
             sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
-        attn_ln_output = ttnn.experimental.operations.primary.layernorm(
+        attn_ln_output = ttnn.layer_norm(
             replicated_hidden_states,
-            self.layernorm_eps,
-            self.ln_attn_gamma,
-            self.ln_attn_beta,
-            self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-            self.model_config["LN_ATTN_PROGCFG"],
+            epsilon=self.layernorm_eps,
+            weight=self.ln_attn_gamma,
+            bias=self.ln_attn_beta,
+            memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_ATTN_PROGCFG"],
         )
-        mlp_ln_output = ttnn.experimental.operations.primary.layernorm(
+        mlp_ln_output = ttnn.layer_norm(
             replicated_hidden_states,
-            self.layernorm_eps,
-            self.ln_mlp_gamma,
-            self.ln_mlp_beta,
-            self.model_config["LN_MLP_OUTPUT_MEMCFG"],
-            self.model_config["LN_MLP_PROGCFG"],
+            epsilon=self.layernorm_eps,
+            weight=self.ln_mlp_gamma,
+            bias=self.ln_mlp_beta,
+            memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_MLP_PROGCFG"],
         )
 
         output = hidden_states

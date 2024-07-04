@@ -5,5 +5,5 @@
 import ttnn
 
 
-def rms_norm(config, input: ttnn.Tensor, *, parameters):
-    return ttnn.rms_norm(input, parameters, epsilon=config.norm_eps)
+def rms_norm(config, input: ttnn.Tensor, *, weight=None, bias=None):
+    return ttnn.rms_norm(input, weight=weight, bias=bias, epsilon=config.norm_eps)

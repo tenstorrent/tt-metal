@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations {
 namespace normalization {
 
-struct GroupNorm {
+struct ExecuteGroupNorm {
 
     static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -78,6 +78,6 @@ struct GroupNorm {
 }  // namespace normalization
 }  // namespace operations
 
-constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::GroupNorm>("ttnn::group_norm");
+constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::ExecuteGroupNorm>("ttnn::group_norm");
 
 }  // namespace ttnn

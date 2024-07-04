@@ -146,10 +146,10 @@ class TtBasicTransformerBlock(nn.Module):
                 )
 
                 self.norm1 = partial(
-                    ttl.tensor.layernorm,
-                    gamma=norm1_gamma,
-                    beta=norm1_beta,
-                    eps=1e-05,
+                    ttnn.layer_norm,
+                    weight=norm1_gamma,
+                    bias=norm1_beta,
+                    epsilon=1e-05,
                 )
 
         if cross_attention_dim is not None:
@@ -180,10 +180,10 @@ class TtBasicTransformerBlock(nn.Module):
                 )
 
                 self.norm2 = partial(
-                    ttl.tensor.layernorm,
-                    gamma=norm2_gamma,
-                    beta=norm2_beta,
-                    eps=1e-05,
+                    ttnn.layer_norm,
+                    weight=norm2_gamma,
+                    bias=norm2_beta,
+                    epsilon=1e-05,
                 )
 
         else:
@@ -212,10 +212,10 @@ class TtBasicTransformerBlock(nn.Module):
             )
 
             self.norm3 = partial(
-                ttl.tensor.layernorm,
-                gamma=norm3_gamma,
-                beta=norm3_beta,
-                eps=1e-05,
+                ttnn.layer_norm,
+                weight=norm3_gamma,
+                bias=norm3_beta,
+                epsilon=1e-05,
             )
 
     def forward(
