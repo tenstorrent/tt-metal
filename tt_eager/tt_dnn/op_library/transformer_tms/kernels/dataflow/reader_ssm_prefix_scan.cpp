@@ -4,6 +4,8 @@
 
 #include "dataflow_api.h"
 
+constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
+
 void fill_zeros(uint32_t cb_id) {
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -20,13 +22,19 @@ void fill_zeros(uint32_t cb_id) {
 
 void kernel_main() {
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(0);
+    uint32_t total_tiles_per_row = get_arg_val<uint32_t>(1);
     constexpr uint32_t cb_a_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_bx_in = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_zeros = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_h_in = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_zeros = get_compile_time_arg_val(3);
+
+    const uint32_t num_chunks_per_row =
+        (total_tiles_per_row + NUM_TILES_IN_TILIZED_CHUNK - 1) / NUM_TILES_IN_TILIZED_CHUNK;  // ceil(x/y)
 
     fill_zeros(cb_zeros);
     cb_push_back(cb_zeros, 1);
 
     cb_push_back(cb_a_in, num_tiles_per_core);
     cb_push_back(cb_bx_in, num_tiles_per_core);
+    cb_push_back(cb_h_in, num_chunks_per_row);
 }
