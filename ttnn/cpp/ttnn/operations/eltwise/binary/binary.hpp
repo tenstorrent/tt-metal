@@ -114,7 +114,7 @@ struct Binary {
             input_tensor_a,
             scalar,
             dtype,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            memory_config,
             optional_output_tensor,
             activations);
     }
@@ -141,7 +141,7 @@ struct Binary {
             input_tensor_a,
             scalar_tensor_device,
             dtype,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            memory_config,
             optional_output_tensor,
             activations);
     }
