@@ -186,23 +186,6 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
 }  // namespace detail
 
 struct ToDtype {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            1,
-            8,
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::float32, ttnn::uint16, ttnn::uint32, ttnn::int32},
-            {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-            true,
-            true,
-            false,
-            false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::forward_as_tuple(tensor_arg);
-    }
-
     // TODO: Move to cpp once we merge with tt_eager
     static Tensor execute_on_worker_thread(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
         auto input_layout = input_tensor.get_layout();

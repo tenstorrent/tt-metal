@@ -15,38 +15,6 @@ namespace operations::binary_backward {
 
 template <BinaryBackwardOpType binary_backward_op_type>
 struct ExecuteBinaryBackward {
-
-    static inline const std::array<TensorSchema, 3> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false}};
-    }
-
     static inline std::vector<ttnn::Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
         const auto& input_tensor = input_tensors.at(0);
@@ -54,11 +22,7 @@ struct ExecuteBinaryBackward {
                                             Tensor(operation::get_workers_for_op_output({input_tensor}))};
     }
 
-    //Type 1: 2 inputs, 1 grad tensor
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
-    }
+    // Type 1: 2 inputs, 1 grad tensor
 
     static std::vector<ttnn::Tensor> execute_on_worker_thread(
         const Tensor &grad_tensor_arg,
@@ -69,11 +33,6 @@ struct ExecuteBinaryBackward {
         auto op_type = utils::get_function_type1(binary_backward_op_type);
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &input_tensor_c, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c);
-    }
 
     static std::vector<ttnn::Tensor> execute_on_worker_thread(
         const Tensor &grad_tensor_arg,
@@ -86,62 +45,56 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, input_tensor_c_arg, memory_config);
         }
 
-    //Type 1: Type 1 with 1 float
-    template <typename... Args>
+        // Type 1: Type 1 with 1 float
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        float alpha,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-
-        auto op_type = utils::get_function_type1_w_float(binary_backward_op_type);
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config);
+        static std::vector<ttnn::Tensor> execute_on_worker_thread(
+            const Tensor &grad_tensor_arg,
+            const Tensor &input_tensor_a_arg,
+            float alpha,
+            const Tensor &input_tensor_b_arg,
+            const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+            auto op_type = utils::get_function_type1_w_float(binary_backward_op_type);
+            auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+            return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config);
         }
 
-    //Type 1: Type 1 with 1 string
-    template <typename... Args>
-
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        string value,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-
-        auto op_type = utils::get_function_type1_w_string(binary_backward_op_type);
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, value, output_memory_config);
+        // Type 1: Type 1 with 1 string
+        static std::vector<ttnn::Tensor> execute_on_worker_thread(
+            const Tensor &grad_tensor_arg,
+            const Tensor &input_tensor_a_arg,
+            string value,
+            const Tensor &input_tensor_b_arg,
+            const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+            auto op_type = utils::get_function_type1_w_string(binary_backward_op_type);
+            auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+            return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, value, output_memory_config);
         }
 
-    //Type 3 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
+        // Type 3 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
+
+        static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
+            uint8_t queue_id,
+            const Tensor &grad_tensor_arg,
+            const Tensor &input_tensor_a_arg,
+            const Tensor &input_tensor_b_arg,
+            const std::optional<MemoryConfig> &memory_config = std::nullopt,
+            const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+            std::optional<Tensor> input_a_grad = std::nullopt,
+            std::optional<Tensor> input_b_grad = std::nullopt) {
+            auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+            auto op_type = utils::get_function_type3(binary_backward_op_type);
+            return op_type(
+                queue_id,
+                grad_tensor_arg,
+                input_tensor_a_arg,
+                input_tensor_b_arg,
+                output_memory_config,
+                are_required_outputs,
+                input_a_grad,
+                input_b_grad);
     }
 
-    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
-        uint8_t queue_id,
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> input_a_grad = std::nullopt,
-        std::optional<Tensor> input_b_grad = std::nullopt) {
-
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        auto op_type = utils::get_function_type3(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
-    }
-
-    //Type 3 : type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::vector<bool> are_required_outputs, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
-    }
+    // Type 3 : type1 args, optional output tensor for inputs based on are_required_outputs value
 
     static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         const Tensor &grad_tensor_arg,
@@ -157,11 +110,7 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
-    //Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float alpha, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
-    }
+    // Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
 
     static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         uint8_t queue_id,
@@ -179,11 +128,7 @@ struct ExecuteBinaryBackward {
         return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
-    //Type 2 : type1 args, optional output tensor for inputs based on are_required_outputs value
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float alpha, std::vector<bool> are_required_outputs, Args &&...args) {
-        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
-    }
+    // Type 2 : type1 args, optional output tensor for inputs based on are_required_outputs value
 
     static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         const Tensor &grad_tensor_arg,

@@ -38,7 +38,7 @@ struct pybind_overload_t {
 };
 
 template <typename registered_operation_t, typename concrete_operation_t, typename T, typename... py_args_t>
-void add_operator_call(T& py_operation, const pybind_arguments_t<py_args_t...>& overload) {
+void define_call_operator(T& py_operation, const pybind_arguments_t<py_args_t...>& overload) {
     std::apply(
         [&py_operation](auto... args) {
             py_operation.def(
@@ -55,58 +55,10 @@ template <
     typename T,
     typename function_t,
     typename... py_args_t>
-void add_operator_call(T& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
+void define_call_operator(T& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) { py_operation.def("__call__", overload.function, args...); },
         overload.args.value);
-}
-
-template <auto id, typename concrete_operation_t>
-std::string append_input_tensor_schemas_to_doc(
-    const operation_t<id, concrete_operation_t>& operation, const std::string& doc) {
-    std::stringstream updated_doc;
-
-    auto write_row = [&updated_doc]<typename Tuple>(const Tuple& tuple) {
-        auto index = 0;
-
-        std::apply(
-            [&index, &updated_doc](const auto&... args) {
-                (
-                    [&index, &updated_doc](const auto& item) {
-                        updated_doc << "        ";
-                        if (index == 0) {
-                            updated_doc << " * - ";
-                        } else {
-                            updated_doc << "   - ";
-                        }
-                        updated_doc << fmt::format("{}", item);
-                        updated_doc << "\n";
-                        index++;
-                    }(args),
-                    ...);
-            },
-            tuple);
-    };
-
-    if constexpr (detail::has_input_tensor_schemas<concrete_operation_t>()) {
-        if constexpr (std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())> > 0) {
-            updated_doc << doc << "\n\n";
-            auto tensor_index = 0;
-            for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
-                updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
-                write_row(ttnn::TensorSchema::attribute_names());
-                write_row(schema.attribute_values());
-                tensor_index++;
-                updated_doc << "\n";
-            }
-            updated_doc << "\n";
-            return updated_doc.str();
-        } else {
-            return doc;
-        }
-    } else {
-        return doc;
-    }
 }
 
 auto bind_registered_operation_helper(
@@ -117,15 +69,11 @@ auto bind_registered_operation_helper(
 
     py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
 
-    if constexpr (requires { append_input_tensor_schemas_to_doc(operation, doc); }) {
-        py_operation.doc() = append_input_tensor_schemas_to_doc(operation, doc).c_str();
-    } else {
-        py_operation.doc() = doc;
-    }
+    py_operation.doc() = doc;
 
     py_operation.def_property_readonly(
         "name",
-        [](const registered_operation_t& self) -> const std::string { return self.name(); },
+        [](const registered_operation_t& self) -> const std::string { return self.base_name(); },
         "Shortened name of the api");
 
     py_operation.def_property_readonly(
@@ -139,7 +87,7 @@ auto bind_registered_operation_helper(
 
     attach_call_operator(py_operation);
 
-    module.attr(operation.name().c_str()) = operation;  // Bind an instance of the operation to the module
+    module.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module
 
     return py_operation;
 }
@@ -155,7 +103,7 @@ auto bind_registered_operation(
     auto attach_call_operator = [&](auto& py_operation) {
         (
             [&py_operation](auto&& overload) {
-                add_operator_call<registered_operation_t, concrete_operation_t>(py_operation, overload);
+                define_call_operator<registered_operation_t, concrete_operation_t>(py_operation, overload);
             }(overloads),
             ...);
     };

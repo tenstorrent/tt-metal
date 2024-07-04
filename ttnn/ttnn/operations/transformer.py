@@ -48,7 +48,7 @@ def _golden_function(
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.transformer.split_query_key_value_and_split_heads,
+    ttnn.transformer.split_query_key_value_and_split_heads,
     golden_function=_golden_function,
 )
 
@@ -70,13 +70,13 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.transformer.attention_softmax,
+    ttnn.transformer.attention_softmax,
     golden_function=_golden_function,
 )
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.transformer.attention_softmax_,
+    ttnn.transformer.attention_softmax_,
     golden_function=_golden_function,
 )
 
@@ -93,7 +93,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.transformer.concatenate_heads, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.transformer.concatenate_heads, golden_function=_golden_function)
 
 
 def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
@@ -114,7 +114,7 @@ def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
     return pt_out
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.transformer.rotary_embedding, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.transformer.rotary_embedding, golden_function=_golden_function)
 
 
 __all__ = []

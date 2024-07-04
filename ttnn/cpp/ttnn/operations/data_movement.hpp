@@ -19,22 +19,6 @@ namespace operations {
 namespace data_movement {
 
 struct UpSample {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::bfloat16, ttnn::bfloat8_b},
-            {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-            true,
-            false,
-            false,
-            false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
-    }
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -93,22 +77,6 @@ struct UpSample {
 };
 
 struct Repeat {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            4,  // min rank
-            4,  // max rank
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::int32, ttnn::uint32},
-            {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-            true,     // can_be_on_device
-            false,    // can_be_on_cpu
-            false,    // can_be_scalar
-            false}};  // is_optional
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
-    }
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -121,22 +89,6 @@ struct Repeat {
 };
 
 struct RepeatInterleave {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            4,  // min rank
-            4,  // max rank
-            {ttnn::bfloat16},
-            {ttnn::TILE_LAYOUT},
-            true,     // can_be_on_device
-            true,    // can_be_on_cpu
-            false,    // can_be_scalar
-            false}};  // is_optional
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
-    }
 
     // # This operation does not support the following cases:
     // #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0

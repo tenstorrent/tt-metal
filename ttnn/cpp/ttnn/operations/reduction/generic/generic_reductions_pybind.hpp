@@ -16,7 +16,7 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
     namespace py = pybind11;
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,

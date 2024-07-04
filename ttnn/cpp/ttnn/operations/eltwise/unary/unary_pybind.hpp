@@ -43,7 +43,7 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -90,7 +90,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, fast_and_approximate_mode=true)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -142,7 +142,7 @@ void bind_unary_operation_with_float_parameter(
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, {2}=true)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc);
@@ -190,7 +190,7 @@ void bind_softplus(py::module& module) {
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, parameter=true)
         )doc",
-        ttnn::softplus.name(),
+        ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -226,7 +226,7 @@ void bind_sigmoid_accurate(py::module& module) {
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, parameter=true)
         )doc",
-        ttnn::sigmoid_accurate.name(),
+        ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -262,7 +262,7 @@ void bind_unary_chain(py::module& module) {
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, ops_chain)
         )doc",
-        ttnn::unary_chain.name(),
+        ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -301,7 +301,7 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -348,7 +348,7 @@ void bind_unary_operation_with_scale_and_shift(py::module& module, const unary_o
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -399,7 +399,7 @@ void bind_unary_operation_with_low_and_high(py::module& module, const unary_oper
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
@@ -449,7 +449,7 @@ void bind_unary_operation_with_diag(py::module& module, const unary_operation_t&
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name());
 
     bind_registered_operation(

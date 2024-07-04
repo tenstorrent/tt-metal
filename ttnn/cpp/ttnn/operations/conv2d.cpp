@@ -15,32 +15,6 @@ namespace operations {
 
 namespace conv2d {
 
-const std::array<ttnn::TensorSchema, 3> input_schemas{
-    ttnn::TensorSchema{
-        4,
-        4,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32},
-        {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-        true,
-        true,
-        false},
-    ttnn::TensorSchema{
-        4,
-        4,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32},
-        {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-        true,
-        true,
-        false},
-    ttnn::TensorSchema{
-        4,
-        4,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32},
-        {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-        true,
-        true,
-        false}};
-
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     while (num % divisor != 0) divisor = divisor - 1;
@@ -553,11 +527,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_) {
-    ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
-    ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
-    if (bias_tensor.has_value()) {
-        ttnn::validate_input_tensor("ttnn.conv2d", bias_tensor.value(), input_schemas[2]);
-    }
+
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;

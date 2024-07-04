@@ -22,7 +22,7 @@ namespace detail {
 template <typename binary_backward_operation_t>
 void bind_binary_backward(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
 {2}
 
@@ -41,7 +41,7 @@ Example:
     >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
     >>> output = {1}(grad_tensor, tensor1, tensor2)
 )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
 

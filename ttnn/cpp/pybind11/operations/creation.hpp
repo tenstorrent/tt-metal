@@ -22,7 +22,7 @@ template <typename creation_operation_t>
 void bind_full_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(shape: ttnn.Shape, fill_value: Union[int, float], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -66,7 +66,7 @@ template <typename creation_operation_t>
 void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(shape: ttnn.Shape, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -92,7 +92,7 @@ template <typename creation_operation_t>
 void bind_full_like_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(tensor: ttnn.Tensor, fill_value: Union[int, float], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -136,7 +136,7 @@ template <typename creation_operation_t>
 void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -162,7 +162,7 @@ template <typename creation_operation_t>
 void bind_arange_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(start: int = 0, stop: int, step: int = 1, dtype: ttnn.DataType = ttnn.bfloat16, device: ttnn.Device = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG)doc",
-        operation.name());
+        operation.base_name());
 
     bind_registered_operation(
         module,

@@ -29,32 +29,6 @@ constexpr bool is_associative(BinaryOpType op) {
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct Binary {
-    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                true,
-                false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
-    }
 
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
@@ -115,11 +89,6 @@ struct Binary {
             BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
 
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
-    }
-
     static Tensor execute_on_worker_thread(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -129,11 +98,6 @@ struct Binary {
         std::optional<FusedActivations> activations = std::nullopt)
     {
         return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
@@ -153,11 +117,6 @@ struct Binary {
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             optional_output_tensor,
             activations);
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     static Tensor execute_on_worker_thread(

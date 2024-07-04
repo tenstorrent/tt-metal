@@ -8,6 +8,9 @@ Adding New ttnn Operation
    Wormhole, or others).
 
 
+FAQ
+***
+
 What is a ttnn operation?
 -------------------------
 
@@ -25,11 +28,13 @@ What steps are needed to add ttnn operation in Python?
 2. (Optional) Attach golden function to the operation using `ttnn.attach_golden_function`. This is useful for debugging and testing.
 
 
+Example of Adding a new Device Operation
+****************************************
 
 C++ Implementation
 ------------------
 
-Step 1: Implement device operation (Optional)
+Step 1: Implement device operation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In order to add a new device operation, follow the directory structure shown below:
@@ -110,8 +115,10 @@ Finally, call the module defined in `examples/example/example_pybind.hpp` wherev
 
 
 
-Step 2: Add golden function for the operation in Python
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Step 2: (Optional) Add golden function for the operation in Python
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A golden function can be added to an operation in order to compare its output with an equivalent `torch` implementation
 
 Add the following code in a python file:
 
@@ -119,8 +126,38 @@ Add the following code in a python file:
 
     import ttnn
 
-    def example_golden_function(input_tensor, *args, **kwargs):
-        output_tensor = ...
+    # For the golden function, use the same signature as the operation
+    # Keep in mind that all `ttnn.Tensor`s are converted to `torch.Tensor`s
+    # And arguments not needed by torch can be ignored using `*args` and `**kwargs`
+    def golden_function(input_tensor: "torch.Tensor", *args, **kwargs):
+        output_tensor:  "torch.Tensor" = ...
         return output_tensor
 
-    ttnn.attach_golden_function(ttnn.example, example_golden_function)
+    # ttnn Tensors are converted to torch tensors before calling the golden function automatically
+    # And the outputs are converted back to ttnn Tensors
+    # But in some cases you may need to preprocess the inputs and postprocess the outputs manually
+
+    # In order to preprocess the inputs manually, use the following signature
+    # Note that the arguments are not packed into *args and **kwargs as in the golden function!!!
+    def preprocess_golden_function_inputs(args, kwargs):
+        # i.e.
+        ttnn_input_tensor = args[0]
+        return ttnn.to_torch(ttnn_input_tensor)
+
+    # In order to postprocess the outputs manually, use the following signature
+    # Note that the arguments are not packed into *args and **kwargs as in the golden function!!!
+    def postprocess_golden_function_outputs(args, kwargs, output):
+        # i.e.
+        ttnn_input_tensor = args[0]
+        torch_output_tensor = outputs[0]
+        return ttnn.from_torch(torch_output_tensor, dtype=ttnn_input_tensor.dtype, device=ttnn_input_tensor.device)
+
+    ttnn.attach_golden_function(
+        ttnn.example,
+        golden_function=golden_function,
+        preprocess_golden_function_inputs=preprocess_golden_function_inputs, # Optional
+        postprocess_golden_function_outputs=postprocess_golden_function_outputs # Optional
+    )
+
+.. note::
+   `ttnn.example` is the name of the operation in Python because the operation was registered as `ttnn::example` in C++.

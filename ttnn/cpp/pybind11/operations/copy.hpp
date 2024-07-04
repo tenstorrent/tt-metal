@@ -21,7 +21,7 @@ namespace detail {
 
 void bind_global_typecast(py::module& module) {
     auto doc = fmt::format(
-R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None, queue_id : Optional[int]) -> ttnn.Tensor
+        R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None, queue_id : Optional[int]) -> ttnn.Tensor
 
 Applies {0} to :attr:`input_tensor`.
 
@@ -40,8 +40,7 @@ Example::
 
     >>> tensor = ttnn.typecast(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), ttnn.uint16)
 )doc",
-        ttnn::typecast.name());
-
+        ttnn::typecast.base_name());
 
     using TypecastType = decltype(ttnn::typecast);
     bind_registered_operation(

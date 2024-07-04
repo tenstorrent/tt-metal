@@ -11,7 +11,6 @@ import ttnn
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
-@pytest.mark.requires_fast_runtime_mode_off
 def test_deallocate(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
@@ -27,4 +26,5 @@ def test_deallocate(device, h, w):
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
-    assert "Tensor must be allocated!" in str(exception.value)
+
+    assert "MemoryConfig can only be obtained if the buffer is not null" in str(exception.value)

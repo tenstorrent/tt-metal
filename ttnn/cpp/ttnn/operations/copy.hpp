@@ -12,29 +12,7 @@ namespace ttnn {
 namespace operations {
 namespace copy {
 
-namespace detail {
-inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
-    return {ttnn::TensorSchema{
-        2,  // min rank
-        4,  // max rank
-        {ttnn::bfloat16},
-        {ttnn::TILE_LAYOUT},
-        true,   // can_be_on_device
-        false,  // can_be_on_cpu
-        false,  // can_be_scalar
-        false   // is_optional}
-    }};
-}
-}  // namespace detail
-
 struct Typecast {
-    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
-
     static Tensor execute_on_worker_thread(
         const uint8_t& queue_id,
         const Tensor& input,
@@ -58,11 +36,6 @@ struct Typecast {
         auto unary_op = UnaryWithParam{UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)}};
         auto eltwise_op = EltwiseUnary{{unary_op}, memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype};
         return operation::run(eltwise_op, {input}, {}, {optional_output_tensor}, queue_id).at(0);
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
     }
 
     static Tensor execute_on_worker_thread(

@@ -60,7 +60,7 @@ def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.data_movement.pad,
+    ttnn.pad,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
@@ -92,7 +92,7 @@ def _golden_function(tensors, dim=0, **_):
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.data_movement.concat,
+    ttnn.concat,
     golden_function=_golden_function,
 )
 
@@ -103,14 +103,14 @@ def _golden_function(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(tensor, repeats, dim=dim)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.repeat_interleave, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.repeat_interleave, golden_function=_golden_function)
 
 
 def _golden_function(tensor, shape, **_):
     return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.repeat, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
@@ -123,7 +123,7 @@ def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.data_movement.upsample,
+    ttnn.upsample,
     golden_function=_golden_function,
 )
 

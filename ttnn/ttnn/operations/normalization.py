@@ -19,7 +19,7 @@ def _golden_function(input_tensor: ttnn.Tensor, dim: int, **_):
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.softmax,
+    ttnn.softmax,
     golden_function=_golden_function,
 )
 
@@ -45,7 +45,7 @@ def _golden_function(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.normalization.layer_norm, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
@@ -60,7 +60,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.normalization.rms_norm, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
 
 # group norm helper function
@@ -232,7 +232,7 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.group_norm,
+    ttnn.group_norm,
     golden_function=_golden_function,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
 )

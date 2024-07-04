@@ -671,8 +671,6 @@ def attach_golden_function(
         postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
     )
 
-    return operation
-
 
 def export_operation(python_fully_qualified_name, operation, is_method):
     """

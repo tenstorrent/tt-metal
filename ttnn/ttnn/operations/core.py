@@ -430,14 +430,14 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_memory_config, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.to_memory_config, golden_function=_golden_function)
 
 
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_layout, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.to_layout, golden_function=_golden_function)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -445,8 +445,8 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 # TODO: Merge to_dtype and typecast
-ttnn.attach_golden_function(ttnn._ttnn.operations.core.to_dtype, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn._ttnn.operations.copy.typecast, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.typecast, golden_function=_golden_function)
 
 
 def _golden_function(tensor, *args, **kwargs):
