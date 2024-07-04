@@ -242,7 +242,7 @@ void TensorModule(py::module& m_tensor) {
 
     auto pyCoreRange = py::class_<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
-    pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
+    pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }), py::arg("start"), py::arg("end"))
         .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
         .def_readonly("start", &CoreRange::start)
         .def_readonly("end", &CoreRange::end)
@@ -251,6 +251,7 @@ void TensorModule(py::module& m_tensor) {
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def("core_ranges", [](const CoreRangeSet& self) { return self.ranges(); })
         .def(
             "__repr__",
             [](const CoreRangeSet& core_range_set) -> std::string { return fmt::format("{}", core_range_set); })
@@ -278,14 +279,17 @@ void TensorModule(py::module& m_tensor) {
         .def(py::init<>([](const CoreRangeSet& core_sets,
                            const std::array<uint32_t, 2>& shard_shape,
                            const ShardOrientation& shard_orientation,
-                           const bool& halo) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo); }))
+                           const bool& halo) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo); }), py::arg("grid"), py::arg("shape"), py::arg("orientation"), py::arg("halo"))
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
+        .def_readwrite("halo", &ShardSpec::halo)
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
+        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); })
+        .def_property_readonly("attribute_names", [](const ShardSpec& self) { return self.attribute_names; })
+        .def("attribute_values", [](const ShardSpec& self) { return self.attribute_values(); });
     ;
 
     auto py_owned_buffer_for_int32_t =
