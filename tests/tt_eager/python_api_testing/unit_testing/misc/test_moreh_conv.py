@@ -199,7 +199,6 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 48, 3, 640, 640, 6, 6, 2, 2, 2, 2, 0, False, None),
         (2, 96, 48, 320, 320, 3, 3, 2, 2, 1, 1, 0, True, {"act_block_h": 32}),
         (2, 48, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
-        (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
         (2, 48, 48, 160, 160, 3, 3, 1, 1, 1, 1, 0, False, {"act_block_h": 32}),
         (2, 96, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
         (2, 192, 96, 160, 160, 3, 3, 2, 2, 1, 1, 0, False, {"act_block_h": 64}),

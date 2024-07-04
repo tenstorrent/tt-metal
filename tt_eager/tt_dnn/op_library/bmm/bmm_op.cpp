@@ -750,12 +750,16 @@ void Matmul::validate(
     TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    auto a_shape = input_tensor_a.get_shape();
+    auto b_shape = input_tensor_b.get_shape();
     TT_FATAL(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
     TT_FATAL(
-        input_tensor_a.get_legacy_shape()[-1] == input_tensor_b.get_legacy_shape()[-2] &&
-        "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
+        a_shape[-1] == b_shape[-2],
+        "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
+        a_shape[-1],
+        b_shape[-2]);
 
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     TT_FATAL(
