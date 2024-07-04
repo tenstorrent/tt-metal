@@ -7,13 +7,16 @@ import sys
 import importlib
 import pathlib
 import datetime
-import shortuuid
+import os
+import uuid
 
 from architecture import str_to_arch
 from permutations import *
 from sql_utils import *
-from serialize import serialize, deserialize
-from pymongo import MongoClient
+from serialize import serialize
+from elasticsearch import Elasticsearch
+
+ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -38,48 +41,38 @@ def validate_vectors(vectors) -> None:
 
 
 # Output the individual test vectors.
-def export_test_vectors(vectors):
-    vectors = list(vectors)
+def export_test_vectors(module_name, vectors):
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    client = MongoClient(MONGO_CONNECTION_STRING)
-    db = client.test_vectors
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
 
     # TODO: Duplicate batch check?
 
-    table_name = MODULE_NAME + "_test_vectors"
-    collection = db[table_name]
+    index_name = module_name + "_test_vectors"
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    serialized_vectors = []
-
     for i in range(len(vectors)):
-        serialized_vectors.append(dict())
-        serialized_vectors[i]["sweep_name"] = MODULE_NAME
-        serialized_vectors[i]["timestamp"] = current_time
+        vector = dict()
+        vector["sweep_name"] = module_name
+        vector["timestamp"] = current_time
         for elem in vectors[i].keys():
-            serialized_vectors[i][elem] = serialize(vectors[i][elem])
-
-    collection.insert_many(serialized_vectors)
+            vector[elem] = serialize(vectors[i][elem])
+        client.index(index=index_name, id=uuid.uuid4(), body=vector)
 
 
 # Generate one or more sets of test vectors depending on module_name
 def generate_tests(module_name, arch):
-    global MODULE_NAME
-    MODULE_NAME = module_name
-
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
-            test_module = importlib.import_module(
-                "sweeps." + str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
-            )
+            module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
+            test_module = importlib.import_module("sweeps." + module_name)
             vectors = generate_vectors(test_module, arch)
             validate_vectors(vectors)
-            export_test_vectors(vectors)
+            export_test_vectors(module_name, vectors)
     else:
-        vectors = generate_vectors(importlib.import_module("sweeps." + module_name[:3]), arch)  # Macro this
+        vectors = generate_vectors(importlib.import_module("sweeps." + module_name), arch)
         validate_vectors(vectors)
-        export_test_vectors(vectors)
+        export_test_vectors(module_name, vectors)
 
 
 if __name__ == "__main__":
@@ -89,7 +82,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
-    parser.add_argument("--mongo", required=False, help="Mongo Connection String for vector database.")
+    parser.add_argument("--elastic", required=False, help="Elastic Connection String for vector database.")
     parser.add_argument("--seed", required=False, default=0, help="Seed for random value generation")
     parser.add_argument(
         "--arch",
@@ -100,7 +93,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    global MONGO_CONNECTION_STRING
-    MONGO_CONNECTION_STRING = args.mongo if args.mongo else "mongodb://localhost:27017"
+    global ELASTIC_CONNECTION_STRING
+    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
 
     generate_tests(args.module_name, str_to_arch(args.arch))
