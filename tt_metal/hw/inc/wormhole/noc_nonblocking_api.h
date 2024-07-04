@@ -15,6 +15,7 @@ const uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
 const uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 const uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
 
+// 36 bits of address followed by coordinate. First 32 bits of address go into lo register, remaining address bits and coordinates are in the mid register
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 32; // address is lower 36 bits and upper bits are the coordinates, 32 bits in lo reg and rest goes to mid
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_MID;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_MID;

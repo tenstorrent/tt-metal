@@ -434,7 +434,7 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
-    return ((uint64_t)(noc_xy) << 32) | addr;
+    return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
 }
 
 

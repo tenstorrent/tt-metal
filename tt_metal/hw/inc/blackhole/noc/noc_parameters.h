@@ -25,6 +25,11 @@
 
 #define NOC_XY_COORD(x, y) ((((uint32_t)(y)) << NOC_ADDR_NODE_ID_BITS) | ((uint32_t)(x)))
 
+// BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used (36 bits of address followed by coordinates)
+// This means that lo and mid registers need to have the address portion while the coordinates go into hi register
+#define NOC_COORD_REG_OFFSET 0 // offset (from LSB) in register holding x-y coordinate
+
+
 // Alignment restrictions
 #define NOC_L1_READ_ALIGNMENT_BYTES       16
 #define NOC_L1_WRITE_ALIGNMENT_BYTES      16
