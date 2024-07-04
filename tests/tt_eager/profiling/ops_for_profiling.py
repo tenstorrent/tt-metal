@@ -162,7 +162,7 @@ def clamp_min_bw(x, y):
 
 
 def clamp_max_bw(x, y):
-    tt_lib.tensor.clamp_min_bw(x, y, 0.9)
+    tt_lib.tensor.clamp_max_bw(x, y, 0.9)
 
 
 def gelu_bw_none(x, y):
@@ -827,8 +827,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.celu_bw",
     },
     {
-        "op": tt_lib.tensor.binary_lt_bw,
-        "name": "tt_lib.tensor.binary_lt_bw",
+        "op": ttnn.binary_lt_bw,
+        "name": "ttnn.binary_lt_bw",
     },
     {
         "op": tt_lib.tensor.log10_bw,
@@ -839,8 +839,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.log1p_bw",
     },
     {
-        "op": tt_lib.tensor.binary_ne_bw,
-        "name": "tt_lib.tensor.binary_ne_bw",
+        "op": ttnn.binary_ne_bw,
+        "name": "ttnn.binary_ne_bw",
     },
     {
         "op": tt_lib.tensor.erf_bw,
@@ -884,12 +884,12 @@ all_binary_ops = [
         "name": "tt_lib.tensor.selu_bw",
     },
     {
-        "op": tt_lib.tensor.binary_ge_bw,
-        "name": "tt_lib.tensor.binary_ge_bw",
+        "op": ttnn.binary_ge_bw,
+        "name": "ttnn.binary_ge_bw",
     },
     {
-        "op": tt_lib.tensor.binary_gt_bw,
-        "name": "tt_lib.tensor.binary_gt_bw",
+        "op": ttnn.binary_gt_bw,
+        "name": "ttnn.binary_gt_bw",
     },
     {
         "op": tt_lib.tensor.square_bw,
@@ -2671,21 +2671,21 @@ all_ternary_ops = [
         "name": "ttnn.binary_eq_bw",
     },
     {
-        "op": tt_lib.tensor.div_bw,
-        "name": "tt_lib.tensor.div_bw",
+        "op": ttnn.div_bw,
+        "name": "ttnn.div_bw",
         "num_repeats": 3,
     },
     {
-        "op": tt_lib.tensor.mul_bw,
-        "name": "tt_lib.tensor.mul_bw",
+        "op": ttnn.mul_bw,
+        "name": "ttnn.mul_bw",
     },
     {
-        "op": tt_lib.tensor.max_bw,
-        "name": "tt_lib.tensor.max_bw",
+        "op": ttnn.max_bw,
+        "name": "ttnn.max_bw",
     },
     {
-        "op": tt_lib.tensor.min_bw,
-        "name": "tt_lib.tensor.min_bw",
+        "op": ttnn.min_bw,
+        "name": "ttnn.min_bw",
     },
     {
         "op": ttnn.add_bw,
