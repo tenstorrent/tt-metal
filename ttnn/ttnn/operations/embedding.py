@@ -12,7 +12,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.embedding.embedding, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.embedding, golden_function=_golden_function)
 
 
 __all__ = []

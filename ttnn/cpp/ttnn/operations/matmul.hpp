@@ -28,8 +28,6 @@ inline bool is_input_batched(const ttnn::Shape& shape);
 
 }  // namespace detail
 
-extern const std::array<ttnn::TensorSchema, 3> input_tensor_schemas();
-
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
 
 ttnn::Tensor matmul(

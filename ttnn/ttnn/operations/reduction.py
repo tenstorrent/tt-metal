@@ -31,17 +31,17 @@ def _create_golden_function_topk():
 
 
 # Generic reductions
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.mean, golden_function=_create_golden_function("mean"))
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.sum, golden_function=_create_golden_function("sum"))
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.max, golden_function=_create_golden_function("max"))
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.min, golden_function=_create_golden_function("min"))
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.var, golden_function=_create_golden_function("var"))
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.std, golden_function=_create_golden_function("std"))
+ttnn.attach_golden_function(ttnn.mean, golden_function=_create_golden_function("mean"))
+ttnn.attach_golden_function(ttnn.sum, golden_function=_create_golden_function("sum"))
+ttnn.attach_golden_function(ttnn.max, golden_function=_create_golden_function("max"))
+ttnn.attach_golden_function(ttnn.min, golden_function=_create_golden_function("min"))
+ttnn.attach_golden_function(ttnn.var, golden_function=_create_golden_function("var"))
+ttnn.attach_golden_function(ttnn.std, golden_function=_create_golden_function("std"))
 
 # Special reductions
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.argmax, golden_function=_create_golden_function("argmax"))
+ttnn.attach_golden_function(ttnn.argmax, golden_function=_create_golden_function("argmax"))
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.reduction.topk, golden_function=_create_golden_function_topk())
+ttnn.attach_golden_function(ttnn.topk, golden_function=_create_golden_function_topk())
 
 
 __all__ = []
