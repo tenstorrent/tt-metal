@@ -226,10 +226,6 @@ TT-LIB API through ``tt_lib``
 Primary Operations
 ==================
 
-.. autofunction:: tt_lib.operations.primary.layernorm
-
-.. autofunction:: tt_lib.operations.primary.add_layernorm
-
 .. autofunction:: tt_lib.operations.primary.moreh_softmax
 
 .. autofunction:: tt_lib.operations.primary.moreh_softmax_backward
@@ -737,13 +733,7 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.conv
 
-.. autofunction:: tt_lib.tensor.layernorm
-
 .. autofunction:: tt_lib.tensor.groupnorm
-
-.. autofunction:: tt_lib.tensor.rmsnorm
-
-.. autofunction:: tt_lib.tensor.add_layernorm
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 

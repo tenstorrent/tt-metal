@@ -78,7 +78,7 @@ class TtFalconLayernorm:
                 }
             )
             # # Option1 : width sharded; produces bad PCC
-            # out = ttnn.experimental.operations.primary.layernorm(
+            # out = ttnn.layer_norm(
             #     x,
             #     self.layernorm_eps,
             #     self.ln_attn_gamma[0],
@@ -96,7 +96,7 @@ class TtFalconLayernorm:
             #             False,
             #         ),
             #     ),
-            #     ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            #     ttnn.LayerNormShardedMultiCoreProgramConfig(
             #         compute_with_storage_grid_size=[8, 4],
             #         subblock_w=8,
             #         block_h=row_height // 32,
@@ -109,7 +109,7 @@ class TtFalconLayernorm:
             # )
 
             # # option 2: block sharded hardcoded for S=128 and 8x4 grid of cores; produces good PCC!
-            # out = ttnn.experimental.operations.primary.layernorm(
+            # out = ttnn.layer_norm(
             #     x,
             #     self.layernorm_eps,
             #     self.ln_attn_gamma[0],
@@ -127,7 +127,7 @@ class TtFalconLayernorm:
             #             False,
             #         ),
             #     ),
-            #     ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            #     ttnn.LayerNormShardedMultiCoreProgramConfig(
             #         compute_with_storage_grid_size=[8, 4],
             #         subblock_w=8,
             #         block_h=1,
@@ -140,23 +140,23 @@ class TtFalconLayernorm:
             # )
 
             # version according to model_config for debug
-            out = ttnn.experimental.operations.primary.layernorm(
+            out = ttnn.layer_norm(
                 x,
-                self.layernorm_eps,
-                self.ln_attn_gamma[0],
-                self.ln_attn_beta[0],
-                self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-                self.model_config["LN_ATTN_PROGCFG"],
+                epsilon=self.layernorm_eps,
+                weight=self.ln_attn_gamma[0],
+                bias=self.ln_attn_beta[0],
+                memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                program_config=self.model_config["LN_ATTN_PROGCFG"],
             )
         else:  # Interleaved does not work for falcon40b dims [32, 8192] since once one core per tile-height is used to process the whole row
             # Option 1: uses only one core; runs out of L1
             # E           Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B
             # E           [(x=0,y=0) - (x=1,y=0)]
-            out = ttnn.experimental.operations.primary.layernorm(
+            out = ttnn.layer_norm(
                 x,
-                self.layernorm_eps,
-                self.ln_attn_gamma[0],
-                self.ln_attn_beta[0],
+                epsilon=self.layernorm_eps,
+                weight=self.ln_attn_gamma[0],
+                bias=self.ln_attn_beta[0],
                 # self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                 # self.model_config["LN_ATTN_PROGCFG"],
             )
@@ -165,7 +165,7 @@ class TtFalconLayernorm:
             # Runs out of L1
             # E                       Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B
             # E                       [(x=0,y=0) - (x=1,y=0)]
-            # out = ttnn.experimental.operations.primary.layernorm(
+            # out = ttnn.layer_norm(
             #     x,
             #     self.layernorm_eps,
             #     self.ln_attn_gamma[0],

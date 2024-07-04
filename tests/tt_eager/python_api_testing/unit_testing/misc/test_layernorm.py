@@ -7,6 +7,8 @@ from loguru import logger
 import pytest
 import torch
 
+import ttnn
+
 import tt_lib as ttl
 
 from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull
@@ -53,105 +55,105 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             )
 
         if test_id == 0:
-            ttz = ttl.tensor.add_layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 1:
-            ttz = ttl.tensor.add_layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                gamma_t,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                weight=gamma_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 2:
-            ttz = ttl.tensor.add_layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                gamma_t,
-                beta_t,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 3:
-            ttz = ttl.tensor.add_rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 4:
-            ttz = ttl.tensor.add_rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                gamma_t,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                weight=gamma_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 5:
-            ttz = ttl.tensor.add_rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                in1_t,
-                epsf,
-                gamma_t,
-                beta_t,
-                output_mem_config=out_mem_config,
+                residual_input_tensor=in1_t,
+                epsilon=epsf,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 6:
-            ttz = ttl.tensor.layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                epsf,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 7:
-            ttz = ttl.tensor.layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                epsf,
-                gamma_t,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                weight=gamma_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 8:
-            ttz = ttl.tensor.layernorm(
+            ttz = ttnn.layer_norm(
                 in0_t,
-                epsf,
-                gamma_t,
-                beta_t,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 9:
-            ttz = ttl.tensor.rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                epsf,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 10:
-            ttz = ttl.tensor.rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                epsf,
-                gamma_t,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                weight=gamma_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 11:
-            ttz = ttl.tensor.rmsnorm(
+            ttz = ttnn.rms_norm(
                 in0_t,
-                epsf,
-                gamma_t,
-                beta_t,
-                output_mem_config=out_mem_config,
+                epsilon=epsf,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=out_mem_config,
                 compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
 

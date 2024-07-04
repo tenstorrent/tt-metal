@@ -4,6 +4,8 @@
 import torch.nn as nn
 import tt_lib
 
+import ttnn
+
 
 class TtRMSNorm(nn.Module):
     def __init__(
@@ -23,5 +25,5 @@ class TtRMSNorm(nn.Module):
         self.weight = tt_lib.tensor.load_tensor(tt_cache_path + base_address + "weightDataType.BFLOAT16.bin")
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        x = tt_lib.tensor.rmsnorm(x, self.eps, self.weight)
+        x = ttnn.rms_norm(x, epsilon=self.eps, weight=self.weight)
         return x
