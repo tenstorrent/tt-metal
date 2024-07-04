@@ -43,11 +43,11 @@ class TtConvNet(torch.nn.Module):
 
     def forward(self, tt_x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         out = fallback_ops.conv2d(tt_x, self.tt_conv1_weight, self.tt_conv1_bias)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
         out = self.max_pool2d(out)
 
         out = fallback_ops.conv2d(out, self.tt_conv2_weight, self.tt_conv2_bias)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
         out = self.max_pool2d(out)
 
         last_dim_size = out.get_legacy_shape()[-1] * out.get_legacy_shape()[-2] * out.get_legacy_shape()[-3]
@@ -60,7 +60,7 @@ class TtConvNet(torch.nn.Module):
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
         )
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
         out = ttnn.matmul(out, self.linear2_weights)
         out = tt_lib.tensor.bcast(
             out,

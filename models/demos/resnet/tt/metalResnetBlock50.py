@@ -1059,7 +1059,7 @@ class Bottleneck:
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.operations.primary.relu
+        self.relu = ttnn.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -1197,17 +1197,21 @@ class Bottleneck:
             tt_tensor_conv_weight = tt_lib.tensor.Tensor(
                 conv2_weight.reshape(-1).tolist(),
                 conv2_weight.shape,
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
+                (
+                    model_config["WEIGHTS_DTYPE"]
+                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                    else tt_lib.tensor.DataType.FLOAT32
+                ),
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
             tt_tensor_conv_bias = tt_lib.tensor.Tensor(
                 conv2_bias.tolist(),
                 [1, 1, 1, conv2_bias.shape[-1]],
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
+                (
+                    model_config["WEIGHTS_DTYPE"]
+                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                    else tt_lib.tensor.DataType.FLOAT32
+                ),
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
             self.conv2 = TTPyCompositeConv(
@@ -1558,17 +1562,21 @@ class ResNet(nn.Module):
             tt_tensor_conv_weight = tt_lib.tensor.Tensor(
                 conv1_weight.reshape(-1).tolist(),
                 conv1_weight.shape,
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
+                (
+                    model_config["WEIGHTS_DTYPE"]
+                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                    else tt_lib.tensor.DataType.FLOAT32
+                ),
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
             tt_tensor_conv_bias = tt_lib.tensor.Tensor(
                 conv1_bias.tolist(),
                 [1, 1, 1, conv1_bias.shape[-1]],
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
+                (
+                    model_config["WEIGHTS_DTYPE"]
+                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                    else tt_lib.tensor.DataType.FLOAT32
+                ),
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
             if is_grayskull():
@@ -1626,7 +1634,7 @@ class ResNet(nn.Module):
             self.conv1_params,
             [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
         )
-        self.relu = tt_lib.operations.primary.relu
+        self.relu = ttnn.relu
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.max_pool_reader_patterns_cache = {}

@@ -241,7 +241,7 @@ class TtLlamaAttention_optimized:
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
             memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
+            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
             # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
         )
 

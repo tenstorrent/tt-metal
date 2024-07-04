@@ -13,7 +13,7 @@ def _golden_function(input_tensor, *args, **kwargs):
     return torch.exp(input_tensor)
 
 
-ttnn.attach_golden_function(ttnn.experimental.tensor.exp, _golden_function)
+ttnn.attach_golden_function(ttnn.exp, _golden_function)
 
 
 def _golden_function_matmul(input_tensor_a, input_tensor_b, *args, **kwargs):

@@ -63,5 +63,5 @@ class TtRobertaPooler(nn.Module):
         tt_first_token_tensor = torch2tt_tensor(first_token_tensor, self.device)
 
         pooled_output = self.dense_linear(tt_first_token_tensor)
-        pooled_output = tt_lib.tensor.tanh(pooled_output, self.mem_config)
+        pooled_output = ttnn.tanh(pooled_output, self.mem_config)
         return pooled_output

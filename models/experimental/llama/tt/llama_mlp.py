@@ -5,6 +5,7 @@
 import torch
 from torch import nn
 import tt_lib
+import ttnn
 
 from models.experimental.llama.llama_utils import linear
 from models.utility_functions import torch_to_tt_tensor_rm
@@ -40,7 +41,7 @@ class TtLlamaMLP(nn.Module):
         )
 
         if hidden_act == "silu":  # silu
-            self.act_fn = tt_lib.tensor.silu
+            self.act_fn = ttnn.silu
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # gate proj

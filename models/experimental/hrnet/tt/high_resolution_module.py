@@ -206,7 +206,7 @@ class TtHighResolutionModule(nn.Module):
                                         bias=False,
                                     ),
                                     self.bn,
-                                    tt_lib.tensor.relu,
+                                    ttnn.relu,
                                 ]
                             )
                     merged_list = [item for sublist in conv3x3s for item in sublist]
@@ -247,6 +247,6 @@ class TtHighResolutionModule(nn.Module):
                     for k in range(1, len(module_list)):
                         res = module_list[k](res) if module_list[k] is not None else res
                     y = ttnn.add(y, res)
-            x_fuse.append(tt_lib.tensor.relu(y))
+            x_fuse.append(ttnn.relu(y))
 
         return x_fuse

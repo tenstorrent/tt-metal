@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2d
@@ -52,7 +53,7 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
         )
 
         self.activation = tt_lib.tensor.silu
-        self.scale_activation = tt_lib.tensor.sigmoid
+        self.scale_activation = ttnn.sigmoid
 
     def _scale(self, x):
         scale = self.avgpool(x)
@@ -64,7 +65,5 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
     def forward(self, x):
         scale = self._scale(x)
 
-        x = tt_lib.tensor.bcast(
-            x, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
-        )
+        x = tt_lib.tensor.bcast(x, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
         return x

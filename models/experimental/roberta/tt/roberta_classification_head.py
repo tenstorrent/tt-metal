@@ -66,7 +66,7 @@ class TtRobertaClassificationHead(nn.Module):
         x = torch2tt_tensor(torch_x, self.device)
         # x = self.dropout(x)
         x = self.dense_linear(x)
-        x = tt_lib.tensor.tanh(x, output_mem_config=self.mem_config)
+        x = ttnn.tanh(x, output_mem_config=self.mem_config)
         # x = torch.tanh(x)
 
         # x = self.dropout(x)

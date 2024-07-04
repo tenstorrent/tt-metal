@@ -166,7 +166,7 @@ def get_rand_falcon_inputs(
                                 -1,
                                 configuration.num_attention_heads,
                                 -1,
-                                -1
+                                -1,
                                 # -1, 71, -1, -1
                             ),
                             device,
