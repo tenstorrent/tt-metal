@@ -131,6 +131,10 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layernorm/multi_core/layernorm_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layernorm/layernorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_pre_allgather_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_pre_allgather_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_post_allgather_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_post_allgather_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm/moreh_bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm_backward/moreh_bmm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear/moreh_linear_op.cpp
