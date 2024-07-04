@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 
-#include <ranges>
 
+#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "device/slice_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -28,24 +28,11 @@ struct ExecuteSlice {
 
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-        auto input_tensor_shape = input_tensor.get_legacy_shape();
-        std::vector<uint32_t> output_tensor_shape = {
-            output_tensor_end[0] - output_tensor_start[0] + 1,
-            output_tensor_end[1] - output_tensor_start[1] + 1,
-            output_tensor_end[2] - output_tensor_start[2] + 1,
-            output_tensor_end[3] - output_tensor_start[3] + 1,
-        };
-        auto output_tensor = operation::run(
-            tt::tt_metal::Unpad{
-                .output_tensor_start=output_tensor_start,
-                .output_tensor_end=output_tensor_end,
-                .output_mem_config=memory_config,
-                .output_shape=output_tensor_shape,
-                .input_shape=input_tensor_shape
-            },
-            {input_tensor}).front();
+        return operation::run(
+                   Slice{output_tensor_start, output_tensor_end, memory_config},
+                   {input_tensor}, {}, {}, queue_id)
+            .at(0);
 
-        return output_tensor;
     }
 
 
