@@ -8,19 +8,19 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl.hpp"
+#include "ttnn/operations/ccl/line_all_gather/device/ccl_line_all_gather_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace operations {
-namespace ccl {
+namespace ccl_line_all_gather {
 
 namespace detail {
 
 template <typename ccl_operation_t>
-void bind_ccl_operation(py::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_ccl_line_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -44,29 +44,8 @@ void bind_ccl_operation(py::module& module, const ccl_operation_t& operation, co
 
 
 void py_module(py::module& module) {
-    detail::bind_ccl_operation(
-        module,
-        ttnn::all_gather,
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
-
-        Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
-            * :attr:`dim` (int)
-
-        Keyword Args:
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.all_gather(tensor, dim=0)
-
-        )doc");
-
-    detail::bind_ccl_operation(
+    detail::bind_ccl_line_all_gather(
         module,
         ttnn::line_all_gather,
         R"doc(line_all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
@@ -89,6 +68,6 @@ void py_module(py::module& module) {
         )doc");
 }
 
-}  // namespace ccl
+}  // namespace ccl_line_all_gather
 }  // namespace operations
 }  // namespace ttnn

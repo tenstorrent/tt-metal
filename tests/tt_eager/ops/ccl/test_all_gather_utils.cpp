@@ -4,21 +4,21 @@
 
 #include "gtest/gtest.h"
 #include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 
 
 //////////////////////////////////////////////////////
-/// InputTensorShardAddrGenArgGenerator TESTS
+/// ttnn::utils::InputTensorShardAddrGenArgGenerator TESTS
 //////////////////////////////////////////////////////
 
 // Col major orientation not supported yet
 TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardStartingLocation_RowMajorOrientation) {
-    // tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+    // ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
     //     num_workers, input_tensor_shard_grid_size, ring_index, serving_worker_index);
     {
         uint32_t ring_size = 8;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 1, 1, 0, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -26,7 +26,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
     {
         uint32_t ring_size = 8;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 1, 1, 1, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 1);
@@ -34,7 +34,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
     {
         uint32_t ring_size = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 4, 16, 0, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -42,7 +42,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
     {
         uint32_t ring_size = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 4, 16, 0, ring_size, 1);
         ASSERT_EQ(dest_worker_index, 2);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -50,7 +50,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
     {
         uint32_t ring_size = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 4, 16, 1, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 8);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -58,7 +58,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
     {
         uint32_t ring_size = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 4, 16, 1, ring_size, 1);
         ASSERT_EQ(dest_worker_index, 10);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -67,7 +67,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
         uint32_t ring_size = 8;
         uint32_t num_workers = 1;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 num_workers, 2, 0, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -76,7 +76,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
         uint32_t ring_size = 8;
         uint32_t num_workers = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 num_workers, 2, 0, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -85,7 +85,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
         uint32_t ring_size = 8;
         uint32_t num_workers = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 num_workers, 2, 0, ring_size, 1);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 1);
@@ -94,7 +94,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
         uint32_t ring_size = 8;
         uint32_t num_workers = 2;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 num_workers, 2, 1, ring_size, 1);
         ASSERT_EQ(dest_worker_index, 0);
         ASSERT_EQ(offset_chunk_in_worker, 3);
@@ -103,7 +103,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetFirstOutputShardSta
         uint32_t ring_size = 8;
         uint32_t num_workers = 8;
         auto const [dest_worker_index, offset_chunk_in_worker] =
-            tt::tt_metal::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
+            ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_first_output_shard_starting_location(
                 num_workers, 32, 1, ring_size, 0);
         ASSERT_EQ(dest_worker_index, 4);
         ASSERT_EQ(offset_chunk_in_worker, 0);
@@ -126,7 +126,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
         uint32_t num_workers = 8;
         {
             std::cout << "HERE" << std::endl;
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 0, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(4,0));
@@ -136,7 +136,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 1, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(4,0));
@@ -146,7 +146,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 2, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(1,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(5,0));
@@ -156,7 +156,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 3, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(1,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(5,0));
@@ -166,7 +166,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 4, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(2,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(6,0));
@@ -176,7 +176,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 5, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(2,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(6,0));
@@ -186,7 +186,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 6, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(3,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(7,0));
@@ -196,7 +196,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_ComputeWorkerDestCores
 
         }
         {
-            auto const& dest_cores = tt::tt_metal::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
+            auto const& dest_cores = ttnn::utils::OutputTensorShardAddrGenArgGenerator::compute_worker_coord_worker_dest_cores (
                 shard_type, global_shard_dest_cores, global_shard_dest_cores.size(), global_shard_dest_cores.size() * ring_size, num_workers, 7, is_shard_orientation_row_major);
             ASSERT_EQ(dest_cores.size(), 8);
             ASSERT_EQ(dest_cores.at(0), CoreCoord(3,0));   ASSERT_EQ(dest_cores.at(1), CoreCoord(7,0));
@@ -218,21 +218,21 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetIntraCoreStrideInSh
         uint32_t input_shard_grid_size = 2;
         uint32_t num_workers = 2;
         uint32_t ring_size = 8;
-        auto stride = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
+        auto stride = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
         ASSERT_EQ(stride, 2);
     }
     {
         uint32_t input_shard_grid_size = 4;
         uint32_t num_workers = 2;
         uint32_t ring_size = 8;
-        auto stride = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
+        auto stride = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
         ASSERT_EQ(stride, 3);
     }
     {
         uint32_t input_shard_grid_size = 16;
         uint32_t num_workers = 4;
         uint32_t ring_size = 8;
-        auto stride = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
+        auto stride = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
         // Since we should be striding past the end of the core for this case, we don't care
         // so either of these values would be valid
         // the first would be the hypothetical stride if ring_size was bigger
@@ -243,7 +243,7 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetIntraCoreStrideInSh
         uint32_t input_shard_grid_size = 56;
         uint32_t num_workers = 1;
         uint32_t ring_size = 8;
-        auto stride = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
+        auto stride = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size,num_workers,ring_size);
         ASSERT_EQ(stride, 1);
     }
 
@@ -255,42 +255,42 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetContiguousChunkCoun
         uint32_t input_shard_grid_size = 1;
         uint32_t num_workers = 1;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 1);
     }
     {
         uint32_t input_shard_grid_size = 2;
         uint32_t num_workers = 2;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 1);
     }
     {
         uint32_t input_shard_grid_size = 4;
         uint32_t num_workers = 2;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 2);
     }
     {
         uint32_t input_shard_grid_size = 16;
         uint32_t num_workers = 4;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 4);
     }
     {
         uint32_t input_shard_grid_size = 56;
         uint32_t num_workers = 1;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 1);
     }
     {
         uint32_t input_shard_grid_size = 32;
         uint32_t num_workers = 8;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
         TT_ASSERT(num_contiguous_shards, 4);
     }
 }
@@ -300,16 +300,16 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetContiguousChunksBef
         uint32_t input_shard_grid_size = 1;
         uint32_t num_workers = 1;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
-        auto intra_core_stride_in_chunks = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto intra_core_stride_in_chunks = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
         ASSERT_EQ(num_contiguous_shards, intra_core_stride_in_chunks);
     }
     {
         uint32_t input_shard_grid_size = 2;
         uint32_t num_workers = 1;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
-        auto intra_core_stride_in_chunks = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto intra_core_stride_in_chunks = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
         ASSERT_EQ(num_contiguous_shards, 1);
         ASSERT_EQ(intra_core_stride_in_chunks, 1);
     }
@@ -317,22 +317,22 @@ TEST(AllGatherUtils, OutputTensorShardAddrGenArgGenerator_GetContiguousChunksBef
         uint32_t input_shard_grid_size = 16;
         uint32_t num_workers = 4;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
-        auto intra_core_stride_in_chunks = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto intra_core_stride_in_chunks = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
         ASSERT_TRUE(num_contiguous_shards == 4 && intra_core_stride_in_chunks == 5);
     }
     {
         uint32_t input_shard_grid_size = 32;
         uint32_t num_workers = 8;
         uint32_t ring_size = 8;
-        auto num_contiguous_shards = OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
-        auto intra_core_stride_in_chunks = OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
+        auto num_contiguous_shards = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_contiguous_chunks_before_stride(input_shard_grid_size, num_workers, ring_size);
+        auto intra_core_stride_in_chunks = ttnn::utils::OutputTensorShardAddrGenArgGenerator::get_intra_core_stride_in_shards(input_shard_grid_size, num_workers, ring_size);
         ASSERT_TRUE(num_contiguous_shards == 4 && intra_core_stride_in_chunks == 5);
     }
 }
 
 //////////////////////////////////////////////////////
-/// InputTensorShardAddrGenArgGenerator TESTS
+/// ttnn::utils::InputTensorShardAddrGenArgGenerator TESTS
 //////////////////////////////////////////////////////
 
 TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWidthSharding_2Workers_WorkerIdx0_2Cores)
@@ -340,7 +340,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0)}, CoreCoord(1,0)});
         uint32_t num_workers = 2;
         uint32_t worker_index = 0;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             CoreRangeSet(all_shard_cores), worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 1);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));
@@ -350,7 +350,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(1,0)}});
         uint32_t num_workers = 2;
         uint32_t worker_index = 1;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 1);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(1,0));
@@ -361,7 +361,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(3,0)}});
         uint32_t num_workers = 2;
         uint32_t worker_index = 0;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 2);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));
@@ -372,7 +372,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(3,0)}});
         uint32_t num_workers = 2;
         uint32_t worker_index = 1;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 2);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(2,0));
@@ -383,7 +383,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,1)}});
         uint32_t num_workers = 4;
         uint32_t worker_index = 0;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));
@@ -396,7 +396,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,1)}});
         uint32_t num_workers = 4;
         uint32_t worker_index = 1;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(4,0));
@@ -409,7 +409,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,1)}});
         uint32_t num_workers = 4;
         uint32_t worker_index = 2;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,1));
@@ -422,7 +422,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,1)}});
         uint32_t num_workers = 4;
         uint32_t worker_index = 3;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(4,1));
@@ -435,7 +435,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,3)}});
         uint32_t num_workers = 8;
         uint32_t worker_index = 0;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,0));
@@ -448,7 +448,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,3)}});
         uint32_t num_workers = 8;
         uint32_t worker_index = 1;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(4,0));
@@ -461,7 +461,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         CoreRangeSet const& all_shard_cores = CoreRangeSet({CoreRange{CoreCoord(0,0), CoreCoord(7,3)}});
         uint32_t num_workers = 8;
         uint32_t worker_index = 2;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         ASSERT_EQ(dest_cores.size(), 4);
         ASSERT_EQ(dest_cores.at(0), CoreCoord(0,1));
@@ -475,7 +475,7 @@ TEST(AllGatherUtils, InputTensorShardAddrGenArgGenerator_CtorGenerateDestCoresWi
         uint32_t num_workers = 8;
         uint32_t worker_index = 3;
         std::cout << "sup" << std::endl;
-        auto const& dest_cores = InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
+        auto const& dest_cores = ttnn::utils::InputTensorShardAddrGenArgGenerator::ctor_generate_dest_cores(
             all_shard_cores, worker_index, num_workers);
         std::cout << "hey" << std::endl;
         ASSERT_EQ(dest_cores.size(), 4);
