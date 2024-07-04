@@ -21,37 +21,37 @@ namespace tt::tt_metal::detail {
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
         Use this version of identity only if input is in uint32 format
         )doc");
-        detail::bind_unary_op(m_tensor, "relu", relu, R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "relu6", relu6, R"doc(Returns tensor with the relu6 activation on elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "sigmoid", sigmoid, R"doc(Applies the sigmoid function to the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "relu", relu, R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "relu6", relu6, R"doc(Returns tensor with the relu6 activation on elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "sigmoid", sigmoid, R"doc(Applies the sigmoid function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "sigmoid_accurate", sigmoid_accurate, R"doc(Applies the sigmoid_accurate function to the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "log2", log2, R"doc(Returns tensor with the base 2 logarithm of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "log10", log10, R"doc(Returns tensor with the base 10 logarithm of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "sin", tt::tt_metal::sin, R"doc(Returns tensor with the sine of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "cos", tt::tt_metal::cos, R"doc(Returns tensor with the cosine of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "tan", tan, R"doc(Returns a new tensor with the tangent of the elements of the input tensor ``{0}`` for the range [-1.45, 1.45].)doc");
-        detail::bind_unary_op(m_tensor, "isfinite", isfinite, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is finite and False elsewhere.)doc");
-        detail::bind_unary_op(m_tensor, "isinf", isinf, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is infinite and False elsewhere.)doc");
-        detail::bind_unary_op(m_tensor, "isposinf", isposinf, R"doc(Returns each element of input tensor ``{0}``, is positive infinity or not.)doc");
+        // detail::bind_unary_op(m_tensor, "log2", log2, R"doc(Returns tensor with the base 2 logarithm of elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "log10", log10, R"doc(Returns tensor with the base 10 logarithm of elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "sin", tt::tt_metal::sin, R"doc(Returns tensor with the sine of elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "cos", tt::tt_metal::cos, R"doc(Returns tensor with the cosine of elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "tan", tan, R"doc(Returns a new tensor with the tangent of the elements of the input tensor ``{0}`` for the range [-1.45, 1.45].)doc");
+        // detail::bind_unary_op(m_tensor, "isfinite", isfinite, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is finite and False elsewhere.)doc");
+        // detail::bind_unary_op(m_tensor, "isinf", isinf, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is infinite and False elsewhere.)doc");
+        // detail::bind_unary_op(m_tensor, "isposinf", isposinf, R"doc(Returns each element of input tensor ``{0}``, is positive infinity or not.)doc");
         detail::bind_unary_op(m_tensor, "tiled_prod", tiled_prod, R"doc(Performs tile-wise multiplication on input tensor ``{0}`` and store the result in the last tile of the input tensor.)doc");
-        detail::bind_unary_op(m_tensor, "isneginf", isneginf, R"doc(Returns each element of input tensor ``{0}``, is negative infinity or not.)doc");
-        detail::bind_unary_op(m_tensor, "isnan", isnan, R"doc(Returns boolean tensor that is True where tensor ``{0}``, is NaN and False elsewhere.)doc");
-        detail::bind_unary_op(m_tensor, "nez", nez, R"doc(Returns tensor with the not equal zero of all of the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "isneginf", isneginf, R"doc(Returns each element of input tensor ``{0}``, is negative infinity or not.)doc");
+        // detail::bind_unary_op(m_tensor, "isnan", isnan, R"doc(Returns boolean tensor that is True where tensor ``{0}``, is NaN and False elsewhere.)doc");
+        // detail::bind_unary_op(m_tensor, "nez", nez, R"doc(Returns tensor with the not equal zero of all of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "exp2", exp2, R"doc(Returns a new tensor with the exp2 (2 power) of the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "expm1", expm1,
-            R"doc(Returns a new tensor with the expm1 of the elements of the input tensor ``{0}``.
-            expm1 = exp(x) - 1)doc"
-        );
-        detail::bind_unary_op(m_tensor, "signbit", signbit, R"doc(Applies the signbit function to the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "expm1", expm1,
+        //     R"doc(Returns a new tensor with the expm1 of the elements of the input tensor ``{0}``.
+        //     expm1 = exp(x) - 1)doc"
+        // );
+        // detail::bind_unary_op(m_tensor, "signbit", signbit, R"doc(Applies the signbit function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "floor", floor, R"doc(Applies floor to the elements of the input tensor ``{0}``. Support provided only for Wormhole_B0.)doc");
-        detail::bind_unary_op(m_tensor, "atan", atan, R"doc(Returns a new tensor with the arctan of the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "logical_not_unary", logical_not_unary, R"doc(Returns a new tensor with the logical not of the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "atan", atan, R"doc(Returns a new tensor with the arctan of the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "logical_not_unary", logical_not_unary, R"doc(Returns a new tensor with the logical not of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}`` for input range [-4,10].)doc");
-        detail::bind_unary_op(m_tensor, "erfinv", erfinv, R"doc(Computes inverse error function for all elements of the input tensor ``{0}`` in the range (-1,1) .)doc");
-        detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
-        detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
+        // detail::bind_unary_op(m_tensor, "erfinv", erfinv, R"doc(Computes inverse error function for all elements of the input tensor ``{0}`` in the range (-1,1) .)doc");
+        // detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
+        // detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
 
         m_tensor.def("eltwise_typecast", &eltwise_typecast,
             py::arg("input").noconvert(), py::arg("tt_input_dtype"), py::arg("tt_output_dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -84,25 +84,25 @@ namespace tt::tt_metal::detail {
         )doc");
 
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "gelu", &gelu,
-            py::arg("fast_and_approx") = true,
-            R"doc(Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``{0}``.)doc",
-            R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
-        );
+        // detail::bind_unary_op_with_param(
+        //     m_tensor, "gelu", &gelu,
+        //     py::arg("fast_and_approx") = true,
+        //     R"doc(Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``{0}``.)doc",
+        //     R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
+        // );
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "erf", &erf,
-            py::arg("fast_and_approx") = true,
-            R"doc(Computes error function for all elements of the input tensor ``{0}``.)doc",
-            R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "erfc", &erfc,
-            py::arg("fast_and_approx") = true,
-            R"doc(Computes complementary error function for all elements of the input tensor ``{0}``.)doc",
-            R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
-        );
+        // detail::bind_unary_op_with_param(
+        //     m_tensor, "erf", &erf,
+        //     py::arg("fast_and_approx") = true,
+        //     R"doc(Computes error function for all elements of the input tensor ``{0}``.)doc",
+        //     R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
+        // );
+        // detail::bind_unary_op_with_param(
+        //     m_tensor, "erfc", &erfc,
+        //     py::arg("fast_and_approx") = true,
+        //     R"doc(Computes complementary error function for all elements of the input tensor ``{0}``.)doc",
+        //     R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
+        // );
         detail::bind_unary_op_with_param(
             m_tensor, "rsqrt", &rsqrt,
             py::arg("fast_and_approx") = true,
@@ -128,54 +128,54 @@ namespace tt::tt_metal::detail {
         R"doc("min value", "float", "")doc"
 
     );
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "elu",
-        elu,
-        py::arg("alpha"),
-        R"doc(Returns tensor with the elu activation of all of elements of the input tensor ``{0}`` and scale
-            factor alpha as ``{1}``. ELU(x) = alpha*(exp(x) - 1) if x < 0 else x.)doc",
-        R"doc("alpha value", "float", "")doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "heaviside",
-        heaviside,
-        py::arg("value"),
-        R"doc(Returns tensor with the Heaviside step function of all of elements of the input tensor ``{0}`` and value factor as ``{1}``.
+    // detail::bind_unary_op_with_param(
+    //     m_tensor,
+    //     "elu",
+    //     elu,
+    //     py::arg("alpha"),
+    //     R"doc(Returns tensor with the elu activation of all of elements of the input tensor ``{0}`` and scale
+    //         factor alpha as ``{1}``. ELU(x) = alpha*(exp(x) - 1) if x < 0 else x.)doc",
+    //     R"doc("alpha value", "float", "")doc");
+    // detail::bind_unary_op_with_param(
+    //     m_tensor,
+    //     "heaviside",
+    //     heaviside,
+    //     py::arg("value"),
+    //     R"doc(Returns tensor with the Heaviside step function of all of elements of the input tensor ``{0}`` and value factor as ``{1}``.
 
-            HEAVISIDE(x) = 0 if x < 0 , 1 if x > 0 , else value.)doc",
-            R"doc("value", "float", "")doc"
+    //         HEAVISIDE(x) = 0 if x < 0 , 1 if x > 0 , else value.)doc",
+    //         R"doc("value", "float", "")doc"
 
-        );
+    //     );
 
-        m_tensor.def("recip",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return recip(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
+        // m_tensor.def("recip",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return recip(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
 
-            Input tensor must have BFLOAT16 data type.
+        //     Input tensor must have BFLOAT16 data type.
 
-            Output tensor will have BFLOAT16 data type.
+        //     Output tensor will have BFLOAT16 data type.
 
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "Tensor reciprocal is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+        //         "input", "Tensor reciprocal is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
 
-        )doc");
-    
+        // )doc");
+
         m_tensor.def("bitwise_xor",bitwise_xor,
             py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Computes bitwise_xor of input tensor ``input`` by a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
@@ -209,372 +209,372 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("sqrt",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return sqrt(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor sqrt is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("exp",
-        [](const Tensor& input,
-            bool fast_and_approx,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return exp(queue_id, input, fast_and_approx, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("fast_and_approx") = false,
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns a new tensor with the exponential of the elements of the input tensor ``exp``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor exp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "fast_and_approx", "Indicate true for approx and fast mode; false for accurate and slow mode",  "bool", "default of false", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("gtz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return gtz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor gtz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("gez",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return gez(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor gez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("lez",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return lez(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the less than equal zero of all of the elements of the input tensor (``input`` <= ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor lez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("ltz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return ltz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the less than zero of all of the elements of the input tensor (``input`` < ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor ltz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("eqz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return eqz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the result of equal to zero of all of the elements of the input tensor (``input`` == ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor eqz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("sign",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return sign(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the elementwise signum of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor sign operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("neg",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return neg(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the negate all of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor neg operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("tanh",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return tanh(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the hyperbolic tangent of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor tanh operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("log",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return log(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the natural logarithm of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor log operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("abs",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return abs(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with elementwise absolute value of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor abs operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("square",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return square(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the square of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor square operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
+        // m_tensor.def("sqrt",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return sqrt(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor sqrt is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("exp",
+        // [](const Tensor& input,
+        //     bool fast_and_approx,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return exp(queue_id, input, fast_and_approx, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("fast_and_approx") = false,
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns a new tensor with the exponential of the elements of the input tensor ``exp``.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor exp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "fast_and_approx", "Indicate true for approx and fast mode; false for accurate and slow mode",  "bool", "default of false", "No"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("gtz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return gtz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor gtz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("gez",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return gez(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor gez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("lez",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return lez(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the less than equal zero of all of the elements of the input tensor (``input`` <= ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor lez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("ltz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return ltz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the less than zero of all of the elements of the input tensor (``input`` < ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor ltz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("eqz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return eqz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the result of equal to zero of all of the elements of the input tensor (``input`` == ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor eqz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("sign",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return sign(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the elementwise signum of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor sign operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("neg",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return neg(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the negate all of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor neg operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("tanh",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return tanh(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the hyperbolic tangent of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor tanh operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("log",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return log(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the natural logarithm of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor log operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("abs",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return abs(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with elementwise absolute value of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor abs operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("square",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return square(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the square of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor square operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
 
         m_tensor.def("rsub",
         [](const Tensor& input,
@@ -606,372 +606,372 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("sqrt",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return sqrt(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor sqrt is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("exp",
-        [](const Tensor& input,
-            bool fast_and_approx,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return exp(queue_id, input, fast_and_approx, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("fast_and_approx") = false,
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns a new tensor with the exponential of the elements of the input tensor ``exp``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor exp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "fast_and_approx", "Indicate true for approx and fast mode; false for accurate and slow mode",  "bool", "default of false", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("gtz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return gtz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor gtz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("gez",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return gez(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor gez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("lez",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return lez(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the less than equal zero of all of the elements of the input tensor (``input`` <= ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor lez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("ltz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return ltz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the less than zero of all of the elements of the input tensor (``input`` < ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor ltz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("eqz",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return eqz(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the result of equal to zero of all of the elements of the input tensor (``input`` == ``0``).
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor eqz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("sign",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return sign(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the elementwise signum of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor sign operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("neg",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return neg(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the negate all of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor neg operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("tanh",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return tanh(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the hyperbolic tangent of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor tanh operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("log",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return log(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the natural logarithm of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor log operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("abs",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return abs(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with elementwise absolute value of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor abs operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
-
-        m_tensor.def("square",
-        [](const Tensor& input,
-            const MemoryConfig& output_mem_config,
-            std::optional<Tensor> output_tensor,
-            uint8_t queue_id){
-                return square(queue_id, input, output_mem_config, output_tensor);
-            },
-            py::arg("input"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Returns tensor with the square of elements of the input tensor ``input`` .
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor square operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-
-        )doc");
+        // m_tensor.def("sqrt",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return sqrt(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor sqrt is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("exp",
+        // [](const Tensor& input,
+        //     bool fast_and_approx,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return exp(queue_id, input, fast_and_approx, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("fast_and_approx") = false,
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns a new tensor with the exponential of the elements of the input tensor ``exp``.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor exp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "fast_and_approx", "Indicate true for approx and fast mode; false for accurate and slow mode",  "bool", "default of false", "No"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("gtz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return gtz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor gtz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("gez",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return gez(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the greater than zero of all of the elements of the input tensor (``input`` > ``0``)`.
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor gez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("lez",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return lez(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the less than equal zero of all of the elements of the input tensor (``input`` <= ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor lez is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("ltz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return ltz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the less than zero of all of the elements of the input tensor (``input`` < ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor ltz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("eqz",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return eqz(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the result of equal to zero of all of the elements of the input tensor (``input`` == ``0``).
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor eqz is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("sign",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return sign(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the elementwise signum of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor sign operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("neg",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return neg(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the negate all of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor neg operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("tanh",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return tanh(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the hyperbolic tangent of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor tanh operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("log",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return log(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the natural logarithm of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor log operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("abs",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return abs(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with elementwise absolute value of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor abs operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
+
+        // m_tensor.def("square",
+        // [](const Tensor& input,
+        //     const MemoryConfig& output_mem_config,
+        //     std::optional<Tensor> output_tensor,
+        //     uint8_t queue_id){
+        //         return square(queue_id, input, output_mem_config, output_tensor);
+        //     },
+        //     py::arg("input"),
+        //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        //     py::arg("output_tensor").noconvert() = std::nullopt,
+        //     py::arg("queue_id").noconvert() = 0,
+        //     R"doc(
+        //     Returns tensor with the square of elements of the input tensor ``input`` .
+
+        //     Input tensor must have BFLOAT16 data type.
+
+        //     Output tensor will have BFLOAT16 data type.
+
+        //     .. csv-table::
+        //         :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+        //         "input", "Tensor square operation is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        //         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        //         "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+        //         "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        // )doc");
 
         m_tensor.def("rsub",
         [](const Tensor& input,
@@ -1019,7 +1019,7 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
         )doc");
-        
+
         m_tensor.def("bitwise_or",bitwise_or,
             py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Computes bitwise_or of input tensor ``input`` by  a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
@@ -1097,12 +1097,12 @@ namespace tt::tt_metal::detail {
             R"doc(Returns tensor  with value ``{1}`` divided by each of respective elements of the input tensor ``{0}``.)doc",
             R"doc("denominator value which is actually calculated as numerator", "float", ">=0.0")doc"
         );
-        detail::bind_unary_op_with_param(
-            m_tensor, "leaky_relu", leaky_relu,
-            py::arg("slope"),
-            R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
-            R"doc("slope value", "float", "")doc"
-        );
+        // detail::bind_unary_op_with_param(
+        //     m_tensor, "leaky_relu", leaky_relu,
+        //     py::arg("slope"),
+        //     R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
+        //     R"doc("slope value", "float", "")doc"
+        // );
         detail::bind_unary_op_with_param(
             m_tensor, "prelu", prelu,
             py::arg("weight"),
