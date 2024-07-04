@@ -274,32 +274,6 @@ namespace tt::tt_metal::detail{
                 "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
-        m_tensor.def("pad", &pad,
-            py::arg("input").noconvert(),
-            py::arg("output_tensor_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("pad_value"),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("use_multicore") = false,
-            R"doc(
-
-            THIS IS DEPRECATED AND WILL BE REMOVED SOON, PLEASE USE THE TTNN VERSION OF THIS OP
-            Pad TT Tensor with given pad value ``arg2``.
-
-            The input tensor must be in ROW_MAJOR or TILE layout.
-
-            Returns an output tensor that contains the input tensor at the given input tensor start indices ``arg3`` and the padded value everywhere else.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "", "Yes"
-                "output_tensor_shape", "Shape of output tensor", "List[int[4]]", "", "Yes"
-                "input_tensor_start", "Start indices to place input tensor in output tensor", "List[int[4]]", "Must be all 0s", "Yes"
-                "pad_value", "Value to pad input tensor", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         m_tensor.def("unpad", &unpad,
             py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Unpad TT Tensor.
