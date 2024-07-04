@@ -46,13 +46,6 @@ inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
     return Shape(output_shape, output_padding);
 }
 
-inline Tensor create_output_tensor(const Tensor &input, int64_t dim, const MemoryConfig &output_mem_config) {
-    const auto output_shape = compute_output_shape(input.get_legacy_shape(), dim);
-    const auto &output =
-        create_device_tensor(output_shape, input.get_dtype(), Layout::TILE, input.device(), output_mem_config);
-    return std::move(output);
-}
-
 }  // namespace
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
@@ -65,24 +58,43 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {
+void MorehNorm::validate_with_output_tensors(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &input = input_tensors.at(0);
-    const auto &output = input_tensors.at(1);
 
     check_tensor(input, "moreh_norm", "input");
-    check_tensor(output, "moreh_norm", "output");
+
+    const auto &output = output_tensors.at(0);
+    if (output.has_value()) {
+        check_tensor(output, "moreh_norm", "output");
+    }
 }
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
-std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const { return {input_tensors.at(1)}; }
+std::vector<Tensor> MorehNorm::create_output_tensors(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors
+) const {
+    if (output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0).value()};
+    }
 
-[[maybe_unused]] Tensor moreh_norm(
+    auto input = input_tensors.at(0);
+    auto device = input.device();
+    const auto output_shape = compute_output_shape(input.get_legacy_shape(), this->dim);
+
+    return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), device, this->memory_config)};
+}
+
+Tensor moreh_norm(
     const Tensor &input,
     float p,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const std::optional<std::reference_wrapper<const Tensor>> output,
-    const MemoryConfig &output_mem_config) {
+    const std::optional<const Tensor> output,
+    const std::optional<MemoryConfig> &memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     if (dim == std::nullopt) {
         std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
@@ -91,10 +103,7 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
 
     if (std::holds_alternative<int64_t>(dim.value())) {
         const auto d = std::get<int64_t>(dim.value());
-        if (output.has_value()) {
-            return moreh_norm_impl(input, p, d, output->get());
-        }
-        return moreh_norm_impl(input, p, d, create_output_tensor(input, d, output_mem_config));
+        return moreh_norm_impl(input, p, d, output, memory_config, compute_kernel_config);
     }
 
     auto dims = std::get<std::vector<int64_t>>(dim.value());
@@ -107,10 +116,7 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
 
     if (dims.size() == 1) {
         const auto d = dims[0];
-        if (output.has_value()) {
-            return moreh_norm_impl(input, p, d, output->get());
-        }
-        return moreh_norm_impl(input, p, d, create_output_tensor(input, d, output_mem_config));
+        return moreh_norm_impl(input, p, d, output, memory_config, compute_kernel_config);
     }
 
     std::sort(dims.begin(), dims.end(), std::greater<int64_t>());
@@ -118,36 +124,46 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
     const auto outermost_dim = dims[dims.size() - 1];
 
     auto tmp_output =
-        moreh_norm_impl(input, p, innermost_dim, create_output_tensor(input, innermost_dim, output_mem_config));
+        moreh_norm_impl(input, p, innermost_dim, std::nullopt, memory_config, compute_kernel_config);
 
     using idx_t = decltype(dims.size());
     for (idx_t idx = 1; idx < dims.size() - 1; ++idx) {
         tmp_output =
-            moreh_norm_impl(tmp_output, p, dims[idx], create_output_tensor(tmp_output, dims[idx], output_mem_config));
+            moreh_norm_impl(tmp_output, p, dims[idx], std::nullopt, memory_config, compute_kernel_config);
     }
 
-    if (output.has_value()) {
-        return moreh_norm_impl(tmp_output, p, outermost_dim, output->get());
-    }
     return moreh_norm_impl(
-        tmp_output, p, outermost_dim, create_output_tensor(tmp_output, outermost_dim, output_mem_config));
+        tmp_output, p, outermost_dim, output, memory_config, compute_kernel_config);
 }
 
-// TODO: move output to optional_output_tensors
-Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
+    const std::optional<const Tensor> output,
+    const std::optional<MemoryConfig> &memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+) {
+    auto device = input.device();
+
+    auto kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
     operation::launch_op(
-        [p, dim](
+        [p, dim, memory_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
-                MorehNorm{.p = p, .dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
+                MorehNorm{.p = p, .dim = dim,
+                    .memory_config = memory_config.value_or(input_tensors.at(0).memory_config()),
+                    .compute_kernel_config = kernel_config_val},
+                    input_tensors,
+                    optional_input_tensors,
+                    optional_output_tensors);
         },
-        {input, output},
+        {input},
         output_tensors,
         {},
-        {});
+        {output});
 
     return output_tensors.at(0);
 }
@@ -161,11 +177,11 @@ operation::ProgramWithCallbacks MorehNorm::create_program(
     const auto input_rank = static_cast<decltype(dim)>(input.get_legacy_shape().rank());
 
     if (dim == input_rank - 1) {
-        return moreh_norm_w_impl(input, this->p, output);
+        return moreh_norm_w_impl(input, this->p, output, this->compute_kernel_config);
     } else if (dim == input_rank - 2) {
-        return moreh_norm_h_impl(input, this->p, output);
+        return moreh_norm_h_impl(input, this->p, output, this->compute_kernel_config);
     } else {
-        return moreh_norm_other_impl(input, this->p, dim, output);
+        return moreh_norm_other_impl(input, this->p, dim, output, this->compute_kernel_config);
     }
 }
 

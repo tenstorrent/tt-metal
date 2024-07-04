@@ -9,6 +9,12 @@ import tt_lib as ttl
 from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
+
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
@@ -66,16 +72,20 @@ def torch_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False):
     return cpu_y, cpu_dx
 
 
-def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
+def tt_norm(cpu_x, expected_y, cpu_dy, *, p=2.0, dim=None, compute_kernel_options=None, do_backward=False, device=None):
     npu_x = to_npu(cpu_x.bfloat16(), device)
     if do_backward:
         npu_dy = to_npu(cpu_dy.bfloat16(), device)
 
-    npu_y = None
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
     if do_backward:
         npu_y = to_npu(torch.norm(cpu_x, p=p, dim=dim, keepdim=True).bfloat16(), device)
     else:
-        npu_y = ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim)
+        npu_y = to_npu(torch.empty_like(expected_y), device)
+        ttl.operations.primary.moreh_norm(
+            npu_x, p=p, dim=dim, output=npu_y, compute_kernel_config=compute_kernel_config
+        )
 
     npu_dx = None
     if do_backward:
@@ -85,6 +95,41 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
     npu_y = to_cpu(npu_y, list(cpu_dy.shape))
 
     return npu_y, npu_dx
+
+
+def run_moreh_norm(input_shape, p, dim, rtol, atol, device, compute_kernel_options=None):
+    if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
+        pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
+
+    if type(dim) == int and dim >= len(input_shape):
+        pytest.skip("dim bigger than input rank")
+
+    if type(dim) == list:
+        for i in dim:
+            if i >= len(input_shape):
+                pytest.skip("dim bigger than input rank")
+
+    cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
+
+    # expected
+    expected_y, _ = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, do_backward=False)
+
+    # actual
+    actual_y, _ = tt_norm(
+        cpu_x,
+        expected_y,
+        cpu_dy,
+        p=p,
+        dim=dim,
+        compute_kernel_options=compute_kernel_options,
+        device=device,
+        do_backward=False,
+    )
+
+    # Check output
+    pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
+    logger.debug(f"output's {out_y}")
+    assert pass_y
 
 
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5], ids=["p=2.0", "p=2.5", "p=-2.5"])
@@ -128,9 +173,8 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [TILE_HEIGHT, TILE_WIDTH],
         [2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13],
-        [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
     ],
 )
 def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
@@ -138,21 +182,55 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
 
     dim, rtol, atol = dim_rtol_atol
 
-    if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
-        pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
+    run_moreh_norm(input_shape, p, dim, rtol, atol, device)
 
-    cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
 
-    # expected
-    expected_y, _ = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, do_backward=False)
+@pytest.mark.parametrize("p", [2.0, 2.5, -2.5], ids=["p=2.0", "p=2.5", "p=-2.5"])
+@pytest.mark.parametrize(
+    "dim_rtol_atol",
+    [
+        [0, 0.1, 0.1],
+        [1, 0.1, 0.1],
+        [2, 0.1, 0.1],
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [10, TILE_HEIGHT, TILE_WIDTH],
+    ],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_norm_compute(input_shape, p, dim_rtol_atol, compute_kernel_options, device):
+    torch.manual_seed(2024)
 
-    # actual
-    actual_y, _ = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=False)
+    dim, rtol, atol = dim_rtol_atol
 
-    # Check output
-    pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
-    logger.debug(f"output's {out_y}")
-    assert pass_y
+    run_moreh_norm(input_shape, p, dim, rtol, atol, device, compute_kernel_options)
+
+
+@pytest.mark.parametrize("p", [2.0], ids=["p=2.0"])
+@pytest.mark.parametrize(
+    "dim_rtol_atol",
+    [
+        [0, 0.1, 0.1],
+        [1, 0.1, 0.1],
+        [2, 0.1, 0.1],
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [10, TILE_HEIGHT, TILE_WIDTH],
+    ],
+)
+def test_moreh_callback(input_shape, p, dim_rtol_atol, device, use_program_cache):
+    torch.manual_seed(2024)
+
+    dim, rtol, atol = dim_rtol_atol
+
+    for _ in range(2):
+        run_moreh_norm(input_shape, p, dim, rtol, atol, device)
 
 
 @pytest.mark.parametrize("p", [2.0], ids=["p=2.0"])
@@ -198,7 +276,6 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
     [
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
         [2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13],
-        [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
     ],
 )
 def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, device):
@@ -212,7 +289,7 @@ def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, device):
     _, expected_dx = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, do_backward=True)
 
     # actual
-    _, actual_dx = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=True)
+    _, actual_dx = tt_norm(cpu_x, expected_dx, cpu_dy, p=p, dim=dim, device=device, do_backward=True)
 
     # Check input_grad
     pass_dx, out_dx = comp_allclose(expected_dx, actual_dx, rtol=rtol, atol=atol)

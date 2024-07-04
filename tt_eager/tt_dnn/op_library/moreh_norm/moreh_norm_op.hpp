@@ -14,6 +14,8 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
+
 namespace tt {
 
 namespace operations {
@@ -24,30 +26,46 @@ using namespace tt_metal;
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
 
-operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, const Tensor &output);
-operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, const Tensor &output);
-operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
+operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehNorm {
     float p;
     int64_t dim;
-    MemoryConfig output_mem_config;
+    MemoryConfig memory_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors
+        ) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<Tensor>>& output_tensors
+    ) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple("p", "dim", "memory_config", "compute_kernel_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
+    }
 };
 
-[[maybe_unused]] Tensor moreh_norm(
+Tensor moreh_norm(
     const Tensor &input,
     float p,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> output = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const std::optional<const Tensor> output = std::nullopt,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
+    const std::optional<const Tensor> output,
+    const std::optional<MemoryConfig> &memory_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

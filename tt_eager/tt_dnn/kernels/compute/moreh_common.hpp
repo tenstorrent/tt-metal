@@ -973,11 +973,11 @@ ALWI void power_tile_to_cb(
     constexpr uint32_t dst0 = 0;
 
     // x^p
-    ACQ();
+    tile_regs_acquire();
     cb_wait_front(cb_x, onetile);
     cb_reserve_back(cb_xpow, onetile);
 
-    copy_tile_init();
+    copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
     power_tile_init();
@@ -987,61 +987,70 @@ ALWI void power_tile_to_cb(
         recip_tile_init();
         recip_tile(dst0);
     }
+    tile_regs_commit();
 
-    pack_tile(dst0, cb_xpow);
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_xpow);
+    tile_regs_release();
 
     cb_push_back(cb_xpow, onetile);
-    REL();
     // We don't pop cb_x here.
 
     // log(x)
-    ACQ();
+    tile_regs_acquire();
     cb_reserve_back(cb_logx, onetile);
 
-    copy_tile_init();
+    copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
     log_tile_init();
     log_tile(dst0);
+    tile_regs_commit();
 
-    pack_tile(dst0, cb_logx);
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_logx);
+    tile_regs_release();
 
     cb_pop_front(cb_x, onetile);
     cb_push_back(cb_logx, onetile);
     REL();
 
     // exp(log(x) * decimal)
-    ACQ();
+    tile_regs_acquire();
     cb_wait_front(cb_logx, onetile);
     cb_reserve_back(cb_exp_lxmd, onetile);
 
-    mul_tiles_init();
+    mul_tiles_init_with_dt(cb_logx, cb_decimal);
     mul_tiles(cb_logx, cb_decimal, 0, 0, dst0);
 
     exp_tile_init();
     exp_tile(dst0);
+	tile_regs_commit();
 
-    pack_tile(dst0, cb_exp_lxmd);
+	tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_exp_lxmd);
+	tile_regs_release();
 
     cb_pop_front(cb_logx, onetile);
     cb_push_back(cb_exp_lxmd, onetile);
-    REL();
 
     // x^p * exp(log(x) * decimal)(==(x + decimal)^p)
-    ACQ();
+	tile_regs_acquire();
     cb_wait_front(cb_xpow, onetile);
     cb_wait_front(cb_exp_lxmd, onetile);
     cb_reserve_back(cb_correct_xpow, onetile);
 
-    mul_tiles_init();
+    mul_tiles_init_with_dt(cb_xpow, cb_exp_lxmd);
     mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
+	tile_regs_commit();
 
-    pack_tile(dst0, cb_correct_xpow);
+	tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_correct_xpow);
+	tile_regs_release();
 
     cb_pop_front(cb_xpow, onetile);
     cb_pop_front(cb_exp_lxmd, onetile);
     cb_push_back(cb_correct_xpow, onetile);
-    REL();
 }
 
 ALWI void power_and_recip_tile_to_cb(
