@@ -11,9 +11,10 @@ from loguru import logger
 from models.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
 
 
-def sequential_prefix_scan(a, bx):
+def sequential_prefix_scan(a, bx, h_prev):
     (_, _, L, EN) = bx.shape
     hidden_states = torch.zeros((1, 1, L, EN), device=a.device)
+    hidden_states[0, 0, -1, :] = h_prev
     for i in range(L):
         hidden_states[:, :, i] = a[:, :, i] * hidden_states[:, :, i - 1] + bx[:, :, i]
     return hidden_states
@@ -24,8 +25,9 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 
     a = torch.randn((1, 1, L, E * N))
     bx = torch.randn((1, 1, L, E * N))
+    h_prev = torch.randn((1, 1, 1, E * N))
 
-    expected = sequential_prefix_scan(a, bx)
+    expected = sequential_prefix_scan(a, bx, h_prev)
 
     compute_grid_size = device.compute_with_storage_grid_size()
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
@@ -41,8 +43,23 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     a = ttl.tensor.Tensor(a, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
     bx = ttl.tensor.Tensor(bx, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
 
+    h_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        [1, E * N // num_cores],
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    h_memory_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, h_shard_spec
+    )
+    h_prev = (
+        ttl.tensor.Tensor(h_prev, ttl.tensor.DataType.BFLOAT16)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, h_memory_config)
+    )
+
     actual = ttl.operations.primary.transformers.ssm_prefix_scan(
-        a, bx, output_mem_config=memory_config, output_dtype=dtype
+        a, bx, h_prev, output_mem_config=memory_config, output_dtype=dtype
     )
     assert list(actual.get_legacy_shape()) == list(expected.shape)
     assert actual.dtype == dtype

@@ -63,6 +63,7 @@ void py_module(py::module& m_transformers) {
         &ssm_prefix_scan,
         py::arg().noconvert(),
         py::arg().noconvert(),
+        py::arg().noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
