@@ -65,7 +65,8 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     // Hidden state is in row-major so must be bfloat16
     const uint32_t cb_h_in_id = tt::CB::c_in2;
-    const auto cb_h_in = create_circular_buffer(cb_h_in_id, num_chunks_per_row, intermediary_tile_size, intermediary_format, h_buffer);
+    const auto cb_h_in =
+        create_circular_buffer(cb_h_in_id, num_chunks_per_row, intermediary_tile_size, intermediary_format, h_buffer);
 
     const uint32_t cb_out_id = tt::CB::c_out0;
     const auto cb_out = create_circular_buffer(cb_out_id, total_tiles, input_tile_size, input_format, output_buffer);
@@ -92,15 +93,12 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t cb_h_id = tt::CB::c_intermed5;
     const auto cb_h = create_circular_buffer(cb_h_id, 2, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_zeros_id = tt::CB::c_intermed6;
-    const auto cb_zeros = create_circular_buffer(cb_zeros_id, 1, intermediary_tile_size, intermediary_format);
-
     const uint32_t cb_h_acc_id = tt::CB::c_intermed7;
     const auto cb_h_acc =
         create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id, cb_zeros_id};
-    std::vector<uint32_t> writer_compile_time_args = {cb_out_id};
+    std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
+    std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
         cb_bx_in_id,
@@ -112,7 +110,6 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
         cb_h_id,
         cb_tilize_out_id,
         cb_out_id,
-        cb_zeros_id,
         cb_h_acc_id};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -140,47 +137,53 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     std::vector<CoreCoord> cores =
         grid_to_cores(all_cores.num_cores(), compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, true);
 
-    auto set_runtime_args = [reader_kernel_id,
-                             writer_kernel_id,
-                             compute_kernel_id,
-                             total_tiles,
-                             total_tiles_per_col,
-                             total_tiles_per_row,
-                             all_cores,
-                             cores,
-                             cb_a_in,
-                             cb_bx_in,
-                             cb_out](Program& program, const Tensor& a, const Tensor& bx, const Tensor &h, const Tensor& output) {
-        tt_metal::Buffer* a_buffer = a.buffer();
-        tt_metal::Buffer* bx_buffer = bx.buffer();
-        tt_metal::Buffer* h_buffer = h.buffer();
-        tt_metal::Buffer* output_buffer = output.buffer();
+    auto set_runtime_args =
+        [reader_kernel_id,
+         writer_kernel_id,
+         compute_kernel_id,
+         total_tiles,
+         total_tiles_per_col,
+         total_tiles_per_row,
+         all_cores,
+         cores,
+         cb_a_in,
+         cb_bx_in,
+         cb_h_in,
+         cb_out](Program& program, const Tensor& a, const Tensor& bx, const Tensor& h, const Tensor& output) {
+            tt_metal::Buffer* a_buffer = a.buffer();
+            tt_metal::Buffer* bx_buffer = bx.buffer();
+            tt_metal::Buffer* h_buffer = h.buffer();
+            tt_metal::Buffer* output_buffer = output.buffer();
 
-        UpdateDynamicCircularBufferAddress(program, cb_a_in, *a_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_bx_in, *bx_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_a_in, *a_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_bx_in, *bx_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_h_in, *h_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
-        std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
-        std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(), {0}};  // (num_tiles_per_core)
-        std::vector<std::vector<uint32_t>> compute_runtime_args = {
-            cores.size(), {0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col)
+            std::vector<std::vector<uint32_t>> reader_runtime_args = {
+                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+            std::vector<std::vector<uint32_t>> writer_runtime_args = {
+                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+            std::vector<std::vector<uint32_t>> compute_runtime_args = {
+                cores.size(), {0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col)
 
-        for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
-            const CoreCoord& core = cores.at(i);
+            for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
+                const CoreCoord& core = cores.at(i);
 
-            reader_runtime_args[i][0] = total_tiles;
-            reader_runtime_args[i][1] = total_tiles_per_row;
+                reader_runtime_args[i][0] = total_tiles;
+                reader_runtime_args[i][1] = total_tiles_per_row;
 
-            writer_runtime_args[i][0] = total_tiles;
+                writer_runtime_args[i][0] = total_tiles;
+                writer_runtime_args[i][1] = total_tiles_per_row;
 
-            compute_runtime_args[i][0] = total_tiles;
-            compute_runtime_args[i][1] = total_tiles_per_row;
-            compute_runtime_args[i][2] = total_tiles_per_col;
-        }
-        SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
-        SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
-        SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
-    };
+                compute_runtime_args[i][0] = total_tiles;
+                compute_runtime_args[i][1] = total_tiles_per_row;
+                compute_runtime_args[i][2] = total_tiles_per_col;
+            }
+            SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
+            SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+        };
 
     set_runtime_args(program, a, bx, h, output);
 
