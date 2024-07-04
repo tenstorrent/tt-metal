@@ -6,6 +6,16 @@ import torch
 import math
 
 import ttnn
+import os
+
+
+def save_tensor(filename, tensor, device_mesh):
+    cloned_tensor = ttnn.clone(tensor, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16)
+    host_tensor = ttnn.to_torch(
+        cloned_tensor, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
+    )
+    # os.mkdir(os.path.dirname(filename))
+    torch.save(host_tensor, filename)
 
 
 def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=False):
