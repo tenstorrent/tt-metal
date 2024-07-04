@@ -30,7 +30,7 @@ inline vFloat softplus(vFloat x) {
     v_elseif(x < -5.0f) {
         // Coefficients for [-20, -5]
         result =
-            (((((vConstFloatPrgm0 * x + vConstFloatPrgm1) * x + vConstFloatPrgm2) * x + 5.25169871e-03) * x +
+            (((((2.01778601e-07 * x + 1.41959790e-05) * x + 3.90682149e-04) * x + 5.25169871e-03) * x +
               3.44602422e-02) *
                  x +
              8.83130932e-02);
@@ -87,11 +87,7 @@ inline void calculate_softplus(uint param0, uint param1, uint param2) {
 }
 
 template <bool APPROXIMATION_MODE>
-void softplus_init() {
-    vConstFloatPrgm0 = 2.01778601e-07;
-    vConstFloatPrgm1 = 1.41959790e-05;
-    vConstFloatPrgm2 = 3.90682149e-04;
-}
+void softplus_init() {}
 
 }  // namespace sfpu
 }  // namespace ckernel
