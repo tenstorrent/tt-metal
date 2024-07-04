@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "downsample_op.hpp"
 
 #include <math.h>
 
@@ -15,9 +15,11 @@
 
 using namespace tt::constants;
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace data_movement {
 
 void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -52,7 +54,7 @@ std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
     return {num_cores_height_sliced, num_cores_width_sliced};
 }
 
-std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> Downsample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.get_legacy_shape()[0] == 1 && input_tensor_a.get_legacy_shape()[1] == 1);
     uint32_t input_height = input_tensor_a.get_legacy_shape()[2];
@@ -60,12 +62,12 @@ std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor>& 
     TT_ASSERT(input_height >= img_batch_size * img_height * img_width);
     uint32_t output_height_unpadded = img_batch_size * ceil((double)img_height / (double)img_stride_h) *
                                       ceil((double)img_width / (double)img_stride_w);
-    uint32_t output_height = round_up(output_height_unpadded, TILE_HEIGHT);
+    uint32_t output_height = tt::round_up(output_height_unpadded, TILE_HEIGHT);
     uint32_t output_width = input_tensor_a.get_legacy_shape()[3];
     auto output_padding =
         Padding({{0, 0}, {0, 0}, {0, (output_height - output_height_unpadded)}, {0, 0}}, Padding::PadValue::Any);
-    auto output_tensor_shape = Shape({1, 1, output_height, output_width}, output_padding);
-    log_debug(LogOp, "Downsample output shape: {}", output_tensor_shape);
+    auto output_tensor_shape = tt::tt_metal::Shape({1, 1, output_height, output_width}, output_padding);
+    log_debug(tt::LogOp, "Downsample output shape: {}", output_tensor_shape);
     return {output_tensor_shape};
 }
 
@@ -77,9 +79,9 @@ std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor>&
         input_tensor.memory_config().memory_layout,
         input_tensor.shard_spec().value().orientation);
     uint32_t output_shard_height =
-        round_up(output_shape[2], num_cores_height_sliced * TILE_HEIGHT) / num_cores_height_sliced;
+        tt::round_up(output_shape[2], num_cores_height_sliced * TILE_HEIGHT) / num_cores_height_sliced;
     uint32_t output_shard_width =
-        round_up(output_shape[3], num_cores_width_sliced * TILE_WIDTH) / num_cores_width_sliced;
+        tt::round_up(output_shape[3], num_cores_width_sliced * TILE_WIDTH) / num_cores_width_sliced;
     auto mem_config = input_tensor.memory_config();
     mem_config.shard_spec = ShardSpec{
         input_tensor.shard_spec().value().grid,
@@ -365,21 +367,21 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
     if (0) {
-        log_debug(LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
-        log_debug(LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
-        log_debug(LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
-        log_debug(LogOp, "   skip_top_partial_right_aligned_row: {}", skip_top_partial_right_aligned_row);
-        log_debug(LogOp, "   num_rows_top_partial_image: {}", num_rows_top_partial_image);
-        log_debug(LogOp, "   num_skip_rows_top_partial_image: {}", num_skip_rows_top_partial_image);
-        log_debug(LogOp, "   num_full_images: {}", num_full_images);
-        log_debug(LogOp, "   num_rows_bottom_partial_image: {}", num_rows_bottom_partial_image);
-        log_debug(LogOp, "   num_skip_rows_bottom_partial_image: {}", num_skip_rows_bottom_partial_image);
-        log_debug(LogOp, "   bottom_partial_left_aligned_row_width: {}", bottom_partial_left_aligned_row_width);
-        log_debug(LogOp, "   skip_bottom_partial_left_aligned_row: {}", skip_bottom_partial_left_aligned_row);
-        log_debug(LogOp, "   v.input_flat_h: {}", v.input_flat_h);
-        log_debug(LogOp, "   v.output_flat_h: {}", v.output_flat_h);
-        log_debug(LogOp, "   input_end_flat_h: {}", input_end_flat_h);
-        log_debug(LogOp, "   output_end_flat_h: {}", output_end_flat_h);
+        log_debug(tt::LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
+        log_debug(tt::LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
+        log_debug(tt::LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
+        log_debug(tt::LogOp, "   skip_top_partial_right_aligned_row: {}", skip_top_partial_right_aligned_row);
+        log_debug(tt::LogOp, "   num_rows_top_partial_image: {}", num_rows_top_partial_image);
+        log_debug(tt::LogOp, "   num_skip_rows_top_partial_image: {}", num_skip_rows_top_partial_image);
+        log_debug(tt::LogOp, "   num_full_images: {}", num_full_images);
+        log_debug(tt::LogOp, "   num_rows_bottom_partial_image: {}", num_rows_bottom_partial_image);
+        log_debug(tt::LogOp, "   num_skip_rows_bottom_partial_image: {}", num_skip_rows_bottom_partial_image);
+        log_debug(tt::LogOp, "   bottom_partial_left_aligned_row_width: {}", bottom_partial_left_aligned_row_width);
+        log_debug(tt::LogOp, "   skip_bottom_partial_left_aligned_row: {}", skip_bottom_partial_left_aligned_row);
+        log_debug(tt::LogOp, "   v.input_flat_h: {}", v.input_flat_h);
+        log_debug(tt::LogOp, "   v.output_flat_h: {}", v.output_flat_h);
+        log_debug(tt::LogOp, "   input_end_flat_h: {}", input_end_flat_h);
+        log_debug(tt::LogOp, "   output_end_flat_h: {}", output_end_flat_h);
         // cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" <<
         // v.img_w << endl;
     }
@@ -410,23 +412,23 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
 operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+              tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
-    tt::DataFormat untilized_cb_data_format = DataFormat::Float16_b;
-    uint32_t untilized_single_tile_size = tt_metal::detail::TileSize(untilized_cb_data_format);
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    tt::DataFormat untilized_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t untilized_single_tile_size = tt::tt_metal::detail::TileSize(untilized_cb_data_format);
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
-    tt_metal::Buffer* src0_buffer = a.buffer();
+    tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     TT_ASSERT(a.get_legacy_shape()[0] == 1 && a.get_legacy_shape()[1] == 1);
     TT_ASSERT(output.get_legacy_shape()[0] == 1 && output.get_legacy_shape()[1] == 1);
 
-    tt_metal::Device* device = a.device();
+    tt::tt_metal::Device* device = a.device();
 
-    tt_metal::Buffer* dst_buffer = output.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
     TT_ASSERT(output.volume() % TILE_HW == 0);
@@ -500,16 +502,16 @@ operation::ProgramWithCallbacks downsample_single_core(
     TT_ASSERT(output_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_output_tiles = output_shard_height / TILE_HEIGHT;
 
-    uint32_t input_cb_index = CB::c_in0;
+    uint32_t input_cb_index = tt::CB::c_in0;
     uint32_t num_input_tiles = num_input_tiles_in_row * num_rows_of_input_tiles;
-    tt_metal::CircularBufferConfig input_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig input_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size);
     input_cb_config = input_cb_config.set_globally_allocated_address(*a.buffer());
-    auto input_cb = tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
+    auto input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         input_cb_index,
         input_single_tile_size,
@@ -518,32 +520,32 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     // CB to store halo data
     // hardcode to store 1 row of tiles
-    uint32_t halo_prev_input_cb_index = CB::c_in1;
+    uint32_t halo_prev_input_cb_index = tt::CB::c_in1;
     uint32_t halo_prev_input_cb_max_rows_of_tiles = 4;
     uint32_t num_halo_prev_cb_input_tiles = num_input_tiles_in_row * halo_prev_input_cb_max_rows_of_tiles;
-    tt_metal::CircularBufferConfig halo_prev_input_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig halo_prev_input_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_halo_prev_cb_input_tiles * input_single_tile_size, {{halo_prev_input_cb_index, input_cb_data_format}})
             .set_page_size(halo_prev_input_cb_index, input_single_tile_size);
-    auto halo_prev_input_cb = tt_metal::CreateCircularBuffer(program, core_range, halo_prev_input_cb_config);
+    auto halo_prev_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_prev_input_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         halo_prev_input_cb_index,
         input_single_tile_size,
         num_halo_prev_cb_input_tiles,
         input_single_tile_size * num_halo_prev_cb_input_tiles);
 
-    uint32_t halo_next_input_cb_index = CB::c_in2;
+    uint32_t halo_next_input_cb_index = tt::CB::c_in2;
     uint32_t halo_next_input_cb_max_rows_of_tiles = 33;  // TODO: Remove hardcoding
     uint32_t num_halo_next_cb_input_tiles = num_input_tiles_in_row * halo_next_input_cb_max_rows_of_tiles;
-    tt_metal::CircularBufferConfig halo_next_input_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig halo_next_input_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_halo_next_cb_input_tiles * input_single_tile_size, {{halo_next_input_cb_index, input_cb_data_format}})
             .set_page_size(halo_next_input_cb_index, input_single_tile_size);
-    auto halo_next_input_cb = tt_metal::CreateCircularBuffer(program, core_range, halo_next_input_cb_config);
+    auto halo_next_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_next_input_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         halo_next_input_cb_index,
         input_single_tile_size,
@@ -553,14 +555,14 @@ operation::ProgramWithCallbacks downsample_single_core(
     // CB to store reader pattern array
     // read pattern array size == output_height
     uint32_t reader_pattern_array_size = output_shard_height;
-    uint32_t reader_pattern_array_cb_index = CB::c_intermed1;
-    tt_metal::CircularBufferConfig reader_pattern_array_cb_config =
-        tt_metal::CircularBufferConfig(
-            reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, DataFormat::Float16_b}})
+    uint32_t reader_pattern_array_cb_index = tt::CB::c_intermed1;
+    tt::tt_metal::CircularBufferConfig reader_pattern_array_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(reader_pattern_array_cb_index, 4);
-    auto reader_pattern_array_cb = tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
+    auto reader_pattern_array_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         reader_pattern_array_cb_index,
         4,
@@ -568,15 +570,15 @@ operation::ProgramWithCallbacks downsample_single_core(
         4 * reader_pattern_array_size);
 
     // untilized CB has size - [32, full width]
-    uint32_t untilize_cb_index = CB::c_intermed2;
+    uint32_t untilize_cb_index = tt::CB::c_intermed2;
     uint32_t num_tiles_untilize_cb = num_input_tiles_in_row;
-    tt_metal::CircularBufferConfig untilize_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig untilize_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_tiles_untilize_cb * untilized_single_tile_size, {{untilize_cb_index, untilized_cb_data_format}})
             .set_page_size(untilize_cb_index, untilized_single_tile_size);
-    auto untilize_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
+    auto untilize_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         untilize_cb_index,
         untilized_single_tile_size,
@@ -584,34 +586,34 @@ operation::ProgramWithCallbacks downsample_single_core(
         untilized_single_tile_size * num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
-    uint32_t untilize_downsampled_cb_index = CB::c_intermed3;
+    uint32_t untilize_downsampled_cb_index = tt::CB::c_intermed3;
     uint32_t num_tiles_untilize_downsampled_cb =
         num_output_tiles;  // untilize downsampled cb size == output size per core
-    tt_metal::CircularBufferConfig untilize_downsampled_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig untilize_downsampled_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_tiles_untilize_downsampled_cb * untilized_single_tile_size,
             {{untilize_downsampled_cb_index, untilized_cb_data_format}})
             .set_page_size(untilize_downsampled_cb_index, untilized_single_tile_size);
-    auto untilize_downsampled_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
+    auto untilize_downsampled_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         untilize_downsampled_cb_index,
         untilized_single_tile_size,
         num_tiles_untilize_downsampled_cb,
         untilized_single_tile_size * num_tiles_untilize_downsampled_cb);
 
-    uint32_t final_tilize_output_cb_index = CB::c_out0;
+    uint32_t final_tilize_output_cb_index = tt::CB::c_out0;
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles;  // final output cb size == output size per core
-    tt_metal::CircularBufferConfig final_tilize_output_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig final_tilize_output_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_tiles_final_tilize_output_cb * output_single_tile_size,
             {{final_tilize_output_cb_index, output_cb_data_format}})
             .set_page_size(final_tilize_output_cb_index, output_single_tile_size);
     final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(*output.buffer());
-    auto final_tilize_output_cb = tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
+    auto final_tilize_output_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
         final_tilize_output_cb_index,
         output_single_tile_size,
@@ -633,11 +635,11 @@ operation::ProgramWithCallbacks downsample_single_core(
         stride_h_x_image_width};
 
     // Writer to downsample - drops rows from untilized cb
-    tt_metal::KernelHandle downsample_writer_kernel_id = tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle downsample_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_writer_kernel.cpp",
         core_range,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         input_cb_index,
@@ -650,13 +652,13 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_rows_of_output_tiles,
         num_output_tiles_in_row,
     };
-    string compute_kernel = "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_compute_kernel.cpp";
+    string compute_kernel = "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_compute_kernel.cpp";
     if (num_input_tiles_in_row <= MAX_PACK_UNTILIZE_WIDTH) {
         compute_kernel =
-            "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_fast_pack_untilize_compute_kernel.cpp";
+            "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_fast_pack_untilize_compute_kernel.cpp";
     }
-    auto downsample_compute_kernel_id = tt_metal::CreateKernel(
-        program, compute_kernel, core_range, tt_metal::ComputeConfig{.compile_args = compute_args});
+    auto downsample_compute_kernel_id = tt::tt_metal::CreateKernel(
+        program, compute_kernel, core_range, tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     // track img h, img w, across cores
     ImgTrackingVars v;
@@ -839,7 +841,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             halo_next_input_num_rows_of_tiles,
         };
 
-        tt_metal::SetRuntimeArgs(program, downsample_compute_kernel_id, core, compile_rt_kernel_args);
+        tt::tt_metal::SetRuntimeArgs(program, downsample_compute_kernel_id, core, compile_rt_kernel_args);
 
         // Writer runtime args
         vector<uint32_t> writer_kernel_args = {
@@ -914,7 +916,7 @@ operation::ProgramWithCallbacks downsample_single_core(
 
             (uint32_t) false};
 
-        tt_metal::SetRuntimeArgs(program, downsample_writer_kernel_id, core, writer_kernel_args);
+        tt::tt_metal::SetRuntimeArgs(program, downsample_writer_kernel_id, core, writer_kernel_args);
         prev_core = core;
     }
 
@@ -944,6 +946,7 @@ operation::ProgramWithCallbacks downsample_single_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
+}  //name space data_movement
+}  // namespace operations
 
-}  // namespace tt
+}  // namespace ttnn

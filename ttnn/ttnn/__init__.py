@@ -330,6 +330,10 @@ from ttnn.operations.data_movement import (
     upsample,
 )
 
+from ttnn.operations.downsample import (
+    downsample,
+)
+
 from ttnn.operations.unary import (
     abs,
     acos,

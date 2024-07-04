@@ -7,6 +7,7 @@ import math
 from loguru import logger
 
 import tt_lib as ttl
+import ttnn
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -145,7 +146,7 @@ def test_run_downsample(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
     )
     # Run downsample op
-    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=dtype)
+    A_downampled_sharded = ttnn.downsample(A_sharded, downsample_params, output_dtype=dtype)
     A_downsampled = ttl.tensor.sharded_to_interleaved(
         A_downampled_sharded,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),

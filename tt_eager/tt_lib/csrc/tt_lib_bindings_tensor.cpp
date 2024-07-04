@@ -12,7 +12,6 @@
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/downsample/downsample_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
@@ -409,24 +408,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
-
-    m_tensor.def(
-        "downsample",
-        &downsample,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        R"doc(
-        Performs a downsample on the input of a conv with a stride > 1 and a kernel window 1x1
-        This op can be followed by a regular matmul to perform the conv1x1 with stride=1 operation
-
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-        | Argument          | Description                                                                       | Data type     | Valid range | Required |
-        +===================+===================================================================================+===============+=============+==========+
-        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
-        | downsample_params | Params list: batch size, conv input H, conv input W, conv stride H, conv stride W | uint32_t      |             | Yes      |
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-    )doc");
 
     m_tensor.def("conv", &conv, R"doc(
         Perform a conv ``A x B`` with two tensors
