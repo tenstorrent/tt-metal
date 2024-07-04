@@ -452,10 +452,12 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-    ss << "#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)" << endl;
+#if defined(TRACY_ENABLE)
+    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
     ss << "extern uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
     ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
     ss << "#endif" << endl;
+#endif
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -492,7 +494,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
      * For DRAM banks in particular, integer division of flat_id/core_count_per_dram gives the dram bank id and the modulo
      * is the offset.
      * */
-    ss << "#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)" << endl;
+    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
     ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
     ss << core_count_per_dram <<  ";" << endl;
     ss << endl;
