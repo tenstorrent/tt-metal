@@ -281,12 +281,12 @@ class TtLlamaDecoder_galaxy:
         for i in range(self.num_devices):
             # TODO: Not Inplace RMSNorm because we need to keep the residual
             attn_norm_replicated.append(
-                tt_lib.operations.primary.rmsnorm(
+                ttnn.rms_norm(
                     xs[i],
-                    self.norm_eps,
-                    self.attn_norm_list[i],
+                    epsilon=self.norm_eps,
+                    weight=self.attn_norm_list[i],
                     program_config=self.model_config["LN_ATTN_PROGCFG"],
-                    output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                 )
             )  # attn_norm_replicated is sharded on 32 cores on all 32 chips
 
@@ -321,12 +321,12 @@ class TtLlamaDecoder_galaxy:
         for i in range(self.num_devices):
             # TODO: Not Inplace RMSNorm because we need to keep the residual
             ffn_norm_replicated.append(
-                tt_lib.operations.primary.rmsnorm(
+                ttnn.rms_norm(
                     output[i],
-                    self.norm_eps,
-                    self.ffn_norm_list[i],
+                    epsilon=self.norm_eps,
+                    weight=self.ffn_norm_list[i],
                     program_config=self.model_config["LN_MLP_PROGCFG"],
-                    output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
                 )
             )  # ffn_norm_replicated is sharded on 32 cores on all 32 chips
 

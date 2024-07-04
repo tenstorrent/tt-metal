@@ -67,10 +67,10 @@ class TtWhisperDecoderLayer(nn.Module):
         )
 
         self.self_attn_layer_norm = partial(
-            tt_lib.tensor.layernorm,
-            gamma=gamma,
-            beta=beta,
-            eps=1e-05,
+            ttnn.layer_norm,
+            weight=gamma,
+            bias=beta,
+            epsilon=1e-05,
         )
 
         self.encoder_attn = TtWhisperAttention(
@@ -94,7 +94,7 @@ class TtWhisperDecoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.encoder_attn_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma1, beta=beta1, eps=1e-05)
+        self.encoder_attn_layer_norm = partial(ttnn.layer_norm, weight=gamma1, bias=beta1, epsilon=1e-05)
 
         self.fc1_weight = torch2tt_tensor(
             self.state_dict[f"{base_address}.fc1.weight"],
@@ -127,7 +127,7 @@ class TtWhisperDecoderLayer(nn.Module):
             self.device,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        self.final_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma2, beta=beta2, eps=1e-05)
+        self.final_layer_norm = partial(ttnn.layer_norm, weight=gamma2, bias=beta2, epsilon=1e-05)
 
     def forward(
         self,

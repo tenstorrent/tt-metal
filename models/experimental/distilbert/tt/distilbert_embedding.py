@@ -39,7 +39,7 @@ class TtDistilBert_Embeddings(nn.Module):
         self.gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.weight"], self.device)
         self.beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.bias"], self.device)
 
-        self.LayerNorm = tt_lib.tensor.layernorm
+        self.LayerNorm = ttnn.layer_norm
 
         self.register_buffer(
             "position_ids",
@@ -71,6 +71,6 @@ class TtDistilBert_Embeddings(nn.Module):
         position_embeddings = torch_to_tt_tensor_rm(position_embeddings, self.device, put_on_device=True)
 
         embeddings = ttnn.add(input_embeds, position_embeddings)
-        embeddings = self.LayerNorm(embeddings, eps=1e-12, gamma=self.gamma, beta=self.beta)
+        embeddings = self.LayerNorm(embeddings, epsilon=1e-12, weight=self.gamma, bias=self.beta)
 
         return embeddings

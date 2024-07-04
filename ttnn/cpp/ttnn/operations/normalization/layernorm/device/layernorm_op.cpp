@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "layernorm_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
@@ -12,11 +12,8 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::normalization {
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
@@ -106,15 +103,15 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 bool mcast_1d = M == block_h;
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 if (mcast_1d) {
-                    TT_FATAL(div_up(Kt, shard_spec.num_cores()) == program_config.block_w, "block_w must equal to K / num_cores.");
+                    TT_FATAL(tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w, "block_w must equal to K / num_cores.");
                     TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
                     TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
                 } else {
                     if (row_wise) {
-                        TT_FATAL(div_up(Kt, (bbox.end.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
+                        TT_FATAL(tt::div_up(Kt, (bbox.end.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
                         TT_FATAL(Mt / (bbox.end.y + 1) == program_config.block_h, "block_h must equal to M / num_cores_r.");
                     } else {
-                        TT_FATAL(div_up(Kt, (bbox.end.y + 1)) == program_config.block_w, "block_w must equal to K / num_cores_r.");
+                        TT_FATAL(tt::div_up(Kt, (bbox.end.y + 1)) == program_config.block_w, "block_w must equal to K / num_cores_r.");
                         TT_FATAL(Mt / (bbox.end.x + 1) == program_config.block_h, "block_h must equal to M / num_cores_c.");
                     }
                 }
@@ -132,7 +129,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
 
 }
-std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }
@@ -195,6 +192,4 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     );
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::normalization

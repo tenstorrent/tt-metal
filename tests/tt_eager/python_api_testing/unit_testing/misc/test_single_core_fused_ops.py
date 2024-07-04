@@ -46,7 +46,7 @@ def test_layernorm(shape, device):
     gammat = pad_by_zero(gamma, device)[0]
     betat = pad_by_zero(beta, device)[0]
 
-    xtt = ttl.tensor.layernorm(xt, 1e-5, gammat, betat)
+    xtt = ttnn.layer_norm(xt, epsilon=1e-5, weight=gammat, bias=betat)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

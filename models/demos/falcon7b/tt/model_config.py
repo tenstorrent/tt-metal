@@ -138,7 +138,7 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
     if fp32_dest_acc_en and is_wormhole_b0():
         max_tiles_in_dest = 4
     subblock_w = find_subblock_w(num_tiles_per_core_w, max_tiles_in_dest)
-    ln_block_sharded_prog_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    ln_block_sharded_prog_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[ln_num_cores_x, ln_num_cores_y],
         subblock_w=subblock_w,
         block_h=num_tiles_per_core_h,

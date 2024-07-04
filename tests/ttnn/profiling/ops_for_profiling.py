@@ -2418,11 +2418,11 @@ all_unary_ops = [
 
 
 def layernorm(x, y, z):
-    tt_lib.tensor.layernorm(input=x, eps=0.0001, gamma=y, beta=z)
+    ttnn.layer_norm(input=x, epsilon=0.0001, weight=y, bias=z)
 
 
 def primary_layernorm(x, y, z):
-    tt_lib.operations.primary.layernorm(input=x, eps=0.0001, gamma=y, beta=z)
+    ttnn.layer_norm(input=x, epsilon=0.0001, weight=y, bias=z)
 
 
 def norm_shapes_func(input_shape):
@@ -2431,11 +2431,11 @@ def norm_shapes_func(input_shape):
 
 
 def add_layernorm(x, y, z):
-    tt_lib.tensor.add_layernorm(a=x, b=x, eps=0.0001, gamma=y, beta=z)
+    ttnn.layer_norm(x, residual_input_tensor=x, epsilon=0.0001, weight=y, bias=z)
 
 
 def primary_add_layernorm(x, y, z):
-    tt_lib.operations.primary.add_layernorm(a=x, b=x, eps=0.0001, gamma=y, beta=z)
+    ttnn.layer_norm(x, residual_input_tensor=x, epsilon=0.0001, weight=y, bias=z)
 
 
 def groupnorm(x, y, z):
@@ -2459,7 +2459,7 @@ def primary_moreh_groupnorm_shape_func(input_shape):
 
 
 def rmsnorm(x, y, z):
-    tt_lib.tensor.rmsnorm(input=x, eps=0.0001, gamma=y, beta=z)
+    ttnn.rms_norm(input=x, epsilon=0.0001, weight=y, bias=z)
 
 
 def addcmul(x, y, z):
@@ -2580,12 +2580,12 @@ all_ternary_ops = [
     },
     {
         "op": layernorm,
-        "name": "tt_lib.tensor.layernorm",
+        "name": "ttnn.layer_norm",
         "shape_func": norm_shapes_func,
     },
     {
         "op": primary_layernorm,
-        "name": "tt_lib.operations.primary.layernorm",
+        "name": "ttnn.layer_norm",
         "shape_func": norm_shapes_func,
     },
     {
@@ -2594,17 +2594,17 @@ all_ternary_ops = [
     },
     {
         "op": rmsnorm,
-        "name": "tt_lib.tensor.rmsnorm",
+        "name": "ttnn.rms_norm",
         "shape_func": norm_shapes_func,
     },
     {
         "op": add_layernorm,
-        "name": "tt_lib.tensor.add_layernorm",
+        "name": "ttnn.layer_norm",
         "shape_func": norm_shapes_func,
     },
     {
         "op": primary_add_layernorm,
-        "name": "tt_lib.operations.primary.add_layernorm",
+        "name": "ttnn.layer_norm",
         "shape_func": norm_shapes_func,
     },
     {

@@ -7,6 +7,8 @@ from loguru import logger
 import pytest
 import torch
 
+import ttnn
+
 import tt_lib as ttl
 
 from tt_lib.utils import (
@@ -76,13 +78,13 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")
-            ttz = tensor.rmsnorm(ttx, epsf, output_mem_config=out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, memory_config=out_mem_config)
         elif test_id == 1:
             logger.info("Running RMSN_G")
-            ttz = tensor.rmsnorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, memory_config=out_mem_config)
         elif test_id == 2:
             logger.info("Running RMSN_GB")
-            ttz = tensor.rmsnorm(ttx, epsf, ttgamma, ttbeta, out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, bias=ttbeta, memory_config=out_mem_config)
         else:
             assert False
         logger.info("Done")

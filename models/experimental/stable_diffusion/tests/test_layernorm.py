@@ -18,6 +18,8 @@ from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
+import ttnn
+
 import tt_lib as ttl
 
 import pytest
@@ -30,7 +32,7 @@ import pytest
         [1, 2, 1024, 320],
         [1, 2, 64, 1280],
         [1, 2, 256, 640],
-        [1, 1, 16, 1024],
+        [1, 1, 32, 1024],
     ],
 )
 @pytest.mark.parametrize(
@@ -59,11 +61,9 @@ def test_layer_norm(device, input_shape, normalized_shape_hint):
 
     xt = xt.to(device)
     normalized_shape = list(map(input_shape.__getitem__, normalized_shape_hint))
-    golden = torch.nn.functional.layer_norm(
-        x, normalized_shape=normalized_shape, eps=eps
-    )
+    golden = torch.nn.functional.layer_norm(x, normalized_shape=normalized_shape, eps=eps)
 
-    xtt_data = ttl.tensor.layernorm(xt, eps).cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    xtt_data = ttnn.layer_norm(xt, epsilon=eps).cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     tt_got_back_rm = xtt_data.to_torch()
 
     torch_output = golden

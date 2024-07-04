@@ -1157,7 +1157,7 @@ def rmsnorm(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.rms_norm(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.rms_norm(t0, residual_input_tensor=t1, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t2)
 
 

@@ -24,10 +24,14 @@ void bind_normalization_rms_norm_operation(py::module& module) {
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
-            py::arg("weight"),
             py::kw_only(),
             py::arg("epsilon") = 1e-12,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("weight") = std::nullopt,
+            py::arg("bias") = std::nullopt,
+            py::arg("residual_input_tensor") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::normalization::detail

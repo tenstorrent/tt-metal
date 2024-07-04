@@ -133,12 +133,12 @@ class MambaTT(torch.nn.Module):
             x = layer(x)
 
         x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
-        x = ttnn.experimental.operations.primary.rmsnorm(
+        x = ttnn.rms_norm(
             x,
-            self.args.eps,
-            self.norm_f_weights,
+            epsilon=self.args.eps,
+            weight=self.norm_f_weights,
             program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
-            output_mem_config=self.configs["sharded_h"],
+            memory_config=self.configs["sharded_h"],
         )
         x = ttnn.experimental.tensor.sharded_to_interleaved(x)
         x = ttnn.linear(

@@ -39,7 +39,7 @@ class TtRobertaOutput(nn.Module):
         beta = pad_by_zero(state_dict[f"{base_address}.LayerNorm.bias"], self.device)[0]
 
         self.LayerNorm = self.LayerNorm = partial(
-            tt_lib.tensor.layernorm, eps=config.layer_norm_eps, gamma=gamma, beta=beta
+            ttnn.layer_norm, epsilon=config.layer_norm_eps, weight=gamma, bias=beta
         )
 
         # TODO: Add dropout when supported

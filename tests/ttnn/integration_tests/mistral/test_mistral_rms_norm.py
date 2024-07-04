@@ -47,7 +47,7 @@ def test_mistral_rms_norm_inference(model_location_generator, device, reset_seed
         device=device,
         custom_preprocessor=custom_preprocessor,
     )
-    output = rms_norm(model_args, ttnn_input, parameters=parameters.weight)
+    output = rms_norm(model_args, ttnn_input, weight=parameters.weight)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)

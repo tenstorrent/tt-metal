@@ -92,7 +92,7 @@ class TtTrOCRDecoder(nn.Module):
                 put_on_device=True,
             )
 
-            self.layernorm_embedding = tt_lib.tensor.layernorm
+            self.layernorm_embedding = ttnn.layer_norm
         else:
             self.layernorm_embedding = None
 
@@ -185,9 +185,9 @@ class TtTrOCRDecoder(nn.Module):
         if self.layernorm_embedding is not None:
             hidden_states = self.layernorm_embedding(
                 hidden_states,
-                eps=1e-05,
-                gamma=self.layernorm_embedding_weight,
-                beta=self.layernorm_embedding_bias,
+                epsilon=1e-05,
+                weight=self.layernorm_embedding_weight,
+                bias=self.layernorm_embedding_bias,
             )
 
         input_shape = input.get_legacy_shape()

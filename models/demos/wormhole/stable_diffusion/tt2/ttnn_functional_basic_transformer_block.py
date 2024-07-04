@@ -73,7 +73,7 @@ class basic_transformer_block:
             end_grid = ttnn.experimental.tensor.CoreCoord(7, 3)
 
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
-        program_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             subblock_w=1,
             block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,

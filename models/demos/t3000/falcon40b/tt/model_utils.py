@@ -342,13 +342,13 @@ def partial_layernorm(
                 ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
-            xs_slice = ttnn.experimental.operations.primary.layernorm(
+            xs_slice = ttnn.layer_norm(
                 xs_slice,
-                ln_eps,
-                ln_gamma,
-                ln_beta,
-                memconfig,
-                pgmconfig,
+                epsilon=ln_eps,
+                weight=ln_gamma,
+                bias=ln_beta,
+                memory_config=memconfig,
+                program_config=pgmconfig,
             )
             ttnn.experimental.tensor.sharded_to_interleaved_partial(
                 xs_slice,
@@ -360,13 +360,13 @@ def partial_layernorm(
         xs_slice.deallocate(True)
     else:
         xs = convert_to_layout(xs, get_dram_memcfg(), memconfig)
-        xs = ttnn.experimental.operations.primary.layernorm(
+        xs = ttnn.layer_norm(
             xs,
-            ln_eps,
-            ln_gamma,
-            ln_beta,
-            memconfig,
-            pgmconfig,
+            epsilon=ln_eps,
+            weight=ln_gamma,
+            bias=ln_beta,
+            memory_config=memconfig,
+            program_config=pgmconfig,
         )
         xs = convert_to_layout(xs, memconfig, get_dram_memcfg())
         xs_output_cat = ttnn.experimental.tensor.typecast(xs, dtype)

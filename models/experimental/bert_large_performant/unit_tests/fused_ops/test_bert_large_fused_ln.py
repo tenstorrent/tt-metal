@@ -15,6 +15,8 @@ from tt_lib.utils import (
     is_close,
 )
 
+import ttnn
+
 
 def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
@@ -83,16 +85,23 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = ttl.operations.primary.layernorm(ttx, epsf, None, None, output_mem_config=out_mem_config)
+                ttz = ttnn.layer_norm(ttx, epsilon=epsf, weight=None, bias=None, memory_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, None, output_mem_config=out_mem_config)
+                ttz = ttnn.layer_norm(ttx, epsilon=epsf, weight=ttgamma, bias=None, memory_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, ttbeta, out_mem_config)
+                ttz = ttnn.layer_norm(ttx, epsilon=epsf, weight=ttgamma, bias=ttbeta, memory_config=out_mem_config)
             elif test_id == 3:
                 logger.info("Running add_LN_GB")
-                ttz = ttl.operations.primary.add_layernorm(ttx, tty, epsf, ttgamma, ttbeta, out_mem_config)
+                ttz = ttnn.layer_norm(
+                    ttx,
+                    residual_input_tensor=tty,
+                    epsilon=epsf,
+                    weight=ttgamma,
+                    bias=ttbeta,
+                    memory_config=out_mem_config,
+                )
             else:
                 assert False
             logger.info("Done")

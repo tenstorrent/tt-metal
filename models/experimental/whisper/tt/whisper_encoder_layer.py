@@ -9,6 +9,8 @@ import torch.nn as nn
 import ttnn
 from typing import Tuple
 
+import ttnn
+
 from transformers import WhisperConfig
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -65,7 +67,7 @@ class TtWhisperEncoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.self_attn_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05)
+        self.self_attn_layer_norm = partial(ttnn.layer_norm, weight=gamma, bias=beta, epsilon=1e-05)
 
         # self.self_attn_layer_norm = fallback_ops.LayerNorm(
         #     gamma, beta, eps=1e-05, normalized_shape=self.embed_dim
@@ -108,7 +110,7 @@ class TtWhisperEncoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.final_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma_1, beta=beta_1, eps=1e-05)
+        self.final_layer_norm = partial(ttnn.layer_norm, gamma=gamma_1, beta=beta_1, eps=1e-05)
 
         # self.final_layer_norm = fallback_ops.LayerNorm(
         #     gamma_1, beta_1, eps=1e-05, normalized_shape=self.embed_dim

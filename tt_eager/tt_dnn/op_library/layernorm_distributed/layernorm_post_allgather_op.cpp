@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_eager/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"

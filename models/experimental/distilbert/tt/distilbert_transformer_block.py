@@ -38,7 +38,7 @@ class TtTransformerBlock(nn.Module):
         self.sa_gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.sa_layer_norm.weight"], self.device)
         self.sa_beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.sa_layer_norm.bias"], self.device)
 
-        self.sa_LayerNorm = tt_lib.tensor.layernorm
+        self.sa_LayerNorm = ttnn.layer_norm
 
         self.ffn = TtFFN(
             self.config,
@@ -50,7 +50,7 @@ class TtTransformerBlock(nn.Module):
         self.output_gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.output_layer_norm.weight"], self.device)
         self.output_beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.output_layer_norm.bias"], self.device)
 
-        self.output_LayerNorm = tt_lib.tensor.layernorm
+        self.output_LayerNorm = ttnn.layer_norm
 
     def forward(
         self,
@@ -81,18 +81,18 @@ class TtTransformerBlock(nn.Module):
 
         sa_output = self.sa_LayerNorm(
             ttnn.add(sa_output, input),
-            eps=1e-12,
-            gamma=self.sa_gamma,
-            beta=self.sa_beta,
+            epsilon=1e-12,
+            weight=self.sa_gamma,
+            bias=self.sa_beta,
         )
 
         ffn_output = self.ffn(sa_output)
 
         ffn_output = self.output_LayerNorm(
             ttnn.add(ffn_output, sa_output),
-            eps=1e-12,
-            gamma=self.output_gamma,
-            beta=self.output_beta,
+            epsilon=1e-12,
+            weight=self.output_gamma,
+            bias=self.output_beta,
         )
 
         output = (ffn_output,)

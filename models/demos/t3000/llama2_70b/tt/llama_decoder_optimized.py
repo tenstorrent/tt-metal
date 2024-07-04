@@ -172,12 +172,12 @@ class TtLlamaDecoder_optimized:
         )
 
         # In-place RMSNorm
-        attn_norm_replicated = tt_lib.operations.primary.rmsnorm(
+        attn_norm_replicated = ttnn.rms_norm(
             xs_replicated,
-            self.norm_eps,
-            self.attn_norm,
+            epsilon=self.norm_eps,
+            weight=self.attn_norm,
             program_config=self.model_config["LN_ATTN_PROGCFG"],
-            output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # attn_norm_replicated is sharded
@@ -203,12 +203,12 @@ class TtLlamaDecoder_optimized:
         )
 
         # In-place RMSNorm
-        ffn_norm_replicated = tt_lib.operations.primary.rmsnorm(
+        ffn_norm_replicated = ttnn.rms_norm(
             attn_resid_replicated,
-            self.norm_eps,
-            self.ffn_norm,
+            epsilon=self.norm_eps,
+            weight=self.ffn_norm,
             program_config=self.model_config["LN_MLP_PROGCFG"],
-            output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # ffn_norm_replicated is sharded

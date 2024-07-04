@@ -404,14 +404,14 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                 False,
             ),
         )
-        model_config["LN_ATTN_PROGCFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        model_config["LN_ATTN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
             block_h=1,
             block_w=8,
             inplace=False,
         )
-        model_config["LN_MLP_PROGCFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        model_config["LN_MLP_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
             block_h=1,
@@ -624,7 +624,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                 False,
             ),
         )
-        model_config["LN_F_PROGCFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
             block_h=1,
@@ -928,21 +928,19 @@ def get_sharded_layernorm_specs_for_seqlen(
         ),
     )
 
-    layernorm_block_sharded_prg_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    layernorm_block_sharded_prg_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
         subblock_w=8,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
         inplace=False,
     )
-    layernorm_block_sharded_prg_config_inplace = (
-        ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
-            subblock_w=8,
-            block_h=num_tiles_per_core_h,
-            block_w=num_tiles_per_core_w,
-            inplace=True,
-        )
+    layernorm_block_sharded_prg_config_inplace = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
+        subblock_w=8,
+        block_h=num_tiles_per_core_h,
+        block_w=num_tiles_per_core_w,
+        inplace=True,
     )
 
     layernorm_params = {

@@ -56,7 +56,7 @@ def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
-    configs["SHARDED_NORM_PRGM_CFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    configs["SHARDED_NORM_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[configs["core_grid_col"], get_nearest_core_grid_row(hidden_size)],
         subblock_w=(hidden_size // (configs["core_grid_col"] * get_nearest_core_grid_row(hidden_size))) // 32,
         block_h=outer_dim // 32,

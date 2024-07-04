@@ -115,7 +115,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
         ),
-        "layernorm_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=2,
             block_h=7,
@@ -125,7 +125,7 @@ def update_model_config(config, batch_size):
             # out_data_format=ttnn.bfloat8_b,
             inplace=True,
         ),
-        "layernorm_after_output_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=2,
             block_h=7,

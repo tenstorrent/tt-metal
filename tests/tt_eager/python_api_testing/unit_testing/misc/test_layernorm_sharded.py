@@ -4,6 +4,7 @@
 
 from loguru import logger
 
+import ttnn
 import pytest
 import torch
 import math
@@ -16,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import torch2tt_tensor, skip_for_wormhole_b0, is_grayskull
 
 
-def rmsnorm(x, dim, gamma, beta, eps):
+def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
 
 
@@ -140,7 +141,7 @@ def test_layernorm_sharded_mix_precision_rm(
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(device, gamma_beta_mem_config)
 
-    program_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=4,
         block_h=batch,
@@ -154,116 +155,116 @@ def test_layernorm_sharded_mix_precision_rm(
         )
 
     if test_id == 0:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 1:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 2:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 3:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 4:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 5:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 6:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 7:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 8:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 9:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 10:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
     if test_id == 11:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
@@ -275,7 +276,7 @@ def test_layernorm_sharded_mix_precision_rm(
     if test_id <= 2 or 6 <= test_id <= 8:
         ref_fn = torch.nn.functional.layer_norm
     else:
-        ref_fn = rmsnorm
+        ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
@@ -414,7 +415,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(device, gamma_beta_mem_config)
 
-    program_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=subblock_w,
         block_h=M // 32,
@@ -429,116 +430,116 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     )
 
     if test_id == 0:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
-        ttz = ttl.operations.primary.add_rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
-        ttz = ttl.operations.primary.layernorm(
+        ttz = ttnn.layer_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
-        ttz = ttl.operations.primary.rmsnorm(
+        ttz = ttnn.rms_norm(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -550,7 +551,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     if test_id <= 2 or 6 <= test_id <= 8:
         ref_fn = torch.nn.functional.layer_norm
     else:
-        ref_fn = rmsnorm
+        ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
