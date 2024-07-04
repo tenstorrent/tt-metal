@@ -82,10 +82,17 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
+    bool row_major = false;
+    if (shard_spec.has_value()) {
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+    }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
@@ -169,8 +176,8 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines});
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t num_tensor_tiles_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_tensor_tiles_per_core = num_tiles_per_core_group_1;
@@ -255,6 +262,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     auto& program = cached_program.program;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     auto src_buffer_a = input_tensor_a.buffer();
     auto src_dram_buffer_b = input_tensor_b.buffer();
@@ -291,8 +299,14 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
 
     uint32_t bnc1 = (bN * bC == 1);
 
+    bool row_major = false;
+    if (shard_spec.has_value()) {
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+    }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     if (shard_spec.has_value()) {
         uint32_t num_tiles_per_shard = 0;
@@ -304,8 +318,8 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         core_group_2 = CoreRangeSet({});
     }
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t num_tensor_tiles_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_tensor_tiles_per_core = num_tiles_per_core_group_1;

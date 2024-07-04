@@ -70,10 +70,14 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
+    constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt);
+        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
+
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
@@ -127,8 +131,8 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
-    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t Wt_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             Wt_per_core = Wt_per_core_group_1;
@@ -220,6 +224,7 @@ void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     auto src_dram_buffer_a = input_tensor_a.buffer();
     auto src_dram_buffer_b = input_tensor_b.buffer();
@@ -247,11 +252,14 @@ void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
+    constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt);
+        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
 
-    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+
+    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t Wt_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             Wt_per_core = Wt_per_core_group_1;
