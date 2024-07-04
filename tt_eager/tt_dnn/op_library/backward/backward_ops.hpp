@@ -182,12 +182,6 @@ std::vector<Tensor> clamp_bw(
     float max,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> clamp_min_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float min,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> clamp_max_bw(
     const Tensor& grad,
     const Tensor& input,
