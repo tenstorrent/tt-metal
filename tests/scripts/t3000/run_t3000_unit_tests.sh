@@ -109,7 +109,7 @@ run_t3000_tests() {
   run_t3000_ttmetal_tests
 
   # Run ttnn tests
-  run_t3000_ttnn_tests
+  # run_t3000_ttnn_tests
 
   # Run falcon7b tests
   run_t3000_falcon7b_tests

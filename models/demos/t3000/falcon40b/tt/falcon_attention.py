@@ -10,15 +10,7 @@ from typing import Optional, Tuple
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    pad_by_zero,
-    nearest_32,
-)
-from models.demos.t3000.falcon40b.tt.model_utils import (
-    convert_to_layout,
-)
+from models.utility_functions import nearest_32
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
@@ -152,7 +144,7 @@ class TtFalconAttention:
         self.num_heads_per_device = self.num_heads // device_mesh.get_num_devices()
         self.tt_cache_path = tt_cache_path
         self.max_batch_size = 32
-
+        self.layer_num = layer_num
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
@@ -207,7 +199,6 @@ class TtFalconAttention:
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
 
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
         self.layer_past = None
 
     def initialize_kvcache(self):
@@ -254,21 +245,6 @@ class TtFalconAttention:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
-
-    def preprocessing(self, llm_mode, batch_size, sequence_size):
-        if llm_mode == "prefill":
-            assert self.model_config["row_height"] == sequence_size
-            if self.model_config["attention_params"]["attention_num_slices"] > 1:
-                # Pre-allocate memory to partially slice and sharde attention
-                self.attn_output = ttnn.as_tensor(
-                    torch.zeros([1, self.num_heads_per_device, sequence_size, self.head_dim]),
-                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device_mesh,
-                    memory_config=self.model_config["DRAM_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-                )
 
     def __call__(
         self,
@@ -335,6 +311,9 @@ class TtFalconAttention:
         q_len = hidden_states.get_legacy_shape()[2]
         assert layer_past is not None
 
+        # filename = f'hidden_states_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, hidden_states)
+
         # Fused query, key and value projection
         fused_query_key_value = falcon_prefill_matmul(
             hidden_states,
@@ -345,7 +324,8 @@ class TtFalconAttention:
             grid=ttnn.CoreGrid(x=8, y=8) if q_len >= 512 else ttnn.CoreGrid(x=8, y=min(q_len // 32, 8)),
             transpose_mcast=True,
         )
-
+        # filename = f'after_fused_query_key_value_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, fused_query_key_value)
         query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
             fused_query_key_value,
             num_heads=self.num_heads // self.num_devices,
@@ -354,7 +334,8 @@ class TtFalconAttention:
             output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         fused_query_key_value.deallocate(True)
-
+        # save_tensor(f'query_layer_before_rotary_{self.layer_num}_before_sdpa.pt', query_layer)
+        # save_tensor(f'key_layer_before_rotary_{self.layer_num}_before_sdpa.pt', key_layer)
         # Rotary embeddings
         query_layer = self.rotary_embedding(query_layer)
         key_layer = self.rotary_embedding(key_layer)
@@ -370,68 +351,34 @@ class TtFalconAttention:
             ttnn.experimental.tensor.typecast(value_layer, self.model_config["KV_CACHE_DTYPE"]),
             user_id,
         )
-        key_layer_transposed = ttnn.experimental.tensor.transpose(
+        # filename = f'query_layer_{self.layer_num}_before_sdpa.pt'
+        # host_tensor = ttnn.to_torch(cloned_query_layer, device=self.device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(self.device_mesh, dim=-1))
+        # torch.save(host_tensor, filename)
+        # save_tensor(filename, query_layer)
+
+        # ttnn.dump_tensor(file_name=filename, tensor=query_layer)
+        # filename = f'key_layer_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, key_layer)
+        # ttnn.dump_tensor(file_name=filename, tensor=key_layer)
+        # filename = f'value_layer_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, value_layer)
+
+        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+            query_layer,
             key_layer,
-            -2,
-            -1,
-            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+            value_layer,
+            attention_mask,
+            is_causal=True,
+            scale=self.scalar,
+            program_config=self.model_config["SDPA_PROGCFG"],
         )
-        key_layer.deallocate(True)
 
-        slice_size = self.model_config["attention_params"]["attention_slice_size"]
-        num_slices = self.model_config["attention_params"]["attention_num_slices"]
-
-        if num_slices > 1:
-            for slice_i in range(num_slices):
-                # Partially slice and convert activations to sharded
-                q_slices = ttnn.experimental.tensor.interleaved_to_sharded_partial(
-                    query_layer,
-                    (8, 8),
-                    [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
-                    num_slices,
-                    slice_i,
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                )
-                attn_output_slice = self.scaled_dot_product_attention(
-                    q_slices,
-                    key_layer_transposed,
-                    attention_mask,
-                    value_layer,
-                    q_len,
-                )
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
-                    attn_output_slice,
-                    self.attn_output,
-                    num_slices,
-                    slice_i,
-                    self.model_config["DRAM_MEMCFG"],
-                )
-                attn_output_slice.deallocate(True)
-                attn_output = self.attn_output
-                q_slices.deallocate(True)
-        else:
-            query_layer = convert_to_layout(
-                query_layer,
-                self.model_config["DRAM_MEMCFG"],
-                self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"],
-            )
-            attn_output = self.scaled_dot_product_attention(
-                query_layer,
-                key_layer_transposed,
-                attention_mask,
-                value_layer,
-                q_len,
-            )
-            attn_output = convert_to_layout(
-                attn_output,
-                self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"],
-                self.model_config["DRAM_MEMCFG"],
-            )
+        # filename = f'attn_output_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, attn_output)
 
         # Deallocate query, key, value
+        key_layer.deallocate(True)
         query_layer.deallocate(True)
-        key_layer_transposed.deallocate(True)
         value_layer.deallocate(True)
 
         # Output projection
@@ -445,6 +392,9 @@ class TtFalconAttention:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
+        # filename = f'attn_output_after_all_gather_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, attn_output)
+
         attn_output = falcon_prefill_matmul(
             attn_output,
             self.dense_weights,
@@ -454,6 +404,10 @@ class TtFalconAttention:
             overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
             overwrite_subblock_h=1,
         )
+
+        # filename = f'attn_output_after_selfout_{self.layer_num}_before_sdpa.pt'
+        # save_tensor(filename, attn_output)
+
         # There are references to tensors in case seq_len > 512
         # so we won't force deallocation
         should_deallocate_tensors = determine_tensor_deallocation(
@@ -463,36 +417,6 @@ class TtFalconAttention:
             hidden_states.deallocate(True)
         layer_present = layer_past if use_cache else None
         return attn_output, layer_present
-
-    def scaled_dot_product_attention(self, q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len):
-        # Q * KˆT
-        attn_weights = ttnn.matmul(
-            q_slices,
-            key_layer_transposed,
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-            program_config=self.model_config["ATTENTION_MM_PROGCFG"],
-            dtype=self.model_config["ATTENTION_DTYPE"],
-        )
-        # Softmax
-        attn_weights = scale_causal_mask_hw_dims_softmax_in_place(
-            attn_weights,
-            self.scalar,
-            attn_mask_slices,
-            program_config=self.model_config["SOFTMAX_PROGCFG"],
-        )
-        # Attention score * V
-        attn_output_slice = ttnn.matmul(
-            attn_weights,
-            value_layer,
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-            program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-            dtype=self.model_config["ATTENTION_OUT_DTYPE"],
-        )
-        attn_weights.deallocate(True)
-
-        return attn_output_slice
 
     def fwd_decode(
         self,
