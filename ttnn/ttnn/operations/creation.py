@@ -14,7 +14,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return torch.zeros_like(input_tensor)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.zeros_like, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.zeros_like, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
@@ -23,7 +23,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return torch.ones_like(input_tensor)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.ones_like, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ones_like, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
@@ -32,7 +32,7 @@ def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     return torch.full_like(input_tensor, fill_value)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.full_like, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
@@ -41,7 +41,7 @@ def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     return torch.empty_like(input_tensor, fill_value)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.empty_like, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.empty_like, golden_function=_golden_function)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -50,7 +50,7 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.zeros(input_shape)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.zeros, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.zeros, golden_function=_golden_function)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -59,7 +59,7 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.ones(input_shape)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.ones, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)
 
 
 def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
@@ -68,7 +68,7 @@ def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
     return torch.full(input_shape, fill_value=fill_value)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.full, golden_function=_golden_function_full)
+ttnn.attach_golden_function(ttnn.full, golden_function=_golden_function_full)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -77,7 +77,7 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.empty(input_shape)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.creation.empty, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.empty, golden_function=_golden_function)
 
 
 def _golden_function(start: int, end: int, step: int, **_):
@@ -86,13 +86,8 @@ def _golden_function(start: int, end: int, step: int, **_):
     return torch.arange(start, end, step)
 
 
-def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.arange",
-    validate_input_tensors=_arange_validate_input_tensors,
     golden_function=_golden_function,
 )
 def arange(

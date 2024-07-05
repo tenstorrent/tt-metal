@@ -9,9 +9,6 @@ import tt_lib as ttl
 import ttnn
 
 
-THIS_MODULE = sys.modules[__name__]
-
-
 def register_ttnn_cpp_unary_function(unary_function):
     import torch
 
@@ -125,80 +122,80 @@ def register_ttnn_cpp_unary_function(unary_function):
 
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
-    ttnn._ttnn.operations.unary.abs,
-    ttnn._ttnn.operations.unary.acos,
-    ttnn._ttnn.operations.unary.asin,
-    ttnn._ttnn.operations.unary.atan,
-    ttnn._ttnn.operations.unary.cos,
-    ttnn._ttnn.operations.unary.erfinv,
-    ttnn._ttnn.operations.unary.exp2,
-    ttnn._ttnn.operations.unary.expm1,
-    ttnn._ttnn.operations.unary.eqz,
-    ttnn._ttnn.operations.unary.gez,
-    ttnn._ttnn.operations.unary.gtz,
-    ttnn._ttnn.operations.unary.i0,
-    ttnn._ttnn.operations.unary.isfinite,
-    ttnn._ttnn.operations.unary.isinf,
-    ttnn._ttnn.operations.unary.isnan,
-    ttnn._ttnn.operations.unary.isneginf,
-    ttnn._ttnn.operations.unary.isposinf,
-    ttnn._ttnn.operations.unary.lez,
-    ttnn._ttnn.operations.unary.log,
-    ttnn._ttnn.operations.unary.log10,
-    ttnn._ttnn.operations.unary.log2,
-    ttnn._ttnn.operations.unary.logical_not,
-    ttnn._ttnn.operations.unary.ltz,
-    ttnn._ttnn.operations.unary.neg,
-    ttnn._ttnn.operations.unary.nez,
-    ttnn._ttnn.operations.unary.reciprocal,
-    ttnn._ttnn.operations.unary.relu,
-    ttnn._ttnn.operations.unary.relu6,
-    ttnn._ttnn.operations.unary.sigmoid,
-    ttnn._ttnn.operations.unary.sign,
-    ttnn._ttnn.operations.unary.signbit,
-    ttnn._ttnn.operations.unary.silu,
-    ttnn._ttnn.operations.unary.sin,
-    ttnn._ttnn.operations.unary.sqrt,
-    ttnn._ttnn.operations.unary.square,
-    ttnn._ttnn.operations.unary.tan,
-    ttnn._ttnn.operations.unary.tanh,
+    ttnn.abs,
+    ttnn.acos,
+    ttnn.asin,
+    ttnn.atan,
+    ttnn.cos,
+    ttnn.erfinv,
+    ttnn.exp2,
+    ttnn.expm1,
+    ttnn.eqz,
+    ttnn.gez,
+    ttnn.gtz,
+    ttnn.i0,
+    ttnn.isfinite,
+    ttnn.isinf,
+    ttnn.isnan,
+    ttnn.isneginf,
+    ttnn.isposinf,
+    ttnn.lez,
+    ttnn.log,
+    ttnn.log10,
+    ttnn.log2,
+    ttnn.logical_not,
+    ttnn.ltz,
+    ttnn.neg,
+    ttnn.nez,
+    ttnn.reciprocal,
+    ttnn.relu,
+    ttnn.relu6,
+    ttnn.sigmoid,
+    ttnn.sign,
+    ttnn.signbit,
+    ttnn.silu,
+    ttnn.sin,
+    ttnn.sqrt,
+    ttnn.square,
+    ttnn.tan,
+    ttnn.tanh,
     # Unaries with fast_and_approximate_mode
-    ttnn._ttnn.operations.unary.exp,
-    ttnn._ttnn.operations.unary.erf,
-    ttnn._ttnn.operations.unary.erfc,
-    ttnn._ttnn.operations.unary.gelu,
-    ttnn._ttnn.operations.unary.rsqrt,
+    ttnn.exp,
+    ttnn.erf,
+    ttnn.erfc,
+    ttnn.gelu,
+    ttnn.rsqrt,
     # Unaries with float parameter
-    ttnn._ttnn.operations.unary.elu,
-    ttnn._ttnn.operations.unary.heaviside,
-    ttnn._ttnn.operations.unary.leaky_relu,
-    # ttnn._ttnn.operations.unary.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
+    ttnn.elu,
+    ttnn.heaviside,
+    ttnn.leaky_relu,
+    # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
-    ttnn._ttnn.operations.unary.log_sigmoid,
-    ttnn._ttnn.operations.unary.softplus,
-    ttnn._ttnn.operations.unary.sigmoid_accurate,
+    ttnn.log_sigmoid,
+    ttnn.softplus,
+    ttnn.sigmoid_accurate,
     # Other unaries (composite operations - tt_eager dependency)
-    ttnn._ttnn.operations.unary.acosh,
-    ttnn._ttnn.operations.unary.asinh,
-    ttnn._ttnn.operations.unary.atanh,
-    ttnn._ttnn.operations.unary.cbrt,
-    ttnn._ttnn.operations.unary.cosh,
-    ttnn._ttnn.operations.unary.deg2rad,
-    ttnn._ttnn.operations.unary.digamma,
-    ttnn._ttnn.operations.unary.hardswish,
-    ttnn._ttnn.operations.unary.hardsigmoid,
-    ttnn._ttnn.operations.unary.hardtanh,
-    ttnn._ttnn.operations.unary.lgamma,
-    ttnn._ttnn.operations.unary.log1p,
-    ttnn._ttnn.operations.unary.mish,
-    ttnn._ttnn.operations.unary.multigammaln,
-    ttnn._ttnn.operations.unary.rad2deg,
-    ttnn._ttnn.operations.unary.sinh,
-    ttnn._ttnn.operations.unary.softsign,
-    ttnn._ttnn.operations.unary.swish,
-    ttnn._ttnn.operations.unary.tanhshrink,
-    ttnn._ttnn.operations.unary.tril,
-    ttnn._ttnn.operations.unary.triu,
+    ttnn.acosh,
+    ttnn.asinh,
+    ttnn.atanh,
+    ttnn.cbrt,
+    ttnn.cosh,
+    ttnn.deg2rad,
+    ttnn.digamma,
+    ttnn.hardswish,
+    ttnn.hardsigmoid,
+    ttnn.hardtanh,
+    ttnn.lgamma,
+    ttnn.log1p,
+    ttnn.mish,
+    ttnn.multigammaln,
+    ttnn.rad2deg,
+    ttnn.sinh,
+    ttnn.softsign,
+    ttnn.swish,
+    ttnn.tanhshrink,
+    ttnn.tril,
+    ttnn.triu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
@@ -219,21 +216,28 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
         torch_function = name_to_golden_function[name]
         return torch_function(input_tensor, parameter)
 
-    def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint8, ttnn.uint16),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
+            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
+
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
+
+            """
+
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_unary_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def unary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -253,26 +257,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
         output_tensor = ttl_unary_function(input_tensor, parameter, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
-
-    if isinstance(unary_function, ttnn.decorators.Operation):
-        unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-
-            """
-    setattr(THIS_MODULE, name, unary_function)
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
@@ -304,21 +288,28 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
         else:
             return torch_function(input_tensor, parameter)
 
-    def _activation_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
+            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
+
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
+
+            """
+
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_activation_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def activation_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -338,26 +329,6 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
         output_tensor = ttl_activation_function(input_tensor, parameter, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
-
-    if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-
-            """
-    setattr(THIS_MODULE, name, activation_function)
 
 
 TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
@@ -382,21 +353,29 @@ def register_ttl_activation_function_with_two_float_params(name, ttl_activation_
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor, parameter1, parameter2)
 
-    def _activation_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
+            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
+
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param1_name} \\; , \\; {param2_name})
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param1_name}`
+                * :attr:`{param2_name}`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param1_name}, {param2_name})
+
+            """
+
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_activation_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def activation_function(
         input_tensor: ttnn.Tensor,
@@ -421,27 +400,6 @@ def register_ttl_activation_function_with_two_float_params(name, ttl_activation_
 
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
-
-    if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param1_name} \\; , \\; {param2_name})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param1_name}`
-                * :attr:`{param2_name}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param1_name}, {param2_name})
-
-            """
-    setattr(THIS_MODULE, name, activation_function)
 
 
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAMS = [
@@ -502,22 +460,25 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
         return torch_function(input_tensor, dim=dim)
 
-    def _activation_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_activation_validate_input_tensors,
-        golden_function=_golden_function,
-    )
+            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
+
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
+
+            """
+
+    @ttnn.register_python_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)
     def activation_function(
         input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:
@@ -540,26 +501,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
         output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(glu_shape))
         return output_tensor
-
-    if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-
-            """
-    setattr(THIS_MODULE, name, activation_function)
 
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [

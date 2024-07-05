@@ -12,6 +12,8 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     exit 1
 fi
 
+export TT_METAL_CLEAR_L1=1
+
 # Not super obvious which test is which during runtime unless you count, so occasionally sprinkle echo statements
 # to make it easier to see where we are.
 

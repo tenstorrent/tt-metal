@@ -22,8 +22,6 @@ from models.demos.t3000.falcon40b.tt.model_utils import (
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
-from ttnn.experimental.operations.primary.transformers import scale_causal_mask_hw_dims_softmax_in_place
-
 
 def generate_cos_sin_cache(
     device_mesh,
@@ -475,7 +473,7 @@ class TtFalconAttention:
             dtype=self.model_config["ATTENTION_DTYPE"],
         )
         # Softmax
-        attn_weights = scale_causal_mask_hw_dims_softmax_in_place(
+        attn_weights = ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
             attn_weights,
             self.scalar,
             attn_mask_slices,

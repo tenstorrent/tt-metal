@@ -54,10 +54,11 @@ inline void llk_unpack_AB_matmul_mop_config(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
-    const bool partial_face) {
+    const bool partial_face_a,
+    const bool partial_face_b) {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(transpose, ct_dim, rt_dim, kt_dim, partial_face);
+    _llk_unpack_AB_matmul_mop_config_(transpose, ct_dim, rt_dim, kt_dim, partial_face_a, partial_face_b);
 }
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -79,10 +80,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    // TODO: Review RT, use partial_face_b
     const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces =
-        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpB_num_faces = partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -93,7 +92,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpB_face_r_dim,
         unpA_num_faces,
         unpB_num_faces,
-        partial_face_a);
+        partial_face_a,
+        partial_face_b);
 }
 
 inline void llk_unpack_AB_matmul(
@@ -135,6 +135,7 @@ inline void llk_unpack_AB_matmul(
         unpA_face_r_dim,
         unpB_face_r_dim,
         partial_face_a,
+        partial_face_b,
         ct_dim,
         rt_dim,
         kt_dim);

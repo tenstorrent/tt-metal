@@ -4,9 +4,8 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/cpp/ttnn/operations/core.hpp"
-#include "ttnn/cpp/ttnn/validation.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/cpp/ttnn/operations/core.hpp"
 
 namespace ttnn {
 
@@ -35,36 +34,6 @@ bool is_input_batched(const ttnn::Shape& shape) {
 
 }  // namespace detail
 
-const std::array<ttnn::TensorSchema, 3> input_tensor_schemas() {
-    return {
-        ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-            {ttnn::TILE_LAYOUT},
-            true,
-            false,
-            true,
-            false},
-        ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-            {ttnn::TILE_LAYOUT},
-            true,
-            false,
-            true,
-            false},
-        ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-            {ttnn::TILE_LAYOUT},
-            true,
-            false,
-            true,
-            true}};
-}
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
     if (!activation.has_value()) {
@@ -86,10 +55,6 @@ ttnn::Tensor matmul(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid,
     const bool propagate_is_b_batched) {
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_tensor_schemas()[0]);
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_tensor_schemas()[1]);
-    ttnn::validate_input_tensor("ttnn.matmul", bias, input_tensor_schemas()[2]);
-
     const auto& input_tensor_a_adjusted = transpose_a ? tt::tt_metal::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
     const auto& input_tensor_b_adjusted = transpose_b ? tt::tt_metal::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
 

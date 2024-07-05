@@ -56,6 +56,7 @@ struct worker_build_settings_t{
     uint32_t cb_log_page_size;
     uint32_t cb_pages;
     uint32_t tunnel_stop;
+    uint32_t num_compute_cores;
 };
 
 // std::optional is used to determine whether core has been assigned

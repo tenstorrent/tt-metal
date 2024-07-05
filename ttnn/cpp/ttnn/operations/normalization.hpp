@@ -15,15 +15,6 @@ namespace normalization {
 
 template <bool in_place>
 struct Softmax {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -52,56 +43,6 @@ struct Softmax {
 };
 
 struct LayerNorm {
-    static inline const std::array<ttnn::TensorSchema, 4> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                1,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-                true,
-                false,
-                false,
-                true},
-            ttnn::TensorSchema{
-                1,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-                true,
-                false,
-                false,
-                true},
-            ttnn::TensorSchema{
-                1,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-                true,
-                false,
-                false,
-                true}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(
-        const Tensor& input_tensor,
-        float epsilon = 1e-12,
-        const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias = std::nullopt,
-        const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
-        Args&&... args) {
-        return std::forward_as_tuple(input_tensor, weight, bias, residual_input_tensor);
-    }
 
     static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -125,32 +66,6 @@ struct LayerNorm {
 };
 
 struct RMSNorm {
-    static inline const std::array<ttnn::TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                1,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
-                true,
-                false,
-                false,
-                false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, const Tensor& weight, Args&&... args) {
-        return std::forward_as_tuple(input_tensor, weight);
-    }
 
     static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -163,17 +78,7 @@ struct RMSNorm {
 };
 
 struct GroupNorm {
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
-
-    static inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, false, false, false}};
-    }
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+        static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const int num_groups,
         const float epsilon,

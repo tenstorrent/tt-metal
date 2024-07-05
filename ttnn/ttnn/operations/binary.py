@@ -10,8 +10,6 @@ import ttnn
 
 import tt_lib as ttl
 
-THIS_MODULE = sys.modules[__name__]
-
 __all__ = []
 
 
@@ -23,21 +21,10 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor, parameter)
 
-    def _binary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-    @ttnn.register_operation(
+    @ttnn.register_python_operation(
         name=f"ttnn.{name}",
-        validate_input_tensors=_binary_validate_input_tensors,
         golden_function=_golden_function,
+        doc=doc,
     )
     def binary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -47,13 +34,6 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         output_tensor = ttl_binary_function(input_tensor, parameter, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
-
-    if isinstance(binary_function, ttnn.decorators.Operation):
-        binary_function.decorated_function.__doc__ = doc + (
-            binary_function.__doc__ if binary_function.__doc__ is not None else ""
-        )
-
-    setattr(THIS_MODULE, name, binary_function)
 
 
 TTL_BINARY_FUNCTIONS = [
@@ -106,8 +86,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.add, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.add_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.add, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.add_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
@@ -115,8 +95,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.subtract, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.subtract_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.subtract, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.subtract_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
@@ -124,8 +104,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **
     return apply_activations(output_tensor, activations)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.multiply, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.multiply_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.multiply, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.multiply_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -134,7 +114,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.eq(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.eq, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.eq, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -143,7 +123,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ne(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ne, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ne, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -152,7 +132,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.gt(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.gt, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.gt, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -161,7 +141,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ge(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ge, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ge, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -170,7 +150,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.lt(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.lt, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.lt, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -179,7 +159,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.le(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.le, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.le, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -188,7 +168,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logical_and(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_and, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_and, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -197,7 +177,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logical_or(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_or, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_or, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -206,7 +186,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.ldexp(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ldexp, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ldexp, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -215,7 +195,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logaddexp(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logaddexp, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logaddexp, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -224,7 +204,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.logaddexp2(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logaddexp2, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logaddexp2, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -233,7 +213,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.divide(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.divide, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -242,7 +222,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.nn.functional.gelu(torch.add(x, y))
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.bias_gelu, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.bias_gelu, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -251,7 +231,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.squared_difference(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.squared_difference, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.squared_difference, golden_function=_golden_function)
 
 
 def torch_squared_difference(x, y, *args, **kwargs):
@@ -275,31 +255,24 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
 
-    def _elt_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_a,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_b,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
+    doc = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_elt_binary_validate_input_tensors,
-        golden_function=_golden_function,
-    )
+            Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
+
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
+
+            Args:
+                * :attr:`input_tensor_a`
+                * :attr:`input_tensor_b`
+
+            Example::
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
+                >>> output = ttnn.{name}(tensor1, tensor2)
+            """
+
+    @ttnn.register_python_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)
     def elt_binary_function(
         input_tensor_a: ttnn.Tensor,
         input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -325,26 +298,6 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    if isinstance(elt_binary_function, ttnn.decorators.Operation):
-        elt_binary_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
-
-            .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
-
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b`
-
-            Example::
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.{name}(tensor1, tensor2)
-            """
-
-    setattr(THIS_MODULE, name, elt_binary_function)
-
 
 TTL_BINARY_ELTWISE_FUNCTIONS = [
     ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
@@ -360,37 +313,14 @@ for elt_binary_function_name, ttl_elt_binary_function, op_name in TTL_BINARY_ELT
     register_ttl_elt_binary_function(elt_binary_function_name, ttl_elt_binary_function, op_name)
 
 
-def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        can_be_a_scalar=False,
-    )
-
-
 def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     import torch
 
     return torch.nextafter(input_tensor_a, input_tensor_b)
 
 
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.nextafter",
-    validate_input_tensors=_nextafter_validate_input_tensors,
     golden_function=_golden_function,
 )
 def nextafter(
@@ -427,18 +357,6 @@ def nextafter(
     return output
 
 
-def _polyval_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 def torch_polyval(input_tensor, coeff):
     curVal = 0
     for curValIndex in range(len(coeff) - 1):
@@ -450,9 +368,8 @@ def _golden_function(input_tensor: ttnn.Tensor, coeff: List[float], **_):
     return torch_polyval(input_tensor, coeff)
 
 
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name="ttnn.polyval",
-    validate_input_tensors=_polyval_validate_input_tensors,
     golden_function=_golden_function,
 )
 def polyval(
@@ -502,7 +419,7 @@ def _golden_function(
     return torch.isclose(input_tensor_a, input_tensor_b, rtol=param1, atol=param2, equal_nan=equal_nan)
 
 
-@ttnn.register_operation(
+@ttnn.register_python_operation(
     name=f"ttnn.isclose",
     golden_function=_golden_function,
 )
