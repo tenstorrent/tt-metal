@@ -147,22 +147,20 @@ void MAIN {
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);
     const uint32_t total_tiles_per_row = get_arg_val<uint32_t>(1);
     const uint32_t total_tiles_per_col = get_arg_val<uint32_t>(2);
-
-    const uint32_t num_tilize_per_row =
-        (total_tiles_per_row + NUM_TILES_IN_TILIZED_CHUNK - 1) / NUM_TILES_IN_TILIZED_CHUNK;  // ceil(x/y)
+    const uint32_t num_chunks_per_row = get_arg_val<uint32_t>(3);
 
     untilize_init(cb_a_in);
     binary_op_init_common(cb_a_in, cb_bx_in);
 
     // Fill initial hidden states
-    for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_tilize_per_row; tilized_chunk_idx++) {
+    for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_chunks_per_row; tilized_chunk_idx++) {
         copy(cb_h_in, cb_h_acc);
         cb_pop_front(cb_h_in, 1);
     }
 
     // For each row of tiles we want to tilize chunks of 32 tiles to pack the rows into tiles
     for (uint32_t row_idx = 0; row_idx < total_tiles_per_col; row_idx++) {
-        for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_tilize_per_row; tilized_chunk_idx++) {
+        for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_chunks_per_row; tilized_chunk_idx++) {
             // Load the last row from the hidden state above this row
             copy(cb_h_acc, cb_h_prev);
             cb_pop_front(cb_h_acc, 1);
@@ -170,7 +168,7 @@ void MAIN {
             // If we don't have a full chunk (NUM_TILES_IN_TILIZED_CHUNK tiles) we should figure out how many tiles we
             // have left. This only runs 2-3 tiles per shard so no need to unroll.
             const uint32_t remaining_tiles_in_chunk =
-                tilized_chunk_idx == num_tilize_per_row - 1 && total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK != 0
+                tilized_chunk_idx == num_chunks_per_row - 1 && total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK != 0
                     ? total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK
                     : NUM_TILES_IN_TILIZED_CHUNK;
 

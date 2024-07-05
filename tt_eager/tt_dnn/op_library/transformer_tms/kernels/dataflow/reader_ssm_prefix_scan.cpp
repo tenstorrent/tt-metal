@@ -8,14 +8,11 @@ constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
 void kernel_main() {
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(0);
-    uint32_t total_tiles_per_row = get_arg_val<uint32_t>(1);
+    uint32_t num_chunks_per_row = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_a_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_bx_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_h_in = get_compile_time_arg_val(2);
-
-    const uint32_t num_chunks_per_row =
-        (total_tiles_per_row + NUM_TILES_IN_TILIZED_CHUNK - 1) / NUM_TILES_IN_TILIZED_CHUNK;  // ceil(x/y)
 
     cb_push_back(cb_a_in, num_tiles_per_core);
     cb_push_back(cb_bx_in, num_tiles_per_core);

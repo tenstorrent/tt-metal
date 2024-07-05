@@ -55,7 +55,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t total_tiles_per_row = sharded_hidden_state_length / TILE_HEIGHT;
     const uint32_t total_tiles_per_col = sharded_sequence_length / TILE_HEIGHT;
     const uint32_t total_tiles = total_tiles_per_row * total_tiles_per_col;
-    const uint32_t num_chunks_per_row = ceil(float(total_tiles_per_row) / 32.0f);
+
+    // One chunk is a row of 32 tiles where an untilize call will move each row into a seperate tile
+    const uint32_t num_tiles_in_chunk = 32;
+    const uint32_t num_chunks_per_row = div_up(total_tiles_per_row, num_tiles_in_chunk);
 
     const uint32_t cb_a_in_id = tt::CB::c_in0;
     const auto cb_a_in = create_circular_buffer(cb_a_in_id, total_tiles, input_tile_size, input_format, a_buffer);
@@ -142,8 +145,9 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
          writer_kernel_id,
          compute_kernel_id,
          total_tiles,
-         total_tiles_per_col,
          total_tiles_per_row,
+         total_tiles_per_col,
+         num_chunks_per_row,
          all_cores,
          cores,
          cb_a_in,
@@ -161,24 +165,25 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
             UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
             std::vector<std::vector<uint32_t>> reader_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+                cores.size(), {0, 0}};  // (num_tiles_per_core, num_chunks_per_row)
             std::vector<std::vector<uint32_t>> writer_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+                cores.size(), {0, 0}};  // (num_tiles_per_core, num_chunks_per_row)
             std::vector<std::vector<uint32_t>> compute_runtime_args = {
-                cores.size(), {0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col)
+                cores.size(), {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
 
             for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
                 const CoreCoord& core = cores.at(i);
 
                 reader_runtime_args[i][0] = total_tiles;
-                reader_runtime_args[i][1] = total_tiles_per_row;
+                reader_runtime_args[i][1] = num_chunks_per_row;
 
                 writer_runtime_args[i][0] = total_tiles;
-                writer_runtime_args[i][1] = total_tiles_per_row;
+                writer_runtime_args[i][1] = num_chunks_per_row;
 
                 compute_runtime_args[i][0] = total_tiles;
                 compute_runtime_args[i][1] = total_tiles_per_row;
                 compute_runtime_args[i][2] = total_tiles_per_col;
+                compute_runtime_args[i][3] = num_chunks_per_row;
             }
             SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
             SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
