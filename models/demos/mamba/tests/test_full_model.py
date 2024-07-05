@@ -140,7 +140,8 @@ def run_prefill(
     # input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
     # input_ids = input_ids.repeat(1, seq_len)
     # input_ids = torch.randint(1, 100, (1, 32)).to(torch.long)
-    sentence = "Here is the reciepe to make a cake: Add flour, sugar, eggs, and milk in a bowl. Mix them well. Pour the mixture in a baking tray. Bake it for 30 minutes. Your cake is ready. You can decorate using fresh fruits and cookies. Enjoy!"
+    # sentence = "Here is the reciepe to make a cake: Add flour, sugar, eggs, and milk in a bowl. Mix them well. Pour the mixture in a baking tray. Bake it for 30 minutes. Your cake is ready. You can decorate using fresh fruits and cookies. Enjoy!"
+    sentence = "What is the 4th of July, anyway? July 4th (also known as Independence Day) is an annual American holiday that falls on, you guessed it, the 4th of July. While you’re thinking of fun 4th of July ideas for this year’s celebration (like planning a trip to see the best fireworks, shopping great sales or sharing meaningful quotes on social media), you may wonder about the 4th of July’s history and its meaning to this nation. Why do we celebrate it each year? Well, don’t worry—we’re breaking it down for you with this 4th of July guide. Read on to learn why we observe Independence Day and what you can do to celebrate this national holiday. Knowing more about the federal holiday’s origins and meaning might give you more incentive to invite family and friends over for a one-of-a-kind celebration. Happy 4th of July!"
     input_ids = tokenizer(sentence, return_tensors="pt")["input_ids"]
     input_ids = input_ids[:, :seq_len]
     mamba_model_pytorch = MambaPytorch(reference_model, num_layers)
@@ -172,7 +173,7 @@ def run_prefill(
     (
         (
             "state-spaces/mamba-2.8b",
-            32,
+            128,
             0.98,
             64,
             1,

@@ -85,14 +85,14 @@ class TtMambaSSM(torch.nn.Module):
             x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
             return x.repeat(self.batch_size * self.seq_len, 1)  # (B, 2EN)
 
-        self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
+        self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.batch_size * self.seq_len}")
 
         # D weight
         D_weight_name = "mixer.D"
         self.D = load_fn(
             D_weight_name,
-            lambda x: x.repeat(self.args.batch_size, 1),
-            postfix=f"D_{self.args.batch_size}",
+            lambda x: x.repeat(self.batch_size * self.seq_len, 1),
+            postfix=f"D_{self.batch_size * self.seq_len}",
         )
 
         # hidden state
@@ -261,17 +261,25 @@ class TtMambaSSM(torch.nn.Module):
             torch_prefix_scan = False
             if torch_prefix_scan:
                 hidden_state1 = self.prefix_scan(abar2, bmulx0)
+                ttnn.deallocate(abar2)
+                ttnn.deallocate(bmulx0)
 
             if not torch_prefix_scan:
-                abar2 = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
-                bmulx0 = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
+                abar2_sharded = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
+                ttnn.deallocate(abar2)
+                bmulx0_sharded = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
+                ttnn.deallocate(bmulx0)
                 hidden_state_ttnn = ttl.operations.primary.transformers.ssm_prefix_scan(
-                    abar2, bmulx0, output_mem_config=self.configs["sharded_scan"], output_dtype=ttnn.bfloat8_b
+                    abar2_sharded,
+                    bmulx0_sharded,
+                    output_mem_config=self.configs["sharded_scan"],
+                    output_dtype=ttnn.bfloat8_b,
                 )
+                ttnn.deallocate(abar2_sharded)
+                ttnn.deallocate(bmulx0_sharded)
                 hidden_state1 = ttnn.to_memory_config(hidden_state_ttnn, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(hidden_state_ttnn)
-            ttnn.deallocate(abar2)
-            ttnn.deallocate(bmulx0)
+
         else:
             # multiply abar and hidden_state
             hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)

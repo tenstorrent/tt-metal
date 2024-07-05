@@ -36,7 +36,7 @@ def create_model_config(batch_size, hidden_size):
     configs["SHARDED_NORM_PRGM_CFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[col, row],
         subblock_w=(hidden_size // (col * row)) // 32,
-        block_h=1,
+        block_h=batch_size // 32,
         block_w=(hidden_size // (col * row)) // 32,
         inplace=False,
     )

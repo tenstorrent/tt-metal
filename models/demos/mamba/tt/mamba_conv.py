@@ -27,7 +27,7 @@ class MambaConv:
         # conv1d_weights (2E, 1, 4)->(1, 2E, 4)->(1, 2E, 4, 1)->(N, 2E, 4, 1)
         torch_conv1d_weights = self.load_fn(
             self.conv1d_weight_name,
-            lambda x: x.transpose(1, 0).unsqueeze(-1).repeat(self.args.batch_size * self.args.seq_len, 1, 1, 1),
+            lambda x: x.transpose(1, 0).unsqueeze(-1).repeat(32, 1, 1, 1),
             return_as_torch=True,
         )
         self.tt_weight_tensor = ttnn.from_torch(
