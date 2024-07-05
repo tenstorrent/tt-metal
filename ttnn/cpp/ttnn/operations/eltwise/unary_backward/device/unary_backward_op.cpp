@@ -507,7 +507,7 @@ std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const Memo
     Tensor val = grad;
     val = global_sum(val, output_mem_config);
     Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
-    result = bcast(result, val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    result = ttnn::add(result, val, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }

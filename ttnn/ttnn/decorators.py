@@ -644,6 +644,30 @@ def query_registered_operations(include_experimental=False):
         return ttnn_operations
 
 
+def dump_operations(csv_file, include_experimental=False):
+    import csv
+    import pandas as pd
+
+    apis = query_registered_operations(include_experimental)
+
+    def to_dict(obj):
+        return {
+            "python_fully_qualified_name": obj.python_fully_qualified_name,
+            "function": str(obj.function),
+            "preprocess_golden_function_inputs": str(obj.preprocess_golden_function_inputs),
+            "golden_function": str(obj.golden_function),
+            "postprocess_golden_function_outputs": str(obj.postprocess_golden_function_outputs),
+            "is_cpp_operation": obj.is_cpp_operation,
+            "is_experimental": obj.is_experimental,
+        }
+
+    df = pd.DataFrame([to_dict(obj) for obj in apis])
+    df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
+    df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
+    df = df[["python_fully_qualified_name", "is_cpp_operation", "has_golden_function", "is_experimental"]]
+    df.to_csv(csv_file, index=False)
+
+
 def get_golden_function(operation):
     if operation.golden_function is None:
         raise RuntimeError(f"{operation} does not have a golden function")

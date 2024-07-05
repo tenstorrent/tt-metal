@@ -256,6 +256,7 @@ from ttnn.decorators import (
     register_cpp_operation,
     attach_golden_function,
     query_registered_operations,
+    dump_operations,
     register_pre_operation_hook,
     register_post_operation_hook,
     get_golden_function,

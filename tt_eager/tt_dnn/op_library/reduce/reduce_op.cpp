@@ -299,6 +299,14 @@ Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_m
     Tensor result = val;
     for(int rank = val.get_legacy_shape().rank()-1; rank >=0; rank--)
         result = f(result, rank, output_mem_config);
+
+    std::array<std::uint32_t, 4> intended_shape_array = {};
+    intended_shape_array.fill(1);
+    std::array<std::uint32_t, 4> padded_shape_array = {};
+    padded_shape_array.fill(1);
+    padded_shape_array[padded_shape_array.size()-1] = 32;
+    padded_shape_array[padded_shape_array.size()-2] = 32;
+    result = ttnn::reshape(result, ttnn::Shape{intended_shape_array, padded_shape_array});
     return result;
 }
 
