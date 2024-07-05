@@ -161,13 +161,13 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/kernels/dataflow/reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         total_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
@@ -435,7 +435,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

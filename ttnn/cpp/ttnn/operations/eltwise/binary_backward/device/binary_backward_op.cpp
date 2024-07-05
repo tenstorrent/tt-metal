@@ -9,7 +9,7 @@
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -374,7 +374,7 @@ std::vector<Tensor> _concat_bw(
         input.get_legacy_shape()[2] - 1,
         input.get_legacy_shape()[3] - 1};
 
-    Tensor grad_a = ttnn::slice(grad, start_index, end_index, std::nullopt);
+    Tensor grad_a = unpad(grad, start_index, end_index);
     grad_tensor.emplace_back(grad_a);
 
     tt::tt_metal::Shape start_index_2 = {0, 0, 0, 0};
@@ -393,7 +393,7 @@ std::vector<Tensor> _concat_bw(
         grad.get_legacy_shape()[1] - 1,
         grad.get_legacy_shape()[2] - 1,
         grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = ttnn::slice(grad, start_index_2, end_index_2, std::nullopt);
+    Tensor grad_b = unpad(grad, start_index_2, end_index_2);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;

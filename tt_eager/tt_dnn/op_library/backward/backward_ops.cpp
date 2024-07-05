@@ -12,7 +12,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_numpy/functions.hpp"
@@ -1532,9 +1532,9 @@ std::vector<Tensor> _prod_bw(
             const Shape start_index = {0, 0, 0, 0};
             const Shape end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, std::nullopt);
+            Tensor new_unpad_tensor = unpad(required, start_index, end_index);
             after_permute_dims = {0, 2, 3, 1};
-            updated_grad = permute(new_slice_tensor, after_permute_dims, output_mem_config);
+            updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
             Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
             Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
             pad_updated_grad = pad_updated_grad.to(Layout::TILE);
@@ -1549,8 +1549,8 @@ std::vector<Tensor> _prod_bw(
             const Shape start_index = {0, 0, 0, 0};
             const Shape end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, std::nullopt);
-            updated_grad = permute(new_slice_tensor, after_permute_dims, output_mem_config);
+            Tensor new_unpad_tensor = unpad(required, start_index, end_index);
+            updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
             if(updated_grad.get_layout()==Layout::ROW_MAJOR){
                 updated_grad = tt::tt_metal::change_layout_to_tile(updated_grad, output_mem_config);
             }
@@ -1599,7 +1599,7 @@ std::vector<Tensor> _prod_bw(
                 input.get_legacy_shape()[1] - 1,
                 input.get_legacy_shape()[2] - 1,
                 input.get_legacy_shape()[3] - 1};
-            grad_result = ttnn::slice(result, start_index, end_index, std::nullopt);
+            grad_result = unpad(result, start_index, end_index);
         }
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
@@ -1633,7 +1633,7 @@ std::vector<Tensor> _prod_bw(
             input.get_legacy_shape()[1] - 1,
             input.get_legacy_shape()[2] - 1,
             input.get_legacy_shape()[3] - 1};
-        grad_result = ttnn::slice(result, start_index, end_index, std::nullopt);
+        grad_result = unpad(result, start_index, end_index);
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
