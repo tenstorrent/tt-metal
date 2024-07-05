@@ -6,6 +6,7 @@
 
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
 
@@ -76,8 +77,8 @@ ttnn::Tensor matmul(
         parameters);
 
     if (post_process_bias) {
-        output_tensor = tt::operations::primary::bcast(
-            output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, parameters.output_mem_config);
+        output_tensor = ttnn::add(
+            output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
