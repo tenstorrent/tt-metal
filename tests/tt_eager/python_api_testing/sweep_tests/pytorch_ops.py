@@ -1467,6 +1467,8 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
     elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
         return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)
     else:
         return x
 

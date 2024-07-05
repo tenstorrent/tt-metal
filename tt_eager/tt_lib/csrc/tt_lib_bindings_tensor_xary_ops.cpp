@@ -67,6 +67,7 @@ namespace tt::tt_metal::detail {
                 BFLOAT8_B <-> INT32
                 BFLOAT8_B <-> UINT16
                 BFLOAT8_B <-> UINT32
+                UINT16 -> UINT32
 
             Input tensor must have tt_input_dtype data type.
 
@@ -175,7 +176,7 @@ namespace tt::tt_metal::detail {
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
 
         )doc");
-    
+
         m_tensor.def("bitwise_xor",bitwise_xor,
             py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Computes bitwise_xor of input tensor ``input`` by a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
@@ -1019,7 +1020,7 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
         )doc");
-        
+
         m_tensor.def("bitwise_or",bitwise_or,
             py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Computes bitwise_or of input tensor ``input`` by  a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
