@@ -42,12 +42,12 @@ ALWI void pack_tile_with_dt(uint32_t ifrom_dst, uint32_t icb)
     pack_tile(ifrom_dst, icb);
 }
 
-ALWI void copy_tile_init_with_dt(uint32_t icb)
+ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0)
 {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format_srca(icb);
     #endif
-    copy_tile_to_dst_init_short(icb);
+    copy_tile_to_dst_init_short(icb, transpose);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
@@ -57,11 +57,46 @@ ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     add_tiles_init(icb0, icb1);
 }
 
+ALWI void add_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    add_bcast_rows_init_short(icb0, icb1);
+}
+
+ALWI void add_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    add_bcast_cols_init_short(icb0, icb1);
+}
+
+ALWI void add_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    add_bcast_scalar_init_short(icb0, icb1);
+}
+
 ALWI void sub_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
     #endif
     sub_tiles_init(icb0, icb1);
+}
+
+ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    sub_bcast_cols_init_short(icb0, icb1);
+}
+
+ALWI void sub_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    sub_tiles_bcast_scalar_init_short(icb0, icb1);
 }
 
 ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
@@ -71,12 +106,36 @@ ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     mul_tiles_init(icb0, icb1);
 }
 
+ALWI void mul_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    mul_bcast_rows_init_short(icb0, icb1);
+}
+
+ALWI void mul_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    mul_bcast_cols_init_short(icb0, icb1);
+}
+
 ALWI void mul_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
     #endif
     mul_tiles_bcast_scalar_init_short(icb0, icb1);
 }
+
+template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+ALWI void reduce_init_delta_with_dt(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
+{
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    reduce_init_delta<at_start>(reduce_type, reduce_dim, ocb, icb0, icb1);
+}
+
 
 class ArgFetcher {
    private:
@@ -489,17 +548,14 @@ ALWI void reduce_tile_to_cb(
     tile_regs_acquire();
     cb_wait_front(icb1, onetile);
 
-    #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(icb0, icb1);
-    #endif
-    reduce_init_delta<false>(reduce_op, dim);
+    reduce_init_delta_with_dt<false>(reduce_op, dim, ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
     }
-    reduce_revert_delta();
+    reduce_revert_delta(ocb);
     tile_regs_commit();
 
     if (pop0)
@@ -800,10 +856,7 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
     cb_wait_front(icb1, onetile);
 
     tile_regs_acquire();
-    #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(icb0, icb1);
-    #endif
-    reduce_init_delta<false>(reduce_op, dim);
+    reduce_init_delta_with_dt<false>(reduce_op, dim, ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 

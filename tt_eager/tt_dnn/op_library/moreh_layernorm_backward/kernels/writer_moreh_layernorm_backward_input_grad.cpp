@@ -26,7 +26,7 @@ void kernel_main() {
 
     const auto input_grad_l1_read_addr = get_read_ptr(cb_id_input_grad);
 
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (uint32_t ncht = 0; ncht < num_rows_per_core; ncht++) {
         // input_grad (N, C, H, W)
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_id_input_grad, onetile);
@@ -36,6 +36,6 @@ void kernel_main() {
         }  // wt loop
         offs += Wt;
 
-    }  // ncht loop
+    }  // num_rows_per_core loop
 
 }  // void kernel_main()
