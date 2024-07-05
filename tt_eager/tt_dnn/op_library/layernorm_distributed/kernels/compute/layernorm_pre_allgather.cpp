@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * This kernel computes larnorm statistics.
+ * For layernorm it computes E(x**2) and E(x) and returns them as a two tile wide output tensor containing E(x**2) and E(x) in the left most columns per tile.
+ * For rmsnorm it computes E(x**2) and returns it as a one tile wide output tensor containing E(x**2) in the left most column per tile.
+*/
+
 #include <cstdint>
 
 #define REDUCE_OP PoolType::SUM
@@ -11,8 +17,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-
-#include "debug/dprint.h"
 
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
