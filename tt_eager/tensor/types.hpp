@@ -242,11 +242,6 @@ struct MemoryConfig {
     bool is_sharded() const;
     bool is_l1() const;
     bool is_dram() const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(this->memory_layout, this->buffer_type, this->shard_spec);
-    }
 };
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
