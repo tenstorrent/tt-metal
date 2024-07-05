@@ -1152,12 +1152,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(ashape.rank() == bshape.rank() && ashape.rank() >= 2 && "bmm (non-bcast matmul) expects input tensors of the same rank and must have rank >= 2");
-    for (auto i = 0; i < ashape.rank() - 2; i++) {
-        TT_FATAL(
-            ashape[i] == bshape[i] &&
-            "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
-    }
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
     TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
 

@@ -463,19 +463,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
-    if (bcast_batch)
-        TT_FATAL(
-            get_batch_size(bshape) == 1 &&
-            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
-    else {
-        // same condition as above, different message
-        TT_FATAL(ashape.rank() == bshape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank");
-        for (auto i = 0; i < ashape.rank() - 2; i++) {
-            TT_FATAL(
-                ashape[i] == bshape[i] &&
-                "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
-        }
-    }
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
