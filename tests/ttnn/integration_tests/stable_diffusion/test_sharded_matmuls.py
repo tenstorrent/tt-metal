@@ -1733,11 +1733,11 @@ def test_matmul(
         assert False
 
     if W1 > 1 or Z1 > 1:
-        out = ttnn.experimental.tensor.bmm(
+        out = ttnn.matmul(
             in_0,
             in_1,
-            output_mem_config=output_mem_config,
-            kernel_config=compute_kernel_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
         )
     else:
         out = ttnn.linear(

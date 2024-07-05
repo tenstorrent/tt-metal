@@ -415,11 +415,11 @@ def test_time_sharded_attnention(
 
     mm_out_torch = tt2torch_tensor(mm_out)
 
-    attn_weights = ttl.tensor.bmm(
-        reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+    attn_weights = ttnn.matmul(
+        reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
     attn_weights = ttl.operations.primary.softmax_in_place(attn_weights)
-    attn_weights = ttl.tensor.bmm(attn_weights, reference_value_layer, output_mem_config=dram_interleaved_memory_config)
+    attn_weights = ttnn.matmul(attn_weights, reference_value_layer, memory_config=dram_interleaved_memory_config)
 
     attn_weights_torch = tt2torch_tensor(attn_weights)
     passing, output = comp_pcc(mm_out_torch, attn_weights_torch)

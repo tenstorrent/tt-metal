@@ -6,6 +6,7 @@ from typing import List, Union, Optional
 from .. import tensor
 
 from loguru import logger
+from ttnn import matmul
 
 
 def Linear(in_features: int, out_features: int, weight: List[Union[int, float]], bias, device):
@@ -26,7 +27,7 @@ def Linear(in_features: int, out_features: int, weight: List[Union[int, float]],
 
     def linear_(activation):
         weight_T = tensor.transpose(weight, -2, -1)
-        output = tensor.matmul(activation, weight_T)
+        output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:
             output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
