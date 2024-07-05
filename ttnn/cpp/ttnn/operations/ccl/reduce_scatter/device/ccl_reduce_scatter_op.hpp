@@ -12,22 +12,6 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteReduceScatter {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-            {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-            true,
-            false,
-            false,
-            false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const std::vector<ttnn::Tensor>& input_tensors, Args&&... args) {
-        return std::forward_as_tuple(input_tensors.at(0));
-    }
 
     static std::vector<ttnn::Tensor> execute_on_main_thread(
         const std::vector<ttnn::Tensor>& input_tensors,
