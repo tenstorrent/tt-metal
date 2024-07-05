@@ -6,6 +6,12 @@ cmake_policy(VERSION 3.16)
 ############################################
 include(cmake/compilers.cmake)
 
+if (DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
+    message(STATUS "Setting C and C++ compiler from environment variables")
+    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
+    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
+endif()
+
 if (CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
     message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
