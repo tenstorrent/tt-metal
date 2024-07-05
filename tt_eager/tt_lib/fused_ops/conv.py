@@ -7,6 +7,7 @@ from .. import tensor, operations
 from ..utils import _nearest_32, _nearest_y
 import torch
 from loguru import logger
+import ttnn
 
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
@@ -449,7 +450,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
 
     def conv_(activation):
         # downsample op
-        output = tensor.downsample(activation, downsample_params, output_dtype=output_dtype)
+        output = ttnn.downsample(activation, downsample_params, output_dtype=output_dtype)
         output = operations.primary.matmul(
             output,
             weight_on_device,
