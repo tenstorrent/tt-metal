@@ -20,6 +20,12 @@ import math
 
 from dataclasses import dataclass
 from typing import Union
+from enum import Enum
+
+
+class ModelMode(Enum):
+    DECODE = 0
+    PREFILL = 1
 
 
 @dataclass
@@ -36,6 +42,7 @@ class ModelArgs:
     bias: bool = False
     batch_size: int = 1
     eps: float = 1e-5
+    mode: ModelMode = ModelMode.DECODE
 
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)
