@@ -809,9 +809,11 @@ void py_module(py::module& m_primary) {
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,
         py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
         py::arg("mean").noconvert() = std::nullopt,
         py::arg("rstd").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm operation.");
     m_primary.def(
         "moreh_layernorm_backward",
@@ -826,7 +828,8 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("gamma_grad").noconvert() = std::nullopt,
         py::arg("beta_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm_backward operation.");
     // softmax
     m_primary.def(
