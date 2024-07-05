@@ -14,14 +14,7 @@ tt_lib.operations.primary.moreh_logsoftmax_dim_3,40,0.86,0.95,1.23,0.99
 tt_lib.operations.primary.moreh_mean_backward,40,0.8,0.92,1.16,0.96
 tt_lib.operations.primary.moreh_mean_dims_0,40,0.9,0.95,1.23,1.0
 tt_lib.operations.primary.moreh_mean_dims_01,40,1.58,1.65,2.06,1.75
-tt_lib.operations.primary.moreh_mean_dims_012,80,2.0,2.55,2.45,2.33
-tt_lib.operations.primary.moreh_mean_dims_013,40,1.91,2.07,2.21,2.09
 tt_lib.operations.primary.moreh_mean_dims_1,40,0.86,0.97,1.17,0.97
-tt_lib.operations.primary.moreh_mean_dims_12,40,1.33,1.43,1.68,1.43
-tt_lib.operations.primary.moreh_mean_dims_13,40,1.26,1.93,1.84,1.72
-tt_lib.operations.primary.moreh_mean_dims_2,40,0.84,0.94,1.15,0.96
-tt_lib.operations.primary.moreh_mean_dims_23,40,1.31,1.47,1.73,1.49
-tt_lib.operations.primary.moreh_mean_dims_3,40,0.84,1.43,1.73,1.4
 tt_lib.operations.primary.moreh_norm_dim_0,40,0.93,1.27,2.0,1.17
 tt_lib.operations.primary.moreh_norm_dim_1,40,0.85,1.29,1.62,1.44
 tt_lib.operations.primary.moreh_norm_dim_2,40,0.88,0.91,1.3,0.98
@@ -220,8 +213,8 @@ tt_lib.tensor.leaky_relu,40,0.87,0.91,1.19,0.96
 tt_lib.tensor.leaky_relu_bw,40,6.08,6.41,6.27,6.15
 tt_lib.tensor.lerp,40,2.6,2.97,3.12,2.92
 tt_lib.tensor.lerp_binary,40,2.48,2.65,2.92,2.65
-tt_lib.tensor.lerp_bw_float_weight,40,1.87,2.01,2.39,2.03
-tt_lib.tensor.lerp_bw_tensor_weight,40,2.93,3.24,3.66,3.31
+ttnn.lerp_bw_float_weight,40,1.87,2.01,2.39,2.03
+ttnn.lerp_bw_tensor_weight,40,2.93,3.24,3.66,3.31
 tt_lib.tensor.lez,40,0.82,0.9,1.12,0.91
 tt_lib.tensor.lgamma,40,42.17,46.02,46.67,45.37
 tt_lib.tensor.lgamma_bw,40,21.67,23.48,24.73,23.37
