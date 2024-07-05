@@ -827,20 +827,12 @@ all_binary_ops = [
         "name": "tt_lib.tensor.celu_bw",
     },
     {
-        "op": ttnn.binary_lt_bw,
-        "name": "ttnn.binary_lt_bw",
-    },
-    {
         "op": tt_lib.tensor.log10_bw,
         "name": "tt_lib.tensor.log10_bw",
     },
     {
         "op": tt_lib.tensor.log1p_bw,
         "name": "tt_lib.tensor.log1p_bw",
-    },
-    {
-        "op": ttnn.binary_ne_bw,
-        "name": "ttnn.binary_ne_bw",
     },
     {
         "op": tt_lib.tensor.erf_bw,
@@ -882,14 +874,6 @@ all_binary_ops = [
     {
         "op": tt_lib.tensor.selu_bw,
         "name": "tt_lib.tensor.selu_bw",
-    },
-    {
-        "op": ttnn.binary_ge_bw,
-        "name": "ttnn.binary_ge_bw",
-    },
-    {
-        "op": ttnn.binary_gt_bw,
-        "name": "ttnn.binary_gt_bw",
     },
     {
         "op": tt_lib.tensor.square_bw,
@@ -1047,46 +1031,46 @@ all_binary_ops = [
         "name": "tt_lib.operations.primary.moreh_mean_dims_01",
         "shape_func": primaru_moreh_mean_01_shape_func,
     },
-    {
-        "op": primaru_moreh_mean_012,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_012",
-        "shape_func": primaru_moreh_mean_012_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_013,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_013",
-        "shape_func": primaru_moreh_mean_013_shape_func,
-    },
+    # {
+    #     "op": primaru_moreh_mean_012,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_012",
+    #     "shape_func": primaru_moreh_mean_012_shape_func,
+    # },
+    # {
+    #     "op": primaru_moreh_mean_013,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_013",
+    #     "shape_func": primaru_moreh_mean_013_shape_func,
+    # },
     {
         "op": primaru_moreh_mean_1,
         "name": "tt_lib.operations.primary.moreh_mean_dims_1",
         "shape_func": primaru_moreh_mean_1_shape_func,
     },
-    {
-        "op": primaru_moreh_mean_12,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_12",
-        "shape_func": primaru_moreh_mean_12_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_13,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_13",
-        "shape_func": primaru_moreh_mean_13_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_2,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_2",
-        "shape_func": primaru_moreh_mean_2_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_23,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_23",
-        "shape_func": primaru_moreh_mean_23_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_3,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_3",
-        "shape_func": primaru_moreh_mean_3_shape_func,
-    },
+    # {
+    #     "op": primaru_moreh_mean_12,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_12",
+    #     "shape_func": primaru_moreh_mean_12_shape_func,
+    # },
+    # {
+    #     "op": primaru_moreh_mean_13,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_13",
+    #     "shape_func": primaru_moreh_mean_13_shape_func,
+    # },
+    # {
+    #     "op": primaru_moreh_mean_2,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_2",
+    #     "shape_func": primaru_moreh_mean_2_shape_func,
+    # },
+    # {
+    #     "op": primaru_moreh_mean_23,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_23",
+    #     "shape_func": primaru_moreh_mean_23_shape_func,
+    # },
+    # {
+    #     "op": primaru_moreh_mean_3,
+    #     "name": "tt_lib.operations.primary.moreh_mean_dims_3",
+    #     "shape_func": primaru_moreh_mean_3_shape_func,
+    # },
     {
         "op": tt_lib.operations.primary.moreh_mean_backward,
         "name": "tt_lib.operations.primary.moreh_mean_backward",
@@ -2521,11 +2505,11 @@ def bias_gelu_bw_tanh(x, y, z):
 
 
 def lerp_bw_1(x, y, z):
-    tt_lib.tensor.lerp_bw(x, y, z, 0.7)
+    ttnn.lerp_bw(x, y, z, 0.7)
 
 
 def lerp_bw_2(x, y, z):
-    tt_lib.tensor.lerp_bw(x, x, y, z)
+    ttnn.lerp_bw(x, x, y, z)
 
 
 def concat_bw_0(x, y, z):
@@ -2566,6 +2550,10 @@ def concat_bw_3_shape_func(input_shape):
 
 def subalpha_bw(x, y, z):
     ttnn.subalpha_bw(x, y, z, alpha=3)
+
+
+def div_bw(x, y, z):
+    ttnn.div_bw(x, y, z, mode="None")
 
 
 def primary_moreh_norm_backward(x, y, z):
@@ -2671,7 +2659,23 @@ all_ternary_ops = [
         "name": "ttnn.binary_eq_bw",
     },
     {
-        "op": ttnn.div_bw,
+        "op": ttnn.binary_ge_bw,
+        "name": "ttnn.binary_ge_bw",
+    },
+    {
+        "op": ttnn.binary_gt_bw,
+        "name": "ttnn.binary_gt_bw",
+    },
+    {
+        "op": ttnn.binary_lt_bw,
+        "name": "ttnn.binary_lt_bw",
+    },
+    {
+        "op": ttnn.binary_ne_bw,
+        "name": "ttnn.binary_ne_bw",
+    },
+    {
+        "op": div_bw,
         "name": "ttnn.div_bw",
         "num_repeats": 3,
     },
@@ -2733,11 +2737,11 @@ all_ternary_ops = [
     },
     {
         "op": lerp_bw_1,
-        "name": "tt_lib.tensor.lerp_bw_float_weight",
+        "name": "ttnn.lerp_bw_float_weight",
     },
     {
         "op": lerp_bw_2,
-        "name": "tt_lib.tensor.lerp_bw_tensor_weight",
+        "name": "ttnn.lerp_bw_tensor_weight",
     },
     {
         "op": ttnn.ldexp_bw,
