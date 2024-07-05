@@ -8,7 +8,7 @@ run_additional_T3000_test(){
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config0-input_dtype0-8-1-input_shape1-0-layout1]" > $PROFILER_ARTIFACTS_DIR/test_out.log
+    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/ttnn/unit_tests/operations/test_all_gather.py::test_all_gather_on_t3000_post_commit" > $PROFILER_ARTIFACTS_DIR/test_out.log
 
     cat $PROFILER_ARTIFACTS_DIR/test_out.log
 

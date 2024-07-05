@@ -12,22 +12,6 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteLineAllGather {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            2,
-            4,
-            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-            {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-            true,
-            false,
-            false,
-            false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
 
     static ttnn::Tensor execute_on_main_thread(
         const ttnn::Tensor& input_tensor,
