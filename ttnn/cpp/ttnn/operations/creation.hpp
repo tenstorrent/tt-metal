@@ -9,9 +9,9 @@
 #include "ttnn/experimental//tensor/types.hpp"
 #include "ttnn/experimental//tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/validation.hpp"
 
 namespace ttnn {
 namespace operations {

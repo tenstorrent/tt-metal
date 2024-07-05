@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -18,9 +19,10 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 )
 def test_bw_binary_gt(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.binary_gt_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.binary_gt_bw(grad_tensor, input_tensor, other_tensor)
     pt_y = torch.zeros_like(grad_data)
     golden_tensor = [pt_y, pt_y]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)

@@ -4,31 +4,20 @@
 
 #pragma once
 
-#include "tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "ttnn/validation.hpp"
 
 namespace ttnn {
 namespace decorators {
 
+using Tensors = tt::tt_metal::operation::Tensors;
+using OptionalTensors = tt::tt_metal::operation::OptionalTensors;
+using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
+
 namespace detail {
-
-template <class T, class... args_t>
-using input_tensors_to_validate_return_t = decltype(T::input_tensors_to_validate(std::declval<args_t>()...));
-
-template <typename T, class... args_t>
-constexpr bool has_input_tensors_to_validate() {
-    return std::experimental::is_detected_v<input_tensors_to_validate_return_t, T, args_t&&...>;
-}
-
-template <class T>
-using input_tensor_schemas_t = decltype(T::input_tensor_schemas);
-
-template <typename T>
-constexpr bool has_input_tensor_schemas() {
-    return std::experimental::is_detected_v<input_tensor_schemas_t, T>;
-}
 
 template <class T, class... args_t>
 using execute_on_worker_thread_return_t = decltype(T::execute_on_worker_thread(std::declval<args_t>()...));
@@ -102,67 +91,21 @@ inline Tensors create_async_output_tensors(const Tensors& inputs, const Optional
     }
 }
 
-template <typename T, typename... TypeToCheck>
-constexpr bool is_any_of = (... || std::is_same_v<std::decay_t<T>, TypeToCheck>);
-
-template <typename T, typename... Include>
-constexpr auto conditional_tuple(T&& arg) {
-    if constexpr (is_any_of<T, Include...>) {
-        return std::forward_as_tuple(std::forward<T>(arg));
-    } else {
-        return std::tuple<>();
-    }
-}
-
-template <typename... Include, typename... Args>
-constexpr auto extract_args(Args&&... args) {
-    return std::tuple_cat(conditional_tuple<Args, Include...>(std::forward<Args>(args))...);
-}
-
-template <typename concrete_operation_t, typename... args_t>
-constexpr auto validate(const char* cpp_fully_qualified_name, args_t&&... args) {
-    if constexpr (has_input_tensor_schemas<concrete_operation_t>()) {
-        if (ttnn::CONFIG.enable_fast_runtime_mode) {
-            return;
-        }
-
-        constexpr auto input_tensors_to_validate = [](args_t&&... args) {
-            if constexpr (has_input_tensors_to_validate<concrete_operation_t, args_t&&...>()) {
-                return concrete_operation_t::input_tensors_to_validate(std::forward<args_t>(args)...);
-            } else {
-                return extract_args<Tensor, std::optional<const Tensor>>(std::forward<args_t>(args)...);
-            }
-        };
-
-        auto tensors_to_validate = input_tensors_to_validate(std::forward<args_t>(args)...);
-        static_assert(
-            std::tuple_size_v<decltype(tensors_to_validate)> ==
-                std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())>,
-            "Number of tensors to validate must match the number of input tensors schemas");
-        if constexpr (std::tuple_size_v<decltype(tensors_to_validate)> > 0) {
-            [cpp_fully_qualified_name, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
-                (ttnn::validate_input_tensor(
-                     cpp_fully_qualified_name,
-                     std::get<Ns>(tensors_to_validate),
-                     concrete_operation_t::input_tensor_schemas().at(Ns)),
-                 ...);
-            }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
-        }
-    }
-}
-
 template <typename... args_t>
 auto map_launch_op_args_to_execute_on_worker_thread_args(
-    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors, args_t&&... args) {
+    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors, const OptionalTensors& optional_output_tensors, args_t&&... args) {
     auto input_tensor_index = 0;
     auto optional_input_tensor_index = 0;
+    auto optional_output_tensor_index = 0;
     return std::tuple{
-        [&input_tensor_index, &input_tensors, &optional_input_tensor_index, &optional_input_tensors](auto&& arg) {
+        [&input_tensor_index, &input_tensors, &optional_input_tensor_index, &optional_input_tensors, &optional_output_tensor_index, &optional_output_tensors](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, Tensor>) {
                 return input_tensors.at(input_tensor_index++);
             } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
                 return optional_input_tensors.at(optional_input_tensor_index++);
+            } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
+                return optional_output_tensors.at(optional_output_tensor_index++);
             } else {
                 return arg;
             }
@@ -211,6 +154,35 @@ void log(const std::string& prefix, args_t&&... args) {
     std::apply([&fmt](const auto&... args) { tt::log_debug(tt::LogOp, fmt.c_str(), args...); }, args_tuple);
 }
 
+// Get "add" from "ttnn::add"
+static const std::string base_name(const char* cpp_fully_qualified_name) {
+    auto cpp_fully_qualified_name_as_string = std::string(cpp_fully_qualified_name);
+    auto last_token = cpp_fully_qualified_name_as_string.substr(cpp_fully_qualified_name_as_string.rfind("::") + 2);
+    return last_token;
+}
+
+// Convert "ttnn::add" to "add_t"
+static const std::string class_name(const char* cpp_fully_qualified_name) {
+    return base_name(cpp_fully_qualified_name) + "_t";
+}
+
+// Convert "ttnn::add" to "ttnn.add"
+static const std::string python_fully_qualified_name(const char* cpp_fully_qualified_name) {
+    auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
+        if (from.empty()) {
+            return input;
+        }
+        auto output = input;
+        size_t start = 0;
+        while ((start = output.find(from, start)) != std::string::npos) {
+            output.replace(start, from.length(), to);
+            start += to.length();  // In case 'to' contains 'from', like replacing 'x' with 'yx'
+        };
+        return output;
+    };
+    return replace(std::string{cpp_fully_qualified_name}, "::", ".");
+}
+
 }  // namespace detail
 
 template <auto id, typename concrete_operation_t>
@@ -242,22 +214,20 @@ struct operation_t {
                 detail::create_async_output_tensors<concrete_operation_t, execute_on_worker_thread_return_t>(
                     input_tensors, optional_input_tensors);
 
-            // TODO: add support for optional_output_tensors
-            // auto optional_output_tensors = extract_args_to_vector(std::forward<args_t>(args)...,
-            // std::optional<ttnn::Tensor>);
+
+            const OptionalTensors optional_output_tensors =
+                detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
 
             bool enable_autoformat = false;
             operation::launch_op(
                 [cpp_fully_qualified_name = this->cpp_fully_qualified_name, args...](
                     const Tensors& input_tensors,
                     const OptionalConstTensors& optional_input_tensors,
-                    const OptionalTensors&) mutable -> Tensors {
+                    const OptionalTensors& optional_output_tensors) mutable -> Tensors {
                     auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                        input_tensors, optional_input_tensors, std::forward<args_t>(args)...);
+                        input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
                     return std::apply(
                         [cpp_fully_qualified_name](auto&&... args) -> Tensors {
-                            detail::validate<concrete_operation_t>(
-                                cpp_fully_qualified_name, std::forward<decltype(args)>(args)...);
                             return detail::map_execute_on_worker_thread_return_to_launch_op_return<
                                 concrete_operation_t>(
                                 concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
@@ -267,7 +237,7 @@ struct operation_t {
                 input_tensors,
                 output_tensors,
                 optional_input_tensors,
-                {},
+                optional_output_tensors,
                 enable_autoformat);
 
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
@@ -287,7 +257,6 @@ struct operation_t {
             }
 
         } else {
-            detail::validate<concrete_operation_t>(cpp_fully_qualified_name, std::forward<decltype(args)>(args)...);
             auto output = concrete_operation_t::execute_on_main_thread(std::forward<decltype(args)>(args)...);
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
             return output;
@@ -295,30 +264,14 @@ struct operation_t {
     }
 
     // Get "add" from "ttnn::add"
-    const std::string name() const {
-        auto cpp_fully_qualified_name = std::string(this->cpp_fully_qualified_name);
-        auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
-        return last_token;
-    }
+    const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }
 
-    // Convert "ttnn::add" to "ttnn_add_t"
-    const std::string class_name() const { return this->name() + "_t"; }
+    // Convert "ttnn::add" to "add_t"
+    const std::string class_name() const { return detail::class_name(this->cpp_fully_qualified_name); }
 
     // Convert "ttnn::add" to "ttnn.add"
     const std::string python_fully_qualified_name() const {
-        auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
-            if (from.empty()) {
-                return input;
-            }
-            auto output = input;
-            size_t start = 0;
-            while ((start = output.find(from, start)) != std::string::npos) {
-                output.replace(start, from.length(), to);
-                start += to.length();  // In case 'to' contains 'from', like replacing 'x' with 'yx'
-            };
-            return output;
-        };
-        return replace(std::string{this->cpp_fully_qualified_name}, "::", ".");
+        return detail::python_fully_qualified_name(this->cpp_fully_qualified_name);
     }
 };
 
@@ -341,84 +294,29 @@ struct lambda_operation_t {
     }
 
     // Get "add" from "ttnn::add"
-    const std::string name() const {
-        auto cpp_fully_qualified_name = std::string(this->cpp_fully_qualified_name);
-        auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
-        return last_token;
-    }
+    const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }
 
-    // Convert "ttnn::add" to "ttnn_add_t"
-    const std::string class_name() const { return this->name() + "_t"; }
+    // Convert "ttnn::add" to "add_t"
+    const std::string class_name() const { return detail::class_name(this->cpp_fully_qualified_name); }
 
     // Convert "ttnn::add" to "ttnn.add"
     const std::string python_fully_qualified_name() const {
-        auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
-            if (from.empty()) {
-                return input;
-            }
-            auto output = input;
-            size_t start = 0;
-            while ((start = output.find(from, start)) != std::string::npos) {
-                output.replace(start, from.length(), to);
-                start += to.length();  // In case 'to' contains 'from', like replacing 'x' with 'yx'
-            };
-            return output;
-        };
-        return replace(std::string{this->cpp_fully_qualified_name}, "::", ".");
+        return detail::python_fully_qualified_name(this->cpp_fully_qualified_name);
     }
 };
 
 template <typename concrete_operation_t>
-constexpr auto register_operation(const char* name) {
-    return operation_t<__COUNTER__, concrete_operation_t>{name};
+constexpr auto register_operation(const char* cpp_fully_qualified_name) {
+    return operation_t<__COUNTER__, concrete_operation_t>{cpp_fully_qualified_name};
 }
 
 template <typename lambda_t>
-constexpr auto register_operation(const char* name, const lambda_t& lambda) {
-    return lambda_operation_t<__COUNTER__, lambda_t>{name, lambda};
-}
-
-// This function is used to transform the arguments of a function before calling it
-// where the lambda is applied to the type that matches T.
-// Example: https://godbolt.org/z/3P9YedMdj
-template <typename T, typename Func, typename Lambda, typename... Args>
-constexpr auto transform_args_lambda(Func func, Lambda lambda, Args&&... args) -> decltype(auto) {
-    auto transformer = [lambda](auto&& arg) -> decltype(auto) {
-        if constexpr (std::is_same_v<T, std::decay_t<decltype(arg)>>) {
-            return lambda(std::forward<decltype(arg)>(arg));
-        } else {
-            return std::forward<decltype(arg)>(arg);
-        }
-    };
-
-    return func(transformer(std::forward<Args>(args))...);
-}
-
-template <typename T, typename Lambda>
-auto transform_first_matching_arg(Lambda lambda) {
-    static_assert(!std::is_same<T, T>::value, "No matching type found");
-}
-
-template <typename T, typename Lambda, typename First, typename... Rest>
-auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) {
-    if constexpr (std::is_same_v<T, std::decay_t<First>>) {
-        return lambda(std::forward<First>(first));
-    } else {
-        return transform_first_matching_arg<T>(lambda, std::forward<Rest>(rest)...);
-    }
+constexpr auto register_operation(const char* cpp_fully_qualified_name, const lambda_t& lambda) {
+    return lambda_operation_t<__COUNTER__, lambda_t>{cpp_fully_qualified_name, lambda};
 }
 
 #define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
 
-#define TO_LAMBDA_WITH_RESHAPE(function)                                                               \
-    ([](auto&&... args) {                                                                              \
-        const auto original_shape = ttnn::decorators::transform_first_matching_arg<Tensor>(            \
-            [&](auto&& tensor) { return tensor.get_shape(); }, std::forward<decltype(args)>(args)...); \
-        return ttnn::reshape(                                                                          \
-            ttnn::decorators::transform_args_lambda<Tensor>(                                           \
-                function, [&](auto&& tensor) { return ttnn::unsqueeze_to_4D(tensor); }, args...),      \
-            original_shape);                                                                           \
-    })
 
 }  // namespace decorators
 

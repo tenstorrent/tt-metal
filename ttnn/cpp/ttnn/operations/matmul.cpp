@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul.hpp"
-#include "ttnn/cpp/ttnn/validation.hpp"
+
+#include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
+
 namespace ttnn {
 
 using MatmulMultiCoreReuseProgramConfig = tt::operations::primary::MatmulMultiCoreReuseProgramConfig;
@@ -32,19 +34,10 @@ bool is_input_batched(const ttnn::Shape& shape) {
 
 }  // namespace detail
 
-const std::array<ttnn::TensorSchema, 3> input_tensor_schemas() {
-    return {
-        ttnn::TensorSchema{
-            2, 4, {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
-        ttnn::TensorSchema{
-            2, 4, {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
-        ttnn::TensorSchema{
-            2, 4, {ttnn::float32, ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, true}};
-}
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
     if (!activation.has_value()) {
-	return std::nullopt;
+        return std::nullopt;
     }
     return string_to_unary_with_param(activation.value());
 }
@@ -53,6 +46,8 @@ ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
+    const bool transpose_a,
+    const bool transpose_b,
     const std::optional<const MatmulProgramConfig> program_config,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const DataType> dtype,
@@ -60,12 +55,11 @@ ttnn::Tensor matmul(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid,
     const bool propagate_is_b_batched) {
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_tensor_schemas()[0]);
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_tensor_schemas()[1]);
-    ttnn::validate_input_tensor("ttnn.matmul", bias, input_tensor_schemas()[2]);
+    const auto& input_tensor_a_adjusted = transpose_a ? tt::tt_metal::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
+    const auto& input_tensor_b_adjusted = transpose_b ? tt::tt_metal::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b.get_shape();
+    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
+    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -81,19 +75,29 @@ ttnn::Tensor matmul(
     std::optional<CoreCoord> user_core_coord;
     const bool has_user_grid = core_grid.has_value();
     if (has_user_grid) {
-	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
     const bool has_program_config = program_config.has_value();
     bool post_process_bias = false;
     if (bias.has_value()) {
         if (!has_program_config && !has_user_grid) {
-	    post_process_bias = true;
-	}
+            post_process_bias = true;
+        }
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a, input_tensor_b, post_process_bias ? std::nullopt : bias, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation), propagate_is_b_batched && input_b_is_batched);
+        input_tensor_a_adjusted,
+        input_tensor_b_adjusted,
+        post_process_bias ? std::nullopt : bias,
+        program_config,
+        memory_config,
+        dtype,
+        compute_kernel_config,
+        false /*untilize_out*/,
+        user_core_coord,
+        get_fused_activation(activation),
+        propagate_is_b_batched && input_b_is_batched);
 
     if (post_process_bias) {
         output_tensor = tt::operations::primary::bcast(

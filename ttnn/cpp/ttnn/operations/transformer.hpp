@@ -228,15 +228,6 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 };
 
 struct ExecuteConcatenateHeads {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{
-            4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
 
     static inline ttnn::Tensor execute_on_worker_thread(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
@@ -246,13 +237,6 @@ struct ExecuteConcatenateHeads {
 };
 
 struct ExecuteRotaryEmbedding {
-    static inline const std::array<TensorSchema, 3> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-            ttnn::TensorSchema{
-                4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
-    }
 
     static inline ttnn::Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
@@ -279,20 +263,6 @@ struct ExecuteRotaryEmbedding {
 
 template <bool in_place>
 struct ExecuteAttentionSoftmax {
-    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(
-        const ttnn::Tensor& input_tensor,
-        const std::optional<int>& head_size = std::nullopt,
-        const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
-        Args&&... args) {
-        return std::forward_as_tuple(input_tensor, attention_mask);
-    }
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
@@ -337,21 +307,21 @@ struct ExecuteAttentionSoftmax {
 namespace transformer {
 
 constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation(
-    "ttnn::transfomer::split_query_key_value_and_split_heads",
+    "ttnn::transformer::split_query_key_value_and_split_heads",
     TO_LAMBDA(ttnn::operations::transformer::split_query_key_value_and_split_heads));
 
 constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
-    "ttnn::transfomer::concatenate_heads");
+    "ttnn::transformer::concatenate_heads");
 
 constexpr auto rotary_embedding = ttnn::register_operation<ttnn::operations::transformer::ExecuteRotaryEmbedding>(
-    "ttnn::transfomer::rotary_embedding");
+    "ttnn::transformer::rotary_embedding");
 
 constexpr auto attention_softmax =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(
-        "ttnn::transfomer::attention_softmax");
+        "ttnn::transformer::attention_softmax");
 constexpr auto attention_softmax_ =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
-        "ttnn::transfomer::attention_softmax_");
+        "ttnn::transformer::attention_softmax_");
 
 }  // namespace transformer
 

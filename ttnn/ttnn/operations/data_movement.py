@@ -59,11 +59,12 @@ def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
     return output_tensor
 
 
-pad = ttnn.register_operation(
+ttnn.attach_golden_function(
+    ttnn.pad,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-)(ttnn._ttnn.operations.data_movement.pad)
+)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
@@ -75,41 +76,13 @@ def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return input_tensor.permute(order).contiguous().clone()
 
 
-def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+def _golden_function(input_tensor, dims, **_):
+    import torch
+
+    return torch.permute(input_tensor, dims)
 
 
-doc = r"""
-permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
-
-Permutes :attr:`input_tensor` using :attr:`order`.
-
-Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`order`: the desired ordering of dimensions.
-
-Example::
-
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-"""
-permute = ttnn.register_operation(
-    name="ttnn.permute",
-    validate_input_tensors=_permute_validate_input_tensors,
-    golden_function=_golden_function,
-    doc=doc,
-)(ttnn._ttnn.operations.data_movement.permute)
+ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.permute, golden_function=_golden_function)
 
 
 def _golden_function(tensors, dim=0, **_):
@@ -118,48 +91,10 @@ def _golden_function(tensors, dim=0, **_):
     return torch.concat(tensors, dim)
 
 
-def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs):
-    for input_tensor in tensors:
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32),
-            layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-
-doc = r"""
-concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-Concats :attr:`tensors` in the given :attr:`dim`.
-
-Args:
-    * :attr:`tensors`: the tensors to be concatenated.
-    * :attr:`dim`: the concatenating dimension.
-
-Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-
-Example::
-
-    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
-    >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-"""
-concat = ttnn.register_operation(
-    name="ttnn.concat",
-    validate_input_tensors=_concat_validate_input_tensors,
+ttnn.attach_golden_function(
+    ttnn.concat,
     golden_function=_golden_function,
-    doc=doc,
-)(ttnn._ttnn.operations.data_movement.concat)
+)
 
 
 def _golden_function(tensor, repeats, dim=0, **_):
@@ -168,16 +103,14 @@ def _golden_function(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(tensor, repeats, dim=dim)
 
 
-repeat_interleave = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.data_movement.repeat_interleave
-)
+ttnn.attach_golden_function(ttnn.repeat_interleave, golden_function=_golden_function)
 
 
 def _golden_function(tensor, shape, **_):
     return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
-repeat = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.data_movement.repeat)
+ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
@@ -189,8 +122,9 @@ def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float
     return ret
 
 
-upsample = ttnn.register_operation(
+ttnn.attach_golden_function(
+    ttnn.upsample,
     golden_function=_golden_function,
-)(ttnn._ttnn.operations.data_movement.upsample)
+)
 
 __all__ = []

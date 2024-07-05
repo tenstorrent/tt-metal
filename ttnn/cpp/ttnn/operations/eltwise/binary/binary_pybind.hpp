@@ -43,7 +43,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
             >>> output = {1}(tensor1, tensor2)
         )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
 

@@ -20,6 +20,9 @@
 
 #define NOC_XY_ADDR2(xy, addr) ((((uint64_t)(xy)) << NOC_ADDR_LOCAL_BITS) | ((uint64_t)(addr)))
 
+// GS address encoding is 32 bits of address followed by coordinate. First address goes into lo register, coordinates are in the mid register
+#define NOC_COORD_REG_OFFSET 0 // offset (from LSB) in register holding x-y coordinate
+
 // Alignment restrictions
 #define NOC_L1_READ_ALIGNMENT_BYTES       16
 #define NOC_L1_WRITE_ALIGNMENT_BYTES      16

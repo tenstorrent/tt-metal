@@ -57,21 +57,16 @@ namespace tt::tt_metal::detail {
             py::arg("input").noconvert(), py::arg("tt_input_dtype"), py::arg("tt_output_dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns tensor with all elements of the input tensor ``{0}`` typecasted.
             Supported typecasts:
-                BFLOAT16 -> UINT32
-                BFLOAT16 -> UINT16
-                UINT16 -> BFLOAT16
-                INT32 -> BFLOAT16
-                BFLOAT16 -> INT32
-                BFLOAT16 -> FLOAT32
-                FLOAT32 -> BFLOAT16
-                UINT16 -> FLOAT32
-                FLOAT32 -> UINT16
-                INT32 -> FLOAT32
-                FLOAT32 -> INT32
-                UINT16 -> BFLOAT8_B
-                BFLOAT8_B -> UINT16
-                INT32 -> BFLOAT8_B
-                BFLOAT8_B -> INT32
+                BFLOAT16 <-> FLOAT32
+                BFLOAT16 <-> INT32
+                BFLOAT16 <-> UINT16
+                BFLOAT16 <-> UINT32
+                FLOAT32 <-> INT32
+                FLOAT32 <-> UINT16
+                FLOAT32 <-> UINT32
+                BFLOAT8_B <-> INT32
+                BFLOAT8_B <-> UINT16
+                BFLOAT8_B <-> UINT32
 
             Input tensor must have tt_input_dtype data type.
 
@@ -1005,6 +1000,40 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        )doc");
+
+        m_tensor.def("bitwise_and",bitwise_and,
+            py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Computes bitwise_and of input tensor ``input`` by  a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
+
+            Input tensor must have INT32 data type.
+
+            Output tensor will have INT32 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "Scalar value", "int", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+
+        )doc");
+        
+        m_tensor.def("bitwise_or",bitwise_or,
+            py::arg("input").noconvert(),py::arg("value"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Computes bitwise_or of input tensor ``input`` by  a scalar ``value``. Input tensor needs to be positive. Support provided only for Wormhole_B0.
+
+            Input tensor must have INT32 data type.
+
+            Output tensor will have INT32 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "scalar value", "int", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
         )doc");
 

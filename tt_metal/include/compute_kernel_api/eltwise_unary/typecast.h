@@ -21,21 +21,16 @@ namespace ckernel {
 /**
  * Performs an elementwise typecast operation on the input.
  * Supports following typecasts:
- *  Float16_b -> UInt32
- *  Float16_b -> UInt16
- *  UInt16 -> Float16_b
- *  Int32 -> Float16_b
- *  Float16_b -> Int32
- *  Float16_b -> Float32
- *  Float32 -> Float16_b
- *  Float32 -> UInt16
- *  UInt16 -> Float32
- *  Float32 -> Int32
- *  Int32 -> Float32
- *  Bfp8_b -> UInt16
- *  UInt16 -> Bfp8_b
- *  Bfp8_b -> Int32
- *  Int32 -> Bfp8_b
+ *  Float16_b <-> Float32
+ *  Float16_b <-> Int32
+ *  Float16_b <-> UInt16
+ *  Float16_b <-> UInt32
+ *  Float32 <-> Int32
+ *  Float32 <-> UInt16
+ *  Float32 <-> UInt32
+ *  Bfp8_b <-> Int32
+ *  Bfp8_b <-> UInt16
+ *  Bfp8_b <-> UInt32
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *

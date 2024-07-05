@@ -9,6 +9,7 @@
 
 #include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 namespace tt {
 
@@ -17,14 +18,6 @@ namespace operations {
 namespace primary {
 
 namespace {
-inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
-}
 
 inline uint32_t get_num_device_cores(Device *device) {
     const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
@@ -47,11 +40,11 @@ void MorehClipGradNormStep1::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
     for (const auto &input : input_tensors) {
-        check_tensor(input, "moreh_clip_grad_norm_step1");
+        check_tensor(input, "moreh_clip_grad_norm_step1", "input");
     }
 
     const auto &tmp_pow_sum = optional_input_tensors.at(0).value();
-    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1");
+    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
 
 std::vector<Shape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -105,10 +98,10 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
 
 void MorehClipGradNormStep2::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &tmp_pow_sum = input_tensors.at(0);
-    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step2");
+    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
     const auto &total_norm = input_tensors.at(1);
-    check_tensor(total_norm, "moreh_clip_grad_norm_step2");
+    check_tensor(total_norm, "moreh_clip_grad_norm_step2", "total_norm");
 }
 
 std::vector<Shape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -145,11 +138,11 @@ void MorehClipGradNormStep3::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
     for (const auto &input : input_tensors) {
-        check_tensor(input, "moreh_clip_grad_norm_step3");
+        check_tensor(input, "moreh_clip_grad_norm_step3", "input");
     }
 
     const auto &clip_coef_clamped = optional_input_tensors.at(0).value();
-    check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3");
+    check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
 }
 
 std::vector<Shape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }

@@ -43,7 +43,7 @@ constexpr uint32_t DEFAULT_PACKETIZED_PATH_TIMEOUT_EN = 0;
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
-constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
+constexpr uint32_t DRAM_DATA_ALIGNMENT = DRAM_ALIGNMENT;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
@@ -1097,10 +1097,11 @@ void gen_smoke_test(Device *device,
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    lengths.push_back(2080);
+    uint32_t length_to_read = align(2080, DRAM_DATA_ALIGNMENT);
+    lengths.push_back(length_to_read);
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
-    lengths.push_back(2080);
+    lengths.push_back(length_to_read);
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size + 1, lengths);
 
     lengths.resize(0);
@@ -1121,38 +1122,38 @@ void gen_smoke_test(Device *device,
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      0, 0, 32, num_dram_banks_g, 0);
+                      0, 0, DRAM_ALIGNMENT, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      0, 0, 32, num_dram_banks_g, 0);
+                      0, 0, DRAM_ALIGNMENT, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      4, 32, 64, num_dram_banks_g, 0);
+                      4, DRAM_ALIGNMENT, DRAM_ALIGNMENT * 2, num_dram_banks_g, 0);
 
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 128, 128, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      4, 32, 2048, num_dram_banks_g + 4, 0);
+                      4, DRAM_ALIGNMENT, 2048, num_dram_banks_g + 4, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      5, 32, 2048, num_dram_banks_g * 3 + 1, 0);
+                      5, DRAM_ALIGNMENT, 2048, num_dram_banks_g * 3 + 1, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      3, 128, 6144, num_dram_banks_g - 1, 0);
+                      3, align(128, DRAM_ALIGNMENT), 6144, num_dram_banks_g - 1, 0);
 
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 128, 128, 32);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      4, 32, 2048, num_dram_banks_g * 2, 1536);
+                      4, DRAM_ALIGNMENT, 2048, num_dram_banks_g * 2, 1536);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      5, 32, 2048, num_dram_banks_g * 2 + 1, 256);
+                      5, DRAM_ALIGNMENT, 2048, num_dram_banks_g * 2 + 1, 256);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      3, 128, 6144, num_dram_banks_g - 1, 640);
+                      3, align(128, DRAM_ALIGNMENT), 6144, num_dram_banks_g - 1, 640);
 
     // Large pages
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
-                      0, 0, scratch_db_size_g / 2 + 32, 2, 128); // just a little larger than the scratch_db, length_adjust backs into prior page
+                      0, 0, scratch_db_size_g / 2 + DRAM_ALIGNMENT, 2, 128); // just a little larger than the scratch_db, length_adjust backs into prior page
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, scratch_db_size_g, 2, 0); // exactly the scratch db size
 
     // Forces length_adjust to back into prior read.  Device reads pages, shouldn't be a problem...
-    uint32_t page_size = 256 + 32;
+    uint32_t page_size = 256 + DRAM_ALIGNMENT;
     uint32_t length = scratch_db_size_g / 2 / page_size * page_size + page_size;
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       3, 128, page_size, length / page_size, 160);
@@ -1498,6 +1499,7 @@ void configure_for_single_chip(Device *device,
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
     CoreCoord prefetch_core = {0, 0};
     CoreCoord prefetch_d_core = {3, 0};
@@ -1535,7 +1537,7 @@ void configure_for_single_chip(Device *device,
     llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = 32;
+    uint32_t noc_read_alignment = PCIE_ALIGNMENT;
     uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
     // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
@@ -1850,6 +1852,7 @@ void configure_for_single_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
+         num_compute_cores // max_write_packed_cores
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2068,6 +2071,8 @@ void configure_for_multi_chip(Device *device,
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    TT_ASSERT(num_compute_cores == (device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y));
 
     CoreCoord prefetch_core = {0, 0};
     CoreCoord prefetch_d_core = {3, 0};
@@ -2118,7 +2123,7 @@ void configure_for_multi_chip(Device *device,
     llrt::write_hex_vec_to_core(device_r->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = 32;
+    uint32_t noc_read_alignment = PCIE_ALIGNMENT;
     uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
     // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
@@ -2518,6 +2523,7 @@ void configure_for_multi_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
+         num_compute_cores
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

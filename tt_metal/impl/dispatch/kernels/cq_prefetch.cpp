@@ -235,6 +235,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // by preamble size. After ensuring that the exec_buf command has been read (barrier),
             // exit.
             barrier_and_stall(pending_read_size, fence, cmd_ptr); // STALL_NEXT -> STALLED
+            return;
         }
     }
     if (!cmd_ready) {
@@ -1164,7 +1165,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     // This packet header just contains the length
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *dptr =
         (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *)data_ptr;
-    dptr->length = length;
+    dptr->header.length = length;
 
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
@@ -1230,7 +1231,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
 
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *cmd_ptr =
         (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *)data_ptr;
-    uint32_t length = cmd_ptr->length;
+    uint32_t length = cmd_ptr->header.length;
 
     uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
     uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_op.hpp"
+#include "binary_device_operation.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
@@ -22,7 +22,7 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-Binary::BroadcastWidthMultiCore::cached_program_t Binary::BroadcastWidthMultiCore::create(
+BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOperation::BroadcastWidthMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -70,10 +70,14 @@ Binary::BroadcastWidthMultiCore::cached_program_t Binary::BroadcastWidthMultiCor
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
+    constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt);
+        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
+
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
@@ -127,8 +131,8 @@ Binary::BroadcastWidthMultiCore::cached_program_t Binary::BroadcastWidthMultiCor
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
-    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t Wt_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             Wt_per_core = Wt_per_core_group_1;
@@ -199,7 +203,7 @@ Binary::BroadcastWidthMultiCore::cached_program_t Binary::BroadcastWidthMultiCor
         {binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
 }
 
-void Binary::BroadcastWidthMultiCore::override_runtime_arguments(
+void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -211,15 +215,16 @@ void Binary::BroadcastWidthMultiCore::override_runtime_arguments(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
 
-    auto& binary_reader_kernel_id = cached_program.program_attributes.binary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.program_attributes.unary_writer_kernel_id;
-    auto& bcast_kernel_id = cached_program.program_attributes.bcast_kernel_id;
-    auto& compute_with_storage_grid_size = cached_program.program_attributes.compute_with_storage_grid_size;
+    auto& binary_reader_kernel_id = cached_program.shared_variables.binary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& bcast_kernel_id = cached_program.shared_variables.bcast_kernel_id;
+    auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
 
     auto& program = cached_program.program;
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     auto src_dram_buffer_a = input_tensor_a.buffer();
     auto src_dram_buffer_b = input_tensor_b.buffer();
@@ -247,11 +252,14 @@ void Binary::BroadcastWidthMultiCore::override_runtime_arguments(
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
+    constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt);
+        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
 
-    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+
+    for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
+        const CoreCoord& core = cores.at(i);
         uint32_t Wt_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             Wt_per_core = Wt_per_core_group_1;

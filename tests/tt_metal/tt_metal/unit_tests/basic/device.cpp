@@ -88,9 +88,13 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    CoreCoord unharvested_logical_grid_size(12, 10);
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        unharvested_logical_grid_size = CoreCoord(8, 10);
+    CoreCoord unharvested_logical_grid_size;
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10);  break;
+        case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
+        case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        default:
+            TT_THROW("Unsupported arch {}", get_env_arch_name());
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {

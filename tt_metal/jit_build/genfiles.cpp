@@ -300,7 +300,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en){
+    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
         if (options.preserve_fp32_precision) {
             unpack_conditional_dst_format = DataFormat::Float32;
         } else {
@@ -467,7 +467,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -524,7 +524,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -595,7 +595,8 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows) {
+    const std::vector<uint32_t>& harvested_rows,
+    bool has_pcie_cores) {
 
     stringstream ss;
 
@@ -623,7 +624,7 @@ static string generate_noc_addr_ranges_string(
     ss << "#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)" << endl;
     ss << endl;
 
-    if (pcie_addr_base == pcie_addr_size) {
+    if (not has_pcie_cores) {
         // If the address range is 0, then there are no PCIe cores (non-mmio device)
         ss << "#define NOC_PCIE_XY_P(x, y) false" << endl;
     } else {
@@ -687,10 +688,11 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows) {
+    const std::vector<uint32_t>& harvested_rows,
+    bool has_pcie_cores) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, has_pcie_cores);
 
     ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;

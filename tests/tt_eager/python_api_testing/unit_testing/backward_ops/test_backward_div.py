@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -33,7 +33,7 @@ def test_bw_div(input_shapes, round_mode, device):
 
     if round_mode == None:
         round_mode = "None"
-    tt_output_tensor_on_device = tt_lib.tensor.div_bw(grad_tensor, input_tensor, other_tensor, round_mode=round_mode)
+    tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor, mode=round_mode)
 
     in_data.retain_grad()
     other_data.retain_grad()

@@ -3,17 +3,19 @@ name: "Custom test dispatch"
 on:
   workflow_dispatch:
     inputs:
-      architecture:
+      arch:
         required: true
+        type: choice
         options:
-          - grayskull
-          - wormhole_b0
+          - E150
+          - N150
+          - N300
       command:
         required: true
         type: string
       description:
         type: string
-        required: true
+        required: false
 
 jobs:
   build-artifact:
@@ -24,9 +26,9 @@ jobs:
     timeout-minutes: 1440
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ inputs.architecture }}
+      ARCH_NAME: ${{ inputs.arch }}
     environment: dev
-    runs-on: ${{ inputs.architecture }}
+    runs-on: ${{ ${{ inputs.arch }}.labels }}
     name: Custom test command ${{ inputs.description }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
@@ -35,9 +37,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
+          name: TTMetal_build_${{ inputs.arch }}
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+        run: tar -xvf ttm_${{ inputs.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |

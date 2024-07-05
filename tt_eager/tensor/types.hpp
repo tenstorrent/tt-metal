@@ -824,45 +824,8 @@ static std::ostream &operator<<(std::ostream &os, const Shape &self) {
     return os;
 }
 
-
-struct TensorSchema {
-    const std::size_t min_rank;
-    const std::size_t max_rank;
-    const std::set<DataType> dtypes;
-    const std::set<Layout> layouts;
-    const bool can_be_on_device;
-    const bool can_be_on_cpu;
-    const bool can_be_scalar;
-    const bool is_optional;
-
-    static constexpr auto attribute_names() {
-        return std::forward_as_tuple(
-            "min_rank",
-            "max_rank",
-            "dtypes",
-            "layouts",
-            "can_be_on_device",
-            "can_be_on_cpu",
-            "can_be_scalar",
-            "is_optional");
-    }
-
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->min_rank,
-            this->max_rank,
-            this->dtypes,
-            this->layouts,
-            this->can_be_on_device,
-            this->can_be_on_cpu,
-            this->can_be_scalar,
-            this->is_optional);
-    }
-};
-
 }  // namespace types
 
 using types::Shape;
-using types::TensorSchema;
 
 }  // namespace ttnn

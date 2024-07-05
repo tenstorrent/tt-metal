@@ -188,10 +188,9 @@ struct Tensor {
     Tensor &operator=(const Tensor &other) {
         // Don't self-assign
         if (this->tensor_attributes != other.tensor_attributes) {
-            // Assign workers before cleanup
-            this->workers = other.workers;
             // Update ref count for curr tensor_attr and deallocate if needed
             perform_cleanup_for_async_mode();
+            this->workers = other.workers;
             this->tensor_id = other.tensor_id;
             this->tensor_attributes = other.tensor_attributes;
             this->deallocate_through_destructor = other.deallocate_through_destructor;
@@ -209,10 +208,9 @@ struct Tensor {
     Tensor &operator=(Tensor &&other) {
         // Don't self assign
         if (this->tensor_attributes != other.tensor_attributes) {
-            // Assign workers before cleanup
-            this->workers = std::move(other.workers);
             // Update ref count for curr tensor_attr and deallocate if needed
             perform_cleanup_for_async_mode();
+            this->workers = std::move(other.workers);
             this->tensor_id = std::move(other.tensor_id);
             this->tensor_attributes = std::move(other.tensor_attributes);
             this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);

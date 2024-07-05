@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "device/binary_op.hpp"
+#include "device/binary_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 
@@ -28,33 +28,7 @@ constexpr bool is_associative(BinaryOpType op) {
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-struct ExecuteBinary {
-    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
-                {ttnn::TILE_LAYOUT},
-                true,
-                false,
-                true,
-                false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
-    }
+struct Binary {
 
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
@@ -108,16 +82,11 @@ struct ExecuteBinary {
             dtype = optional_output_tensor.value().get_dtype();
         }
 
-        return ttnn::device_operation::run<Binary>(
+        return ttnn::device_operation::run<BinaryDeviceOperation>(
             queue_id,
-            Binary::operation_attributes_t{
+            BinaryDeviceOperation::operation_attributes_t{
                 binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
-            Binary::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+            BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
 
     static Tensor execute_on_worker_thread(
@@ -131,11 +100,6 @@ struct ExecuteBinary {
         return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
     }
 
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
-    }
-
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
     static Tensor execute_on_worker_thread(
@@ -145,13 +109,14 @@ struct ExecuteBinary {
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<FusedActivations> activations = std::nullopt) {
-
-        return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, dtype, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, optional_output_tensor, activations);
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
-        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+        return Binary::execute_on_worker_thread(
+            DefaultQueueId,
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            optional_output_tensor,
+            activations);
     }
 
     static Tensor execute_on_worker_thread(
@@ -172,36 +137,71 @@ struct ExecuteBinary {
             Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return ExecuteBinary::execute_on_worker_thread(
-            input_tensor_a, scalar_tensor_device, dtype, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, optional_output_tensor, activations);
+        return Binary::execute_on_worker_thread(
+            input_tensor_a,
+            scalar_tensor_device,
+            dtype,
+            memory_config,
+            optional_output_tensor,
+            activations);
     }
 };
 
 }  // operations::binary
 
-constexpr auto add = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::ADD, false>>("ttnn::add");
-constexpr auto add_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::ADD, true>>("ttnn::add_");
-constexpr auto subtract = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SUB, false>>("ttnn::subtract");
-constexpr auto subtract_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SUB, true>>("ttnn::subtract_");
-constexpr auto multiply = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::MUL, false>>("ttnn::multiply");
-constexpr auto multiply_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::MUL, true>>("ttnn::multiply_");
+constexpr auto add =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::ADD, false>>("ttnn::add");
+constexpr auto add_ =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::ADD, true>>("ttnn::add_");
+constexpr auto subtract =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SUB, false>>(
+        "ttnn::subtract");
+constexpr auto subtract_ =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SUB, true>>(
+        "ttnn::subtract_");
+constexpr auto multiply =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::MUL, false>>(
+        "ttnn::multiply");
+constexpr auto multiply_ =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::MUL, true>>(
+        "ttnn::multiply_");
 
-constexpr auto eq = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::EQ, false>>("ttnn::eq");
-constexpr auto ne = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::NE, false>>("ttnn::ne");
-constexpr auto ge = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::GTE, false>>("ttnn::ge");
-constexpr auto gt = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::GT, false>>("ttnn::gt");
-constexpr auto le = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LTE, false>>("ttnn::le");
-constexpr auto lt = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
-constexpr auto logical_and = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGICAL_AND, false>>("ttnn::logical_and");
-constexpr auto logical_or = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGICAL_OR, false>>("ttnn::logical_or");
-constexpr auto ldexp = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LDEXP, false>>("ttnn::ldexp");
+constexpr auto eq =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::EQ, false>>("ttnn::eq");
+constexpr auto ne =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::NE, false>>("ttnn::ne");
+constexpr auto ge =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::GTE, false>>("ttnn::ge");
+constexpr auto gt =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::GT, false>>("ttnn::gt");
+constexpr auto le =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LTE, false>>("ttnn::le");
+constexpr auto lt =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
+constexpr auto logical_and =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGICAL_AND, false>>(
+        "ttnn::logical_and");
+constexpr auto logical_or =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGICAL_OR, false>>(
+        "ttnn::logical_or");
+constexpr auto ldexp =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LDEXP, false>>("ttnn::ldexp");
 
-constexpr auto logaddexp = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGADDEXP, false>>("ttnn::logaddexp");
-constexpr auto logaddexp2 = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGADDEXP2, false>>("ttnn::logaddexp2");
-constexpr auto squared_difference = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>("ttnn::squared_difference");
-constexpr auto divide = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::DIV_FAST, false>>("ttnn::divide");
-constexpr auto bias_gelu = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::BIAS_GELU, false>>("ttnn::bias_gelu");
-
+constexpr auto logaddexp =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGADDEXP, false>>(
+        "ttnn::logaddexp");
+constexpr auto logaddexp2 =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGADDEXP2, false>>(
+        "ttnn::logaddexp2");
+constexpr auto squared_difference =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>(
+        "ttnn::squared_difference");
+constexpr auto divide =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::DIV_FAST, false>>(
+        "ttnn::divide");
+constexpr auto bias_gelu =
+    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::BIAS_GELU, false>>(
+        "ttnn::bias_gelu");
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {

@@ -6,14 +6,11 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "device/topk_op.hpp"
 #include "ttnn/cpp/ttnn/types.hpp"
-
-constexpr uint8_t DefaultQueueId = 0;
 
 template <class Tuple,
    class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
@@ -23,21 +20,10 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple)
         return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...};
     }, std::forward<Tuple>(tuple));
 }
-
-
 namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteTopK {
-    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
-        return {ttnn::TensorSchema{4, 4, {ttnn::bfloat8_b, ttnn::bfloat16}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
-
     static inline std::vector<Tensor> execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor &input_tensor,
@@ -54,11 +40,6 @@ struct ExecuteTopK {
         queue_id);
     }
 
-    template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::forward_as_tuple(input_tensor);
-    }
-
     static inline auto execute_on_worker_thread(
         const Tensor &input_tensor,
         const uint16_t k,
@@ -67,6 +48,7 @@ struct ExecuteTopK {
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+        constexpr uint8_t DefaultQueueId = 0;
         return execute_on_worker_thread(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
 

@@ -30,7 +30,7 @@ import math
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     post_process_output,
 )
-from ttnn.operations.core import unsqueeze_to_4D
+from ttnn import unsqueeze_to_4D
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,

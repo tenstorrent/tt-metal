@@ -11,6 +11,8 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
+#include "tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 #include "tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
@@ -41,7 +43,6 @@
 #include "tt_dnn/op_library/prod/prod_nc_op.hpp"
 #include "tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
-#include "tt_dnn/op_library/topk/topk_op.hpp"
 
 namespace py = pybind11;
 
@@ -534,6 +535,54 @@ void py_module(py::module& m_primary) {
             Performs a rmsnorm(a+b)*gamma + beta operation.
         )doc");
 
+    m_primary.def(
+        "layernorm_pre_allgather",
+        tt::operations::primary::layernorm_pre_allgather,
+        py::arg("input").noconvert(),
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
+        R"doc(
+            Performs the first part of a distributed layernorm operation collecting local statistics E(x) and E(xˆ2).
+        )doc");
+
+    m_primary.def(
+        "rmsnorm_pre_allgather",
+        tt::operations::primary::rmsnorm_pre_allgather,
+        py::arg("input").noconvert(),
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
+        R"doc(
+            Performs the first part of a distributed rms norm operation collecting local statistics E(x) and E(xˆ2).
+        )doc");
+
+    m_primary.def(
+        "layernorm_post_allgather",
+        tt::operations::primary::layernorm_post_allgather,
+        py::arg("input").noconvert(),
+        py::arg("stats").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        R"doc(
+            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
+        )doc");
+
+    m_primary.def(
+        "rmsnorm_post_allgather",
+        tt::operations::primary::rmsnorm_post_allgather,
+        py::arg("input").noconvert(),
+        py::arg("stats").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        R"doc(
+            Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
+        )doc");
+
     // prod along all dimensions
     m_primary.def(
         "prod_all",
@@ -760,9 +809,11 @@ void py_module(py::module& m_primary) {
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,
         py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
         py::arg("mean").noconvert() = std::nullopt,
         py::arg("rstd").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm operation.");
     m_primary.def(
         "moreh_layernorm_backward",
@@ -777,7 +828,8 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("gamma_grad").noconvert() = std::nullopt,
         py::arg("beta_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm_backward operation.");
     // softmax
     m_primary.def(
@@ -1103,14 +1155,6 @@ void py_module(py::module& m_primary) {
         py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a getitem operation. Returns an output tensor.");
-
-    m_primary.def(
-        "topk",
-        &tt::tt_metal::topk,
-        py::arg("input_tensor").noconvert(),
-        py::arg("k").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Get the Top K values and their indices in the input tensor");
 }
 
 }  // namespace

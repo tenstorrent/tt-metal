@@ -174,7 +174,7 @@ class TtCrossAttention(nn.Module):
     ) -> ttl.tensor.Tensor:
         t_key = ttl.tensor.transpose(key, -2, -1)
 
-        temp = ttl.tensor.bmm(query, t_key)
+        temp = ttnn.matmul(query, t_key)
         # Aaron: TODO: intentionally keeping this here!
         # scale_tensor = ttl.tensor.fill_rm(temp.get_legacy_shape()[0],
         #                                 temp.get_legacy_shape()[1],
@@ -228,7 +228,7 @@ def CrossAttnProcessor(
 
     attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
-    hidden_states = ttl.tensor.bmm(attention_probs, value)
+    hidden_states = ttnn.matmul(attention_probs, value)
 
     hidden_states = attn.batch_to_head_dim(hidden_states)
     hidden_states = attn.to_out(hidden_states)

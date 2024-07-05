@@ -10,36 +10,6 @@ namespace ttnn {
 namespace operations {
 namespace kv_cache {
 
-struct UpdateKVCache {
-    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-            ttnn::TensorSchema{
-                2,
-                4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
-                {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-                true,
-                false,
-                false,
-                false},
-        };
-    }
-
-    template <typename... Args>
-    static auto input_tensors_to_validate(const ttnn::Tensor& cache, const ttnn::Tensor& token, Args&&... args) {
-        return std::forward_as_tuple(cache, token);
-    }
-};
-
 struct ExecuteFillCache {
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
@@ -69,9 +39,11 @@ struct ExecuteUpdateCache {
 }  // namespace kv_cache
 }  // namespace operations
 
+namespace kv_cache {
 constexpr auto fill_cache_for_user_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteFillCache>("ttnn::fill_cache_for_user_");
+    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteFillCache>("ttnn::kv_cache::fill_cache_for_user_");
 constexpr auto update_cache_for_token_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteUpdateCache>("ttnn::update_cache_for_token_");
+    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteUpdateCache>("ttnn::kv_cache::update_cache_for_token_");
+}  // namespace kv_cache
 
 }  // namespace ttnn

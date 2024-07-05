@@ -12,6 +12,8 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     exit 1
 fi
 
+export TT_METAL_CLEAR_L1=1
+
 # Not super obvious which test is which during runtime unless you count, so occasionally sprinkle echo statements
 # to make it easier to see where we are.
 
@@ -85,8 +87,8 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis -packetized_en"  # Random Test
 
 
-# Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 224 -dpgr 256
+# Testcase: Paged Write Cmd to DRAM. 256 pages, 256b size.
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 256 -dpgr 256
 # Testcase: Paged Write Cmd to DRAM. 120 pages, 64b size.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 64 -dpgr 120
 

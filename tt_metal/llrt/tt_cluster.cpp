@@ -129,6 +129,10 @@ bool Cluster::is_galaxy_cluster() const {
     return this->is_tg_cluster_;
 }
 
+BoardType Cluster::get_board_type(chip_id_t chip_id) const {
+  return this->cluster_desc_->get_board_type(chip_id);
+}
+
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0)
                                    ? get_cluster_desc_yaml().string()

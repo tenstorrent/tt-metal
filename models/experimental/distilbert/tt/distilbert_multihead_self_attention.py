@@ -11,6 +11,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from models.helper_funcs import Linear as TtLinear
 
@@ -104,7 +105,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         dim_per_head_tensor = tt_lib.tensor.recip(dim_per_head_tensor)
 
         q = ttnn.mul(q, dim_per_head_tensor)
-        scores = tt_lib.tensor.bmm(q, tt_lib.tensor.transpose(k, -2, -1))
+        scores = ttnn.matmul(q, tt_lib.tensor.transpose(k, -2, -1))
         score_value = self.get_min(scores)
         scores = tt_to_torch_tensor(scores)
         mask = tt_to_torch_tensor(mask)
@@ -121,7 +122,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         if head_mask is not None:
             weights = tt_lib.temsor.mul(weights, head_mask)
 
-        context = tt_lib.tensor.bmm(weights, v)
+        context = ttnn.matmul(weights, v)
         context = unshape(context)
         context = self.out_linear(context)
 

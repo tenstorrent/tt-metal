@@ -203,7 +203,6 @@ void Device::initialize_and_launch_firmware() {
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
 
-
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
@@ -213,6 +212,22 @@ void Device::initialize_and_launch_firmware() {
                 not_done_cores.insert(worker_core);
             }
         }
+    }
+
+    // Clear idle erisc mailbox
+    for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
+        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        std::vector<uint32_t> zero_vec_mailbox(128 / sizeof(uint32_t), 0);
+        llrt::write_hex_vec_to_core(this->id(), physical_core, zero_vec_mailbox, MEM_IERISC_MAILBOX_BASE);
+    }
+
+    // Clear erisc sync info
+    std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
+    for (const auto &eth_core : this->get_active_ethernet_cores()) {
+        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+
+        llrt::write_hex_vec_to_core(
+            this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
     // Load erisc app base FW to eth cores
@@ -242,6 +257,8 @@ void Device::initialize_and_launch_firmware() {
 }
 
 void Device::clear_l1_state() {
+    log_debug(tt::LogMetal, "Clearing L1 for device {}", this->id_);
+    // Clear all clearable Tensix and Eth L1
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(this->l1_size_per_core() % sizeof(uint32_t) == 0);
     std::vector<uint32_t> zero_vec(this->l1_size_per_core() / sizeof(uint32_t), 0);
@@ -259,15 +276,15 @@ void Device::clear_l1_state() {
         llrt::write_hex_vec_to_core(this->id(), physical_core, zero_vec_mailbox, MEM_IERISC_MAILBOX_BASE);
     }
 
-    // Clear erisc sync info
+    // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
+    // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
+    std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
+            sizeof(uint32_t),
+        0);
+
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
-        // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-        std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
-                sizeof(uint32_t),
-            0);
 
         llrt::write_hex_vec_to_core(
             this->id(),
@@ -555,7 +572,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     auto dispatch_core_type = settings.dispatch_core_type;
                     settings.upstream_cores.push_back(demux_settings.worker_physical_core);
                     settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                    settings.compile_args.resize(21);
+                    settings.compile_args.resize(22);
                     auto& compile_args = settings.compile_args;
                     compile_args[0] = settings.cb_start_address;
                     compile_args[1] = settings.cb_log_page_size;
@@ -576,8 +593,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
                     compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                     compile_args[18] = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // XXXX should this be mux pages?
-                    compile_args[19] = false; // is_dram_variant
-                    compile_args[20] = true; // is_host_variant
+                    compile_args[19] = settings.num_compute_cores;
+                    compile_args[20] = false; // is_dram_variant
+                    compile_args[21] = true; // is_host_variant
                 }
                 break;
             }
@@ -746,7 +764,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 auto dispatch_core_type = dispatch_d_settings.dispatch_core_type;
                 dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
                 dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_physical_core);
-                dispatch_d_settings.compile_args.resize(21);
+                dispatch_d_settings.compile_args.resize(22);
                 auto& compile_args = dispatch_d_settings.compile_args;
                 compile_args[0] = dispatch_d_settings.cb_start_address;
                 compile_args[1] = dispatch_d_settings.cb_log_page_size;
@@ -767,8 +785,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[16] = 0;
                 compile_args[17] = 1; //prefetch_downstream_cb_sem,
                 compile_args[18] = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // XXXX should this be mux pages?
-                compile_args[19] = true; // is_dram_variant
-                compile_args[20] = false; // is_host_variant
+                compile_args[19] = dispatch_d_settings.num_compute_cores;
+                compile_args[20] = true; // is_dram_variant
+                compile_args[21] = false; // is_host_variant
                 break;
             }
             case MUX_D:
@@ -901,6 +920,8 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
             settings.cb_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
             settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
+            CoreCoord compute_grid_size = tt::get_compute_grid_size(device_id, num_hw_cqs);
+            settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
             tunnel_core_allocations[DISPATCH].push_back(std::make_tuple(dispatch_location, settings));
             log_debug(LogMetal, "Device {} Channel {} : Dispatch: Issue Q Start Addr: {} - Completion Q Start Addr: {}",  device_id, channel, settings.issue_queue_start_addr, settings.completion_queue_start_addr);
 
@@ -1100,6 +1121,7 @@ void Device::compile_command_queue_programs() {
 
     if (this->is_mmio_capable()) {
         auto device_id = this->id();
+        uint32_t num_compute_cores = this->compute_with_storage_grid_size().x * this->compute_with_storage_grid_size().y;
         uint8_t num_hw_cqs = this->num_hw_cqs();
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         uint32_t cq_size = this->sysmem_manager().get_cq_size();
@@ -1185,6 +1207,7 @@ void Device::compile_command_queue_programs() {
                 0,      // unused prefetch noc_xy
                 0,      // unused prefetch_local_downstream_sem_addr
                 0,      // unused prefetch_downstream_buffer_pages
+                num_compute_cores, // max_write_packed_cores
                 true,   // is_dram_variant
                 true    // is_host_variant
             };
@@ -1642,7 +1665,6 @@ bool Device::close() {
     detail::EnableAllocs(this);
 
     this->deallocate_buffers();
-    watcher_detach(this);
 
     std::unordered_set<CoreCoord> not_done_dispatch_cores;
     std::unordered_set<CoreCoord> cores_to_skip;
@@ -1737,6 +1759,7 @@ bool Device::close() {
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
     DprintServerDetach(this);
+    watcher_detach(this);
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();

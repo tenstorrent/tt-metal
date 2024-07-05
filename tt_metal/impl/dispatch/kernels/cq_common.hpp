@@ -93,7 +93,7 @@ void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dst_addr >> 32);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT));
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         ASSERT(size <= NOC_MAX_BURST_SIZE);

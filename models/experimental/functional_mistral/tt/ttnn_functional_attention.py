@@ -5,7 +5,6 @@
 import ttnn
 import tt_lib
 import torch
-import ttnn.experimental
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 

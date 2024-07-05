@@ -28,14 +28,14 @@ inline bool is_input_batched(const ttnn::Shape& shape);
 
 }  // namespace detail
 
-extern const std::array<ttnn::TensorSchema, 3> input_tensor_schemas();
-
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
 
 ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
+    const bool transpose_a = false,
+    const bool transpose_b = false,
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
     const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
     std::optional<const DataType> dtype = std::nullopt,

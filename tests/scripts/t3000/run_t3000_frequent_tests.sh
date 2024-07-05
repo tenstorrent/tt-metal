@@ -50,7 +50,7 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
   # mixtral8x7b 8 chip decode model test (env flags set inside the test)
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-10-1-pcc] ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -70,6 +70,9 @@ run_t3000_tteager_tests() {
 
   pytest -n auto tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k post_commit ; fail+=$?
   pytest -n auto tests/tt_eager/python_api_testing/unit_testing/misc/test_reduce_scatter_post_commit.py ; fail+=$?
+
+  # distributed layernorm
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -91,12 +94,12 @@ run_t3000_trace_stress_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
+
   echo "LOG_METAL: run_t3000_trace_stress_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
-
 
 run_t3000_falcon40b_tests() {
   fail=0
@@ -125,6 +128,9 @@ run_t3000_tests() {
 
   # Run tteager tests
   run_t3000_tteager_tests
+
+  # Run trace tests
+  run_t3000_trace_stress_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests

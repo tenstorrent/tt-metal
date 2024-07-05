@@ -60,25 +60,6 @@ std::vector<Tensor> addcdiv_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<std::optional<Tensor>> mul_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_a_grad = std::nullopt,
-    std::optional<Tensor> input_b_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> mul_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_a_grad = std::nullopt,
-    std::optional<Tensor> input_b_grad = std::nullopt);
-
 std::vector<std::optional<Tensor>> exp_bw(
     uint8_t cq_id,
     const Tensor& grad,
@@ -121,30 +102,11 @@ std::vector<Tensor> unary_div_bw(
     string round_mode,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> div_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> rdiv_bw(
     const Tensor& grad,
     const Tensor& input,
     float scalar,
     string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> max_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> min_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // bw = grad(1 - tanh(x) ** 2)
@@ -292,14 +254,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is float
-std::vector<Tensor> lerp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    float weight,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is tensor
 std::vector<Tensor> lerp_bw(
     const Tensor& grad,
@@ -434,22 +388,12 @@ std::vector<Tensor> celu_bw(
     float alpha,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> binary_lt_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> log10_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> log1p_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> binary_ne_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -501,16 +445,6 @@ std::vector<Tensor> silu_bw(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> selu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> binary_ge_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> binary_gt_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

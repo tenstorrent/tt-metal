@@ -136,7 +136,7 @@ tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-t
 
 # models
 /models/ @boris-drazic
-models/conv_on_device_utils*.py @tt-nshanker
+models/conv_on_device_utils*.py @mywoodstock @sankarmanoj-tt
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
@@ -152,6 +152,7 @@ models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
+models/demos/resnet @mywoodstock @tt-aho
 models/perf/ @boris-drazic @tt-rkim
 
 # docs
@@ -163,10 +164,10 @@ docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
 # docs/source/apis/kernel_apis.rst @davorchap @pgkeller @tt-rkim
 
 # misc
-tests/**/dtx/ @tt-nshanker
-tests/**/*test*conv*.py @tt-nshanker
+tests/**/dtx/ @mywoodstock @sankarmanoj-tt
+tests/**/*test*conv*.py @mywoodstock @sankarmanoj-tt
 # tests/**/module.mk @tenstorrent-metal/developers
-tests/python_api_testing/conv/ @tt-nshanker
+tests/python_api_testing/conv/ @mywoodstock @sankarmanoj-tt
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @ttmchiou @TT-billteng @tt-rkim

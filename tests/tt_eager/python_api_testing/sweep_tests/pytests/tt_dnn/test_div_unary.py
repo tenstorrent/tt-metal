@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import is_grayskull
 
 mem_configs = [
     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
@@ -42,7 +42,6 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for floor and trunc")
 class TestUnary_Div:
     def test_run_unary_div(
         self,
@@ -53,6 +52,9 @@ class TestUnary_Div:
         dst_mem_config,
         device,
     ):
+        if is_grayskull():
+            if round_mode in ["trunc", "floor"]:
+                pytest.skip("does not work for Grayskull -skipping")
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ] * 2

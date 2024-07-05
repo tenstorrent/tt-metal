@@ -58,33 +58,34 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto out_shape = input_tensor.get_legacy_shape();
+    auto padding = out_shape.padding();
     switch (this->dim){
         case TransposeOpDim::CN:
-            out_shape[0] = input_tensor.get_legacy_shape()[1];
-            out_shape[1] = input_tensor.get_legacy_shape()[0];
+            std::swap(out_shape[0], out_shape[1]);
+            std::swap(padding[0], padding[1]);
             break;
         case TransposeOpDim::HC:
-            out_shape[1] = input_tensor.get_legacy_shape()[2];
-            out_shape[2] = input_tensor.get_legacy_shape()[1];
+            std::swap(out_shape[1], out_shape[2]);
+            std::swap(padding[1], padding[2]);
             break;
         case TransposeOpDim::WH:
-            out_shape[2] = input_tensor.get_legacy_shape()[3];
-            out_shape[3] = input_tensor.get_legacy_shape()[2];
+            std::swap(out_shape[2], out_shape[3]);
+            std::swap(padding[2], padding[3]);
             break;
         case TransposeOpDim::NH:
-            out_shape[0] = input_tensor.get_legacy_shape()[2];
-            out_shape[2] = input_tensor.get_legacy_shape()[0];
+            std::swap(out_shape[0], out_shape[2]);
+            std::swap(padding[0], padding[2]);
             break;
         case TransposeOpDim::NW:
-            out_shape[3] = input_tensor.get_legacy_shape()[0];
-            out_shape[0] = input_tensor.get_legacy_shape()[3];
+            std::swap(out_shape[0], out_shape[3]);
+            std::swap(padding[0], padding[3]);
             break;
         case TransposeOpDim::CW:
-            out_shape[1] = input_tensor.get_legacy_shape()[3];
-            out_shape[3] = input_tensor.get_legacy_shape()[1];
+            std::swap(out_shape[1], out_shape[3]);
+            std::swap(padding[1], padding[3]);
             break;
     }
-    return {out_shape};
+    return {Shape(out_shape, padding)};
 }
 
 

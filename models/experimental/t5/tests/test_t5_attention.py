@@ -9,6 +9,7 @@ from transformers import T5Model
 from loguru import logger
 
 import tt_lib
+import ttnn
 import pytest
 
 from models.experimental.t5.tt.t5_attention import (
@@ -107,7 +108,7 @@ def run_test_matmul(device):
     test_input2 = (torch.rand(32, 8, 64, 128) * 2) - 1
 
     pt_out = torch.matmul(test_input1, test_input2)
-    tt_out = tt_lib.tensor.bmm(torch2tt_tensor(test_input1, device), torch2tt_tensor(test_input2, device))
+    tt_out = ttnn.matmul(torch2tt_tensor(test_input1, device), torch2tt_tensor(test_input2, device))
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)

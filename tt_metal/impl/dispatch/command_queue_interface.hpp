@@ -15,7 +15,6 @@
 using namespace tt::tt_metal;
 
 // todo consider moving these to dispatch_addr_map
-static constexpr uint32_t PCIE_ALIGNMENT = std::max(NOC_PCIE_READ_ALIGNMENT_BYTES, NOC_PCIE_WRITE_ALIGNMENT_BYTES);
 static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
 static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28; // 256 MB;
 static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
