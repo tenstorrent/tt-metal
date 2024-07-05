@@ -395,6 +395,25 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
     return os;
 }
 
+template <typename T>
+    requires(std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value))
+std::ostream& operator<<(std::ostream& os, const T& object) {
+    os << reflect::type_name(object);
+    os << "(";
+
+    reflect::for_each(
+        [&os, &object](auto I) {
+            os << reflect::member_name<I>(object) << "=" << reflect::get<I>(object);
+            if (I < reflect::size(object) - 1) {
+                os << ",";
+            }
+        },
+        object);
+
+    os << ")";
+    return os;
+}
+
 template <typename object_t, typename T>
     requires std::same_as<std::decay_t<T>, object_t>
 constexpr auto visit_object_of_type(auto callback, T&& value) {
@@ -616,6 +635,21 @@ struct fmt::formatter<std::set<T>> {
     }
 };
 
+template <typename T>
+    requires(
+        std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value or
+                                       tt::stl::reflection::detail::supports_conversion_to_string_v<T>))
+struct fmt::formatter<T> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 namespace tt {
 namespace stl {
 namespace hash {
@@ -746,7 +780,7 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
-    } else if constexpr (std::is_aggregate_v<T>) {
+    } else if constexpr (std::is_aggregate_v<std::decay<T>>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
