@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -39,7 +40,7 @@ Example:
     >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
     >>> output = {1}(grad_tensor, input)
 )doc",
-        operation.name(),
+        operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
 
@@ -47,6 +48,53 @@ Example:
         module,
         operation,
         doc,
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+
+                using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
+                if(operation.base_name()=="mul_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
+                }
+
+                return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::Tensor>& input_a_grad,
+               const std::optional<ttnn::Tensor>& input_b_grad,
+               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+                using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
+                if(operation.base_name()=="mul_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
+                }
+                return BinaryBackwardOp::execute_on_main_thread(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt,
+            py::arg("queue_id") = 0},
+
         ttnn::pybind_overload_t{
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
@@ -83,7 +131,7 @@ Example:
 void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
-        ttnn::unary_mul_bw,
+        ttnn::mul_bw,
         R"doc(Performs backward operations for multiply on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward(
