@@ -47,7 +47,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(UnaryBackwardOpType OpType){
     switch (OpType) {
-        case UnaryBackwardOpType::UNARY_MUL_BW:
+        case UnaryBackwardOpType::MUL_BW:
             return _unary_mul_bw;
         case UnaryBackwardOpType::CLAMP_MIN_BW:
             return _clamp_min_bw;
