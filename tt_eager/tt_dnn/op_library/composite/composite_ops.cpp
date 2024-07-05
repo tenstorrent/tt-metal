@@ -60,9 +60,9 @@ Tensor mk_filled_tensor_like(
     Tensor k = ttnn::operations::creation::create_scalar(val, dtype, Layout::TILE, reference_tensor.device());
     Tensor zero_like = mk_zero_tensor_like(reference_tensor, output_mem_config);
     if (output_tensor.has_value()) {
-        return bcast(queue_id, zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config, output_tensor);
+        return ttnn::add(queue_id, zero_like, k, std::nullopt, output_mem_config, output_tensor);
     } else {
-        return bcast(queue_id, zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        return ttnn::add(queue_id, zero_like, k, std::nullopt, output_mem_config);
     }
 }
 
@@ -291,7 +291,7 @@ Tensor _selu(const Tensor& x, const float scale, const float alpha, const Memory
     // term 2
     Tensor x_Exp = ttnn::exp(x, false, output_mem_config);
     Tensor minus_one = ttnn::operations::creation::create_scalar(-1.0f, x.get_dtype(), Layout::TILE, x.device());
-    Tensor x_Exp_minus_1 = bcast(x_Exp, minus_one, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    Tensor x_Exp_minus_1 = ttnn::add(x_Exp, minus_one,std::nullopt, output_mem_config);
     x_Exp.deallocate();
     minus_one.deallocate();
     Tensor t_alpha = ttnn::operations::creation::create_scalar(alpha, x.get_dtype(), Layout::TILE, x.device());
@@ -395,13 +395,13 @@ Tensor _polyval(const Tensor& input_tensor, std::vector<float> coeffs, const Mem
     for (int idx = 1; idx < coeffs.size() - 1; idx++) {
         Tensor scalar = ttnn::operations::creation::create_scalar(
             coeffs[idx], input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
-        result = bcast(result, scalar, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        result = ttnn::add(result, scalar, std::nullopt, output_mem_config);
         scalar.deallocate();
         result = ttnn::multiply(input_tensor, result, std::nullopt, output_mem_config);
     }
     Tensor last_coeffs = ttnn::operations::creation::create_scalar(
         coeffs.back(), input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
-    Tensor final_tensor = bcast(result, last_coeffs, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    Tensor final_tensor = ttnn::add(result, last_coeffs, std::nullopt, output_mem_config);
     last_coeffs.deallocate();
     return final_tensor;
 }
@@ -417,32 +417,31 @@ Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const MemoryConfi
     bool b_is_scalar = b.intended_volume() == 1;
     bool c_is_scalar = c.intended_volume() == 1;
 
-    const auto dim = BcastOpDim::HW;
     if (!a_is_scalar && !b_is_scalar && !c_is_scalar) {
         // all tensors
         return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (!a_is_scalar && !b_is_scalar && c_is_scalar) {
         // a - tensor, b - tensor, c - is scalar
-        return bcast(
-            ttnn::multiply(a, b, std::nullopt, output_mem_config), c, BcastOpMath::ADD, dim, output_mem_config);
+        return ttnn::add(
+            ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (!a_is_scalar && b_is_scalar && !c_is_scalar) {
         // a - tensor, b - scalar, c - is tensor
         return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (!a_is_scalar && b_is_scalar && c_is_scalar) {
         // a - tensor, b - scalar, c - is scalar
-        return bcast(
-            ttnn::multiply(a, b, std::nullopt, output_mem_config), c, BcastOpMath::ADD, dim, output_mem_config);
+        return ttnn::add(
+            ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (a_is_scalar && !b_is_scalar && !c_is_scalar) {
         // a - scalar, b - tensor, c - tensor
         return ttnn::add(ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (a_is_scalar && !b_is_scalar && c_is_scalar) {
         // a - scalar, b - tensor, c - is scalar
-        return bcast(
-            ttnn::multiply(b, a, std::nullopt, output_mem_config), c, BcastOpMath::ADD, dim, output_mem_config);
+        return ttnn::add(
+            ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (a_is_scalar && b_is_scalar && !c_is_scalar) {
         // a - scalar, b - scalar, c - is tensor
-        return bcast(
-            c, ttnn::multiply(a, b, std::nullopt, output_mem_config), BcastOpMath::ADD, dim, output_mem_config);
+        return ttnn::add(
+            c, ttnn::multiply(a, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     }
 
     // all scalars
@@ -1385,7 +1384,7 @@ Tensor _variance_impl(
     return sum_sqr_y_minus_mean_y;  // var
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const MemoryConfig& output_mem_config) {
-    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::subtract(y, mean_y);
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 Tensor _variance(const Tensor& y, const MemoryConfig& output_mem_config) {
@@ -1416,7 +1415,7 @@ Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config) {
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor _normalize(const Tensor& y, const MemoryConfig& output_mem_config) {
     Tensor mean_y = mean_hw(y);
-    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::subtract(y, mean_y);
     Tensor std_y = tt::tt_metal::_std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y);
@@ -1485,7 +1484,7 @@ Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig&
 Tensor _threshold(const Tensor& input_tensor, float threshold, float value, const MemoryConfig& output_mem_config) {
     Tensor t_threshold = ttnn::operations::creation::create_scalar(
         threshold, input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
-    Tensor t0 = bcast(input_tensor, t_threshold, BcastOpMath::SUB, BcastOpDim::HW, output_mem_config);
+    Tensor t0 = ttnn::subtract(input_tensor, t_threshold, std::nullopt, output_mem_config);
     t_threshold.deallocate();
     Tensor t_value =
         ttnn::operations::creation::create_scalar(value, input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
@@ -2086,11 +2085,11 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     Tensor tindex = tt::numpy::index_width<bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
                     if (is_width) {
-                        max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+                        max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_mem_config);
                     } else {
                         tindex = tt::numpy::index_height<bfloat16>(
                             input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
-                        max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+                        max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_mem_config);
                     }
                     tindex = tindex.to(input_a.device());
                     max_val.deallocate();
@@ -2105,9 +2104,9 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     result = where(ttnn::eq(result, size), res_index, result, output_mem_config);
                     std::vector<int64_t> permute_dims = {3, 0, 1, 2};
                     if (is_width) {
-                        res_index = bcast(res_index, result, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+                        res_index = ttnn::add(res_index, result, std::nullopt, output_mem_config);
                     } else {
-                        res_index = bcast(res_index, result, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+                        res_index = ttnn::add(res_index, result, std::nullopt, output_mem_config);
                         permute_dims[0] = 2;
                         permute_dims[3] = 3;
                     }
@@ -2157,7 +2156,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                 input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
             Tensor max_val = global_max(input_a, output_mem_config);
             Tensor max_tensor = zeros_like(input_a, output_mem_config);
-            max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+            max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_mem_config);
             max_val.deallocate();
             Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_mem_config);
             max_tensor.deallocate();
