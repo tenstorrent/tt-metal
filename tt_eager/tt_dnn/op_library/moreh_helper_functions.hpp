@@ -271,6 +271,12 @@ auto create_override_addresses_callback(
 }
 
 
+bool is_hw_dim(uint32_t dim, uint32_t rank);
+
+uint32_t compute_inner(Shape shape, uint32_t dim);
+
+uint32_t compute_outer(Shape shape, uint32_t dim);
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt
