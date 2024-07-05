@@ -105,7 +105,6 @@ tt_lib.tensor.binary_gt_bw,40,1.78,2.16,2.43,2.24
 ttnn.binary_le_bw,40,1.98,2.06,2.44,4.37
 tt_lib.tensor.binary_lt_bw,40,1.9,2.27,2.56,2.18
 tt_lib.tensor.binary_ne_bw,40,1.88,2.17,2.57,2.11
-tt_lib.tensor.bmm,40,0.9,0.96,3.05,1.0
 tt_lib.tensor.cbrt,40,4.93,5.56,5.86,5.32
 tt_lib.tensor.ceil_bw,40,0.96,1.06,1.35,1.09
 tt_lib.tensor.celu_bw,40,10.62,11.46,12.0,11.09
@@ -256,7 +255,6 @@ ttnn.lt,40,0.9,1.19,1.24,1.12
 tt_lib.tensor.ltz,40,0.81,0.9,1.12,0.93
 tt_lib.tensor.mac,40,1.69,1.79,2.13,1.83
 tt_lib.tensor.maeloss,40,11.89,13.2,14.13,12.75
-tt_lib.tensor.matmul,40,0.88,1.78,3.89,1.5
 tt_lib.tensor.max_bw,40,9.93,10.57,11.04,10.39
 tt_lib.tensor.mean_hw,40,1.17,1.44,1.88,1.62
 tt_lib.tensor.min_bw,40,9.15,10.14,10.67,10.13
