@@ -94,3 +94,30 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
+def test_bw_unary_mul(input_shapes, scalar, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+
+    tt_output_tensor_on_device = ttnn.mul_bw(grad_tensor, input_tensor, scalar)
+
+    in_data.retain_grad()
+
+    pyt_y = in_data * torch.tensor(scalar)
+
+    pyt_y.backward(gradient=grad_data)
+
+    golden_tensor = [in_data.grad]
+
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
