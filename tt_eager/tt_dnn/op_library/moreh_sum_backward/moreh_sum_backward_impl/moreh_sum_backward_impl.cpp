@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
 
     const auto &input_grad_shape = input_grad.get_legacy_shape();
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
-    const auto input_grad_rank = input_grad_shape.rank();
+    const uint32_t input_grad_rank = input_grad_shape.rank();
 
     std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(LogOp, "input_grad");
