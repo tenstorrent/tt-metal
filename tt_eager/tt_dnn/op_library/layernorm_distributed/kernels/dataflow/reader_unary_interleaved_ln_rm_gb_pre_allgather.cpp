@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * This kernel reads the layernorm inputs from interleaved dram.
+*/
+
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
@@ -9,10 +13,10 @@
 #include "debug/assert.h"
 
 void kernel_main() {
-    const uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t NCHt      = get_arg_val<uint32_t>(1);
-    const uint32_t Wt        = get_arg_val<uint32_t>(2);
-    const uint32_t tile_offset = get_arg_val<uint32_t>(3);
+    const uint32_t src_addr  = get_arg_val<uint32_t>(0);  // Source address in dram
+    const uint32_t NCHt      = get_arg_val<uint32_t>(1);  // Number of NCH tiles
+    const uint32_t Wt        = get_arg_val<uint32_t>(2);  // Width in tiles
+    const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
 
     constexpr uint32_t cb_inp = tt::CB::c_in0;
     constexpr uint32_t cb_reduce = tt::CB::c_in1;

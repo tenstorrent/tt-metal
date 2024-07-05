@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * This kernel reads the layernorm inputs, per device statistics, and gamma, beta, epsilon from interleaved dram.
+*/
+
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
@@ -9,11 +13,11 @@
 #include "debug/assert.h"
 
 void kernel_main() {
-    const uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t NCHt      = get_arg_val<uint32_t>(1);
-    const uint32_t Wt        = get_arg_val<uint32_t>(2);
-    const uint32_t tile_offset = get_arg_val<uint32_t>(3);
-    const uint32_t stats_tile_offset = get_arg_val<uint32_t>(4);
+    const uint32_t src_addr  = get_arg_val<uint32_t>(0);  // Source address in dram
+    const uint32_t NCHt      = get_arg_val<uint32_t>(1);  // Number of NCH tiles
+    const uint32_t Wt        = get_arg_val<uint32_t>(2);  // Width in tiles
+    const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
+    const uint32_t stats_tile_offset = get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and E(x^2) in the left most columns per tile.
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(7);
     const uint32_t beta_addr = get_arg_val<uint32_t>(8);
