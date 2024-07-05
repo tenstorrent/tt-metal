@@ -11,12 +11,16 @@
 #include "types.hpp"
 #include "reports.hpp"
 
+#include "ttnn/experimental/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
+
+    auto m_experimental = module.def_submodule("experimental", "ttnn experimental");
+    tt::bind_tt_lib(m_experimental);
 
     auto m_types = module.def_submodule("types", "ttnn Types");
     ttnn::types::py_module(m_types);

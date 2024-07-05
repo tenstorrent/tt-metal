@@ -11,10 +11,12 @@ import pprint
 import subprocess
 from typing import Optional
 
+import sys
+from pathlib import Path
 from loguru import logger
 
-import tt_lib as _tt_lib
 import ttnn._ttnn
+import tt_lib as _tt_lib
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
@@ -132,14 +134,6 @@ if CONFIG_PATH is not None:
 if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
-
-
-from _ttnn_experimental import tensor, device, profiler, operations
-
-# import tt_lib as _tt_lib
-
-# _tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
-import ttnn._ttnn
 
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 

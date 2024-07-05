@@ -340,12 +340,9 @@ void ProfilerModule(py::module &m_profiler) {
 
 } // end namespace tt_metal
 
-} // end namespace tt
+void bind_tt_lib(py::module m) {
 
-
-PYBIND11_MODULE(_ttnn_experimental, m) {
-
-    m.attr("__name__") = "_ttnn_experimental";
+    m.attr("__name__") = "tt_lib";
     m.doc() = "Python bindings for TT-Metal";
 
     py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
@@ -369,3 +366,5 @@ PYBIND11_MODULE(_ttnn_experimental, m) {
     tracy_decorator(m_operations);
 #endif
 }
+
+} // end namespace tt
