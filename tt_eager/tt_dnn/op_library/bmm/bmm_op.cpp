@@ -750,8 +750,9 @@ void Matmul::validate(
     TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    auto a_shape = input_tensor_a.get_shape();
-    auto b_shape = input_tensor_b.get_shape();
+    const auto& a_shape = input_tensor_a.get_shape();
+    const auto& b_shape = input_tensor_b.get_shape();
+
     TT_FATAL(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
@@ -760,6 +761,20 @@ void Matmul::validate(
         "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
         a_shape[-1],
         b_shape[-2]);
+
+    if (this->bcast_batch) {
+        TT_FATAL(
+            get_batch_size(b_shape) == 1 &&
+            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
+    } else {
+        // same condition as above, different message
+        TT_FATAL(a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank");
+        for (auto i = 0; i < a_shape.rank() - 2; i++) {
+            TT_FATAL(
+                a_shape[i] == b_shape[i] &&
+                "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
+        }
+    }
 
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     TT_FATAL(
@@ -781,7 +796,7 @@ void Matmul::validate(
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
         TT_FATAL(bias_shape[-2] == TILE_HEIGHT, "Unsupported bias shape: second last dimension not equal to tile height");
-        TT_FATAL(bias_shape[-1] == input_tensor_b.get_legacy_shape()[-1], "Unsupported bias shape: last dimension not equal to second input's last dimension.");
+        TT_FATAL(bias_shape[-1] == b_shape[-1], "Unsupported bias shape: last dimension not equal to second input's last dimension.");
     }
 
     if (this->untilize_out) {
