@@ -234,17 +234,17 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
     CoreRange core(
         {0, 0},
-        {0, num_cores - 1}
+        {0, num_cores - 1u}
     );
 
     CoreRange local_cores(
         {0, 0},
-        {0, num_cores - 2}
+        {0, num_cores - 2u}
     );
 
     CoreRange final_cores(
-        {0, num_cores - 1},
-        {0, num_cores - 1}
+        {0, num_cores - 1u},
+        {0, num_cores - 1u}
     );
 
     uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;
@@ -345,7 +345,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
 
     CoreCoord local_cores_physical_start = device->worker_core_from_logical_core({0, 0});
-    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core({0, num_cores - 2});
+    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core({0, num_cores - 2u});
     std::vector<uint32_t> reader_compile_time_args =             {
                 (std::uint32_t) receiver_semaphore,
                 (std::uint32_t) sender_semaphore,
@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
         final_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, num_cores - 1});
+    CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, num_cores - 1u});
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) receiver_semaphore,
         (std::uint32_t) sender_semaphore,
@@ -475,7 +475,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
             ascending = !ascending;
         }
-        CoreCoord core = {core_h, num_cores - 1};
+        CoreCoord core = {core_h, num_cores - 1u};
         SetRuntimeArgs(
             program,
             binary_writer_final_kernel_id,

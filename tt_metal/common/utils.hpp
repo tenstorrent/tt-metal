@@ -5,8 +5,10 @@
 #pragma once
 
 #include <string>
+#include <sstream>
 #include <thread>
 #include <mutex>
+#include <vector>
 
 using std::string;
 

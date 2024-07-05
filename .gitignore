@@ -123,3 +123,5 @@ ttnn/ttnn/.rpath_checked
 
 # exclude packages brough in from CPM
 .cpmcache
+
+ClangBuildAnalyzer.ini

@@ -80,16 +80,16 @@ concept DeviceOperationConcept = requires {
 };
 
 template <typename device_operation_t>
-concept DeviceOperationWithCustomProgramCacheConcept = DeviceOperationConcept<device_operation_t> and requires {
-    [](auto&& program_factory,
-       const typename device_operation_t::operation_attributes_t& operation_attributes,
-       const typename device_operation_t::tensor_args_t& tensor_args) {
-        device_operation_t::compute_program_hash(operation_attributes, tensor_args);
+concept DeviceOperationWithCustomProgramCacheConcept =
+    DeviceOperationConcept<device_operation_t> &&
+    requires(
+        const typename device_operation_t::operation_attributes_t& operation_attributes,
+        const typename device_operation_t::tensor_args_t& tensor_args) {
+        { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
-};
 
 template <typename... Ts>
-[[nodiscard]] std::variant<Ts...> constexpr map_index_to_variant(std::size_t i, std::variant<Ts...>) {
+[[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
     static constexpr std::variant<Ts...> table[] = {Ts{}...};
     return table[i];

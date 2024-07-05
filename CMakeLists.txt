@@ -4,22 +4,21 @@ cmake_policy(VERSION 3.16)
 ############################################
 # Project setup
 ############################################
+include(cmake/compilers.cmake)
 
-# Use Clang-17 by default until we upgrade to Ubuntu version that supports higher GCC
-# No longer support GCC-9 as it does not support C++20
-find_program(CLANGPP_17 clang++-17)
-find_program(CLANG_17 clang-17)
-
-if (NOT CLANGPP_17)
-    message(FATAL_ERROR "clang++-17 not found")
+if (DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
+    message(STATUS "Setting C and C++ compiler from environment variables")
+    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
+    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
 endif()
 
-if (NOT CLANG_17)
-    message(FATAL_ERROR "clang-17 not found")
+if (CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
+    message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
+    message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
+else()
+    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
+    FIND_AND_SET_CLANG17()
 endif()
-
-set(CMAKE_CXX_COMPILER "${CLANGPP_17}")
-set(CMAKE_C_COMPILER "${CLANG_17}")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
@@ -32,7 +31,6 @@ project(tt-metal
         LANGUAGES CXX
 )
 
-include(${PROJECT_SOURCE_DIR}/cmake/macros.cmake)
 CHECK_COMPILERS()
 
 ############################################################################################################################
@@ -88,7 +86,9 @@ set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
 include(${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake)
 
 if(WITH_PYTHON_BINDINGS)
+    set(Python3_FIND_STRATEGY LOCATION)
     find_package (Python3 COMPONENTS Interpreter Development)
+    message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
@@ -101,9 +101,17 @@ endif()
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
+add_library(stdlib INTERFACE)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_link_libraries(stdlib INTERFACE c++ c++abi)
+    target_compile_options(stdlib INTERFACE -stdlib=libc++)
+else()
+    target_link_libraries(stdlib INTERFACE stdc++)
+endif()
+
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic c++ c++abi hwloc numa # system libraries, hwloc has no cmake support, find_package won't find it
+    dl z pthread atomic hwloc numa stdlib # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -113,11 +121,13 @@ add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
 target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
-CHECK_COMPILER_WARNINGS()      # <- add any extra compile warning flags for building with Clang-17
+
+# add additional compile warning flags depending on the compiler
+ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
-target_link_libraries(compiler_flags INTERFACE compiler_warnings)
-target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto -stdlib=libc++)
+target_link_libraries(compiler_flags INTERFACE compiler_warnings stdlib)
+target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(TT_METAL_VERSIM_DISABLED)
     target_compile_options(compiler_flags INTERFACE -DTT_METAL_VERSIM_DISABLED)

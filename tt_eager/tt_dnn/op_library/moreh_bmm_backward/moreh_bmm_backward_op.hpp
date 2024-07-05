@@ -15,7 +15,7 @@ namespace primary {
 
 using namespace tt_metal;
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_bmm_backward(
+[[maybe_unused]] std::vector<std::variant<std::monostate, Tensor, char *>> moreh_bmm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mat2,

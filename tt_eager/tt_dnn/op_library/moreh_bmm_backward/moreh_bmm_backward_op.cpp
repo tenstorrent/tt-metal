@@ -48,30 +48,33 @@ inline void moreh_bmm_backward_validate(
     }
 }
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_bmm_backward(
+[[maybe_unused]] std::vector<std::variant<std::monostate, Tensor, char *>> moreh_bmm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mat2,
     std::optional<std::reference_wrapper<const Tensor>> input_grad,
     std::optional<std::reference_wrapper<const Tensor>> mat2_grad,
     const MemoryConfig &output_mem_config) {
-    std::vector<std::variant<Tensor, char *>> outputs;
+    using TensorVariant = std::variant<std::monostate, Tensor, char *>;
+    std::vector<TensorVariant> outputs;
     outputs.reserve(2);
 
     moreh_bmm_backward_validate(output_grad, input, mat2, input_grad, mat2_grad);
 
     if (input_grad) {
-        outputs.push_back(tt::operations::primary::moreh_matmul(
-            output_grad, mat2, false, true, input_grad->get(), std::nullopt, output_mem_config));
+        auto res = tt::operations::primary::moreh_matmul(
+            output_grad, mat2, false, true, input_grad->get(), std::nullopt, output_mem_config);
+        outputs.push_back(TensorVariant(std::in_place_type<Tensor>, std::move(res)));
     } else {
-        outputs.push_back(nullptr);
+        outputs.push_back(TensorVariant(std::in_place_type<char *>, nullptr));
     }
 
     if (mat2_grad) {
-        outputs.push_back(tt::operations::primary::moreh_matmul(
-            input, output_grad, true, false, mat2_grad->get(), std::nullopt, output_mem_config));
+        auto res = tt::operations::primary::moreh_matmul(
+            input, output_grad, true, false, mat2_grad->get(), std::nullopt, output_mem_config);
+        outputs.push_back(TensorVariant(std::in_place_type<Tensor>, std::move(res)));
     } else {
-        outputs.push_back(nullptr);
+        outputs.push_back(TensorVariant(std::in_place_type<char *>, nullptr));
     }
     return outputs;
 }
