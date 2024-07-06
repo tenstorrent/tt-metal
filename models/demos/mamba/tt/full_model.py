@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from models.demos.mamba.tt.residual_block import TtResidualBlock
+from models.demos.mamba.reference.args import ModelMode
 
 
 class TtTensorLoader:
@@ -30,6 +31,7 @@ class TtTensorLoader:
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
             torch_tensor=None,
+            return_as_torch=False,
         ):
             if layer_num == None:
                 tensor_name = name
@@ -44,6 +46,9 @@ class TtTensorLoader:
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
+
+            if return_as_torch:
+                return torch_tensor
 
             # All tensors need to be rank 4 because of op performance issues with rank 1/2 inputs in ttnn
             while len(torch_tensor.size()) < 4:
@@ -111,20 +116,20 @@ class MambaTT(torch.nn.Module):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
 
         x = self.embedding(x)  # (B, 1, E)
-        x = x.squeeze(1).unsqueeze(0).unsqueeze(0)  # (1, 1, B, E)
+        x = x.view(1, 1, self.configs["outer_dim"], self.args.d_model)  # (1, 1, B, E)
 
         assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
 
         x = ttnn.from_torch(
             x,
             device=self.device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.configs["dtype"]["activations"],
         )
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=self.configs["dtype"]["activations"])
 
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            # print(f"Running layer {i}")
             x = layer(x)
 
         x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
@@ -146,6 +151,7 @@ class MambaTT(torch.nn.Module):
         )
 
         x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
-        x = x.squeeze(0).squeeze(0).unsqueeze(1)
+
+        x = x.view((self.args.batch_size, self.configs["seq_len"], -1))
 
         return x
