@@ -9,6 +9,7 @@ import tt_lib as ttl
 from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
+from models.demos.mamba.reference.args import ModelMode
 
 
 class TtMambaSSM(torch.nn.Module):
@@ -81,21 +82,30 @@ class TtMambaSSM(torch.nn.Module):
             x = -torch.exp(x.float())  # (2E, N) where N=16
             x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))  # (2E, N) where N=32
             x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
-            return x.repeat(self.batch_size, 1)  # (B, 2EN)
+            return x.repeat(self.configs["outer_dim"], 1)  # (B, 2EN)
 
-        self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
+        self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.configs['outer_dim']}")
 
         # D weight
         D_weight_name = "mixer.D"
         self.D = load_fn(
             D_weight_name,
-            lambda x: x.repeat(self.args.batch_size, 1),
-            postfix=f"D_{self.args.batch_size}",
+            lambda x: x.repeat(self.configs["outer_dim"], 1),
+            postfix=f"D_{self.configs['outer_dim']}",
         )
 
         # hidden state
-        prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
-        self.tt_hidden_state = load_fn(f"tt_hidden_state_{args.batch_size}", torch_tensor=prev_hidden_states)
+
+        if self.configs["mode"] == ModelMode.DECODE:
+            prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
+            self.tt_hidden_state = load_fn(
+                f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
+            )
+        else:
+            prev_hidden_states = torch.zeros((1, 1, 1, self.hidden_size * self.n))
+            self.tt_hidden_state = load_fn(
+                f"tt_hidden_state_{1}", torch_tensor=prev_hidden_states, tt_layout=ttnn.ROW_MAJOR_LAYOUT
+            )
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
@@ -103,8 +113,8 @@ class TtMambaSSM(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
         self.eltwise_math_fidelity = ttl.tensor.MathFidelity.HiFi2
-        self.core_grid_row = 5
-        self.core_grid_col = 8
+        self.core_grid_row = self.configs["core_grid_row"]
+        self.core_grid_col = self.configs["core_grid_col"]
 
     def forward(self, x):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
@@ -162,19 +172,6 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(abar1)
 
-        # multiply abar and hidden_state
-        hidden_state0 = ttnn.to_memory_config(
-            self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-        )
-        hidden_state0 = ttnn.multiply(
-            abar2,
-            hidden_state0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.configs["dtype"]["activations"],
-            output_tensor=hidden_state0,
-        )
-        ttnn.deallocate(abar2)
-
         # B
         B0 = ttnn.linear(
             x,
@@ -213,19 +210,58 @@ class TtMambaSSM(torch.nn.Module):
         # deallocate bbar
         ttnn.deallocate(bbar0)
 
-        # add amulh and bmulx
-        hidden_state0 = ttnn.add(
-            hidden_state0,
-            bmulx0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.configs["dtype"]["activations"],
-            output_tensor=hidden_state0,
-        )
-        ttnn.deallocate(self.tt_hidden_state)
-        self.tt_hidden_state = ttnn.to_memory_config(
-            hidden_state0, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-        )
-        ttnn.deallocate(bmulx0)
+        if self.configs["mode"] == ModelMode.DECODE:
+            # multiply abar and hidden_state
+            hidden_state0 = ttnn.to_memory_config(
+                self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+            )
+            hidden_state0 = ttnn.multiply(
+                abar2,
+                hidden_state0,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+                output_tensor=hidden_state0,
+            )
+            ttnn.deallocate(abar2)
+
+            # add amulh and bmulx
+            hidden_state0 = ttnn.add(
+                hidden_state0,
+                bmulx0,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+                output_tensor=hidden_state0,
+            )
+            ttnn.deallocate(bmulx0)
+
+            ttnn.deallocate(self.tt_hidden_state)
+            self.tt_hidden_state = ttnn.to_memory_config(
+                hidden_state0, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+            )
+
+        elif self.configs["mode"] == ModelMode.PREFILL:
+            prev_hidden_state = ttnn.to_memory_config(
+                self.tt_hidden_state, memory_config=self.configs["sharded_prev_hidden"]
+            )
+            abar2_sharded = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
+            ttnn.deallocate(abar2)
+            bmulx0_sharded = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
+            ttnn.deallocate(bmulx0)
+            hidden_states_sharded = ttl.operations.primary.transformers.ssm_prefix_scan(
+                abar2_sharded,
+                bmulx0_sharded,
+                prev_hidden_state,
+                output_mem_config=self.configs["sharded_scan"],
+                output_dtype=ttnn.bfloat8_b,
+            )
+            ttnn.deallocate(abar2_sharded)
+            ttnn.deallocate(bmulx0_sharded)
+
+            self.tt_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(prev_hidden_state)
+
+            hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_states_sharded)
 
         # compute C
         C0 = ttnn.linear(
