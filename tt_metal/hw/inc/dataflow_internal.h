@@ -17,7 +17,10 @@ void noc_fast_read_wait_ready() {
 
 FORCE_INLINE
 void noc_fast_read_set_src_xy(uint64_t src_addr) {
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, uint32_t(src_addr >> NOC_ADDR_COORD_SHIFT));
+#ifdef ARCH_BLACKHOLE
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & 0x1000000F);
+#endif
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, uint32_t(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 }
 
 FORCE_INLINE
@@ -63,7 +66,10 @@ void noc_fast_write_set_cmd_field(uint32_t vc, bool mcast, bool linked) {
 
 FORCE_INLINE
 void noc_fast_write_set_dst_xy(uint64_t dest_addr) {
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
+#ifdef ARCH_BLACKHOLE
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & 0x1000000F);
+#endif
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 }
 
 FORCE_INLINE

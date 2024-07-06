@@ -48,7 +48,7 @@ constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
-constexpr uint32_t pcie_noc_xy = uint32_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
+constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 
 constexpr uint32_t completion_queue_end_addr = completion_queue_base_addr + completion_queue_size;
@@ -130,7 +130,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
     uint64_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
-    uint64_t pcie_address = get_noc_addr_helper(pcie_noc_xy, completion_queue_write_ptr_addr);  // For now, we are writing to host hugepages at offset
+    uint64_t pcie_address = pcie_noc_xy | completion_queue_write_ptr_addr;  // For now, we are writing to host hugepages at offset
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
@@ -195,7 +195,7 @@ void process_write_host_h() {
         uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
         completion_queue_reserve_back(npages);
         uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
-        uint64_t host_completion_queue_write_addr = get_noc_addr_helper(pcie_noc_xy, completion_queue_write_addr);
+        uint64_t host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
         // completion_queue_write_addr will never be equal to completion_queue_end_addr due to completion_queue_push_back
         // wrap logic so we don't need to handle this case explicitly to avoid 0 sized transactions
         if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
@@ -205,7 +205,7 @@ void process_write_host_h() {
             data_ptr += last_chunk_size;
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
-            host_completion_queue_write_addr = get_noc_addr_helper(pcie_noc_xy, completion_queue_write_addr);
+            host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
             block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
         }
         noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);

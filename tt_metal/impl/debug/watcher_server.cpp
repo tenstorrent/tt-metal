@@ -294,7 +294,7 @@ static string get_noc_target_str(Device *device, CoreCoord &core, int noc, const
             "{} core w/ physical coords {} {}", type_and_mem.first, target_phys_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR_OFFSET(san->noc_addr), san->len);
+    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR(san->noc_addr), san->len);
     return out;
 }
 
