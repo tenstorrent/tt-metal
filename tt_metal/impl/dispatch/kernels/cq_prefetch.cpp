@@ -50,7 +50,7 @@ constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t pcie_noc_xy = uint32_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
+constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
@@ -161,7 +161,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
         pcie_read_ptr = pcie_base;
     }
 
-    uint64_t host_src_addr = get_noc_addr_helper(pcie_noc_xy, pcie_read_ptr);
+    uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
     DPRINT << "read_from_pcie: " << fence + preamble_size << " " << pcie_read_ptr << ENDL();
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;

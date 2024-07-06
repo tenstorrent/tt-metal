@@ -250,8 +250,7 @@ void Cluster::open_driver(
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than
         // available. Metal currently uses assigns 1 channel per device
-        uint32_t num_host_mem_ch_per_mmio_device =
-            this->arch_ == tt::ARCH::BLACKHOLE ? 0 : controlled_device_ids.size();
+        uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
         if (is_tg_cluster_) {
             num_host_mem_ch_per_mmio_device = HOST_MEM_CHANNELS;
         }

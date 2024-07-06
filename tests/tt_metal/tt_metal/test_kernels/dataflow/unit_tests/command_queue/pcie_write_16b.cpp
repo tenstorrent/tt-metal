@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t base_pcie_dst_address = get_compile_time_arg_val(1);
     constexpr uint32_t num_16b_writes = get_compile_time_arg_val(2);
 
-    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y, NOC_INDEX)) << 32;
+    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y, NOC_INDEX));
 
     uint32_t l1_src_address = base_l1_src_address;
     uint32_t pcie_dst_address = base_pcie_dst_address;
