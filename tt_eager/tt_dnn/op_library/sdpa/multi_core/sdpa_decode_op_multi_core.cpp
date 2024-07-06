@@ -456,8 +456,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
-    uint32_t reduce_core_noc_x;
-    uint32_t reduce_core_noc_y;
+    uint32_t reduce_core_noc_x{};
+    uint32_t reduce_core_noc_y{};
     uint32_t in0_mcast_reducer_semaphore{};
     std::vector<uintptr_t> all_reader_kernels_id;
     std::vector<uintptr_t> all_writer_kernels_id;
