@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks MaxPoolNew::create_program(const std::vector<Ten
                     out_mem_config_)};
 }
 
-operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
+operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors, const std::vector<Tensor> &output_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_shape();
     uint32_t batch_size = sliding_window_config_.batch_size_;

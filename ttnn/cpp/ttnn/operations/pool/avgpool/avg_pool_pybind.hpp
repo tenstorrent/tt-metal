@@ -62,15 +62,15 @@ void bind_global_avg_pool2d(py::module& module) {
 void py_module(py::module& module) {
     detail::bind_global_avg_pool2d(module);
     module.def(
-        "average_pool_2d",
-        &average_pool_2d,
+        "avg_pool2d",
+        &avg_pool2d,
         py::arg().noconvert(),
         py::kw_only(),
         py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("dtype").noconvert() = std::nullopt,
         R"doc(
         Average Pool 2D
-        It operates on tensors whose that have channels as the last dimension
+        It operates on tensors that have channels as the last dimension.
 
         +----------+----------------------------+------------+-------------------------------+----------+
         | Argument | Description                | Data type  | Valid range                   | Required |

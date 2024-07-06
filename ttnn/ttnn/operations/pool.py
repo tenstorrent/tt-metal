@@ -155,12 +155,12 @@ def golden_maxpool2d(
 
 
 global_avg_pool2d = ttnn._ttnn.operations.avgpool.global_avg_pool2d
-average_pool_2d = ttnn._ttnn.operations.avgpool.average_pool_2d
+avg_pool2d = ttnn._ttnn.operations.avgpool.avg_pool2d
 max_pool2d = ttnn.ttnn._ttnn.operations.maxpool.max_pool2d
 max_pool2d_v2 = ttnn._ttnn.operations.maxpool.max_pool2d_v2
 
 ttnn.attach_golden_function(global_avg_pool2d, golden_function=golden_global_avg_pool2d)
-# ttnn.attach_golden_function(average_pool_2d, golden_function=golden_global_avg_pool2d)
+# ttnn.attach_golden_function(avg_pool2d, golden_function=golden_global_avg_pool2d)
 
 # ttnn.attach_golden_function(max_pool2d_v2, golden_function=golden_maxpool2d)
 # ttnn.attach_golden_function(max_pool2d_v2, golden_function=golden_maxpool2d)

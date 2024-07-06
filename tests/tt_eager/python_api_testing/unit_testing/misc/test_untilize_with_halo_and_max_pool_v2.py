@@ -14,6 +14,7 @@ from ttnn.operations.pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )
+from ttnn.operations.pool import max_pool2d_v2 as ttnn_max_pool2d_v2
 
 
 import tt_lib as ttl
@@ -172,7 +173,9 @@ def test_run_max_pool(
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
 
     max_pool_reader_patterns_cache = {}
-    max_pool = TTPyMaxPool(sliding_window_op_params, device, max_pool_reader_patterns_cache, pad_val=pad_val)
+    max_pool = TTPyMaxPool(
+        sliding_window_op_params, device, max_pool_reader_patterns_cache, pad_val=pad_val, pool_op=ttnn_max_pool2d_v2
+    )
     ttact_sharded = max_pool.copy_input_to_device(ttact)
 
     out_padded = max_pool(ttact_sharded)
