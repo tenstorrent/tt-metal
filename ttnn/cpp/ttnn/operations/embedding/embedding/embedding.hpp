@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_eager/tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "ttnn/cpp/ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
@@ -15,16 +15,19 @@ namespace operations {
 
 namespace embedding {
 
-using EmbeddingsType = tt::tt_metal::EmbeddingsType;
-
 struct Embedding {
-    static Tensor execute_on_worker_thread(
+    static inline Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
         const Layout& layout = ttnn::ROW_MAJOR_LAYOUT,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto embeddings_type = EmbeddingsType::GENERIC;
+        EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
+        const std::optional<const DataType> output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt
+        ) {
+
         if (pad_token.has_value()) {
             embeddings_type = EmbeddingsType::PADDED;
         }
@@ -39,17 +42,31 @@ struct Embedding {
 
         bool tilized = layout == ttnn::TILE_LAYOUT;
         auto embeddings = operation::run(
-                              tt::tt_metal::Embeddings{
+                              Embeddings{
                                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
                                   .tilized = tilized,
                                   .embeddings_type = embeddings_type,
                                   .pad_token = pad_token,
-                                  .output_dtype = weight.get_dtype()},
+                                  .output_dtype = output_dtype.value_or(weight.get_dtype())},
                               {input_tensor, weight})
                               .at(0);
         embeddings = ttnn::reshape(embeddings, ttnn::Shape{{batch_size, sentence_size, hidden_embedding_dim}});
         return embeddings;
     }
+
+    static inline auto execute_on_worker_thread(
+        const Tensor& input_tensor_arg,
+        const Tensor& weight_arg,
+        const std::optional<int>& pad_token = std::nullopt,
+        const Layout& layout = ttnn::ROW_MAJOR_LAYOUT,
+        EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
+        const std::optional<const DataType> output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt
+        ) {
+            constexpr auto DefaultQueueId = 0;
+            return execute_on_worker_thread(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, output_dtype, memory_config, optional_output_tensor);
+        }
 };
 
 }  // namespace embedding

@@ -83,8 +83,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto origin_H = input_shape_without_padding[-2];
     const auto origin_W = input_shape_without_padding[-1];
 
-    auto mean_rstd_height = 0;
-    auto mean_rstd_width = 0;
+    uint32_t mean_rstd_height = 0;
+    uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
         const auto mean_rstd_shape = mean.value().get_legacy_shape();

@@ -15,14 +15,6 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<Tensor> addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> unary_mul_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -51,14 +43,6 @@ std::vector<std::optional<Tensor>> unary_pow_bw(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<Tensor> addcdiv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<std::optional<Tensor>> exp_bw(
     uint8_t cq_id,
@@ -135,27 +119,6 @@ std::vector<Tensor> tan_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<std::optional<Tensor>> where_bw(
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> where_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
 
 std::vector<Tensor> fill_zero_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -252,14 +215,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     const Tensor& input,
     float bias,
     string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is tensor
-std::vector<Tensor> lerp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> hardsigmoid_bw(

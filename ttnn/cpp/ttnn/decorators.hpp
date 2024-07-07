@@ -65,9 +65,8 @@ template <typename concrete_operation_t, typename execute_on_worker_thread_retur
 inline Tensors create_async_output_tensors(const Tensors& inputs, const OptionalConstTensors& optional_inputs) {
     bool enable_autoformat_device = false;
 
-    constexpr bool custom_create_async_outputs = requires(const concrete_operation_t& t) {
-        t.create_async_output_tensors(inputs, optional_inputs);
-    };
+    constexpr bool custom_create_async_outputs =
+        requires(const concrete_operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
 
     if constexpr (custom_create_async_outputs) {
         return concrete_operation_t::create_async_output_tensors(inputs, optional_inputs);

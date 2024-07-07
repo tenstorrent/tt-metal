@@ -526,12 +526,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.where_binary_x_y_const",
     },
     {
-        "op": tt_lib.tensor.matmul,
-        "name": "tt_lib.tensor.matmul",
-    },
-    {
-        "op": tt_lib.tensor.bmm,
-        "name": "tt_lib.tensor.bmm",
+        "op": ttnn.matmul,
+        "name": "ttnn.matmul",
     },
     {
         "op": tt_lib.tensor.copy,

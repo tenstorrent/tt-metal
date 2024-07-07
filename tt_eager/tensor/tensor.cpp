@@ -308,7 +308,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                 if (this->workers.size() != 1) {
                     // Not populated - sync.
                     this->wait_for_tensor_data_populated();
-                    workers = {this->device()};
+                    workers = std::vector<Device*>{this->device()};
                 } else {
                     // Already populated.
                     workers = this->workers;

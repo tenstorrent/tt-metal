@@ -498,8 +498,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core); // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores{{}};
-    uint32_t weights_mcast_sender_semaphore;
-    uint32_t weights_mcast_receiver_semaphore;
+    uint32_t weights_mcast_sender_semaphore{};
+    uint32_t weights_mcast_receiver_semaphore{};
     uint32_t act_mcast_sender_semaphore = 0;
     uint32_t act_mcast_receiver_semaphore = 0;
     std::vector<uint32_t> act_mcast_noc_y;
@@ -738,7 +738,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         .compile_args = writer_compile_time_args,
         .defines = writer_mcast_sender_defines});
 
-    KernelHandle writer_mcast_receiver_id;
+    KernelHandle writer_mcast_receiver_id{};
     if (total_num_cores > 1) {
         writer_mcast_receiver_id = CreateKernel(
         program,

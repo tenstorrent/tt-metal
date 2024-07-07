@@ -10,6 +10,7 @@
 #include <iterator>   // for back_inserter
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "allocator/allocator.hpp"
@@ -188,7 +189,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
             this->buffer.page_size();
         if (this->buffer.page_size() % this->buffer.alignment() != 0 and
             this->buffer.page_size() != this->buffer.size()) {
-            // If page size is not 32B-aligned, we cannot do a contiguous write
+            // If page size is not aligned, we cannot do a contiguous write
             uint32_t src_address_offset = unpadded_src_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += this->padded_page_size) {
@@ -826,7 +827,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
             cmd_sequence_sizeB += align(
-                CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd))) +
                     kernel_bins_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
                 PCIE_ALIGNMENT);
             cmd_sequence_sizeB += align(
@@ -1222,7 +1223,7 @@ void EnqueueRecordEventCommand::process() {
         packed_write_sizeB +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event
                               // payload
         align(
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE + dispatch_constants::EVENT_PADDED_SIZE,
+            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE,
             PCIE_ALIGNMENT);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -1537,7 +1538,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     src_page_index,
                     num_pages_to_read);
 
-                this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
+                this->issued_completion_q_reads.push(detail::CompletionReaderVariant(
+                    std::in_place_type<detail::ReadBufferDescriptor>,
                     buffer.buffer_layout(),
                     buffer.page_size(),
                     padded_page_size,
@@ -1569,7 +1571,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             src_page_index,
             pages_to_read);
 
-        this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
+        this->issued_completion_q_reads.push(detail::CompletionReaderVariant(
+            std::in_place_type<detail::ReadBufferDescriptor>,
             buffer.buffer_layout(),
             buffer.page_size(),
             padded_page_size,
@@ -1904,7 +1907,8 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool cle
     if (clear_count) {
         this->expected_num_workers_completed = 0;
     }
-    this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
+    this->issued_completion_q_reads.push(
+        detail::CompletionReaderVariant(std::in_place_type<detail::ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
 }
 
@@ -2142,8 +2146,7 @@ void HWCommandQueue::read_completion_queue() {
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
-                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor =
-                    *(this->issued_completion_q_reads.pop());
+                auto read_descriptor = *(this->issued_completion_q_reads.pop());
                 {
                     ZoneScopedN("CompletionQueueWait");
                     this->manager.completion_queue_wait_front(
@@ -2220,9 +2223,8 @@ void HWCommandQueue::finish() {
         }
     } else {
         std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
-        this->reads_processed_cv.wait(lock, [this] {
-            return this->num_entries_in_completion_q == this->num_completed_completion_q_reads;
-        });
+        this->reads_processed_cv.wait(
+            lock, [this] { return this->num_entries_in_completion_q == this->num_completed_completion_q_reads; });
     }
 }
 

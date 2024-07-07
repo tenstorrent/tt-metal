@@ -37,4 +37,4 @@ ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_out
         input_tensor.device());
 }
 
-}  // namespace ttnn::operations::example
+}  // namespace ttnn::operations::examples

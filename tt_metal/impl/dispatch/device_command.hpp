@@ -107,6 +107,7 @@ class DeviceCommand {
         } else {
             initialize_wait_cmds(relay_wait_dst, wait_cmd_dst);
         }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     void add_dispatch_wait_with_prefetch_stall(
@@ -301,6 +302,8 @@ class DeviceCommand {
             TT_ASSERT(data != nullptr);  // compiled out?
             uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
             this->add_data(data, data_sizeB, increment_sizeB);
+        } else {
+            this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
         }
     }
 
@@ -338,6 +341,7 @@ class DeviceCommand {
         } else {
             initialize_terminate_cmd(terminate_cmd_dst);
         }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     void add_prefetch_terminate() {
@@ -362,7 +366,7 @@ class DeviceCommand {
             // prefetch exec_buf_end behaves as a relay_inline
             exec_buf_end_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
             exec_buf_end_cmd->relay_inline.length = sizeof(CQDispatchCmd);
-            exec_buf_end_cmd->relay_inline.stride = sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd);
+            exec_buf_end_cmd->relay_inline.stride = align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
         };
         auto initialize_dispatch_exec_buf_end_cmd = [&](CQDispatchCmd *exec_buf_end_cmd) {
             exec_buf_end_cmd->base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
@@ -382,6 +386,7 @@ class DeviceCommand {
             initialize_prefetch_exec_buf_end_cmd(prefetch_exec_buf_end_cmd_dst);
             initialize_dispatch_exec_buf_end_cmd(dispatch_exec_buf_end_cmd_dst);
         }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void *new_data, uint32_t data_sizeB) {
@@ -493,6 +498,7 @@ class DeviceCommand {
         }
 
         this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     template <typename CommandPtr, bool data = false>

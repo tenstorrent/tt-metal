@@ -456,15 +456,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
-    uint32_t reduce_core_noc_x;
-    uint32_t reduce_core_noc_y;
-    uint32_t in0_mcast_reducer_semaphore;
+    uint32_t reduce_core_noc_x{};
+    uint32_t reduce_core_noc_y{};
+    uint32_t in0_mcast_reducer_semaphore{};
     std::vector<uintptr_t> all_reader_kernels_id;
     std::vector<uintptr_t> all_writer_kernels_id;
     std::vector<uintptr_t> all_compute_kernels_id;
-    for (int i = 0; i < num_active_cores; ++i) {
+    for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        int worker_id = i % num_cores_per_batch - 1;
+        uint32_t worker_id = i % num_cores_per_batch - 1;
         bool do_reduce = (worker_id == -1);
         uint32_t cur_batch = i / num_cores_per_batch;
         uint32_t k_chunk_start = chunk_assignment[worker_id+1][0];
@@ -490,7 +490,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // Reader
         std::vector<uint32_t> reader_compile_time_args = reader_compile_time_args_common;
-        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end, is_q_sharded, !do_reduce, reduce_core_physical.x, reduce_core_physical.y});
+        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end, is_q_sharded, !do_reduce, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y});
         auto reader_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_all.cpp",
@@ -514,7 +514,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                     defines
             ));
         } else {
-            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, reduce_core_physical.x, reduce_core_physical.y, cur_batch, worker_id, k_chunk_start, k_chunk_end});
+            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y, cur_batch, worker_id, k_chunk_start, k_chunk_end});
             writer_kernels_id = CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_worker.cpp",

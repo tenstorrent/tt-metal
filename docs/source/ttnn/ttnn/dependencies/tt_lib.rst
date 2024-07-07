@@ -249,8 +249,6 @@ TT-LIB API through ``tt_lib``
 Primary Operations
 ==================
 
-autofunction:: tt_lib.operations.primary.matmul
-
 .. autofunction:: tt_lib.operations.primary.layernorm
 
 .. autofunction:: tt_lib.operations.primary.add_layernorm
@@ -406,7 +404,7 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.bitwise_xor
 
 .. autofunction:: tt_lib.tensor.bitwise_not
-    
+
 .. autofunction:: tt_lib.tensor.bitwise_and
 
 .. autofunction:: tt_lib.tensor.bitwise_or
@@ -510,13 +508,6 @@ Tensor ternary operations
 .. autofunction:: tt_lib.tensor.where
 
 .. autofunction:: tt_lib.tensor.threshold
-
-Tensor matrix math operations
-=============================
-
-.. autofunction:: tt_lib.tensor.matmul
-
-.. autofunction:: tt_lib.tensor.bmm
 
 Tensor manipulation operations
 -=============================
@@ -830,10 +821,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.prod_bw
 
-.. autofunction:: tt_lib.tensor.addcmul_bw
-
-.. autofunction:: tt_lib.tensor.addcdiv_bw
-
 .. autofunction:: tt_lib.tensor.conj_bw
 
 .. autofunction:: tt_lib.tensor.unary_mul_bw
@@ -857,8 +844,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.expm1_bw
 
 .. autofunction:: tt_lib.tensor.unary_pow_bw
-
-.. autofunction:: tt_lib.tensor.where_bw
 
 .. autofunction:: tt_lib.tensor.tanh_bw
 
