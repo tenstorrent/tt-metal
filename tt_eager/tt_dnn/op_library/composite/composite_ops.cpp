@@ -499,8 +499,9 @@ Tensor _sinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     e_neg_x.deallocate();
     Tensor scalar =
         ttnn::operations::creation::create_scalar(0.5f, input_a.get_dtype(), Layout::TILE, input_a.device());
-    return ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
+    Tensor res = ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
     scalar.deallocate();
+    return res;
 }
 Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _sinh)(input_a, output_mem_config);
@@ -515,8 +516,9 @@ Tensor _cosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     e_neg_x.deallocate();
     Tensor scalar =
         ttnn::operations::creation::create_scalar(0.5f, input_a.get_dtype(), Layout::TILE, input_a.device());
-    return ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
+    Tensor res ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
     scalar.deallocate();
+    return res;
 }
 Tensor cosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _cosh)(input_a, output_mem_config);
