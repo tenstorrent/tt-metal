@@ -516,7 +516,7 @@ Tensor _cosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     e_neg_x.deallocate();
     Tensor scalar =
         ttnn::operations::creation::create_scalar(0.5f, input_a.get_dtype(), Layout::TILE, input_a.device());
-    Tensor res ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
+    Tensor res = ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
     scalar.deallocate();
     return res;
 }
