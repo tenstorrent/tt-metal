@@ -51,6 +51,16 @@ void kernel_main() {
             cb_push_back(cb_in, onetile);
             tile_idx += dim_stride;
         }
+
+        tile_idx = outer_idx * outer_stride + inner_idx;
+        for (uint32_t d = 0; d < dim_size; d++) {
+            cb_reserve_back(cb_in, onetile);
+            l1_write_addr_in = get_write_ptr(cb_in);
+            noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
+            noc_async_read_barrier();
+            cb_push_back(cb_in, onetile);
+            tile_idx += dim_stride;
+        }
         curr_tile += 1;
     }
 }

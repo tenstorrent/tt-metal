@@ -10,32 +10,11 @@ from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
 
-compute_kernel_options = [
-    False,  # for grayskull
-]
-compute_kernel_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0:
-    compute_kernel_options.append(True)
-    compute_kernel_ids.append("fp32_dest_acc_en=True")
-
-
-def get_compute_kernel_options(compute_kernel_options):
-    if is_wormhole_b0():
-        fp32_dest_acc_en = compute_kernel_options
-        packer_l1_acc = False
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=packer_l1_acc,
-        )
-    else:
-        # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=True,
-        )
-    return compute_kernel_config
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 
 
 @pytest.mark.parametrize(
@@ -60,7 +39,7 @@ def test_softmax_for_dim_hw(shape_dim, compute_kernel_options, device):
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -92,7 +71,7 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, compute_kernel_options, d
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -174,7 +153,7 @@ def test_softmax_for_dim_nc(shape_dim, compute_kernel_options, device):
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
     dev_x = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)

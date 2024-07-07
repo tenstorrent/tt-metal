@@ -21,21 +21,31 @@ namespace primary {
 
 #define L1_512KB (512 * 1024)
 
-bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
+bool is_moreh_softmax_w_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
     auto w = tensor.get_legacy_shape()[-1];
     int32_t Wt = (w + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
+    auto arch = tensor.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    auto data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     auto tile_size = tt_metal::detail::TileSize(data_format);
+    auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
     int32_t cb_usage = 0;        // bytes
-    cb_usage += 2 * tile_size;   // input;
+    cb_usage += Wt * tile_size;   // input;
     cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 2 * tile_size;   // output;
-    cb_usage += Wt * tile_size;  // exp(x);
-    cb_usage += 1 * tile_size;   // reduce;
     cb_usage += 1 * tile_size;   // scaler;
+
+    cb_usage += Wt * tile_size;   // output;
+
+    cb_usage += Wt * intermed_tile_size;  // exp(x);
+    cb_usage += 1 * intermed_tile_size;   // reduce;
+    cb_usage += 1 * intermed_tile_size;   // max;
+    cb_usage += Wt * intermed_tile_size;   // x - max;
+    cb_usage += 1 * intermed_tile_size;   // tmp;
 
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
@@ -64,19 +74,23 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {CB::c_in0, 2},         // input
+            {CB::c_in0, Wt},         // input
             {CB::c_in1, 1},         // mask
-            {CB::c_out0, 2},        // output
-            {CB::c_intermed0, Wt, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // exp(x)
-            {CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // reduce
-            {CB::c_in2, 1}          // scaler
+            {CB::c_in2, 1},          // scaler
+            {CB::c_out0, Wt},        // output
+            {CB::c_intermed0, Wt, intermed_data_format},  // exp(x)
+            {CB::c_intermed1, 1, intermed_data_format},   // reduce
+            {CB::c_intermed2, 1, intermed_data_format},     // max
+            {CB::c_intermed3, Wt, intermed_data_format},     // x - max
+            {CB::c_intermed4, 1, intermed_data_format}     // tmp
         });
 
     // create read/wrtie kernel

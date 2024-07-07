@@ -53,7 +53,7 @@ void MAIN {
                 }
             }
 
-            reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+            reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
 
             for (uint32_t w = 0; w < Wt; w += onetile) {
                 // exp(y)
@@ -85,7 +85,7 @@ void MAIN {
             }
 
             // step 2, compute sum(y * dy)
-            reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+            reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
 
             // step 3, compute final result
             for (uint32_t w = 0; w < Wt; w += onetile) {
