@@ -90,13 +90,13 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
     auto rank = input.get_legacy_shape().rank();
     if (this->strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == this->dim) {
-            if (is_moreh_softmax_w_small_available(input)) {
+            if (is_moreh_softmax_w_small_available(input, this->compute_kernel_config)) {
                 return MorehSoftmaxOpParallelizationStrategy::SMALL_W;
             }
             return MorehSoftmaxOpParallelizationStrategy::LARGE_W;
         }
         if (rank - 2 == this->dim) {
-            if (is_moreh_softmax_h_small_available(input)) {
+            if (is_moreh_softmax_h_small_available(input, this->compute_kernel_config)) {
                 return MorehSoftmaxOpParallelizationStrategy::SMALL_H;
             }
             return MorehSoftmaxOpParallelizationStrategy::LARGE_H;
@@ -112,7 +112,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_H) {
             TT_ASSERT(
-                is_moreh_softmax_h_small_available(input),
+                is_moreh_softmax_h_small_available(input, this->compute_kernel_config),
                 fmt::format("not enough circular buffer memory for {}", this->strategy));
         }
     } else if (rank - 1 == this->dim) {
@@ -123,7 +123,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_W) {
             TT_ASSERT(
-                is_moreh_softmax_w_small_available(input),
+                is_moreh_softmax_w_small_available(input, this->compute_kernel_config),
                 fmt::format("not enough circular buffer memory for {}", this->strategy));
         }
     } else {
