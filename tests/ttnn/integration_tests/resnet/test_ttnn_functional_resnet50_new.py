@@ -133,7 +133,7 @@ golden_pcc = {
 
 class ResNet50TestInfra:
     def __init__(
-        self, device, batch_size, act_dtype, weight_dtype, math_fidelity, dealloc_input, final_output_mem_config
+        self, device, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight, dealloc_input, final_output_mem_config
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -147,7 +147,11 @@ class ResNet50TestInfra:
         self.dealloc_input = dealloc_input
         self.final_output_mem_config = final_output_mem_config
 
-        torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+        torch_model = (
+            torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+            if use_pretrained_weight
+            else torchvision.models.resnet50().eval()
+        )
 
         model_config = {
             "MATH_FIDELITY": math_fidelity,
@@ -225,15 +229,15 @@ def create_test_infra(
     act_dtype,
     weight_dtype,
     math_fidelity,
+    use_pretrained_weight=True,
     dealloc_input=True,
     final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
 ):
     return ResNet50TestInfra(
-        device, batch_size, act_dtype, weight_dtype, math_fidelity, dealloc_input, final_output_mem_config
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight, dealloc_input, final_output_mem_config
     )
 
 
-@skip_for_wormhole_b0("PCC error with B=16. Fitting issue with B=20 due to 1x1s2 repleacement.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
@@ -250,13 +254,23 @@ def create_test_infra(
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
-def test_resnet_50(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
+    ],
+)
+def test_resnet_50(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight
+):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight)
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT
