@@ -292,7 +292,7 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _binary_eq_bw(
+std::vector<std::optional<Tensor>> _eq_bw(
     uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
@@ -326,9 +326,9 @@ std::vector<std::optional<Tensor>> _binary_eq_bw(
     return std::move(result);
 }
 
-std::vector<ttnn::Tensor> _binary_eq_bw_inter(
+std::vector<ttnn::Tensor> _eq_bw_inter(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    auto result = _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    auto result = _eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(result.size());
 
@@ -342,7 +342,7 @@ std::vector<ttnn::Tensor> _binary_eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
+std::vector<std::optional<Tensor>> _eq_bw_overload(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -351,7 +351,7 @@ std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     uint8_t default_queue_id = 0;
-    return _binary_eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+    return _eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<Tensor> _assign_bw(
@@ -636,8 +636,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _squared_difference_bw;
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_inter;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw_inter;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw_inter;
         case BinaryBackwardOpType::ASSIGN_BW:
             return _assign_bw;
         case BinaryBackwardOpType::BINARY_LE_BW:
@@ -716,8 +716,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw;
         default:
@@ -730,8 +730,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_overload;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw_overload;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw_overload;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw_overload;
         default:
