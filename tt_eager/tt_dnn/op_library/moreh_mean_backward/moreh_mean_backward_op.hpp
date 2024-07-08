@@ -24,7 +24,6 @@ struct MorehMeanBackward {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output_grad, const Tensor &input_grad);

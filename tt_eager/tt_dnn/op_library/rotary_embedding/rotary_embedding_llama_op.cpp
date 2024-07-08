@@ -79,13 +79,6 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
     return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
 }
 
-tt::stl::reflection::Attributes RotaryEmbeddingLlama::attributes() const {
-    return {
-        {"seq_len", this->seq_len},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

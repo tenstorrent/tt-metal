@@ -51,8 +51,6 @@ struct GroupNormShardedMultiCoreProgramConfig {
     DataType out_data_format;
     bool inplace;
     Layout output_layout;
-
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 struct GroupNorm {
@@ -69,7 +67,6 @@ struct GroupNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline Tensor groupnorm(const Tensor &a, const uint32_t num_groups, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, std::optional<const Tensor> input_mask = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const GroupNormShardedMultiCoreProgramConfig& program_config = GroupNormShardedMultiCoreProgramConfig{}) {

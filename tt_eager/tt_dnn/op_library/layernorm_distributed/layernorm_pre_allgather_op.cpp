@@ -67,13 +67,6 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     );
 }
 
-tt::stl::reflection::Attributes LayerNormPreAllGather::attributes() const {
-    return {
-        {"norm_type", this->norm_type},
-        {"compute_kernel_config", this->compute_kernel_config}
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

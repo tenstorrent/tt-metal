@@ -16,22 +16,12 @@
 namespace ttnn::operations::normalization {
 
 struct SoftmaxDefaultProgramConfig{
-    tt::stl::reflection::Attributes attributes() const { return {}; };
 };
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
     std::size_t block_h;
     std::size_t block_w;
-
-    tt::stl::reflection::Attributes attributes() const {
-        return {
-            {"compute_with_storage_grid_size", compute_with_storage_grid_size},
-            {"subblock_w", subblock_w},
-            {"block_h", block_h},
-            {"block_w", block_w},
-        };
-    };
 };
 
 using SoftmaxProgramConfig = std::variant<

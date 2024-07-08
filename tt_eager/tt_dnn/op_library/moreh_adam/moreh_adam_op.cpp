@@ -107,12 +107,6 @@ std::vector<Tensor> MorehAdam::create_output_tensors(
     return std::move(result);
 }
 
-tt::stl::reflection::Attributes MorehAdam::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 operation::ProgramWithCallbacks MorehAdam::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,

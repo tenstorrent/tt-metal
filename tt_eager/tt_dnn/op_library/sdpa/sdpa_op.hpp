@@ -20,22 +20,12 @@ namespace primary {
 using namespace tt_metal;
 
 namespace transformers {
-struct SDPADefaultProgramConfig{
-    tt::stl::reflection::Attributes attributes() const { return {}; };
-};
+struct SDPADefaultProgramConfig {};
 
 struct SDPAMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
-
-    tt::stl::reflection::Attributes attributes() const {
-        return {
-            {"compute_with_storage_grid_size", compute_with_storage_grid_size},
-            {"q_chunk_size", q_chunk_size},
-            {"k_chunk_size", k_chunk_size}
-        };
-    };
 };
 
 using SDPAProgramConfig = std::variant<
@@ -61,7 +51,6 @@ struct ScaledDotProductAttention {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 operation::ProgramWithCallbacks sdpa_multi_core(
@@ -90,11 +79,9 @@ struct ScaledDotProductAttentionDecode {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const;
-    tt::stl::reflection::Attributes attributes() const;
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        std::vector<Tensor> &output_tensors) const;
 };
 
 operation::ProgramWithCallbacks sdpa_decode_multi_core(

@@ -27,9 +27,6 @@ struct MorehMean {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
-    stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->dim)); }
 };
 
 operation::ProgramWithCallbacks moreh_mean_nc(const Tensor &input, const Tensor &output, int64_t dim);

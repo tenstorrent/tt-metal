@@ -39,13 +39,6 @@ operation::ProgramWithCallbacks NonZeroIndices::create_program(const std::vector
     return non_zero_indices_single_core(input_tensor, out_num_indices, out_indices);
 }
 
-
-tt::stl::reflection::Attributes NonZeroIndices::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 std::vector<Tensor> non_zero_indices(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::run_without_autoformat(NonZeroIndices{output_mem_config}, {input});
 }

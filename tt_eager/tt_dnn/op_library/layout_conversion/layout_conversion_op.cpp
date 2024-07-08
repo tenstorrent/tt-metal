@@ -31,12 +31,6 @@ std::vector<Tensor> LayoutConversionOnHost::compute_output_tensors(const std::ve
     }
 }
 
-tt::stl::reflection::Attributes LayoutConversionOnHost::attributes() const {
-    return {
-        {"target_layout", this->target_layout},
-    };
-}
-
 Tensor layout_conversion_on_host(const Tensor &input_tensor, const Layout target_layout) {
     return operation::run(LayoutConversionOnHost{target_layout}, {input_tensor}).at(0);
 }

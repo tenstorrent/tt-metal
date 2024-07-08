@@ -47,7 +47,6 @@ struct SplitFusedQKVAndSplitHeads {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, const uint32_t num_heads = 16) {
@@ -67,7 +66,6 @@ struct ConcatenateHeads {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline Tensor concatenate_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config) {
@@ -90,8 +88,8 @@ struct AttnMatmul {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
@@ -132,8 +130,8 @@ struct GroupAttnMatmul {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
@@ -188,8 +186,8 @@ struct SSMEltwiseMul {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 inline Tensor ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, MathFidelity math_fidelity = MathFidelity::HiFi4) {
@@ -211,8 +209,8 @@ struct SSM1DSumReduce {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 inline Tensor ssm_1d_sum_reduce(const Tensor &input_tensor_a, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, MathFidelity math_fidelity = MathFidelity::HiFi4) {
@@ -235,7 +233,6 @@ struct SSMPrefixScan {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline Tensor ssm_prefix_scan(

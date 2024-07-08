@@ -28,7 +28,6 @@ struct SplitTiled {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 }  // namespace tt_metal

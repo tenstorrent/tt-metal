@@ -88,14 +88,6 @@ operation::ProgramWithCallbacks SplitTiled::create_program(
     return {};
 }
 
-tt::stl::reflection::Attributes SplitTiled::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"num_chunks", this->num_chunks},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

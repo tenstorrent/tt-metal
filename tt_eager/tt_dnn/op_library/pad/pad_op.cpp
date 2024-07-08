@@ -582,15 +582,6 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
     }
 }
 
-tt::stl::reflection::Attributes Pad::attributes() const {
-    return {
-        {"output_tensor_shape", this->output_tensor_shape},
-        {"input_tensor_start", this->input_tensor_start},
-        {"pad_value", this->pad_value},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
@@ -634,14 +625,6 @@ std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>&
     } else {
         return {input_tensor.pad(output_shape, this->input_tensor_start, this->pad_value)};
     }
-}
-
-tt::stl::reflection::Attributes PadOnHost::attributes() const {
-    return {
-        {"output_tensor_shape", this->output_tensor_shape},
-        {"input_tensor_start", this->input_tensor_start},
-        {"pad_value", this->pad_value},
-    };
 }
 
 Tensor pad_on_host(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) {

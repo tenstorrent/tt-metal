@@ -28,9 +28,6 @@ struct MorehCumSum {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
-    stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "flip");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->dim), std::cref(this->flip)); }
 };
 
 operation::ProgramWithCallbacks moreh_cumsum_nc(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &flip);

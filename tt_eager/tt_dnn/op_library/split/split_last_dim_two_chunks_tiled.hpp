@@ -18,6 +18,9 @@ struct SplitLastDimTwoChunksTiled : public SplitTiled {
     SplitLastDimTwoChunksTiled(const MemoryConfig &mem_config) : SplitTiled{3, 2, mem_config} { ; }
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple("dim", "num_chunks", "output_mem_config");
+    const auto attribute_values() const { return std::forward_as_tuple(dim, num_chunks, output_mem_config); }
 };
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(

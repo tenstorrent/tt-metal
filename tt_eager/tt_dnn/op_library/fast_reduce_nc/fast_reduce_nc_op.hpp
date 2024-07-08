@@ -46,11 +46,6 @@ struct FastReduceNC {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
-    stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
-    }
 };
 
 operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor &output, int64_t dim, const DeviceComputeKernelConfig &compute_kernel_config);

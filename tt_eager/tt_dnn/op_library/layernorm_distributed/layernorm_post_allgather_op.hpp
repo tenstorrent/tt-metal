@@ -45,7 +45,6 @@ struct LayerNormPostAllGather {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 }  // namespace metal

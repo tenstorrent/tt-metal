@@ -32,7 +32,6 @@ struct RotateHalf {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline Tensor rotate_half(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {

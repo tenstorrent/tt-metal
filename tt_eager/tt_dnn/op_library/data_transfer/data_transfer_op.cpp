@@ -27,10 +27,6 @@ std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector
     }
 }
 
-tt::stl::reflection::Attributes DataTransferToHost::attributes() const {
-    return {};
-}
-
 Tensor data_transfer_to_host(const Tensor &input_tensor) {
     return operation::run(DataTransferToHost(), {input_tensor}).at(0);
 }
@@ -53,13 +49,6 @@ std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vect
     } else {
         return {input_tensor.to(this->device, this->mem_config)};
     }
-}
-
-tt::stl::reflection::Attributes DataTransferToDevice::attributes() const {
-    return {
-        {"device", this->device->id()},
-        {"mem_config", this->mem_config},
-    };
 }
 
 Tensor data_transfer_to_device(const Tensor &input_tensor, Device* device, const MemoryConfig &mem_config) {

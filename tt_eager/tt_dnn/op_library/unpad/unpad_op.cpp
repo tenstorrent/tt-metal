@@ -137,14 +137,6 @@ UnpadOpParallelizationStrategy Unpad::get_parallelization_strategy(const std::ve
     return UnpadOpParallelizationStrategy::MULTI_CORE;
 }
 
-tt::stl::reflection::Attributes Unpad::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 const operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
     TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
@@ -244,14 +236,6 @@ std::vector<Tensor> UnpadOnHost::compute_output_tensors(const std::vector<Tensor
         return {input_tensor.unpad(this->output_tensor_start, this->output_tensor_end)};
     }
 }
-
-tt::stl::reflection::Attributes UnpadOnHost::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-    };
-}
-
 Tensor unpad_on_host(
     const Tensor &input_tensor,
     const Shape &output_tensor_start,
