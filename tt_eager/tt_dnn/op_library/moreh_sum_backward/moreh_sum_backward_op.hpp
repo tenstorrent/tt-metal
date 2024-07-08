@@ -31,10 +31,6 @@ struct MorehSumBackward {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("dims", "input_grad_mem_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dims), std::cref(this->input_grad_mem_config), std::cref(this->compute_kernel_config));
-    }
 };
 
 operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const DeviceComputeKernelConfig &compute_kernel_config);
