@@ -88,7 +88,7 @@ Tensor softshrink(const Tensor& a, float param, const MemoryConfig& output_mem_c
 Tensor _hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config) {
     TT_ASSERT(param >= 0);
     Tensor t1 = ttnn::multiply(ttnn::ltz(ttnn::add(a, param)), a, std::nullopt, output_mem_config);
-    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::add(a, param)), a, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::subtract(a, param)), a, std::nullopt, output_mem_config);
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
 Tensor hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config) {
