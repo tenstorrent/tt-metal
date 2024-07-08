@@ -984,7 +984,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
-                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                    (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
