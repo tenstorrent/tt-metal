@@ -75,13 +75,4 @@ operation::ProgramWithCallbacks Embeddings::create_program(
     return detail::embeddings_(a, weights, output_tensor, this->tilized, this->embeddings_type, this->pad_token);
 }
 
-tt::stl::reflection::Attributes Embeddings::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"tilized", this->tilized},
-        {"embeddings_type", this->embeddings_type},
-        {"pad_token", this->pad_token},
-        {"output_dtype", this->output_dtype}};
-}
-
 }  // namespace ttnn::operations::embedding::detail

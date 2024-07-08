@@ -107,7 +107,11 @@ struct Attribute final {
         implementations{
             .to_string_impl_ = [](const storage_t& storage) -> const std::string {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
-                return fmt::format("{}", object);
+                if constexpr (std::is_pointer_v<BaseType>) {
+                    return fmt::format("{}*", get_type_name<BaseType>());
+                } else {
+                    return fmt::format("{}", object);
+                }
             },
             .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
@@ -250,8 +254,15 @@ Attributes get_attributes(const T& object) {
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
         return object.attributes();
     } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<T>, "Object doesn't support compile-time or run-time attributes!");
+        tt::stl::reflection::Attributes attributes;
+        reflect::for_each(
+            [&object, &attributes](auto I) {
+                const auto& attribute_name = reflect::member_name<I>(object);
+                const auto& attribute = reflect::get<I>(object);
+                attributes.push_back({std::string{attribute_name}, attribute});
+            },
+            object);
+        return attributes;
     }
 }
 

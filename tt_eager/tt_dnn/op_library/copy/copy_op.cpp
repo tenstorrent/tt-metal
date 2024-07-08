@@ -61,13 +61,6 @@ CopyOpParallelizationStrategy Copy::get_parallelization_strategy(const std::vect
     return CopyOpParallelizationStrategy::MULTI_CORE;
 }
 
-tt::stl::reflection::Attributes Copy::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype}
-    };
-}
-
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
     std::vector<Tensor> dummy_outputs = {Tensor(operation::get_workers_for_op_output({src_tensor}))};
     operation::launch_op(

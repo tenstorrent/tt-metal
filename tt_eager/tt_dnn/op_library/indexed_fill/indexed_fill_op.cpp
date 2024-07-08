@@ -49,13 +49,6 @@ operation::ProgramWithCallbacks IndexedFill::create_program(const std::vector<Te
     return indexed_fill_multi_core(batch_ids, input_tensor_a, input_tensor_b, output_tensor);
 }
 
-
-tt::stl::reflection::Attributes IndexedFill::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor indexed_fill(const Tensor &batch_ids, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config, std::int64_t dim) {
     return operation::run_without_autoformat(IndexedFill{output_mem_config, dim}, {batch_ids, input_a, input_b}).at(0);
 }

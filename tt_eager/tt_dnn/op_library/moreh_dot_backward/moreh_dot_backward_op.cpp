@@ -85,8 +85,6 @@ operation::ProgramWithCallbacks MorehDotBackward::create_program(
     return moreh_dot_backward_single_core(output_grad, input, other, input_grad, other_grad);
 }
 
-tt::stl::reflection::Attributes MorehDotBackward::attributes() const { return {}; }
-
 std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor& output_grad,
     const Tensor& input,
