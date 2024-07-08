@@ -166,6 +166,13 @@ void py_module(py::module& module) {
         ttnn::unary_assign_bw,
         R"doc(Performs backward operations for assign on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::multigammaln_bw,
+        R"doc(Performs backward operations for multigammaln on :attr:`input_tensor` with given :attr:`grad_tensor` and value of P is taken as 4.
+        mvlgamma is refered as multigammaln.
+        Input value must be greater than 2.5f)doc");
+
 }
 
 }  // namespace binary_backward

@@ -968,8 +968,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.complex_sub_bw
 
-.. autofunction:: tt_lib.tensor.multigammaln_bw
-
 .. autofunction:: tt_lib.tensor.repeat_bw
 
 .. autofunction:: tt_lib.tensor.floor_bw
