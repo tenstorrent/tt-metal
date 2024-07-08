@@ -116,6 +116,7 @@ inline auto& create_or_get_program_from_cache(
     typename device_operation_t::tensor_return_value_t& tensor_return_value) {
     if (not program_cache_hit) {
         ZoneScopedN("Program Cache Miss");
+        op_profiler::tracy_message("`TT_SIGNPOST: create_program_start`");
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
 
         auto& program = std::visit(
@@ -138,6 +139,7 @@ inline auto& create_or_get_program_from_cache(
                 return cached_program.program;
             },
             program_factory);
+        op_profiler::tracy_message("`TT_SIGNPOST: create_program_end`");
         return program;
     } else {
         ZoneScopedN("Program Cache Hit");
@@ -155,10 +157,15 @@ inline auto& create_or_get_program_from_cache(
 
                 using cached_program_t =
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
 
+                op_profiler::tracy_message("`TT_SIGNPOST: lookup_program_cache_start`");
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
+                op_profiler::tracy_message("`TT_SIGNPOST: lookup_program_cache_end`");
+
+                op_profiler::tracy_message("`TT_SIGNPOST: override_runtime_arguments_start`");
                 program_factory_t::override_runtime_arguments(
                     cached_program, operation_attributes, tensor_args, tensor_return_value);
+                op_profiler::tracy_message("`TT_SIGNPOST: override_runtime_arguments_end`");
 
                 return cached_program.program;
             },
@@ -261,13 +268,21 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     }
 
     log_operation<device_operation_t>(
-            device_operation_id,
-            device->id(),
-            operation_attributes,
-            tensor_args,
-            program_hash,
-            program_cache_hit
-        );
+        device_operation_id,
+        device->id(),
+        operation_attributes,
+        tensor_args,
+        program_hash,
+        program_cache_hit
+    );
+
+    op_profiler::tracy_message("`TT_SIGNPOST: compute_hash_start`");
+    auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+    op_profiler::tracy_message("`TT_SIGNPOST: compute_hash_end`");
+
+    op_profiler::tracy_message("`TT_SIGNPOST: check_program_cache_hit_start`");
+    auto program_cache_hit = program_cache.contains(program_hash);
+    op_profiler::tracy_message("`TT_SIGNPOST: check_program_cache_hit_start`");
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
@@ -282,8 +297,10 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
+            op_profiler::tracy_message("`TT_SIGNPOST: enque_program_start`");
             auto& queue = device->command_queue(cq_id);
             tt::tt_metal::EnqueueProgram(queue, program, false);
+            op_profiler::tracy_message("`TT_SIGNPOST: enque_program_end`");
         } else {
             ZoneScopedN("LaunchProgram");
             tt::tt_metal::detail::LaunchProgram(device, program);
@@ -352,9 +369,14 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     // Create output tensor first
+    op_profiler::tracy_message("`TT_SIGNPOST: create_output_tensors_start`");
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    op_profiler::tracy_message("`TT_SIGNPOST: create_output_tensors_end`");
+
+    op_profiler::tracy_message("`TT_SIGNPOST: launch_on_worker_thread_start`");
     auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
     launch_on_worker_thread<device_operation_t>(cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
+    op_profiler::tracy_message("`TT_SIGNPOST: launch_on_worker_thread_end`");
     return tensor_return_value;
 }
 
