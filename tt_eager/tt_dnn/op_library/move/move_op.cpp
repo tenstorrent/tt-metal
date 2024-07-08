@@ -59,13 +59,6 @@ MoveOpParallelizationStrategy Move::get_parallelization_strategy(const std::vect
     return this->move_op_parallelization_strategy;
 }
 
-tt::stl::reflection::Attributes Move::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"move_op_parallelization_strategy", this->move_op_parallelization_strategy},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

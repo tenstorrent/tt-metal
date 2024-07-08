@@ -35,7 +35,6 @@ struct MorehDotBackward {
         const std::vector<Tensor> &inputs,
         const std::vector<std::optional<const Tensor>> &optional_inputs,
         std::vector<Tensor> &outputs) const;
-    tt::stl::reflection::Attributes attributes() const;
 };
 
 std::vector<std::optional<Tensor>> moreh_dot_backward(

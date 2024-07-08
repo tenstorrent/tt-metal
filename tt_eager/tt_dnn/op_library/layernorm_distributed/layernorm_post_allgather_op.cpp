@@ -109,17 +109,6 @@ operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
         a, stats, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config
     );
 }
-
-tt::stl::reflection::Attributes LayerNormPostAllGather::attributes() const {
-    return {
-        {"norm_type", this->norm_type},
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-        {"compute_kernel_config", this->compute_kernel_config}
-        // {"program_config", this->program_config}
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

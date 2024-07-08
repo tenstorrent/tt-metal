@@ -315,16 +315,6 @@ operation::ProgramWithCallbacks Reshape::create_program(const std::vector<Tensor
     }
 }
 
-tt::stl::reflection::Attributes Reshape::attributes() const {
-    return {
-        {"N", this->N},
-        {"C", this->C},
-        {"H", this->H},
-        {"W", this->W},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());

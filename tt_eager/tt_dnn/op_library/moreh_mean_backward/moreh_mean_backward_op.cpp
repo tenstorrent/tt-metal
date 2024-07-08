@@ -72,8 +72,6 @@ std::vector<Shape> MorehMeanBackward::compute_output_shapes(const std::vector<Te
     return {};
 }
 
-tt::stl::reflection::Attributes MorehMeanBackward::attributes() const { return {}; }
-
 Tensor moreh_mean_backward_(const Tensor& output_grad, const Tensor& input_grad) {
     std::vector<Tensor> dummy_output_tensors = {
         Tensor(operation::get_workers_for_op_output({output_grad, input_grad}))};

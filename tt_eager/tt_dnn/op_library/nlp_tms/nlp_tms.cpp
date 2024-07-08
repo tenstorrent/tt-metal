@@ -53,13 +53,6 @@ operation::ProgramWithCallbacks NlpCreateHeadsFalcon7B::create_program(const std
     return  multi_core_nlp_create_qkv_heads_falcon7b(input_tensor, output_tensors, compute_with_storage_grid_size);
 }
 
-tt::stl::reflection::Attributes NlpCreateHeadsFalcon7B::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
 // Generic NLP CreateHeads op for decode
 void NlpCreateHeadsDecode::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -267,16 +260,6 @@ operation::ProgramWithCallbacks NlpCreateHeads::create_program(const std::vector
     }
 }
 
-tt::stl::reflection::Attributes NlpCreateHeads::attributes() const {
-    return {
-        {"num_q_heads", this->num_q_heads},
-        {"num_kv_heads", this->num_kv_heads},
-        {"transpose_k_heads", this->transpose_k_heads},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
 // Generic NLP ConcatHeads op
 void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -337,12 +320,6 @@ operation::ProgramWithCallbacks NlpConcatHeads::create_program(const std::vector
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     return  multi_core_nlp_concat_heads(input_tensor, output_tensor, compute_with_storage_grid_size);
-}
-
-tt::stl::reflection::Attributes NlpConcatHeads::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 // NLP ConcatHeads op for decode
@@ -581,15 +558,6 @@ std::vector<Tensor> CreateQKVHeads::create_output_tensors(const std::vector<Tens
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
-tt::stl::reflection::Attributes CreateQKVHeads::attributes() const {
-    return {
-        {"num_q_heads", this->num_q_heads},
-        {"num_kv_heads", this->num_kv_heads},
-        {"transpose_k_heads", this->transpose_k_heads},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 
 void CreateQKVHeadsSeparateTensors::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& q_input_tensor = input_tensors.at(0);
@@ -718,15 +686,6 @@ std::vector<Tensor> CreateQKVHeadsSeparateTensors::create_output_tensors(const s
     auto out_tensor_k = create_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
     auto out_tensor_v = create_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
     return {out_tensor_q, out_tensor_k, out_tensor_v};
-}
-
-tt::stl::reflection::Attributes CreateQKVHeadsSeparateTensors::attributes() const {
-    return {
-        {"num_q_heads", this->num_q_heads},
-        {"num_kv_heads", this->num_kv_heads},
-        {"transpose_k_heads", this->transpose_k_heads},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 } // namespace tt_metal
