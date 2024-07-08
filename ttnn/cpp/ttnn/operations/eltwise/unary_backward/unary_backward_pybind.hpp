@@ -121,6 +121,23 @@ Example:
             py::arg("input_tensor"),
             py::arg("alpha"),
             py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const float a,
+               const float b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(grad_tensor, input_tensor, a, b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("a"),
+            py::arg("b"),
+            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 
 }
@@ -138,6 +155,11 @@ void py_module(py::module& module) {
         module,
         ttnn::clamp_min_bw,
         R"doc(Performs backward operations for clamp min value on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::clamp_bw,
+        R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
 
 }
 

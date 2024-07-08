@@ -414,21 +414,6 @@ std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _rsqrt_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _clamp_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor minT = gte_unary(input, min, output_mem_config);
-    Tensor maxT = lte_unary(input, max, output_mem_config);
-    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> clamp_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _clamp_bw)(grad, input, min, max, output_mem_config);
-}
-
 std::vector<Tensor> _clamp_max_bw(
     const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
