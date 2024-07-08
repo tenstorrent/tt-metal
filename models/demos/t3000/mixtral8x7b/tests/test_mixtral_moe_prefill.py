@@ -48,6 +48,7 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
         if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
     }
 
+    # Initialize reference model
     partial_state_dict_ref = {k[13:]: v for k, v in partial_state_dict.items()}
     reference_model = MoeLayer(
         experts=[FeedForward(args=model_args) for _ in range(8)],
@@ -55,8 +56,8 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
         moe_args=model_args,
     )
     reference_model.load_state_dict(partial_state_dict_ref)
-    # Initialize TT models
 
+    # Initialize TT models
     experts = TtMixtralMLP(
         device_mesh=t3k_device_mesh,
         state_dict=state_dict,
@@ -80,7 +81,6 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
 
     all_tests_pass = True
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(iterations):
         logger.info(f"[Decoder] Generating token {i}")
 
@@ -101,7 +101,7 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
             batch, seq_len, -1
         )
 
-        # Reference model
+        # Run reference model
         ref_output = reference_model(pt_decode_input)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 

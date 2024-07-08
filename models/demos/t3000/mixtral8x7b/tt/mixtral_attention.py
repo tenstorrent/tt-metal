@@ -162,7 +162,7 @@ class TtMixtralAttention(LightweightModule):
         start_pos: the length of the KV cache. Same as current token's index.
         current_pos: start_pos
         attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
-        rot_mats: list of rotation matrices for each device
+        rot_mat: rotation matrix for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
@@ -171,12 +171,11 @@ class TtMixtralAttention(LightweightModule):
         P : padded_layer_past_len
         """
         padded_layer_past_len = nearest_32(start_pos + 1)
-
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
-        rot_mat = rot_mat
         attn_mask_1B4P = attn_masks
+
         ###
         # QKV matmuls
         ###
@@ -299,14 +298,9 @@ class TtMixtralAttention(LightweightModule):
         )
         attn_output_1B4D.deallocate(True)
 
-        # attn_output_11BH = ttnn.experimental.tensor.sharded_to_interleaved(
-        #     attn_output_11BH, output_mem_config=ttnn.L1_MEMORY_CONFIG
-        # )
-
         ###
         # Output matmul
         ###
-
         dense_out_11BH = ttnn.matmul(
             attn_output_11BH,
             wo,
@@ -325,22 +319,24 @@ class TtMixtralAttention(LightweightModule):
         return dense_outputs_11BH
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
-        assert xs_11SH.shape[2] % 128 == 0 and xs_11SH.shape[2] > 0, "Seqlen must be divisible by 128"
         seq_len = xs_11SH.shape[-2]
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+
         ###
         # QKV matmuls
         ###
         xqkv_program_config = None
         xqkv_mem_config = ttnn.L1_MEMORY_CONFIG
-        if seq_len > 8192:
+        if seq_len > 8192:  # Too large to fit in L1. Reshape and parallelize in multiple cores
             xs_11SH = ttnn.reshape(xs_11SH, (1, seq_len // 2048, 2048, -1))
             xqkv_program_config = self.model_config["WQKV_PREFILL_PROGCFG"]
             xqkv_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
         xqkv_fused = ttnn.linear(
             xs_11SH,
             self.wqkv,
             dtype=ttnn.bfloat16,
-            memory_config=xqkv_mem_config,  # self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            memory_config=xqkv_mem_config,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not xqkv_program_config else None,
             compute_kernel_config=self.compute_kernel,
             program_config=xqkv_program_config,
@@ -348,7 +344,7 @@ class TtMixtralAttention(LightweightModule):
 
         xs_11SH.deallocate(True)
 
-        if seq_len > 8192:
+        if seq_len > 8192:  # Reshape back again to intended shape
             xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, seq_len, -1))
         # split qkv into heads
         (
@@ -360,7 +356,7 @@ class TtMixtralAttention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,  # self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         xqkv_fused.deallocate(True)
@@ -379,23 +375,18 @@ class TtMixtralAttention(LightweightModule):
         )
         k_heads_11SD_pre_rot.deallocate(True)
 
-        # FILL KV CACHE
+        # Fill KV-Cache
         keys_11SD = self.layer_past[0]
         values_11SD = self.layer_past[1]
         keys_reshaped = ttnn.reshape(keys_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
         values_reshaped = ttnn.reshape(values_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.kv_cache.fill_cache_for_user_(
-            keys_reshaped, ttnn.experimental.tensor.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id
-        )
-        ttnn.kv_cache.fill_cache_for_user_(
-            values_reshaped, ttnn.experimental.tensor.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id
-        )
+        ttnn.kv_cache.fill_cache_for_user_(keys_reshaped, ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
+        ttnn.kv_cache.fill_cache_for_user_(values_reshaped, ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
         keys_11SD = ttnn.reshape(keys_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
         values_11SD = ttnn.reshape(values_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
         self.layer_past = [keys_11SD, values_11SD]
 
         # SDPA
-
         attn_output_14SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
             q_heads_14SD,
             k_heads_11SD,
@@ -414,7 +405,6 @@ class TtMixtralAttention(LightweightModule):
         ###
         # Output matmul
         ###
-
         attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
             attn_output_14SD,
             output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -422,7 +412,7 @@ class TtMixtralAttention(LightweightModule):
         attn_output_14SD.deallocate(True)
 
         wo_program_config = None
-        if seq_len > 2048:
+        if seq_len > 2048:  # To big to compute. Reshape and manually parallelize across multiple cores
             attn_output_11SH = ttnn.reshape(attn_output_11SH, (1, seq_len // 2048, 2048, -1))
             wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
 
@@ -437,7 +427,7 @@ class TtMixtralAttention(LightweightModule):
         )
         attn_output_11SH.deallocate(True)
 
-        if seq_len > 2048:
+        if seq_len > 2048:  # Reshape back to intended shape
             output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
         output_11BH_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1)
         output_11SH.deallocate(True)

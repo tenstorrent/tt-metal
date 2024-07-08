@@ -48,7 +48,7 @@ class TtMixtralMLP(LightweightModule):
 
         self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
 
-    def forward(self, x: ttnn.Tensor, mode="prefill") -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode="decode") -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -58,7 +58,8 @@ class TtMixtralMLP(LightweightModule):
         if mode == "prefill":
             seq_len = x.shape[-2]
             compute_kernel_config = self.prefill_mlp_config
-            if seq_len >= 2048 // 2:
+            if seq_len >= 2048 // 2:  # Too big to compute. Set different program configs based on seqlen
+                # Reshape input to to fit on device and parallelize computation
                 x = ttnn.reshape(x, [1, seq_len // 1024, 1024, self.model_args.dim])
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
@@ -67,7 +68,7 @@ class TtMixtralMLP(LightweightModule):
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
-            else:
+            else:  # For some sequence lengths,just use default program config
                 pc_1 = None
                 pc_2 = None
                 pc_3 = None
@@ -91,7 +92,7 @@ class TtMixtralMLP(LightweightModule):
             )
 
             x.deallocate(True)
-            w2_in = ttnn.multiply(w1_out, w3_out)  # , memory_config = ttnn.L1_MEMORY_CONFIG)
+            w2_in = ttnn.multiply(w1_out, w3_out)
 
             w3_out.deallocate(True)
             w1_out.deallocate(True)
@@ -107,37 +108,35 @@ class TtMixtralMLP(LightweightModule):
 
             w2_in.deallocate(True)
 
-            if seq_len >= 2048:
+            if seq_len >= 2048:  # Reshape back to intended shape
                 w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
 
-            return w2_out
-
-        else:
-            w1_out = ttnn.experimental.operations.primary.matmul_1d(
+        else:  # Decode mode
+            w1_out = ttnn.matmul(
                 x,
                 self.w1,
                 program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
-                output_mem_config=self.model_config["FF1_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["FF1_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.model_args.get_compute_kernel_config(),
-                output_dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat8_b,
             )
-            w3_out = ttnn.experimental.operations.primary.matmul_1d(
+            w3_out = ttnn.matmul(
                 x,
                 self.w3,
                 program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
-                output_mem_config=self.model_config["FF3_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["FF3_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.model_args.get_compute_kernel_config(),
-                output_dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat8_b,
             )
             w2_in = ttnn.mul(w1_out, w3_out)
 
-            w2_out = ttnn.experimental.operations.primary.matmul_1d(
+            w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
                 program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
-                output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["FF2_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.model_args.get_compute_kernel_config(),
-                output_dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat8_b,
             )
 
-            return w2_out
+        return w2_out

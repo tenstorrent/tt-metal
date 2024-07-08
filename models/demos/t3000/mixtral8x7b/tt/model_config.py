@@ -283,17 +283,6 @@ class TtModelArgs:
             fused_activation=None,
             mcast_in0=True,
         )
-        self.model_config["OUTPUT_MM_PROGCFG_PREFILL"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(7, 6),  # TODO Hanging with full coreGrid (8,8)
-            in0_block_w=2,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=4,
-            per_core_N=32,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
 
         self.model_config["PREFILL_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -395,15 +384,29 @@ class TtModelArgs:
             fuse_batch=False,
         )
 
+        # Chunk values based on what works best empirically
         self.model_config[
             "SDPA_PROGCFG"
         ] = lambda seqlen: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen > 8192 else 64),
-            k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen > 8192 else 64),
+            q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
+            k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
         )
 
+<<<<<<< HEAD
         if device is not None:  # Avoid issue with test_mistral_torch.py not having a device
+=======
+        self.model_config[
+            "SHARDED_NORM_PRGM_CFG"
+        ] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=4,
+            block_h=shard_height // 32,
+            block_w=shard_width_hidden_dim_across_32_cores // 32,
+            inplace=False,
+        )
+
+        if device is not None:  # Avoid issue with test_mixtral_torch.py not having a device
             grid_size = device.compute_with_storage_grid_size()
             # TODO Lower max grid size (used by MLP) to avoid hangs
             self.max_grid_size = ttnn.CoreGrid(y=7, x=6)  # (y,x)  (y=7, x=8)
@@ -412,6 +415,7 @@ class TtModelArgs:
                 ttnn.CoreGrid(y=4, x=8) if (4 <= grid_size.y and 8 <= grid_size.x) else self.max_grid_size
             )
 
+        # Create Compute kernel configs
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=True,
@@ -424,10 +428,15 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
-        # Create Compute kernel configs
         self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
             math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )

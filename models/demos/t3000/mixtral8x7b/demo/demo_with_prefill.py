@@ -127,6 +127,27 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     )
     logger.info("Finished loading weights to device.")
 
+    # Prepare rotary matrix for decode
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        tt_model.device_mesh,
+        model_args.max_seq_len,
+    )
+
+    generation_start_pos = prefill_seq_len
+    max_generated_tokens = 50
+
+    cache_attention(
+        device_mesh,
+        state_dict,
+        model_args,
+        current_rot_mat,
+        rot_matrix,
+        generation_start_pos,
+        max_generated_tokens,
+        dtype,
+    )
+
     if prefill_seq_len > 0:
         logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
         rot_mats_prefill = get_prefill_rot_mat(
@@ -160,28 +181,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
         logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
 
-    # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        model_args.head_dim,
-        tt_model.device_mesh,
-        model_args.max_seq_len,
-    )
-
-    generation_start_pos = prefill_seq_len
-    max_generated_tokens = 50
-
-    cache_attention(
-        device_mesh,
-        state_dict,
-        model_args,
-        current_rot_mat,
-        rot_matrix,
-        generation_start_pos,
-        max_generated_tokens,
-        dtype,
-    )
-
-    logger.info("Starting inference...")
+    logger.info("Starting decode...")
 
     # Keep track of generated outputs to print out every iteration
     all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
@@ -233,7 +233,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             pt_decode_input = embd(tt_token_batch).view(batch_size, 1, -1)
         else:  # Embedding/argmax on device
             # TODO Update argmax to ttnn when OP becomes available
-            tt_out_B11B = ttnn.experimental.tensor.argmax(tt_out_11BH, dim=-1)
+            tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:
@@ -283,7 +283,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     # When running in CI, check the output against the expected output to avoid accuracy regressions
     if os.getenv("CI") == "true":
-        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill.json"
+        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
         with open(expected_output, "r") as f:
             expected_out = json.load(f)
 
@@ -296,12 +296,12 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
 
 # Avoid running this test when in CI
-@pytest.mark.skipif(os.getenv("CI") == "True", reason="Non-CI tests")
+@pytest.mark.skipif(os.getenv("CI") == "true", reason="Non-CI tests")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill.json", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill.json", True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", True),
     ],
     ids=["general_weights", "instruct_weights"],
 )
@@ -316,7 +316,7 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill.json", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
     ],
     ids=[
         "general_weights",

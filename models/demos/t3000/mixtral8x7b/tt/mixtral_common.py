@@ -324,6 +324,7 @@ def get_single_rot_mat(dhead, device_mesh, start_pos=0, theta: float = 1000000.0
     rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
     rot_matrix = rot_matrix.transpose(-1, -2)
 
+    # Support for start_pos different than 0
     freqs = start_pos * freqs
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
     current_rot_mat = torch.zeros(dhead, dhead)
@@ -400,7 +401,7 @@ def get_prefill_rot_mat(head_dim, max_seq_len, device_mesh, seq_len):
 
 def prepare_inputs_ttnn_prefill(x_bsh, device_mesh):
     """
-    Prepare inputs for decode mode.
+    Prepare inputs for prefill mode.
     x: (batch, seq, hidden_dim)
     B: batch (32)
     S: sequence len (1)
@@ -437,10 +438,11 @@ def prepare_inputs_ttnn_prefill(x_bsh, device_mesh):
     return xs_1BSH, attn_mask, attn_mask_torch
 
 
+# Updates some model arg parameters above their default values
 def set_model_args(model_args, seq_len):
-    if seq_len > 8192:
+    if seq_len >= 8192:  # for seqlen larger than 8k we can't fit 32 users in a batch
         model_args.max_seq_len = seq_len
         model_args.max_batch_size = 32 // (seq_len // 8192)
-        if seq_len > 8192 * 2:
+        if seq_len > 8192 * 2:  # For seqlen higher than 16k, we can only fit 1 user in a batch
             model_args.max_batch_size = 1
     return model_args

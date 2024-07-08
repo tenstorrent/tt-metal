@@ -4,9 +4,7 @@
 import os
 import torch
 import pytest
-import numpy as np
 from loguru import logger
-from sklearn.metrics import top_k_accuracy_score
 
 # Set Mixtral flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -15,7 +13,8 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-    os.environ["REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill"
+    # Prefill prompt files too large to keep in repo
+    os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -42,25 +41,34 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-@pytest.mark.skipif(os.getenv("CI") == "False", reason="CI-only test")
 @pytest.mark.parametrize(
     "seq_len",
     (128, 1024, 2048, 4096, 8192, 8192 * 2, 8192 * 4),
 )
-def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
+def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
     n_layers = 32
     pcc = 0.93
     dtype = ttnn.bfloat8_b
 
+    # Validate that the prompt file and reference output files exist
+    prompt_file = os.environ["MIXTRAL_REF_OUTPUT_PATH"] + "/tale-of-two-cities.txt"
+    assert os.path.exists(
+        prompt_file
+    ), f"Expected prompt file not found: {prompt_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
+    if seq_len in [8192, 8192 * 2, 8192 * 4]:
+        ref_out_file = os.environ["MIXTRAL_REF_OUTPUT_PATH"] + f"/ref_output_prefil_{n_layers}L_{seq_len//1000}k.pt"
+        assert os.path.exists(
+            ref_out_file
+        ), f"Reference output file not found: {ref_out_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
+
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     model_args = set_model_args(model_args, seq_len)
-
     model_args.n_layers = n_layers
+
     batch = 1
     state_dict = model_args.load_state_dict()
-
     tokenizer = Tokenizer(model_args.tokenizer_path)
-    prompt_file = os.environ["REF_OUTPUT_PATH"] + "tale-of-two-cities.txt"
+
     with open(prompt_file, "r") as f:
         prompt = f.read()
     encoded_prompts = tokenizer.encode(prompt)[:seq_len]
@@ -68,6 +76,8 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     # Embedding on host
     embd = Emb()
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+
+    # Prepare rotary matrices
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_device_mesh, seq_len=seq_len)
     head_dim = model_args.dim // model_args.n_heads
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
@@ -86,7 +96,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        start_pos=seq_len,
+        start_pos=seq_len,  # Start position for decode mode
     )
 
     # Select the corresponding seq_len of tokens for prefill
@@ -116,9 +126,11 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
             .float()
         )
 
-    # Measure PCC
+    # Run reference model if prefill seqlen is lower than 8K. Otherwise we use the previously captured reference logits
     if seq_len in [8192, 8192 * 2, 8192 * 4]:
-        ref_output = torch.load(os.environ["REF_OUTPUT_PATH"] + f"ref_output_prefil_{n_layers}L_{seq_len//1000}k.pt")
+        ref_output = torch.load(
+            os.environ["MIXTRAL_REF_OUTPUT_PATH"] + f"/ref_output_prefil_{n_layers}L_{seq_len//1000}k.pt"
+        )
     else:
         reference_model = Transformer(args=model_args)
         reference_model.load_state_dict(state_dict)
@@ -126,13 +138,14 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         positions = torch.LongTensor(range(seq_len))
         ref_output = reference_model(pt_decode_input, positions, attn_mask_torch, mode="prefill").detach().float()
 
+    # Measure PCC
     passing, pcc_message = comp_pcc(ref_output.view(batch, seq_len, -1), tt_output_torch.view(batch, seq_len, -1), pcc)
     logger.info(comp_allclose(ref_output, tt_output_torch))
     logger.info(pcc_message)
     if passing:
-        logger.info(f"Mistral model prefill Passed!")
+        logger.info(f"Mixtral model prefill Passed!")
     else:
-        logger.warning("Mistral model prefill Failed!")
+        logger.warning("Mixtral model prefill Failed!")
 
     decode_after_prefill = False
     passing_decode = True
@@ -178,8 +191,8 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         logger.info(pcc_message_decode)
 
         if passing_decode:
-            logger.info(f"Mistral model decode after prefill Passed!")
+            logger.info(f"Mixtral model decode after prefill Passed!")
         else:
-            logger.warning("Mistral model decode after prefill Failed!")
+            logger.warning("Mixtral model decode after prefill Failed!")
 
     assert passing and passing_decode, f"PCC value is lower for some of the outputs. Check Warnings!"

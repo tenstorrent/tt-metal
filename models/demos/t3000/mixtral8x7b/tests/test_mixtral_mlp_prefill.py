@@ -41,6 +41,7 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     state_dict = model_args.load_state_dict()
 
+    # Load ttnn MLP
     tt_model = TtMixtralMLP(
         device_mesh=t3k_device_mesh,
         state_dict=state_dict,
@@ -49,6 +50,7 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
         dtypes=dtypes,
     )
 
+    # Load reference MLP
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
@@ -62,10 +64,10 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
     rms = RMSNorm(dim=model_args.dim)
     rms.load_state_dict(rms_state_dict)
 
+    # Prepare inputs
     torch_input = (torch.rand(1, 1, seq_len, model_args.dim) * 2) - 1
     torch_input = rms(torch_input)  # apply rmsnorm to input
 
-    reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=t3k_device_mesh,
@@ -76,17 +78,22 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
     )
     tt_input = ttnn.to_device(tt_input, t3k_device_mesh)
 
+    # Run reference MLP
+    reference_output = reference_model(torch_input)
+
+    # Run ttnn MLP
     tt_output = tt_model.forward(tt_input, mode="prefill")
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
 
-    pcc_required = 0.98
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    # Validate PCC
+    pcc = 0.98
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(pcc_message)
     if passing:
-        logger.info("Mistral_MLP Passed!")
+        logger.info("Mixtral_MLP Passed!")
     else:
-        logger.warning("Mistral_MLP Failed!")
+        logger.warning("Mixtral_MLP Failed!")
 
-    assert passing, f"Mistral_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"Mixtral_MLP output does not meet PCC requirement {pcc}: {pcc_message}."

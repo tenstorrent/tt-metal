@@ -226,7 +226,7 @@ class Transformer(nn.Module):
         h = input_ids
         freqs_cis = self.freqs_cis[positions]
 
-        for layer in self.layers[:]:
+        for layer in self.layers:
             h = layer(h, freqs_cis, positions, mask)
         if mode == "prefill":
             return h.float()

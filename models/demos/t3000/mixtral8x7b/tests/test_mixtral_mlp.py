@@ -80,8 +80,8 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(pcc_message)
     if passing:
-        logger.info("Mistral_MLP Passed!")
+        logger.info("Mixtral_MLP Passed!")
     else:
-        logger.warning("Mistral_MLP Failed!")
+        logger.warning("Mixtral_MLP Failed!")
 
-    assert passing, f"Mistral_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"Mixtral_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
