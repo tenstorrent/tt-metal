@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
@@ -50,9 +49,7 @@ def test_bw_binary_assign(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
     tt_output_tensor_on_device = ttnn.assign_bw(grad_tensor, input_tensor, other_tensor)
-    print(tt_output_tensor_on_device)
-    print(grad_tensor)
-    print(input_tensor, other_tensor)
+
     in_data.retain_grad()
 
     pyt_y = torch.clone(in_data)

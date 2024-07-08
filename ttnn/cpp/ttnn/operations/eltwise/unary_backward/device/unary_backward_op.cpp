@@ -13,11 +13,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn::operations::unary_backward {
-
-namespace utils {
-
 
 std::vector<ttnn::Tensor> _mul_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
@@ -35,7 +33,6 @@ std::vector<Tensor> _clamp_min_bw(
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-
 
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
@@ -81,7 +78,7 @@ std::vector<Tensor> _add_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
@@ -90,10 +87,10 @@ std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const Tensor& input, floa
 
 std::vector<Tensor> _eq_bw(
     const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
-    return _unary_comp_bw(grad, input, other, output_mem_config);
+    return _unary_comp_bw(grad, output_mem_config);
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
             return _assign_bw;
@@ -105,7 +102,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(UnaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_float(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::MUL_BW:
             return _mul_bw;
@@ -121,7 +118,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> get_function_type1_w_two_float(UnaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_two_float(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::CLAMP_BW:
             return _clamp_bw;
@@ -129,8 +126,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, flo
             TT_ASSERT(false && "Undefined op type");
             return 0;
     }
-}
-
 }
 
 }  // namespace ttnn::operations::unary

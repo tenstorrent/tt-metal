@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "device/unary_backward_op.cpp"
+#include "device/unary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 
@@ -29,7 +29,7 @@ struct ExecuteUnaryBackward {
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
 
-        auto op_type = utils::get_function_type1(unary_backward_op_type);
+        auto op_type = UnaryBackwardFunction::get_function_type1(unary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_arg, output_memory_config);
         }
@@ -42,7 +42,7 @@ struct ExecuteUnaryBackward {
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
 
-        auto op_type = utils::get_function_type1_w_float(unary_backward_op_type);
+        auto op_type = UnaryBackwardFunction::get_function_type1_w_float(unary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_arg, alpha, output_memory_config);
         }
@@ -56,7 +56,7 @@ struct ExecuteUnaryBackward {
         float b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
 
-        auto op_type = utils::get_function_type1_w_two_float(unary_backward_op_type);
+        auto op_type = UnaryBackwardFunction::get_function_type1_w_two_float(unary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_arg, a, b, output_memory_config);
         }
