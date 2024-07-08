@@ -175,13 +175,6 @@ std::vector<Tensor> gt_bw(
 std::vector<Tensor> ne_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> clamp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float min,
-    float max,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> clamp_max_bw(
     const Tensor& grad,
     const Tensor& input,

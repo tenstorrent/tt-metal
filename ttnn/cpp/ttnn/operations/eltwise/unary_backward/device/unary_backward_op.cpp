@@ -37,6 +37,17 @@ std::vector<Tensor> _clamp_min_bw(
 }
 
 
+std::vector<Tensor> _clamp_bw(
+    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor minT = gte_unary(input, min, output_mem_config);
+    Tensor maxT = lte_unary(input, max, output_mem_config);
+    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
+    result = ttnn::multiply(grad, result, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         default:
@@ -51,6 +62,16 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _unary_mul_bw;
         case UnaryBackwardOpType::CLAMP_MIN_BW:
             return _clamp_min_bw;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> get_function_type1_w_two_float(UnaryBackwardOpType OpType){
+    switch (OpType) {
+        case UnaryBackwardOpType::CLAMP_BW:
+            return _clamp_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
