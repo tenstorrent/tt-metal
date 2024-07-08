@@ -4,6 +4,7 @@
 
 from ttnn import *
 import tt_lib
+from statuses import VectorStatus
 
 
 def serialize(object):

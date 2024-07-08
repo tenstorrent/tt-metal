@@ -10,3 +10,8 @@ class TestStatus(Enum):
     FAIL_ASSERT_EXCEPTION = 1
     FAIL_CRASH_HANG = 2
     NOT_RUN = 3
+
+
+class VectorStatus(Enum):
+    VALID = 0
+    INVALID = 1
