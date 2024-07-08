@@ -54,10 +54,32 @@ std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, co
     return grad_tensor;
 }
 
+std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor digamma_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor digamma_result_2 = ttnn::multiply(
+        grad, tt::tt_metal::digamma(add_unary(-0.5, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+
+    Tensor grad_result = ttnn::add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
+
+    digamma_result = ttnn::multiply(
+        grad, tt::tt_metal::digamma(add_unary(-1.0, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
+
+    digamma_result = ttnn::multiply(
+        grad, tt::tt_metal::digamma(add_unary(-1.5, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::UNARY_ASSIGN_BW:
             return _unary_assign_bw;
+        case UnaryBackwardOpType::MULTIGAMMALN_BW:
+            return _multigammaln_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

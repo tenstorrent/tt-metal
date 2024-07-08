@@ -17,6 +17,7 @@ enum class UnaryBackwardOpType {
     CLAMP_MIN_BW,
     CLAMP_BW,
     UNARY_ASSIGN_BW,
+    MULTIGAMMALN_BW,
 };
 
 
