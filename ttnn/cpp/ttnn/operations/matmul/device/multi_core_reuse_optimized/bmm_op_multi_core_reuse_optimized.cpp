@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 
@@ -10,6 +9,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -160,14 +161,14 @@ operation::ProgramWithCallbacks create_program(
 
     KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines)
     );
 
     KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
         WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines)
     );
@@ -204,7 +205,7 @@ operation::ProgramWithCallbacks create_program(
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_1, .defines = mm_kernel_defines}
     );
@@ -231,7 +232,7 @@ operation::ProgramWithCallbacks create_program(
         };
         auto mm_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_2, .defines = mm_kernel_defines}
         );

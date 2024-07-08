@@ -5,7 +5,6 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -23,6 +22,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace tt {
 
@@ -1769,7 +1769,15 @@ Tensor _outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
         }
     }
 
-    return tt::operations::primary::matmul(a_slim, b_slim, std::nullopt, std::nullopt, output_mem_config);
+    return ttnn::operations::matmul::matmul(
+            a_slim,
+            b_slim,
+            /*bias=*/std::nullopt,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*program_config=*/std::nullopt,
+            output_mem_config
+            );
 }
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);

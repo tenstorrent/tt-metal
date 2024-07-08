@@ -6,14 +6,22 @@
 #include <type_traits>
 
 #include "tt_metal/host_api.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace tt {
 namespace tt_metal {
 
 Tensor fully_connected_(const Tensor& act, const Tensor& weights, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& output_mem_config) {
-    Tensor mm_output = tt::operations::primary::matmul(act, weights, /*bias=*/std::nullopt, /*program_config=*/std::nullopt, output_mem_config);
+    Tensor mm_output = ttnn::operations::matmul::matmul(
+            act,
+            weights,
+            /*bias=*/std::nullopt,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*program_config=*/std::nullopt,
+            output_mem_config
+            );
     if (bias) {
         return bcast(mm_output, bias.value(), BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
     }
