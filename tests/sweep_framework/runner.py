@@ -13,7 +13,8 @@ from queue import Empty
 import subprocess
 from ttnn import *
 from serialize import *
-from test_status import TestStatus
+from statuses import TestStatus, VectorStatus
+from serialize import deserialize
 import architecture
 from elasticsearch import Elasticsearch
 
@@ -54,6 +55,14 @@ def execute_batch(test_module, test_vectors):
     p = None
     for test_vector in test_vectors:
         result = dict()
+        if deserialize(test_vector["status"]) == VectorStatus.INVALID:
+            result["status"] = TestStatus.NOT_RUN
+            result["message"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+            result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            results.append(result)
+            continue
+        else:
+            test_vector.pop("status")
         if p is None:
             p = Process(target=run, args=(test_module, input_queue, output_queue))
             p.start()

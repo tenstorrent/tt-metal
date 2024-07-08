@@ -10,9 +10,9 @@ import datetime
 import os
 
 from permutations import *
-from sql_utils import *
 from serialize import serialize
 from elasticsearch import Elasticsearch
+from statuses import VectorStatus
 
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
@@ -29,13 +29,18 @@ def generate_vectors(test_module):
         batch_vectors = list(permutations(parameters[batch]))
         for v in batch_vectors:
             v["batch_name"] = batch
+            v["status"] = VectorStatus.VALID
         vectors += batch_vectors
     return vectors
 
 
 # Perform any post-gen validation to the resulting vectors.
-def validate_vectors(vectors) -> None:
-    pass
+def invalidate_vectors(test_module, vectors) -> None:
+    for vector in vectors:
+        invalid, reason = test_module.invalidate_vector(vector)
+        if invalid:
+            vector["status"] = VectorStatus.INVALID
+            vector["invalid_reason"] = reason
 
 
 # Output the individual test vectors.
@@ -65,11 +70,12 @@ def generate_tests(module_name):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
             test_module = importlib.import_module("sweeps." + module_name)
             vectors = generate_vectors(test_module)
-            validate_vectors(vectors)
+            invalidate_vectors(test_module, vectors)
             export_test_vectors(module_name, vectors)
     else:
-        vectors = generate_vectors(importlib.import_module("sweeps." + module_name))
-        validate_vectors(vectors)
+        test_module = importlib.import_module("sweeps." + module_name)
+        vectors = generate_vectors(test_module)
+        invalidate_vectors(test_module, vectors)
         export_test_vectors(module_name, vectors)
 
 

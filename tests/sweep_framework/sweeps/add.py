@@ -65,7 +65,7 @@ parameters = {
 # If invalidated, the vector will still be stored but will be expected to fail.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector.broadcast in {"w", "hw"} and test_vector.input_b_layout == ttnn.ROW_MAJOR_LAYOUT:
+    if test_vector["broadcast"] in {"w", "hw"} and test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Broadcasting along width is not supported for row major layout"
     return False, None
 
