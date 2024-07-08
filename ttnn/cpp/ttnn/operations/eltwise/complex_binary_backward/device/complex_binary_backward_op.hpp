@@ -15,6 +15,7 @@ constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexBinaryBackwardOpType {
     COMPLEX_ADD_BW,
     COMPLEX_SUB_BW,
+    COMPLEX_MUL_BW,
 };
 
 
