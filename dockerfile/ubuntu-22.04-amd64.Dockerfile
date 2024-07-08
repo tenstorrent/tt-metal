@@ -63,4 +63,4 @@ RUN apt-get -y update \
     libc++abi-17-dev \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["tail", "-f", "/dev/null"]
+# CMD ["tail", "-f", "/dev/null"]
