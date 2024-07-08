@@ -36,6 +36,8 @@ def generate_vectors(test_module):
 
 # Perform any post-gen validation to the resulting vectors.
 def invalidate_vectors(test_module, vectors) -> None:
+    if "invalidate_vector" not in dir(test_module):
+        return
     for vector in vectors:
         invalid, reason = test_module.invalidate_vector(vector)
         if invalid:
