@@ -6,7 +6,7 @@
 
 #include <functional>
 #include <optional>
-
+#include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace ttnn::operations::unary_backward {
@@ -22,5 +22,10 @@ enum class UnaryBackwardOpType {
     EQ_BW,
 };
 
+struct UnaryBackwardFunction{
+    static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType);
+    static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(UnaryBackwardOpType OpType);
+    static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> get_function_type1_w_two_float(UnaryBackwardOpType OpType);
+};
 
-}  // namespace ttnn::operations::unary
+}  // namespace ttnn::operations::unary_backward

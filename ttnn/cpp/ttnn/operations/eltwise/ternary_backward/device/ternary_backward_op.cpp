@@ -16,9 +16,6 @@
 
 namespace ttnn::operations::ternary_backward {
 
-//namespace utils {
-
-
 std::vector<Tensor> _addcmul_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -167,8 +164,5 @@ std::function<std::vector<std::optional<Tensor>>(const Tensor&, const Tensor&, c
             return 0;
     }
 }
-
-//}
-
 
 }  // namespace ttnn::operations::ternary
