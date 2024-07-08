@@ -13,7 +13,6 @@
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/kv_cache.hpp"
-#include "pybind11/operations/matmul.hpp"
 #include "pybind11/operations/maxpool2d.hpp"
 #include "pybind11/operations/pool.hpp"
 #include "pybind11/operations/ternary.hpp"
@@ -27,6 +26,7 @@
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
+#include "ttnn/operations/matmul/matmul_pybind.hpp"
 
 
 namespace py = pybind11;

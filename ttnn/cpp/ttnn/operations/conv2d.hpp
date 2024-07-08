@@ -8,7 +8,7 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul.hpp"
+#include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
