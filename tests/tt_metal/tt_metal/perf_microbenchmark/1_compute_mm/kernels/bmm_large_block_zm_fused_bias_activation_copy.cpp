@@ -16,10 +16,6 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 
-// Please update tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
-// when making any changes to this file.
-// Have to keep a copy because cannot import ttnn into tests/tt_metal.
-
 namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles, uint32_t out_subblock_w, uint32_t out_subblock_h, uint32_t in0_block_w) {
