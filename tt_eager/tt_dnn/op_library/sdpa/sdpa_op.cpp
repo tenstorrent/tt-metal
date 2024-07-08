@@ -222,17 +222,6 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->valid_seq_len);
 }
 
-tt::stl::reflection::Attributes ScaledDotProductAttention::attributes() const {
-    // fill out with everything in struct
-    return {
-        {"scale", this->scale},
-        {"output_mem_config", this->output_mem_config},
-        {"program_config", this->program_config},
-        {"is_causal", this->is_causal},
-        {"compute_kernel_config", this->compute_kernel_config},
-        {"valid_seq_len", this->valid_seq_len.value_or(0)}};
-}
-
 void ScaledDotProductAttentionDecode::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -399,15 +388,6 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->compute_kernel_config,
         this->program_config,
         this->valid_seq_len);
-}
-
-tt::stl::reflection::Attributes ScaledDotProductAttentionDecode::attributes() const {
-    // fill out with everything in struct
-    return {
-        {"scale", this->scale},
-        {"output_mem_config", this->output_mem_config},
-        {"program_config", this->program_config},
-        {"compute_kernel_config", this->compute_kernel_config}};
 }
 
 namespace transformers {
