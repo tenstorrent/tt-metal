@@ -81,6 +81,18 @@ std::vector<Tensor> _add_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _unary_eq_bw(
+    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+    return _unary_comp_bw(grad, input, other, output_mem_config);
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -101,6 +113,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _clamp_min_bw;
         case UnaryBackwardOpType::ADD_BW:
             return _add_bw;
+        case UnaryBackwardOpType::UNARY_EQ_BW:
+            return _unary_eq_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

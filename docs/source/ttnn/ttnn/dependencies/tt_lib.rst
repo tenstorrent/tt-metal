@@ -928,8 +928,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.threshold_bw
 
-.. autofunction:: tt_lib.tensor.unary_eq_bw
-
 .. autofunction:: tt_lib.tensor.logit_bw
 
 .. autofunction:: tt_lib.tensor.logiteps_bw
