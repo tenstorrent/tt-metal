@@ -47,26 +47,6 @@ struct Softmax {
         std::vector<Tensor> &output_tensors
     ) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "scale",
-        "inplace",
-        "output_mem_config",
-        "program_config",
-        "is_causal_mask",
-        "compute_kernel_config",
-        "is_scale_causal_mask_hw_dims_softmax");
-
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->scale,
-            this->inplace,
-            this->output_mem_config,
-            this->program_config,
-            this->is_causal_mask,
-            this->compute_kernel_config,
-            this->is_scale_causal_mask_hw_dims_softmax);
-    };
-
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

@@ -31,9 +31,6 @@ struct Transpose {
 
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("dim", "output_mem_config");
-    const auto attribute_values() const { return std::forward_as_tuple(dim, output_mem_config); }
 };
 
 // TODO: Accept parallelization

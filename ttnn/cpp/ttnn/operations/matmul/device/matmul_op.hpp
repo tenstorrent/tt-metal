@@ -52,35 +52,8 @@ struct BMMTilizeUntilize {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "out_dt",
-        "in0_nblocks_h",
-        "in0_nblocks_w",
-        "in1_nblocks_w",
-        "in0_block_ntiles_h",
-        "in0_block_ntiles_w",
-        "in1_block_ntiles_w",
-        "out_subblock_ntiles_h",
-        "out_subblock_ntiles_w",
-        "tilize_in0",
-        "untilize_out",
-        "has_bias");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->out_dt_),
-            std::cref(this->in0_nblocks_h_),
-            std::cref(this->in0_nblocks_w_),
-            std::cref(this->in1_nblocks_w_),
-            std::cref(this->in0_block_ntiles_h_),
-            std::cref(this->in0_block_ntiles_w_),
-            std::cref(this->in1_block_ntiles_w_),
-            std::cref(this->out_subblock_ntiles_h_),
-            std::cref(this->out_subblock_ntiles_w_),
-            std::cref(this->tilize_in0_),
-            std::cref(this->untilize_out_),std::cref(this->has_bias_));
-    }
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 /**
@@ -119,23 +92,6 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "compute_with_storage_grid_size",
-        "in0_block_w",
-        "out_subblock_h",
-        "out_subblock_w",
-        "per_core_M",
-        "per_core_N");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->compute_with_storage_grid_size),
-            std::cref(this->in0_block_w),
-            std::cref(this->out_subblock_h),
-            std::cref(this->out_subblock_w),
-            std::cref(this->per_core_M),
-            std::cref(this->per_core_N));
-    }
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -148,29 +104,6 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "compute_with_storage_grid_size",
-        "in0_block_w",
-        "out_subblock_h",
-        "out_subblock_w",
-        "per_core_M",
-        "per_core_N",
-        "transpose_mcast",
-        "fused_activation",
-        "fuse_batch");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->compute_with_storage_grid_size),
-            std::cref(this->in0_block_w),
-            std::cref(this->out_subblock_h),
-            std::cref(this->out_subblock_w),
-            std::cref(this->per_core_M),
-            std::cref(this->per_core_N),
-            std::cref(this->transpose_mcast),
-            std::cref(this->fused_activation),
-            std::cref(this->fuse_batch));
-    }
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
@@ -183,29 +116,6 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool fuse_batch;
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "compute_with_storage_grid_size",
-        "in0_block_w",
-        "out_subblock_h",
-        "out_subblock_w",
-        "per_core_M",
-        "per_core_N",
-        "fuse_batch",
-        "fused_activation",
-        "mcast_in0");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->compute_with_storage_grid_size),
-            std::cref(this->in0_block_w),
-            std::cref(this->out_subblock_h),
-            std::cref(this->out_subblock_w),
-            std::cref(this->per_core_M),
-            std::cref(this->per_core_N),
-            std::cref(this->fuse_batch),
-            std::cref(this->fused_activation),
-            std::cref(this->mcast_in0));
-    }
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -213,29 +123,12 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M;
     std::size_t per_core_N;
     std::optional<UnaryWithParam> fused_activation;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "in0_block_w",
-        "per_core_M",
-        "per_core_N",
-        "fused_activation");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->in0_block_w),
-            std::cref(this->per_core_M),
-            std::cref(this->per_core_N),
-            std::cref(this->fused_activation));
-    }
 };
 
 struct MatmulMultiCoreProgramConfig {
-    static constexpr auto attribute_names = std::make_tuple();
-    const auto attribute_values() const { return std::make_tuple(); }
 };
 
 struct MatmulMultiCoreNonOptimizedReuseProgramConfig {
-    static constexpr auto attribute_names = std::make_tuple();
-    const auto attribute_values() const { return std::make_tuple(); }
 };
 
 using MatmulProgramConfig = std::variant<
@@ -273,21 +166,6 @@ struct Matmul {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-
-    static constexpr auto attribute_names =
-        std::make_tuple("program_config", "bcast_batch", "output_mem_config", "output_dtype", "compute_kernel_config", "untilize_out", "user_core_coord", "user_fused_activation", "user_run_batched");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->program_config),
-            std::cref(this->bcast_batch),
-            std::cref(this->output_mem_config),
-            std::cref(this->output_dtype),
-            std::cref(this->compute_kernel_config),
-            std::cref(this->untilize_out),
-            std::cref(this->user_core_coord),
-            std::cref(this->user_fused_activation),
-            std::cref(this->user_run_batched));
-    }
 };
 
 inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const MatmulProgramConfig> matmul_program_config) {

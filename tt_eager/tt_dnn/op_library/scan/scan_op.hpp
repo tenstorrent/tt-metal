@@ -35,10 +35,6 @@ struct Scan {
     ScanOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
         return ScanOpParallelizationStrategy::SHARDED_MULTI_CORE;
     }
-
-    static constexpr auto attribute_names = std::make_tuple("direction", "n_tile_columns");
-
-    const auto attribute_values() const { return std::make_tuple(direction, n_tile_columns); }
 };
 
 Tensor scan(Tensor &a);

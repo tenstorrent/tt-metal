@@ -20,11 +20,6 @@ struct Downsample {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple("downsample_params", "output_dtype");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->downsample_params), std::cref(this->output_dtype));
-    }
 };
 
 //operation::ProgramWithCallbacks downsample_multi_core(const Tensor &a, Tensor& output);

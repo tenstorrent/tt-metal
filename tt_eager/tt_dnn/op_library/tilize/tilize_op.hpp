@@ -24,12 +24,6 @@ struct Tilize {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     TilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple("output_mem_config", "output_dtype", "use_multicore");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_mem_config), std::cref(this->output_dtype), std::cref(this->use_multicore));
-    }
 };
 
 enum class TilizeWithValPaddingOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
@@ -48,17 +42,6 @@ struct TilizeWithValPadding {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     TilizeWithValPaddingOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names =
-        std::make_tuple("output_tensor_shape", "pad_value", "output_mem_config", "output_dtype", "use_multicore");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_tensor_shape),
-            std::cref(this->pad_value),
-            std::cref(this->output_mem_config),
-            std::cref(this->output_dtype),
-            std::cref(this->use_multicore));
-    }
 };
 
 operation::ProgramWithCallbacks tilize_multi_core(const Tensor &a, Tensor &output);

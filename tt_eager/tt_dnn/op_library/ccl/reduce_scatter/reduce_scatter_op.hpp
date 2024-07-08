@@ -30,30 +30,6 @@ struct ReduceScatter {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "binary_op_type",
-        "scatter_dim",
-        "num_links",
-        "ring_size",
-        "ring_index",
-        "receiver_device_id",
-        "sender_device_id",
-        "output_mem_config",
-        "topology");
-
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->binary_op_type,
-            this->scatter_dim,
-            this->num_links,
-            this->ring_size,
-            this->ring_index,
-            this->receiver_device_id,
-            this->sender_device_id,
-            this->output_mem_config,
-            this->topology);
-    };
 };
 
 std::vector<Tensor> reduce_scatter(

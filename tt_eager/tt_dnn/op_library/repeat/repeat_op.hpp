@@ -17,6 +17,7 @@ struct Repeat {
     const uint32_t repeat_dim;
     const uint32_t num_repeats;
     const MemoryConfig output_mem_config;
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -24,11 +25,6 @@ struct Repeat {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     RepeatOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("repeat_dim", "num_repeats", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->repeat_dim), std::cref(this->num_repeats), std::cref(this->output_mem_config));
-    }
 };
 
 operation::ProgramWithCallbacks repeat_multi_core(
