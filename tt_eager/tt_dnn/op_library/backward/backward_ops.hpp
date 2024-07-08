@@ -424,12 +424,6 @@ std::vector<Tensor> threshold_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_eq_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> logit_bw(
     const Tensor& grad,
     const Tensor& input,

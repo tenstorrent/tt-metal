@@ -181,7 +181,12 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::add_bw,
-        R"doc(Performs backward operations for unary add on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for addition on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::unary_eq_bw,
+        R"doc(Performs backward operations for equal to comparison on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
 
 }
 
