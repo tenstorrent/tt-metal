@@ -38,11 +38,6 @@ struct MorehNorm {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple("p", "dim", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->output_mem_config));
-    }
 };
 
 [[maybe_unused]] Tensor moreh_norm(

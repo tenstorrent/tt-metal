@@ -237,9 +237,10 @@ inline void log_operation(
         tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
     }
 
-    if (not operation.attributes().empty()) {
+    auto attributes = operation.attributes();
+    if (not attributes.empty()) {
         tt::log_debug(tt::LogOp, "Attributes:");
-        for (auto&& [name, value] : operation.attributes()) {
+        for (auto&& [name, value] : attributes) {
             tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
         }
     }

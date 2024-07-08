@@ -206,12 +206,6 @@ template <typename T>
 constexpr bool supports_to_string_v = std::experimental::is_detected_v<has_to_string_t, T>;
 
 template <typename T>
-using has_attributes_t = decltype(std::declval<T>().attributes());
-
-template <typename T>
-constexpr bool supports_runtime_time_attributes_v = std::experimental::is_detected_v<has_attributes_t, T>;
-
-template <typename T>
 static constexpr std::size_t get_num_attributes() {
     static_assert(
         std::tuple_size_v<decltype(T::attribute_names)> ==
@@ -231,8 +225,7 @@ constexpr bool supports_compile_time_attributes_v = std::experimental::is_detect
 
 template <typename T>
 constexpr bool supports_conversion_to_string_v =
-    detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T> or
-    detail::supports_runtime_time_attributes_v<T>;
+    detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T>;
 }  // namespace detail
 
 template <typename T>
@@ -251,8 +244,6 @@ Attributes get_attributes(const T& object) {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return attributes;
-    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
-        return object.attributes();
     } else {
         tt::stl::reflection::Attributes attributes;
         reflect::for_each(
@@ -268,21 +259,6 @@ Attributes get_attributes(const T& object) {
 
 static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     os << attribute.to_string();
-    return os;
-}
-
-static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) {
-    os << "(";
-    for (auto index = 0; index < attributes.size(); index++) {
-        auto&& [key, value] = attributes[index];
-        os << key;
-        os << "=";
-        os << value;
-        if (index != attributes.size() - 1) {
-            os << ", ";
-        }
-    }
-    os << ")";
     return os;
 }
 
@@ -317,10 +293,6 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
         }
 
         os << ")";
-    } else if constexpr (detail::supports_runtime_time_attributes_v<T>) {
-        static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
-        os << get_type_name<T>();
-        os << object.attributes();
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Type cannot be converted to string");
     }
@@ -525,19 +497,6 @@ constexpr auto get_first_object_of_type(T&& object) {
 }  // namespace stl
 }  // namespace tt
 
-template <>
-struct fmt::formatter<tt::stl::reflection::Attributes> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const tt::stl::reflection::Attributes& attributes, format_context& ctx) const
-        -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
-        std::stringstream ss;
-        ss << attributes;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
 template <typename T>
 struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_conversion_to_string_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
@@ -729,15 +688,6 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
         }
         return std::hash<T>{}(object);
-    } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attributes>) {
-        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing tt::stl::reflection::Attributes: {}\n", object);
-        }
-        auto hash = 0;
-        for (auto&& [name, attribute] : object) {
-            hash = hash_objects(hash, attribute);
-        }
-        return hash;
     } else if constexpr (tt::stl::reflection::detail::supports_to_hash_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using to_hash method: {}\n", get_type_name<T>(), object);
@@ -759,11 +709,6 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return hash;
-    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>) {
-        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using run-time attributes: {}\n", get_type_name<T>(), object);
-        }
-        return hash_objects(0, object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);

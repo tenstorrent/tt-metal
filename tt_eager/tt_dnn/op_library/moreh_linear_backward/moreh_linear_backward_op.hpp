@@ -36,8 +36,6 @@ struct MorehBiasAddBackward {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("bias_grad_mem_config", "compute_kernel_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->bias_grad_mem_config), std::cref(this->compute_kernel_config)); }
 };
 
 std::vector<std::optional<Tensor>> moreh_linear_backward(
