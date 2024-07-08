@@ -111,16 +111,6 @@ std::vector<std::optional<Tensor>> exp_bw(const Tensor& grad, const Tensor& inpu
     return operation::decorate_as_composite(__func__, _exp_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-
-std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
-}
-
 // sqrt_bw
 std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;

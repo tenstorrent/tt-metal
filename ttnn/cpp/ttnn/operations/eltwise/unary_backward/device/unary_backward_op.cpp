@@ -48,8 +48,16 @@ std::vector<Tensor> _clamp_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
+        case UnaryBackwardOpType::UNARY_ASSIGN_BW:
+            return _unary_assign_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

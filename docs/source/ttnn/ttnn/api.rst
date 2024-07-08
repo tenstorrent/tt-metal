@@ -169,6 +169,7 @@ Pointwise Unary
    ttnn/mul_bw
    ttnn/clamp_min_bw
    ttnn/clamp_bw
+   ttnn/unary_assign_bw
 
 Pointwise Binary
 ================
