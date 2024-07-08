@@ -28,16 +28,6 @@ struct OptimizedConvParallelizationConfig {
     // std::size_t per_core_M;
     // std::size_t per_core_N;
 
-    static constexpr auto attribute_names =
-        std::make_tuple("grid_size", "num_cores_nhw", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->grid_size),
-            std::cref(this->num_cores_nhw),
-            std::cref(this->per_core_out_matrix_height_ntiles),
-            std::cref(this->per_core_out_matrix_width_ntiles));
-    }
-
     CoreCoord get_grid_size() const {
         return this->grid_size;
     }
@@ -48,19 +38,6 @@ struct OptimizedConvBlockConfig {
     uint32_t act_block_w_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "act_block_h_ntiles",
-        "act_block_w_ntiles",
-        "out_subblock_h_ntiles",
-        "out_subblock_w_ntiles");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->act_block_h_ntiles),
-            std::cref(this->act_block_w_ntiles),
-            std::cref(this->out_subblock_h_ntiles),
-            std::cref(this->out_subblock_w_ntiles));
-    }
 };
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);

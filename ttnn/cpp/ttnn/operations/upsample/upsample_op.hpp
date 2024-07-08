@@ -24,17 +24,6 @@ struct UpSample{
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     UpSampleParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "scale_factor_h",
-        "scale_factor_w",
-        "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(scale_factor_h_),
-            std::cref(scale_factor_w_),
-            std::cref(output_mem_config_));
-    }
 };
 
 Tensor upsample(const Tensor &input,

@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-from ttnn.experimental import tensor as tt_tensor
+import ttnn.experimental.tensor as tt_tensor
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 

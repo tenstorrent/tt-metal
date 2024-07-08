@@ -28,16 +28,6 @@ struct Untilize {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     UntilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names =
-        std::make_tuple("output_mem_config", "use_multicore", "use_pack_untilize", "fp32_dest_acc_en");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_mem_config),
-            std::cref(this->use_multicore),
-            std::cref(this->use_pack_untilize),
-            std::cref(this->fp32_dest_acc_en));
-    }
 };
 
 enum class UntilizeWithUnpaddingOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
@@ -57,16 +47,6 @@ struct UntilizeWithUnpadding {
     UntilizeWithUnpaddingOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "output_tensor_end", "output_mem_config", "use_multicore", "use_pack_untilize", "fp32_dest_acc_en");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_tensor_end),
-            std::cref(this->output_mem_config),
-            std::cref(this->use_multicore),
-            std::cref(this->use_pack_untilize),
-            std::cref(this->fp32_dest_acc_en));
-    }
 };
 
 operation::ProgramWithCallbacks untilize_multi_core(
@@ -107,19 +87,6 @@ struct UntilizeWithHalo {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "pad_val", "in_b", "in_h", "in_w", "out_shard_size_max_per_core", "stride", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->pad_val_),
-            std::cref(this->in_b),
-            std::cref(this->in_h),
-            std::cref(this->in_w),
-            std::cref(this->max_out_nsticks_per_core_),
-            std::cref(this->stride_),
-            std::cref(this->output_mem_config));
-    }
 };
 Tensor untilize_with_halo(
     const Tensor &a,
@@ -143,17 +110,6 @@ struct UntilizeWithHaloV2 {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "pad_val_", "ncores_nhw_", "max_out_nsticks_per_core_", "out_mem_config_", "remote_read_", "transpose_mcast_");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(pad_val_),
-            std::cref(ncores_nhw_),
-            std::cref(max_out_nsticks_per_core_),
-            std::cref(out_mem_config_),
-            std::cref(remote_read_),
-            std::cref(transpose_mcast_));
-    }
 };
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
