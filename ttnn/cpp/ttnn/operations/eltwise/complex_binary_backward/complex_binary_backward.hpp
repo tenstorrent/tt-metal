@@ -33,5 +33,7 @@ struct ExecuteComplexBinaryBackward {
 
 }
 constexpr auto complex_add_bw = ttnn::register_operation<operations::complex_binary_backward::ExecuteComplexBinaryBackward<operations::complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_ADD_BW>>("ttnn::complex_add_bw");
+constexpr auto complex_sub_bw = ttnn::register_operation<operations::complex_binary_backward::ExecuteComplexBinaryBackward<operations::complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_SUB_BW>>("ttnn::complex_sub_bw");
+
 
 }

@@ -33,6 +33,21 @@ std::vector<ComplexTensor> _complex_add_bw(const ComplexTensor& grad, const Comp
     return grad_tensor;
 }
 
+// complex sub
+// self: grad, other: -grad * alpha
+std::vector<ComplexTensor> complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = grad;
+    grad_tensor.emplace_back(grad);
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+    UnaryWithParam op1 {UnaryOpType::NEG};
+    UnaryWithParam op2 {UnaryOpType::MUL_UNARY_SFPU, alpha};
+    ComplexTensor grad_b = ComplexTensor({tt::tt_metal::unary_chain( grad_r, {op1, op2}, output_mem_config), tt::tt_metal::unary_chain( grad_i, {op1, op2}, output_mem_config)});
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
 std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> get_function_type1(ComplexBinaryBackwardOpType OpType){
     switch (OpType) {
         case ComplexBinaryBackwardOpType::COMPLEX_ADD_BW:

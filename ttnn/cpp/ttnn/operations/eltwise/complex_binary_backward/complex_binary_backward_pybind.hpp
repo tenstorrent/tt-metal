@@ -75,6 +75,12 @@ void py_module(py::module& module) {
         module,
         ttnn::complex_add_bw,
         R"doc(Performs backward operations for addition of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_complex_binary_backward(
+        module,
+        ttnn::complex_sub_bw,
+        R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
