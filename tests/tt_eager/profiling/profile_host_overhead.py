@@ -10,7 +10,7 @@ import time
 import statistics
 from loguru import logger
 
-# from models.utility_functions import torch2tt_tensor
+from models.utility_functions import torch2tt_tensor
 from tests.tt_eager.profiling import ops_for_profiling
 from tracy import signpost
 
@@ -36,8 +36,8 @@ all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to disp
 NUM_REPEATS = 15
 
 
-def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
-    return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
+# def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
+#     return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
