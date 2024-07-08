@@ -537,11 +537,6 @@ std::vector<Tensor> complex_sub_bw(
     float alpha = 1.0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> multigammaln_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> repeat_bw(
     const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config);
 
