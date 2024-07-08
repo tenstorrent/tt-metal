@@ -40,14 +40,7 @@ struct Reduce {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    ReduceOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-
-    static constexpr auto attribute_names =
-        std::make_tuple("math_op", "dim", "scaler", "output_mem_config", "output_dtype");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->math_op), std::cref(this->dim), std::cref(this->scaler), std::cref(this->output_mem_config), std::cref(this->output_dtype));
-    }
+    ReduceOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
 };
 
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const std::optional<DataType>& output_dtype=std::nullopt);

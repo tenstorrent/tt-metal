@@ -22,13 +22,6 @@ struct TensorRecord {
     const DataType data_type;
     const Layout layout;
     const std::optional<MemoryConfig> memory_config;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->storage_type, this->shape, this->data_type, this->layout, this->memory_config);
-    }
 };
 
 struct OperationRecord {

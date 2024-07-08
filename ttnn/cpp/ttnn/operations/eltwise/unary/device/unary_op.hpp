@@ -143,8 +143,8 @@ struct UnaryWithParam {
 
     bool has_parameter() const { return params.size() > 0; }
 
-    static constexpr auto attribute_names = std::make_tuple("op_type", "param");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->params)); }
+    static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
+    const auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
 inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
@@ -200,11 +200,6 @@ struct Unary {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple("op_chain", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->op_chain), std::cref(this->output_mem_config));
-    }
 
     const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
