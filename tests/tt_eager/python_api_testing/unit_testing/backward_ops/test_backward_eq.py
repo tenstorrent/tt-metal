@@ -22,7 +22,7 @@ def test_bw_binary_eq(input_shapes, device):
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
     _, grad_tensor = data_gen_with_range(input_shapes, -20, 40, device)
 
-    tt_output_tensor_on_device = ttnn.binary_eq_bw(grad_tensor, input_tensor, other_tensor)
+    tt_output_tensor_on_device = ttnn.eq_bw(grad_tensor, input_tensor, other_tensor)
     in_grad = torch.zeros_like(in_data)
     other_grad = torch.zeros_like(other_data)
 
@@ -51,7 +51,7 @@ def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    tt_output_tensor_on_device = ttnn.binary_eq_bw(
+    tt_output_tensor_on_device = ttnn.eq_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
@@ -94,7 +94,7 @@ def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs)
 
     cq_id = 0
 
-    tt_output_tensor_on_device = ttnn.binary_eq_bw(
+    tt_output_tensor_on_device = ttnn.eq_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
@@ -114,3 +114,23 @@ def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs)
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("other", [1.0])
+def test_bw_unary_eq(input_shapes, other, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    tt_output_tensor_on_device = ttnn.eq_bw(grad_tensor, input_tensor, other)
+    pt_y = torch.zeros_like(grad_data)
+    golden_tensor = [pt_y]
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert comp_pass

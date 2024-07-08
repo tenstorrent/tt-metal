@@ -88,7 +88,7 @@ std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const Tensor& input, floa
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_eq_bw(
+std::vector<Tensor> _eq_bw(
     const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
     return _unary_comp_bw(grad, input, other, output_mem_config);
 }
@@ -113,8 +113,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _clamp_min_bw;
         case UnaryBackwardOpType::ADD_BW:
             return _add_bw;
-        case UnaryBackwardOpType::UNARY_EQ_BW:
-            return _unary_eq_bw;
+        case UnaryBackwardOpType::EQ_BW:
+            return _eq_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
