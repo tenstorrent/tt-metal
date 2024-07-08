@@ -7,8 +7,6 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
-import time
-from serialize import deserialize_vector
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.utility_functions import torch_random
@@ -25,8 +23,8 @@ parameters = {
         "broadcast": [None, "h", "w", "hw"],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -40,9 +38,25 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(1, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 4)),
+                        }
+                    ),
+                    [64, 64],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+        ],
     },
 }
 

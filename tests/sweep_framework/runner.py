@@ -7,7 +7,7 @@ import sys
 import pathlib
 import importlib
 import datetime
-import uuid
+import time
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
@@ -24,7 +24,7 @@ def git_hash():
     try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
     except Exception as e:
-        raise RuntimeError("Couldn't get git hash!") from e
+        return "Couldn't get git hash!"
 
 
 def run(test_module, input_queue, output_queue):
@@ -34,10 +34,14 @@ def run(test_module, input_queue, output_queue):
             test_vector = input_queue.get(block=True, timeout=1)
             test_vector = deserialize_vector(test_vector)
             try:
+                start_time = time.time_ns()
                 status, message = test_module.run(**test_vector, device=device)
+                end_time = time.time_ns()
+                e2e_perf = end_time - start_time
             except Exception as e:
                 status, message = False, str(e)
-            output_queue.put([status, message])
+                e2e_perf = None
+            output_queue.put([status, message, e2e_perf])
     except Empty as e:
         ttnn.close_device(device)
         exit(0)
@@ -56,9 +60,10 @@ def execute_batch(test_module, test_vectors):
         try:
             input_queue.put(test_vector)
             response = output_queue.get(block=True, timeout=5)
-            status, message = response[0], response[1]
+            status, message, e2e_perf = response[0], response[1], response[2]
             result["status"] = TestStatus.PASS if status else TestStatus.FAIL_ASSERT_EXCEPTION
             result["message"] = message
+            result["e2e_perf"] = e2e_perf
         except Empty as e:
             print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
             p.terminate()
@@ -89,6 +94,16 @@ def sanitize_inputs(test_vectors):
     return header_info, test_vectors
 
 
+def get_batch_vectors(client, vector_index, batch):
+    response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
+    test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
+    test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
+    for i in range(len(test_ids)):
+        test_vectors[i]["vector_id"] = test_ids[i]
+    header_info, test_vectors = sanitize_inputs(test_vectors)
+    return header_info, test_vectors
+
+
 def run_sweeps(module_name, batch_name):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
 
@@ -110,13 +125,7 @@ def run_sweeps(module_name, batch_name):
 
                 for batch in batches:
                     print(f"SWEEPS: Executing tests for module {sweep_name}, batch {batch}.")
-                    response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
-                    test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
-                    test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
-                    for i in range(len(test_ids)):
-                        test_vectors[i]["vector_id"] = test_ids[i]
-
-                    header_info, test_vectors = sanitize_inputs(test_vectors)
+                    header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
                     results = execute_batch(test_module, test_vectors)
                     print(f"SWEEPS: Completed tests for module {sweep_name}, batch {batch}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
@@ -126,7 +135,11 @@ def run_sweeps(module_name, batch_name):
                 continue
 
     else:
-        test_module = importlib.import_module("sweeps." + module_name)
+        try:
+            test_module = importlib.import_module("sweeps." + module_name)
+        except ModuleNotFoundError as e:
+            print(f"SWEEPS: No module found with name {module_name}")
+            exit(1)
         vector_index = module_name + "_test_vectors"
 
         try:
@@ -140,20 +153,21 @@ def run_sweeps(module_name, batch_name):
                         return
 
                     for batch in batches:
-                        response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
-                        test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
-                        header_info, test_vectors = sanitize_inputs(test_vectors)
+                        print(f"SWEEPS: Executing tests for module {module_name}, batch {batch}.")
+                        header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
                         results = execute_batch(test_module, test_vectors)
+                        print(f"SWEEPS: Completed tests for module {module_name}, batch {batch}.")
+                        print(f"SWEEPS: Tests Executed - {len(results)}")
                         export_test_results(header_info, results)
                 except Exception as e:
                     print(e)
                     return
             else:
-                response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
-                test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
-
-                header_info, test_vectors = sanitize_inputs(test_vectors)
+                print(f"SWEEPS: Executing tests for module {module_name}, batch {batch_name}.")
+                header_info, test_vectors = get_batch_vectors(client, vector_index, batch_name)
                 results = execute_batch(test_module, test_vectors)
+                print(f"SWEEPS: Completed tests for module {module_name}, batch {batch_name}.")
+                print(f"SWEEPS: Tests Executed - {len(results)}")
                 export_test_results(header_info, results)
         except Exception as e:
             print(e)
@@ -163,22 +177,20 @@ def run_sweeps(module_name, batch_name):
 
 # Export test output (msg), status, exception (if applicable), git hash, timestamp, test vector, test UUID?,
 def export_test_results(header_info, results):
+    if len(results) == 0:
+        return
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
     sweep_name = header_info[0]["sweep_name"]
     results_index = sweep_name + "_test_results"
 
-    try:
-        git = git_hash()
-        for result in results:
-            result["git_hash"] = git
-    except:
-        pass
+    for result in results:
+        result["git_hash"] = git_hash()
 
     for i in range(len(results)):
         result = header_info[i]
         for elem in results[i].keys():
             result[elem] = serialize(results[i][elem])
-        client.index(index=results_index, id=uuid.uuid4(), body=result)
+        client.index(index=results_index, body=result)
 
     client.close()
 

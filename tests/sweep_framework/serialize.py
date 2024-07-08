@@ -13,6 +13,9 @@ def serialize(object):
         attr_names = object.attribute_names
         attr_values = object.attribute_values()
         for i in range(len(attr_names)):
+            if attr_names[i] == "shard_spec":
+                if attr_values[i] == None:
+                    continue
             serialized_object[attr_names[i]] = serialize(attr_values[i])
         return serialized_object
     elif type(object) == ttnn.CoreRange:
