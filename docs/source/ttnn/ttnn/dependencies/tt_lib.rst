@@ -796,8 +796,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.conj_bw
 
-.. autofunction:: tt_lib.tensor.unary_add_bw
-
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
 .. autofunction:: tt_lib.tensor.rdiv_bw

@@ -174,6 +174,11 @@ void py_module(py::module& module) {
         mvlgamma is refered as multigammaln.
         Input value must be greater than 2.5f)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::unary_add_bw,
+        R"doc(Performs backward operations for unary add on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

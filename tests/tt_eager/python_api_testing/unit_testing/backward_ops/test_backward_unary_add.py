@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -21,7 +22,7 @@ def test_bw_unary_add(input_shapes, alpha, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_add_bw(grad_tensor, input_tensor, alpha=alpha)
+    tt_output_tensor_on_device = ttnn.unary_add_bw(grad_tensor, input_tensor, alpha=alpha)
 
     in_data.retain_grad()
 

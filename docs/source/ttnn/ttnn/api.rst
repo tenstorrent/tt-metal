@@ -171,6 +171,7 @@ Pointwise Unary
    ttnn/clamp_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
+   ttnn/unary_add_bw
 
 Pointwise Binary
 ================
