@@ -74,7 +74,7 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_add_bw(
+std::vector<Tensor> _add_bw(
     const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -99,8 +99,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _mul_bw;
         case UnaryBackwardOpType::CLAMP_MIN_BW:
             return _clamp_min_bw;
-        case UnaryBackwardOpType::UNARY_ADD_BW:
-            return _unary_add_bw;
+        case UnaryBackwardOpType::ADD_BW:
+            return _add_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

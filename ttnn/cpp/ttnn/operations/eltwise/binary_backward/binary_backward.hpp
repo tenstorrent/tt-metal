@@ -166,6 +166,5 @@ constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::E
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
 
 //type 3
-constexpr auto add_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADD_BW>>("ttnn::add_bw");
 constexpr auto binary_eq_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_EQ_BW>>("ttnn::binary_eq_bw");
 }  // namespace ttnn
