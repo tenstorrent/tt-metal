@@ -23,7 +23,7 @@ class TtModelArgs:
     vocab_size = 32000
 
     max_batch_size = 32
-    max_seq_len = 4096
+    max_seq_len = 8192 * 2
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
@@ -164,6 +164,21 @@ class TtModelArgs:
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=False,
+        )
+
+        self.model_config[
+            "SDPA_DECODE_PROGCFG"
+        ] = lambda k_chunk_size: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=32,
+            k_chunk_size=k_chunk_size,
+        )
+
+        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
         self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"] = cached_lambda(

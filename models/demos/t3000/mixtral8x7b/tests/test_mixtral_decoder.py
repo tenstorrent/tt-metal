@@ -48,8 +48,8 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         tt_model.device_mesh,
     )
 
-    generation_start_pos = 0
-    generation_length = 1
+    generation_start_pos = 15000
+    generation_length = 10
     all_tests_pass = True
 
     seqlen = 1
@@ -60,7 +60,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
 
         pt_decode_input_bsh = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
         decode_input_b1sh, attn_mask = prepare_inputs_ttnn(
             pt_decode_input_bsh,
@@ -77,6 +77,8 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             .squeeze(1)
             .view(batch, 1, -1)
         )
+
+        attn_mask.deallocate(True)
 
         # Reference model
         positions = torch.LongTensor([start_pos])
