@@ -11,6 +11,7 @@ import torch
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
 import pytest
+import ttnn
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
@@ -144,7 +145,7 @@ def test_level2_complex_add_bw(bs, hw, alpha, memcfg, dtype, device, function_le
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_add_bw(grad_tensor, input_tensor, other_tensor, alpha, memcfg)
+    tt_dev = ttnn.complex_add_bw(grad_tensor, input_tensor, other_tensor, alpha, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
@@ -204,7 +205,7 @@ def test_level2_complex_sub_bw(bs, hw, alpha, memcfg, dtype, device, function_le
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_sub_bw(grad_tensor, input_tensor, other_tensor, alpha, memcfg)
+    tt_dev = ttnn.complex_sub_bw(grad_tensor, input_tensor, other_tensor, alpha, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
@@ -263,7 +264,7 @@ def test_level2_complex_mul_bw(bs, hw, memcfg, dtype, device, function_level_def
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_mul_bw(grad_tensor, input_tensor, other_tensor, memcfg)
+    tt_dev = ttnn.complex_mul_bw(grad_tensor, input_tensor, other_tensor, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
@@ -322,7 +323,7 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_div_bw(grad_tensor, input_tensor, other_tensor, memcfg)
+    tt_dev = ttnn.complex_div_bw(grad_tensor, input_tensor, other_tensor, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
@@ -382,7 +383,7 @@ def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, functio
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_div_bw(grad_tensor, input_tensor, other_tensor, memcfg)
+    tt_dev = ttnn.complex_div_bw(grad_tensor, input_tensor, other_tensor, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
