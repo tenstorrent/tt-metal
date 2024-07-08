@@ -94,6 +94,29 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
+
+    module.def(
+        "get_conv_padded_input_shape_and_mem_config",
+        [](ttnn::Device& device,
+            const ttnn::Tensor& input_tensor,
+            const Conv2dConfig& conv_config,
+            uint32_t batch_size,
+            uint32_t height,
+            uint32_t width,
+            uint32_t in_channels,
+            uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config(
+                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
+        },
+        py::kw_only(),
+        py::arg("device"),
+        py::arg("input_tensor"),
+        py::arg("conv_config"),
+        py::arg("batch_size"),
+        py::arg("height"),
+        py::arg("width"),
+        py::arg("in_channels"),
+        py::arg("out_channels"));
 }
 
 }  // namespace conv2d
