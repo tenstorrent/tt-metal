@@ -35,7 +35,7 @@ std::vector<ComplexTensor> _complex_add_bw(const ComplexTensor& grad, const Comp
 
 // complex sub
 // self: grad, other: -grad * alpha
-std::vector<ComplexTensor> complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config) {
+std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor grad_a = grad;
     grad_tensor.emplace_back(grad);
@@ -48,10 +48,35 @@ std::vector<ComplexTensor> complex_sub_bw(const ComplexTensor& grad, const Compl
     return grad_tensor;
 }
 
+
+// complex mul
+// grad_input = grad * other.conj()
+// grad_other = grad * input.conj()
+std::vector<ComplexTensor> _complex_mul_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = tt::tt_metal::complex_mul(grad, conj(other,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    ComplexTensor grad_b = tt::tt_metal::complex_mul(grad, conj(input,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
 std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> get_function_type1(ComplexBinaryBackwardOpType OpType){
     switch (OpType) {
         case ComplexBinaryBackwardOpType::COMPLEX_ADD_BW:
             return _complex_add_bw;
+        case ComplexBinaryBackwardOpType::COMPLEX_SUB_BW:
+            return _complex_sub_bw;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
+std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&)> get_function_type2(ComplexBinaryBackwardOpType OpType){
+    switch (OpType) {
+        case ComplexBinaryBackwardOpType::COMPLEX_MUL_BW:
+            return _complex_mul_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

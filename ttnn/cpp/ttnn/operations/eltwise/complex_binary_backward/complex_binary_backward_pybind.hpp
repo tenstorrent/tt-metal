@@ -64,6 +64,20 @@ Example:
             py::arg("input_tensor_b"),
             py::arg("alpha"),
             py::kw_only(),
+            py::arg("memory_config")},
+
+        ttnn::pybind_overload_t{
+            [](const complex_binary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
             py::arg("memory_config")});
 }
 
@@ -80,6 +94,11 @@ void py_module(py::module& module) {
         module,
         ttnn::complex_sub_bw,
         R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_complex_binary_backward(
+        module,
+        ttnn::complex_mul_bw,
+        R"doc(Performs backward operations for multiplication of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
 
 }
 

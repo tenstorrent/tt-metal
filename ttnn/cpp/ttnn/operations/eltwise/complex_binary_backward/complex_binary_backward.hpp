@@ -16,7 +16,7 @@ namespace operations::complex_binary_backward {
 template <ComplexBinaryBackwardOpType complex_binary_backward_op_type>
 struct ExecuteComplexBinaryBackward {
 
-    //Type 1: 2 inputs, 1 grad tensor
+    //Type 1: 2 inputs, 1 grad tensor 1 float
 
     static std::vector<ComplexTensor> execute_on_main_thread(
         const ComplexTensor &grad_tensor_arg,
@@ -29,11 +29,24 @@ struct ExecuteComplexBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, memory_config);
         }
 
+    //Type 1: 2 inputs, 1 grad tensor
+
+    static std::vector<ComplexTensor> execute_on_main_thread(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config) {
+
+        auto op_type = utils::get_function_type2(complex_binary_backward_op_type);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
+        }
+
 };
 
 }
 constexpr auto complex_add_bw = ttnn::register_operation<operations::complex_binary_backward::ExecuteComplexBinaryBackward<operations::complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_ADD_BW>>("ttnn::complex_add_bw");
 constexpr auto complex_sub_bw = ttnn::register_operation<operations::complex_binary_backward::ExecuteComplexBinaryBackward<operations::complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_SUB_BW>>("ttnn::complex_sub_bw");
+constexpr auto complex_mul_bw = ttnn::register_operation<operations::complex_binary_backward::ExecuteComplexBinaryBackward<operations::complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_MUL_BW>>("ttnn::complex_mul_bw");
 
 
 }
