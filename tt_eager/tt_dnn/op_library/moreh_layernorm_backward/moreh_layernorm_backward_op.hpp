@@ -36,10 +36,6 @@ struct MorehLayerNormBackwardInputGrad {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "memory_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
-    }
 };
 
 struct MorehLayerNormBackwardGammaBetaGrad {
@@ -53,12 +49,7 @@ struct MorehLayerNormBackwardGammaBetaGrad {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors,
-        std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "memory_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
-    }
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(

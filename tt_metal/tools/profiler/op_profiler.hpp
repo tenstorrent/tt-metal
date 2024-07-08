@@ -236,9 +236,10 @@ inline json get_base_json(
     j["op_code"] = opName;
 
     json attributesObj;
-    if (not op.attributes().empty()) {
+    auto attributes = op.attributes();
+    if (not attributes.empty()) {
         ZoneScopedN("get_attributes_json");
-        for (auto&& [name, value] : op.attributes()) {
+        for (auto&& [name, value] : attributes) {
             std::string nameStr = "";
             if (std::holds_alternative<std::string>(name)) {
                 nameStr = fmt::format("{}", std::get<std::string>(name));
