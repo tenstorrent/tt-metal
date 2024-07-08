@@ -921,6 +921,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     uint32_t input_core_units_rem = input_units_per_shard;
     uint32_t input_address = input.buffer()->address();
     auto input_buffer_type = input.buffer()->buffer_type();
+    auto bank_id = device->bank_ids_from_logical_core(input_buffer_type, input_cores[input_core_idx])[0];
+    uint32_t bank_offset = device->bank_offset(input_buffer_type, bank_id);
+    auto input_core = device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
 
     std::array<tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t output_units_left = num_output_units;
@@ -934,9 +937,14 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             if (output_units_to_get != 0) {
                 uint32_t num_reads = 0;
                 kernel_args[1] = (output_units_per_shard - output_units_per_core) * unit_size;
-                auto bank_id = device->bank_ids_from_logical_core(input_buffer_type, input_cores[input_core_idx])[0];
-                uint32_t bank_offset = device->bank_offset(input_buffer_type, bank_id);
                 while (output_units_to_get > 0) {
+                    if (input_core_units_rem == 0) {
+                        input_core_idx++;
+                        input_core_units_rem = input_units_per_shard;
+                        bank_id = device->bank_ids_from_logical_core(input_buffer_type, input_cores[input_core_idx])[0];
+                        bank_offset = device->bank_offset(input_buffer_type, bank_id);
+                        input_core = device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
+                    }
                     uint32_t units_to_read = std::min(input_core_units_rem, output_units_to_get);
                     auto input_core =
                         device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
@@ -949,10 +957,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     output_units_per_core -= units_to_read;
                     output_units_to_get -= units_to_read;
                     input_core_units_rem -= units_to_read;
-                    if (input_core_units_rem == 0) {
-                        input_core_idx++;
-                        input_core_units_rem = input_units_per_shard;
-                    }
                     num_reads++;
                 }
                 kernel_args[2] = num_reads;
