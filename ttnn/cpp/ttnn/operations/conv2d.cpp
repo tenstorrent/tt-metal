@@ -241,7 +241,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
         .out_subblock_w_ntiles = out_subblock_w_ntiles};
 }
 
-std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
     Device& device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -331,8 +331,47 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
         }
     }
     if (needs_shard_or_reshard) {
-        bool input_is_on_device = ttnn::has_storage_type_of(input_tensor, ttnn::DEVICE_STORAGE_TYPE);
+        uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
+        // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+        uint32_t tensor_height = input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
+        uint32_t input_tensor_height_snapped_to_tile = round_up(tensor_height, input_num_cores_nhw * 32);
+        TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
+        uint32_t tensor_width = input_tensor.get_shape()[3];
+        uint32_t input_tensor_width_snapped_to_channels_alignment =
+            round_up(tensor_width, conv_config.input_channels_alignment);
+        TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
 
+        auto input_padded_shape = Shape({1, 1, input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
+                                                                                                                                         // tt::tt_metal::Shape issue to clean up next line
+        auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+            Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
+            parallel_config,
+            32);
+        return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
+    } else {
+        return {input_tensor.shape(), input_tensor.memory_config(), needs_shard_or_reshard};
+    }
+}
+
+std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_required(
+    Device& device,
+    const ttnn::Tensor& input_tensor_,
+    const Conv2dConfig& conv_config,
+    uint32_t batch_size,
+    uint32_t height,
+    uint32_t width,
+    uint32_t in_channels,
+    uint32_t out_channels) {
+    ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
+    bool input_tensor_on_device = ttnn::has_storage_type_of(input_tensor_, ttnn::DEVICE_STORAGE_TYPE);
+
+    auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] = get_conv_padded_input_shape_and_mem_config(device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels);
+    ParallelConfig parallel_config = {
+        .grid = input_tensor_sharded_memory_config.shard_spec.value().grid,
+        .shard_scheme = input_tensor_sharded_memory_config.memory_layout,
+        .shard_orientation = input_tensor_sharded_memory_config.shard_spec.value().orientation
+    };
+    if (needs_shard_or_reshard) {
         if (input_tensor.get_shape()[0] != 1 or input_tensor.get_shape()[1] != 1) {
             // reshape to [1, 1, N*H*W, C]
             input_tensor = ttnn::operations::core::reshape(
@@ -343,36 +382,24 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
                      input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
                      input_tensor.get_shape()[3]}));
         }
-        if (!input_is_on_device) {
-            uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-            // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
-            uint32_t tensor_height = input_tensor.get_shape()[2];
-            uint32_t input_tensor_height_snapped_to_tile = round_up(tensor_height, input_num_cores_nhw * 32);
-            TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
-            uint32_t tensor_width = input_tensor.get_shape()[3];
-            uint32_t input_tensor_width_snapped_to_channels_alignment =
-                round_up(tensor_width, conv_config.input_channels_alignment);
-            TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
-            if (input_tensor_height_snapped_to_tile != tensor_height ||
-                input_tensor_width_snapped_to_channels_alignment != tensor_width) {
+
+        uint32_t tensor_height = input_tensor.get_shape()[2];
+        uint32_t tensor_width = input_tensor.get_shape()[3];
+
+        if (!input_tensor_on_device) {
+            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                 input_tensor = tt::tt_metal::pad_on_host(
                     input_tensor,
                     {input_tensor.get_shape()[0],
                      input_tensor.get_shape()[1],
-                     input_tensor_height_snapped_to_tile,
-                     input_tensor_width_snapped_to_channels_alignment},
+                     input_padded_shape[-2],
+                     input_padded_shape[-1]},
                     {0, 0, 0, 0},
                     0);
             }
         }
-        auto input_padded_shape = input_tensor.get_legacy_shape();  // TODO: resolve ttnn::types::Shape and
-                                                                    // tt::tt_metal::Shape issue to clean up next line
-        auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
-            parallel_config,
-            32);
 
-        if (input_is_on_device) {
+        if (input_tensor_on_device) {
             auto resharded_input_tensor = ttnn::operations::core::ToMemoryConfig::execute_on_worker_thread(
                 input_tensor, input_tensor_sharded_memory_config, {});
             if (conv_config.deallocate_activation) {
