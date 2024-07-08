@@ -1534,18 +1534,6 @@ std::vector<Tensor> threshold_bw(
     return operation::decorate_as_composite(__func__, _threshold_bw)(grad, input, threshold, value, output_mem_config);
 }
 
-std::vector<Tensor> _unary_eq_bw(
-    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    return grad_tensor;
-}
-std::vector<Tensor> unary_eq_bw(
-    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_eq_bw)(grad, input, other, output_mem_config);
-}
-
 // Torch reference
 // # if eps is not None:
 // #         lo = eps
