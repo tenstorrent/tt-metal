@@ -173,6 +173,24 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
     )
 
 
+def get_chunk_size(s):
+    if s <= 32:
+        return 32
+    if s <= 64:
+        return 32
+    if s <= 128:
+        return 32
+    if s <= 256:
+        return 256
+    if s <= 2048:
+        return 512
+    return 512
+
+
+def nearest_n(x, n):
+    return ((x + n - 1) // n) * n
+
+
 def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh):
     """
     Prepare inputs for decode mode.
@@ -201,27 +219,22 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
     )
 
     # Attention mask
-    padded_layer_past_len = nearest_32(current_pos + 1)
+    k_chunk_size = get_chunk_size(current_pos + 1)
+    padded_layer_past_len = nearest_n(current_pos + 1, k_chunk_size)
     attn_mask = torch.zeros(seq_len, 32, 32, padded_layer_past_len)  # [SB4P]
     attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
     if model_args.dummy_weights:
         cache_name = None
     else:
-        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{current_pos}")
+        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask_interleaved.{current_pos}")
 
     attn_mask = ttnn.as_tensor(
         attn_mask,
         device=device_mesh,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.create_sharded_memory_config(
-            shape=(32, padded_layer_past_len),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
         cache_file_name=cache_name,
     )
@@ -283,27 +296,20 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
         if model_args.dummy_weights:
             cache_name = None
         else:
-            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{pos}")
+            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask_interleaved.{pos}")
 
         padded_layer_past_len = min(nearest_32(pos + 1), model_args.sliding_window)
         # 32 on dim 2 for 1 tile (padded n_heads)
         attn_mask = torch.zeros(1, model_args.max_batch_size, 32, padded_layer_past_len)
         attn_mask[:, :, :, pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
-        ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(32, padded_layer_past_len),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
         attn_mask = ttnn.as_tensor(
             # torch.zeros(1, 1, 32, padded_layer_past_len),
             attn_mask,
             device=device_mesh,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ATTN_MASK_MEMCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
             cache_file_name=cache_name,
         )

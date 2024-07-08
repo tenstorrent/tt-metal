@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.utility_functions import nearest_32
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule, get_chunk_size, nearest_n
 
 
 class TtMixtralAttention(LightweightModule):
@@ -170,7 +170,8 @@ class TtMixtralAttention(LightweightModule):
         D : head_dim (128)
         P : padded_layer_past_len
         """
-        padded_layer_past_len = nearest_32(start_pos + 1)
+        k_chunk_size = get_chunk_size(current_pos + 1)
+        padded_layer_past_len = nearest_n(current_pos + 1, k_chunk_size)
 
         x_11BH = xs
         wo = self.wo
@@ -238,60 +239,17 @@ class TtMixtralAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
-            keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
-        )
-
-        ###
-        # Attention
-        ###
-        # transpose keys
-        keys_1BDP = ttnn.experimental.tensor.transpose(
-            keys_1BPD,
-            -2,
-            -1,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-        )
-        keys_1BPD.deallocate(True)
-
-        # scores matmul
-
-        attn_1B4P = ttnn.matmul(
+        attn_output_1B4D = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
             q_heads_1B4D,
-            keys_1BDP,
-            dtype=ttnn.bfloat16,
-            program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            memory_config=self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len),
-            compute_kernel_config=self.compute_kernel_attn,
-        )
-        q_heads_1B4D.deallocate(True)
-        keys_1BDP.deallocate(True)
-
-        # Softmax and scaling
-
-        attn_1B4P = ttnn.scale_mask_softmax_in_place(
-            attn_1B4P,
-            self.scale,
-            attn_mask_1B4P,
-            program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
-            is_causal_mask=True,
-        )
-
-        # values matmul
-        values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
-            values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
-        )
-
-        attn_output_1B4D = ttnn.matmul(
-            attn_1B4P,
+            keys_1BPD,
             values_1BPD,
-            dtype=ttnn.bfloat16,
-            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
-            program_config=self.model_config["VALUES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            compute_kernel_config=self.compute_kernel_attn,
+            attn_mask_1B4P,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_DECODE_PROGCFG"](k_chunk_size),
+            valid_seq_len=padded_layer_past_len,
+            compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
-        attn_1B4P.deallocate(True)
-        values_1BPD.deallocate(True)
 
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
