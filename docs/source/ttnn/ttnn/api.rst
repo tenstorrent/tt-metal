@@ -318,6 +318,7 @@ Pointwise Binary
    ttnn/complex_add_bw
    ttnn/complex_sub_bw
    ttnn/complex_mul_bw
+   ttnn/complex_div_bw
 
 Pointwise Ternary
 =================
