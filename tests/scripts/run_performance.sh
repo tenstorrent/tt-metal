@@ -11,7 +11,7 @@ run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
 
-    env pytest -n auto tests/ttnn/integration_tests/resnet/test_performance.py -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/resnet/tests -m $test_marker
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
@@ -59,6 +59,8 @@ run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/resnet/tests -m $test_marker
+
     env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     if [ "$tt_arch" == "grayskull" ]; then
@@ -73,8 +75,6 @@ run_device_perf_models() {
         env pytest models/demos/bert/tests -m $test_marker
 
         env pytest models/demos/wormhole/mistral7b/tests -m $test_marker
-
-        env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
     fi

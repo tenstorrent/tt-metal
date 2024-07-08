@@ -27,7 +27,13 @@ from models.experimental.resnet.tests.test_ttnn_resnet50_performant import (
 )
 from models.experimental.resnet.tt.custom_preprocessing import custom_preprocessor
 from models.experimental.resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
-from tracy import signpost
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 # TODO: Create ttnn apis for these
 ttnn.create_event = tt_lib.device.CreateEvent
@@ -62,7 +68,8 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    signpost(header="start")
+    if use_signpost:
+        signpost(header="start")
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
@@ -70,7 +77,8 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         outputs.append(ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=False))
     ttnn.device.synchronize_device(device)
     profiler.end(f"run")
-    signpost(header="stop")
+    if use_signpost:
+        signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
@@ -115,7 +123,8 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    signpost(header="start")
+    if use_signpost:
+        signpost(header="start")
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
@@ -128,7 +137,8 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         outputs.append(ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=False))
     ttnn.device.synchronize_device(device)
     profiler.end(f"run")
-    signpost(header="stop")
+    if use_signpost:
+        signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
@@ -165,7 +175,8 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    signpost(header="start")
+    if use_signpost:
+        signpost(header="start")
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
@@ -174,7 +185,8 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         outputs.append(ttnn.from_device(tt_output_res, blocking=False))
     ttnn.device.synchronize_device(device)
     profiler.end(f"run")
-    signpost(header="stop")
+    if use_signpost:
+        signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
@@ -239,7 +251,8 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    signpost(header="start")
+    if use_signpost:
+        signpost(header="start")
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
@@ -254,7 +267,8 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.device.synchronize_device(device)
     profiler.end(f"run")
-    signpost(header="stop")
+    if use_signpost:
+        signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
