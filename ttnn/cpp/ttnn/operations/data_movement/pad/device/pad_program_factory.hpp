@@ -70,11 +70,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+                                                        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         cores,
                                                         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(program,
-                                                        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+                                                        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         cores,
                                                         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     CoreRange core({0, 0}, {0, 0});
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
+                                                        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
                                                         core,
                                                         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/pad_dims_rm_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/pad_dims_rm_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args_vec));
 
@@ -700,11 +700,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+                                                        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(program,
-                                                        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+                                                        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     // int32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
