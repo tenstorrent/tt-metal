@@ -274,7 +274,7 @@ class TtLlamaAttention(nn.Module):
             attn_weights = pad_by_zero(attn_weights, self.device)[0]
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
-        attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
+        attn_weights = ttnn.softmax_in_place(attn_weights)
         attn_output = ttnn.matmul(attn_weights, value_states)
 
         if attn_output.get_legacy_shape() != [bsz, self.num_heads, q_len, self.head_dim]:

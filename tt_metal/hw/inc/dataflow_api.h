@@ -1485,10 +1485,10 @@ void noc_async_write_barrier() {
 */
 FORCE_INLINE
 void noc_async_writes_flushed() {
-    DEBUG_STATUS("NWBW");
+    DEBUG_STATUS("NWFW");
     while (!ncrisc_noc_nonposted_writes_sent(noc_index))
         ;
-    DEBUG_STATUS("NWBD");
+    DEBUG_STATUS("NWFD");
 }
 
 /**

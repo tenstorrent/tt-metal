@@ -35,13 +35,14 @@ void kernel_main() {
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {
+        cb_reserve_back(cb_in, Wt);
+        l1_write_addr_in = get_write_ptr(cb_in);
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
             noc_async_read_tile(curr_tile, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            l1_write_addr_in += src_in_tile_bytes;
             curr_tile++;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_in, Wt);
     }
 }

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/sdpa/sdpa_op.hpp"
 
 #include <pybind11/pybind11.h>
@@ -63,51 +62,13 @@ void py_module(py::module& m_transformers) {
         &ssm_prefix_scan,
         py::arg().noconvert(),
         py::arg().noconvert(),
+        py::arg().noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
         R"doc(
         Performs a prefix scan to produce the SSM hidden states across an entire sequence. All input and output tensors are expected to be shape [1, 1, L, 2EN] where E = 2560 and N = 32. L can be any multiple of 32.)doc");
 
-    py::class_<SoftmaxProgramConfig>(m_transformers, "SoftmaxProgramConfig").def(py::init<>());
-
-    py::class_<SoftmaxDefaultProgramConfig>(m_transformers, "SoftmaxDefaultProgramConfig")
-        .def(py::init<>());
-
-    py::class_<SoftmaxShardedMultiCoreProgramConfig>(m_transformers, "SoftmaxShardedMultiCoreProgramConfig")
-        .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t>(),
-            py::kw_only(),
-            py::arg("compute_with_storage_grid_size"),
-            py::arg("subblock_w").noconvert(),
-            py::arg("block_h").noconvert(),
-            py::arg("block_w").noconvert()
-        )
-        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
-
-    m_transformers.def(
-        "scale_mask_softmax_in_place",
-        &scale_mask_softmax_in_place,
-        py::arg("input_tensor").noconvert(),
-        py::arg("scale").noconvert() = std::nullopt,
-        py::arg("mask").noconvert() = std::nullopt,
-        py::arg("program_config").noconvert() = SoftmaxDefaultProgramConfig{},
-        py::arg("is_causal_mask").noconvert() = false,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
-        );
-
-    m_transformers.def(
-        "scale_causal_mask_hw_dims_softmax_in_place",
-        &scale_causal_mask_hw_dims_softmax_in_place,
-        py::arg("input_tensor").noconvert(),
-        py::arg("scale").noconvert(),
-        py::arg("mask").noconvert(),
-        py::arg("program_config").noconvert() = SoftmaxShardedMultiCoreProgramConfig{},
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified "
-        "in place. Input must be sharded, and attention mask interleaved and of shape [1, 1, H, W]"
-        );
 
     py::class_<SDPADefaultProgramConfig>(m_transformers, "SDPADefaultProgramConfig")
         .def(py::init<>());

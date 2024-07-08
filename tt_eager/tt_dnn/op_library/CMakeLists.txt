@@ -55,15 +55,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/bmm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/single_core/bmm_op_single_core_tilize_untilize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core/bmm_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_dram_sharded_optimized/bmm_op_multi_core_reuse_dram_sharded_optimized.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/downsample/downsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/optimized_conv_op.cpp
@@ -78,8 +69,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op_v2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/softmax/multi_core/softmax_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/softmax/softmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_decode_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/sdpa_op.cpp
@@ -209,9 +198,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/embeddings/embeddings_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/upsample/multi_core/upsample_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/upsample/single_core/upsample_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/upsample/upsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fold/fold_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fold/single_core/fold_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fold/multi_core/fold_op_multi_core.cpp

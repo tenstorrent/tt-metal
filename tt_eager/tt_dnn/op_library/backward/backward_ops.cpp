@@ -6,7 +6,7 @@
 
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "ttnn/cpp/ttnn/operations/embedding/embedding/embedding.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
@@ -123,32 +123,6 @@ std::vector<std::optional<Tensor>> exp_bw(const Tensor& grad, const Tensor& inpu
     return operation::decorate_as_composite(__func__, _exp_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<Tensor> _addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    Tensor grad_a = mul_unary(ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = mul_unary(ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-
-    return grad_tensor;
-}
-std::vector<Tensor> addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcmul_bw)(
-        grad, input, tensor1, tensor2, value, output_mem_config);
-}
 
 std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -325,106 +299,6 @@ std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const Memor
 }
 std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _tan_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _addcdiv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-    Tensor grad_a = ttnn::multiply(mul_unary(grad, value, output_mem_config), recip(tensor2, output_mem_config));
-    grad_tensor.emplace_back(where(
-        eqz(tensor2, output_mem_config),
-        where(eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
-        grad_a,
-        output_mem_config));
-    Tensor tmp = ttnn::multiply(
-        mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
-    Tensor grad_b =
-        ttnn::multiply(tmp, recip(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(where(
-        eqz(tensor2, output_mem_config),
-        where(eqz(grad, output_mem_config), t_nan, neg(t_inf, output_mem_config), output_mem_config),
-        grad_b,
-        output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> addcdiv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcdiv_bw)(
-        grad, input, tensor1, tensor2, value, output_mem_config);
-}
-
-
-std::vector<std::optional<Tensor>> _where_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
-        } else {
-            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
-        }
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
-        } else {
-            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
-        }
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    return std::move(result);
-}
-
-std::vector<std::optional<Tensor>> where_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _where_bw)(queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
-std::vector<std::optional<Tensor>> where_bw(
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _where_bw)(default_queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 
@@ -627,21 +501,6 @@ std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _exp2_bw)(grad, input, output_mem_config);
-}
-
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result_1 = ttnn::multiply(grad, sub_unary(1.0, weight, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_1);
-    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_2);
-    return grad_tensor;
 }
 
 std::vector<Tensor> _gelu_bw(

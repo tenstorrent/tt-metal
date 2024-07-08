@@ -40,7 +40,6 @@ struct MorehAdam {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
 
     static constexpr auto attribute_names = std::make_tuple(
         "lr",

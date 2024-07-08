@@ -41,7 +41,8 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     CreateCircularBuffer(
         program,
@@ -50,9 +51,11 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
         {
             {CB::c_in0, 2},         // input
             {CB::c_out0, 2},        // output
-            {CB::c_intermed0, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // exp(x)
-            {CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // recips
-            {CB::c_intermed2, 2, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // add
+            {CB::c_intermed0, 1, intermed_data_format},   // exp(x)
+            {CB::c_intermed1, 1, intermed_data_format},   // recips
+            {CB::c_intermed2, 2, intermed_data_format},   // add
+            {CB::c_intermed3, 1},   // max
+            {CB::c_intermed4, 1, intermed_data_format},   // tmp
         });
 
     // create read/wrtie kernel
@@ -63,9 +66,9 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_c.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_c_large.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_c.cpp", all_cores, {dst_is_dram}, writer_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_c_large.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     auto outer_stride = Ht * Wt;
     for(int i = dim ; i < shape.rank() - 2; i++ ) {

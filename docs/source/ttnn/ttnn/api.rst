@@ -81,6 +81,12 @@ Pointwise Unary
    ttnn/atan
    ttnn/atan2
    ttnn/atanh
+   ttnn/bitwise_and
+   ttnn/bitwise_or
+   ttnn/bitwise_xor
+   ttnn/bitwise_not
+   ttnn/bitwise_left_shift
+   ttnn/bitwise_right_shift
    ttnn/cbrt
    ttnn/celu
    ttnn/clip
@@ -96,6 +102,7 @@ Pointwise Unary
    ttnn/exp
    ttnn/exp2
    ttnn/expm1
+   ttnn/floor
    ttnn/geglu
    ttnn/gelu
    ttnn/glu
@@ -106,6 +113,7 @@ Pointwise Unary
    ttnn/heaviside
    ttnn/hypot
    ttnn/i0
+   ttnn/identity
    ttnn/isfinite
    ttnn/isinf
    ttnn/isnan
@@ -127,8 +135,13 @@ Pointwise Unary
    ttnn/prelu
    ttnn/reglu
    ttnn/relu
+   ttnn/relu_max
+   ttnn/relu_min
    ttnn/relu6
+   ttnn/remainder
    ttnn/rsqrt
+   ttnn/rdiv
+   ttnn/rsub
    ttnn/sigmoid
    ttnn/sigmoid_accurate
    ttnn/sign
@@ -227,6 +240,9 @@ Pointwise Ternary
    ttnn/addcmul
    ttnn/mac
    ttnn/where
+   ttnn/addcmul_bw
+   ttnn/addcdiv_bw
+   ttnn/where_bw
 
 Losses
 ======

@@ -123,7 +123,7 @@ tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
-**/tt_eager/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock
+**/tt_eager/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
 **/tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
 **/tt_eager/tt_lib/fallback_ops @tt-aho
 
@@ -157,7 +157,7 @@ models/perf/ @boris-drazic @tt-rkim
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
-docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
+docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @sangwon-chae
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim

@@ -444,14 +444,14 @@ def test_falcon7b_attnention_sliced(
         subblock_w = 1
         if seq_len == 2048:
             subblock_w = 8
-        softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=subblock_w,
             block_h=mm_output_height_shard_spec[0] // 32,
             block_w=mm_output_height_shard_spec[1] // 32,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.softmax_in_place(
+        mm_slice = ttnn.softmax_in_place(
             mm_slice, program_config=softmax_program_config, compute_kernel_config=compute_kernel_config
         )
 
@@ -504,9 +504,7 @@ def test_falcon7b_attnention_sliced(
         output_mem_config=dram_interleaved_memory_config,
     )
     attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=dram_interleaved_memory_config)
-    attn_weights = ttnn.experimental.operations.primary.softmax_in_place(
-        attn_weights, compute_kernel_config=compute_kernel_config
-    )
+    attn_weights = ttnn.softmax_in_place(attn_weights, compute_kernel_config=compute_kernel_config)
     attn_output = ttnn.matmul(attn_weights, reference_value_layer)
     attn_output_torch = tt2torch_tensor(attn_output)
     passing = True
@@ -711,14 +709,14 @@ def test_falcon7b_attention_softmax_sequence(
         subblock_w = 1
         if seq_len == 2048:
             subblock_w = 8
-        softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=subblock_w,
             block_h=mm_output_height_shard_spec[0] // 32,
             block_w=mm_output_height_shard_spec[1] // 32,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+        mm_slice = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
             mm_slice,
             scalar_value,
             attention_masks_per_slice[i],
@@ -767,11 +765,11 @@ def test_falcon7b_attention_softmax_sequence(
         reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
 
-    attn_weights = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+    attn_weights = ttnn.scale_mask_softmax_in_place(
         attn_weights,
         scalar_value,
         attention_mask_proper_dim,
-        program_config=ttnn.experimental.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+        program_config=ttnn.SoftmaxDefaultProgramConfig(),
         is_causal_mask=True,
         compute_kernel_config=compute_kernel_config,
     )
@@ -918,14 +916,14 @@ def test_softmax(device, num_cores, seq_len):
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=1,
             block_h=height_shard_spec[0] // 32,
             block_w=height_shard_spec[1] // 32,
         )
 
-        input_slice = ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+        input_slice = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
             input_slice,
             scalar_value,
             tt_attention_masks_per_slice[i],
@@ -952,7 +950,7 @@ def test_softmax(device, num_cores, seq_len):
         memory_config=dram_interleaved_memory_config,
     )
 
-    out = ttnn.experimental.operations.primary.softmax_in_place(out, compute_kernel_config=compute_kernel_config)
+    out = ttnn.softmax_in_place(out, compute_kernel_config=compute_kernel_config)
 
     out_torch = tt2torch_tensor(out)
     out_torch_view = out_torch.view(1, 1, out_torch.shape[1] * out_torch.shape[2], out_torch.shape[3])

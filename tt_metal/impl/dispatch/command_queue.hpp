@@ -23,13 +23,6 @@
 
 namespace tt::tt_metal {
 
-using std::pair;
-using std::set;
-using std::shared_ptr;
-using std::tuple;
-using std::unique_ptr;
-using std::weak_ptr;
-
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
     ENQUEUE_READ_BUFFER,
@@ -432,7 +425,7 @@ struct ReadBufferDescriptor {
     TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
-    vector<std::optional<uint32_t>> dev_page_to_host_page_mapping;
+    std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
@@ -450,11 +443,11 @@ struct ReadBufferDescriptor {
         buffer_layout(buffer_layout),
         page_size(page_size),
         padded_page_size(padded_page_size),
+        dev_page_to_host_page_mapping(dev_page_to_host_page_mapping),
         dst(dst),
         dst_offset(dst_offset),
         num_pages_read(num_pages_read),
-        cur_dev_page_id(cur_dev_page_id),
-        dev_page_to_host_page_mapping(dev_page_to_host_page_mapping) {}
+        cur_dev_page_id(cur_dev_page_id) {}
 };
 
 /*
@@ -464,13 +457,14 @@ struct ReadEventDescriptor {
     uint32_t event_id;
     uint32_t global_offset;
 
-    ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
     uint32_t get_global_event_id() { return global_offset + event_id; }
 };
 
-typedef LockFreeQueue<std::variant<ReadBufferDescriptor, ReadEventDescriptor>> CompletionReaderQueue;
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+using CompletionReaderQueue = LockFreeQueue<CompletionReaderVariant>;
 }  // namespace detail
 
 struct AllocBufferMetadata {

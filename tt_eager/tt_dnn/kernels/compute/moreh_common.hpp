@@ -85,6 +85,15 @@ ALWI void sub_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     sub_tiles_init(icb0, icb1);
 }
 
+ALWI void sub_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    MATH(( llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>() )); // TODO(AP)
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
+}
+
 ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
@@ -133,7 +142,7 @@ ALWI void reduce_init_delta_with_dt(PoolType reduce_op, ReduceDim dim, uint32_t 
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
     #endif
-    reduce_init_delta<at_start>(reduce_type, reduce_dim, ocb, icb0, icb1);
+    reduce_init_delta<at_start, reduce_type, reduce_dim>(reduce_op, dim, ocb, icb0, icb1);
 }
 
 
@@ -516,7 +525,6 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
 
     mask_tile_init();
     mask_tile(dst0, dst_mask);
-
     tile_regs_commit();
 
     tile_regs_wait();
@@ -531,6 +539,8 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
     cb_push_back(ocb, onetile);
 }
 
+
+template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile_to_cb(
     PoolType reduce_op,
     ReduceDim dim,
@@ -548,12 +558,12 @@ ALWI void reduce_tile_to_cb(
     tile_regs_acquire();
     cb_wait_front(icb1, onetile);
 
-    reduce_init_delta_with_dt<false>(reduce_op, dim, ocb, icb0, icb1);
+    reduce_init_delta_with_dt<false, reduce_type, reduce_dim>(reduce_op, dim, ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
+        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
     }
     reduce_revert_delta(ocb);
     tile_regs_commit();
@@ -840,7 +850,32 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     cb_push_back(ocb, onetile);
 }
 
-ALWI void reduce_tile_and_recip_tile_to_cb(
+ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb, itile + 1);
+
+    tile_regs_acquire();
+    copy_tile_init_with_dt(icb);
+    copy_tile(icb, itile, dst0);
+
+    log_tile_init();
+    log_tile(dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, ocb);
+    tile_regs_release();
+
+    if (pop)
+        cb_pop_front(icb, pop);
+    cb_push_back(ocb, onetile);
+}
+
+template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+ALWI void reduce_and_recip_tile_to_cb(
     PoolType reduce_op,
     ReduceDim dim,
     uint32_t icb0,
@@ -856,12 +891,12 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
     cb_wait_front(icb1, onetile);
 
     tile_regs_acquire();
-    reduce_init_delta_with_dt<false>(reduce_op, dim, ocb, icb0, icb1);
+    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(reduce_type, reduce_dim, ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
+        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
     }
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -872,6 +907,49 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
 
     recip_tile_init();
     recip_tile(dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, ocb);
+    tile_regs_release();
+
+    cb_push_back(ocb, onetile);
+}
+
+
+template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+ALWI void reduce_and_log_tile_to_cb(
+    PoolType reduce_op,
+    ReduceDim dim,
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb,
+    uint32_t size,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb1, onetile);
+
+    tile_regs_acquire();
+    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(reduce_type, reduce_dim, ocb, icb0, icb1);
+    for (uint32_t x = 0; x < size; ++x) {
+        cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
+
+        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
+        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
+    }
+    if (pop0)
+        cb_pop_front(icb0, pop0);
+    if (pop1)
+        cb_pop_front(icb1, pop1);
+
+    reduce_revert_delta();
+
+    log_tile_init();
+    log_tile(dst0);
     tile_regs_commit();
 
     tile_regs_wait();

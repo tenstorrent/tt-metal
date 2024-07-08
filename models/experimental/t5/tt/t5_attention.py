@@ -548,7 +548,7 @@ class TtT5Attention(nn.Module):
         scores = ttnn.add(scores, position_bias, memory_config=self.mem_config)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
-        attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
+        attn_weights = ttnn.softmax_in_place(scores)
 
         # Dropout is not used in inference
         # attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)  # (batch_size, n_heads, seq_length, key_length)

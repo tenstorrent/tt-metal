@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.cpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -55,7 +56,7 @@ std::vector<ttnn::Tensor> _embedding_bw(
         input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1,
         "Only dim 0 && 3 for the input can be non 1");
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = embeddings(input, grad, false);
+    Tensor grad_a = ttnn::embedding(input, grad);
     grad_tensor.emplace_back(grad_a);
 
     return grad_tensor;
@@ -749,7 +750,7 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_overload_function(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::LERP_BW:
-            return tt::tt_metal::_lerp_overload;
+            return ttnn::operations::ternary_backward::utils::_lerp_overload;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

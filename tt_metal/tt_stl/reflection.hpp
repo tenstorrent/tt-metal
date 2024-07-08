@@ -107,7 +107,11 @@ struct Attribute final {
         implementations{
             .to_string_impl_ = [](const storage_t& storage) -> const std::string {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
-                return fmt::format("{}", object);
+                if constexpr (std::is_pointer_v<BaseType>) {
+                    return fmt::format("{}*", get_type_name<BaseType>());
+                } else {
+                    return fmt::format("{}", object);
+                }
             },
             .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
@@ -250,8 +254,15 @@ Attributes get_attributes(const T& object) {
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
         return object.attributes();
     } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<T>, "Object doesn't support compile-time or run-time attributes!");
+        tt::stl::reflection::Attributes attributes;
+        reflect::for_each(
+            [&object, &attributes](auto I) {
+                const auto& attribute_name = reflect::member_name<I>(object);
+                const auto& attribute = reflect::get<I>(object);
+                attributes.push_back({std::string{attribute_name}, attribute});
+            },
+            object);
+        return attributes;
     }
 }
 
@@ -392,6 +403,25 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
         index++;
     }
     os << "}";
+    return os;
+}
+
+template <typename T>
+    requires(std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value))
+std::ostream& operator<<(std::ostream& os, const T& object) {
+    os << reflect::type_name(object);
+    os << "(";
+
+    reflect::for_each(
+        [&os, &object](auto I) {
+            os << reflect::member_name<I>(object) << "=" << reflect::get<I>(object);
+            if (I < reflect::size(object) - 1) {
+                os << ",";
+            }
+        },
+        object);
+
+    os << ")";
     return os;
 }
 
@@ -616,6 +646,21 @@ struct fmt::formatter<std::set<T>> {
     }
 };
 
+template <typename T>
+    requires(
+        std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value or
+                                       tt::stl::reflection::detail::supports_conversion_to_string_v<T>))
+struct fmt::formatter<T> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 namespace tt {
 namespace stl {
 namespace hash {
@@ -746,7 +791,7 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
-    } else if constexpr (std::is_aggregate_v<T>) {
+    } else if constexpr (std::is_aggregate_v<std::decay<T>>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }

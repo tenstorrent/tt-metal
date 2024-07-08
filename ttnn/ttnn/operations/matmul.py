@@ -7,16 +7,13 @@ from typing import Optional, Tuple
 
 import ttnn
 
-MatmulProgramConfig = ttnn._ttnn.deprecated.operations.primary.MatmulProgramConfig
-MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.deprecated.operations.primary.MatmulMultiCoreReuseProgramConfig
-MatmulMultiCoreReuseMultiCastProgramConfig = (
-    ttnn._ttnn.deprecated.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig
-)
-MatmulMultiCoreReuseMultiCast1DProgramConfig = (
-    ttnn._ttnn.deprecated.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig
-)
+
+MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
+MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
+MatmulMultiCoreReuseMultiCastProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastProgramConfig
+MatmulMultiCoreReuseMultiCast1DProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
-    ttnn._ttnn.deprecated.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+    ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
 )
 
 

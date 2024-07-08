@@ -40,30 +40,6 @@ def test_benchmark_ttnn_add(device, use_program_cache, height, width, dtype):
 ])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 # fmt: on
-def test_benchmark_ttl_matmul(device, use_program_cache, m_size, k_size, n_size, dtype):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((1, 1, m_size, k_size))
-    torch_input_tensor_b = torch.rand((1, 1, k_size, n_size))
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    ttl.tensor.matmul(input_tensor_a.value, input_tensor_b.value)
-    for i in range(3):
-        start = time.time()
-        output = ttl.tensor.matmul(input_tensor_a.value, input_tensor_b.value)
-        end = time.time()
-        duration = end - start
-        print(f"ttl.tensor.matmul: {duration} seconds")
-        output = output.cpu()
-
-
-# fmt: off
-@pytest.mark.parametrize("m_size,k_size,n_size", [
-    (384, 1024, 1024),
-])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-# fmt: on
 def test_benchmark_ttnn_matmul(device, use_program_cache, m_size, k_size, n_size, dtype):
     torch.manual_seed(0)
 

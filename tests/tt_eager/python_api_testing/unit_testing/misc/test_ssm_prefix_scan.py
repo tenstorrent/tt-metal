@@ -11,9 +11,10 @@ from loguru import logger
 from models.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
 
 
-def sequential_prefix_scan(a, bx):
+def sequential_prefix_scan(a, bx, h_prev):
     (_, _, L, EN) = bx.shape
     hidden_states = torch.zeros((1, 1, L, EN), device=a.device)
+    hidden_states[0, 0, -1, :] = h_prev
     for i in range(L):
         hidden_states[:, :, i] = a[:, :, i] * hidden_states[:, :, i - 1] + bx[:, :, i]
     return hidden_states
@@ -24,8 +25,9 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 
     a = torch.randn((1, 1, L, E * N))
     bx = torch.randn((1, 1, L, E * N))
+    h_prev = torch.randn((1, 1, 1, E * N))
 
-    expected = sequential_prefix_scan(a, bx)
+    expected = sequential_prefix_scan(a, bx, h_prev)
 
     compute_grid_size = device.compute_with_storage_grid_size()
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
@@ -41,17 +43,36 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     a = ttl.tensor.Tensor(a, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
     bx = ttl.tensor.Tensor(bx, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
 
+    h_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        [1, E * N // num_cores],
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    h_memory_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, h_shard_spec
+    )
+    h_prev = (
+        ttl.tensor.Tensor(h_prev, ttl.tensor.DataType.BFLOAT16)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, h_memory_config)
+    )
+
     actual = ttl.operations.primary.transformers.ssm_prefix_scan(
-        a, bx, output_mem_config=memory_config, output_dtype=dtype
+        a, bx, h_prev, output_mem_config=memory_config, output_dtype=dtype
     )
     assert list(actual.get_legacy_shape()) == list(expected.shape)
     assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)
-
     passing_pcc, output_pcc = comp_pcc(actual, expected, 0.999)
     logger.debug(f"Out passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
+
+    h_prev = tt2torch_tensor(h_prev)
+    passing_pcc, output_pcc = comp_pcc(h_prev, expected[0, 0, -1, :], 0.999)
+    logger.debug(f"Hidden state passing={passing_pcc}")
+    logger.debug(f"Hidden state pcc={output_pcc}")
 
     assert passing_pcc
 
@@ -76,6 +97,82 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 )
 def test_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     run_ssm_prefix_scan(L, E, N, num_cores, dtype, device)
+
+
+def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cores: int, dtype, device):
+    torch.manual_seed(0)
+
+    a = torch.randn((1, 1, L, E * N))
+    bx = torch.randn((1, 1, L, E * N))
+    h_prev = torch.randn((1, 1, 1, E * N))
+
+    expected = sequential_prefix_scan(a, bx, h_prev)
+
+    num_chunks = L // chunk_size
+    a_chunks = torch.chunk(a, num_chunks)
+    bx_chunks = torch.chunk(bx, num_chunks)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        [L, E * N // num_cores],
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    memory_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+    )
+
+    def to_device(x):
+        return ttl.tensor.Tensor(x, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
+
+    h_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        [1, E * N // num_cores],
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    h_memory_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, h_shard_spec
+    )
+    h_prev = (
+        ttl.tensor.Tensor(h_prev, ttl.tensor.DataType.BFLOAT16)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, h_memory_config)
+    )
+
+    actual = []
+    for idx in range(len(a_chunks)):
+        a_chunk = to_device(a_chunks[idx])
+        bx_chunk = to_device(bx_chunks[idx])
+
+        h_chunk = ttl.operations.primary.transformers.ssm_prefix_scan(
+            a_chunk, bx_chunk, h_prev, output_mem_config=memory_config, output_dtype=dtype
+        )
+        actual.append(tt2torch_tensor(h_chunk))
+
+    actual = torch.concat(actual, dim=2)
+    assert list(actual.shape) == [1, 1, L, E * N]
+
+    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.999)
+    logger.debug(f"Out passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
+
+
+@skip_for_grayskull("Grayskull not supported")
+@pytest.mark.parametrize(
+    "L, E, N, chunk_size, num_cores",
+    (
+        (32, 32, 32, 32, 1),
+        (64, 32, 32, 32, 1),
+        (96, 32, 32, 64, 1),
+        (128, 2560, 32, 32, 32),
+    ),
+)
+def test_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cores: int, device):
+    dtype = ttl.tensor.DataType.BFLOAT8_B
+    run_chunked_ssm_prefix_scan(L, E, N, chunk_size, num_cores, dtype, device)
 
 
 @skip_for_grayskull("Grayskull not supported")

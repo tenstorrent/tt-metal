@@ -47,12 +47,6 @@ RotateHalfOpParallelizationStrategy RotateHalf::get_parallelization_strategy(con
     return RotateHalfOpParallelizationStrategy::SINGLE_CORE;
 }
 
-tt::stl::reflection::Attributes RotateHalf::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

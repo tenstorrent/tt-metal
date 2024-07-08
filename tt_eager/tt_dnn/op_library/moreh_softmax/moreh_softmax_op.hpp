@@ -32,8 +32,8 @@ enum class MorehSoftmaxOp {
     LOGSOFTMAX,
 };
 
-bool is_moreh_softmax_w_small_available(const Tensor &tensor);
-bool is_moreh_softmax_h_small_available(const Tensor &tensor);
+bool is_moreh_softmax_w_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config);
+bool is_moreh_softmax_h_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config);
 
 operation::ProgramWithCallbacks moreh_softmax_w_small(
     const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);

@@ -1895,13 +1895,6 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                                     );
     }
 }
-tt::stl::reflection::Attributes GroupNorm::attributes() const {
-    return {
-        {"eps", this->eps},
-        {"num_groups", this->num_groups},
-        {"output_mem_config", this->output_mem_config}
-    };
-}
 
 }   // namespace primary
 }   // namespace operations

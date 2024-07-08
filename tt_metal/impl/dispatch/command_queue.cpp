@@ -10,6 +10,7 @@
 #include <iterator>   // for back_inserter
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "allocator/allocator.hpp"
@@ -1537,7 +1538,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     src_page_index,
                     num_pages_to_read);
 
-                this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
+                this->issued_completion_q_reads.push(detail::CompletionReaderVariant(
+                    std::in_place_type<detail::ReadBufferDescriptor>,
                     buffer.buffer_layout(),
                     buffer.page_size(),
                     padded_page_size,
@@ -1569,7 +1571,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             src_page_index,
             pages_to_read);
 
-        this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
+        this->issued_completion_q_reads.push(detail::CompletionReaderVariant(
+            std::in_place_type<detail::ReadBufferDescriptor>,
             buffer.buffer_layout(),
             buffer.page_size(),
             padded_page_size,
@@ -1904,7 +1907,8 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool cle
     if (clear_count) {
         this->expected_num_workers_completed = 0;
     }
-    this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
+    this->issued_completion_q_reads.push(
+        detail::CompletionReaderVariant(std::in_place_type<detail::ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
 }
 
@@ -2142,8 +2146,7 @@ void HWCommandQueue::read_completion_queue() {
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
-                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor =
-                    *(this->issued_completion_q_reads.pop());
+                auto read_descriptor = *(this->issued_completion_q_reads.pop());
                 {
                     ZoneScopedN("CompletionQueueWait");
                     this->manager.completion_queue_wait_front(
@@ -2220,9 +2223,8 @@ void HWCommandQueue::finish() {
         }
     } else {
         std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
-        this->reads_processed_cv.wait(lock, [this] {
-            return this->num_entries_in_completion_q == this->num_completed_completion_q_reads;
-        });
+        this->reads_processed_cv.wait(
+            lock, [this] { return this->num_entries_in_completion_q == this->num_completed_completion_q_reads; });
     }
 }
 

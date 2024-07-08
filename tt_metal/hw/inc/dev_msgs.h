@@ -75,6 +75,7 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint8_t max_cb_index;
     volatile uint8_t dispatch_core_x;
     volatile uint8_t dispatch_core_y;
+    volatile uint8_t exit_erisc_kernel;
     volatile uint8_t run;  // must be in last cacheline of this msg
 };
 

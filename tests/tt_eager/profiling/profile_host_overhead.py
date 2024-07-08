@@ -9,7 +9,8 @@ import tt_lib
 import time
 import statistics
 from loguru import logger
-from models.utility_functions import torch2tt_tensor
+
+# from models.utility_functions import torch2tt_tensor
 from tests.tt_eager.profiling import ops_for_profiling
 from tracy import signpost
 
@@ -33,6 +34,10 @@ test_sweep_args = [
 
 all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
 NUM_REPEATS = 15
+
+
+def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
+    return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
@@ -90,8 +95,8 @@ def measure_host_overhead_binary(
     if shape_func is not None:
         input_shape_0, input_shape_1 = shape_func(input_shape)
 
-    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
+    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100).bfloat16()
 
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
@@ -123,7 +128,7 @@ def measure_host_overhead_unary(
     shape_func=None,
     is_warmup=False,
 ):
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).bfloat16()
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
 
     def op_func():
@@ -160,9 +165,9 @@ def measure_host_overhead_ternary(
     if shape_func is not None:
         input_shape_0, input_shape_1, input_shape_2 = shape_func(input_shape)
 
-    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100)
-    z = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
+    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100).bfloat16()
+    z = torch.Tensor(size=input_shape_2).uniform_(-100, 100).bfloat16()
 
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
@@ -251,6 +256,9 @@ def test_host_overhead(device, user_input):
     Run with tracy:
     python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
+
+    # Enable program cache
+    device.enable_program_cache()
 
     if "::" in user_input[0]:
         splitted = user_input[0].split("::")

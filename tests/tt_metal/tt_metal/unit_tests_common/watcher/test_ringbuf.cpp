@@ -192,6 +192,10 @@ TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
         log_info(tt::LogTest, "Skip due to #7771");
         GTEST_SKIP();
     }
+    if (this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "Skip, see #9993");
+        GTEST_SKIP();
+    }
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},

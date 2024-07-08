@@ -117,14 +117,6 @@ operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(
     }
 }
 
-tt::stl::reflection::Attributes SplitFusedQKVAndSplitHeads::attributes() const {
-    return {
-        {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
-        {"output_mem_config", this->output_mem_config},
-        {"num_heads", this->num_heads},
-    };
-}
-
 void ConcatenateHeads::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
@@ -166,13 +158,6 @@ operation::ProgramWithCallbacks ConcatenateHeads::create_program(
         "Unsupported grid shape");
 
     return multi_core_concat_heads(input_tensor, output_tensor, this->compute_with_storage_grid_size);
-}
-
-tt::stl::reflection::Attributes ConcatenateHeads::attributes() const {
-    return {
-        {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
@@ -274,15 +259,6 @@ operation::ProgramWithCallbacks AttnMatmul::create_program(
         this->transpose_hw,
         this->compute_with_storage_grid_size,
         this->compute_kernel_config);
-}
-
-tt::stl::reflection::Attributes AttnMatmul::attributes() const {
-    return {
-        {"transpose_hw", this->transpose_hw},
-        {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
 }
 
 const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -479,17 +455,6 @@ operation::ProgramWithCallbacks GroupAttnMatmul::create_program(
         this->compute_kernel_config);
 }
 
-tt::stl::reflection::Attributes GroupAttnMatmul::attributes() const {
-    return {
-        {"transpose_hw", this->transpose_hw},
-        {"out_subblock_w", this->out_subblock_w},
-        {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-        {"row_major", this->row_major},
-    };
-}
-
 const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -599,13 +564,6 @@ operation::ProgramWithCallbacks SSMEltwiseMul::create_program(
         input_tensor_a, input_tensor_b, output_tensor, hidden_size, this->math_fidelity, device_compute_with_storage_grid_size);
 }
 
-tt::stl::reflection::Attributes SSMEltwiseMul::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-        {"hidden_size", this->HIDDEN_SIZE},
-    };
-}
 
 void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1);
@@ -662,23 +620,13 @@ operation::ProgramWithCallbacks SSM1DSumReduce::create_program(
     return multi_core_ssm_1d_sum_reduce(input_tensor_a, output_tensor, math_fidelity, device_compute_with_storage_grid_size);
 }
 
-tt::stl::reflection::Attributes SSM1DSumReduce::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
-}
-
 void SSMPrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors");
+    TT_FATAL(input_tensors.size() == 3, "Expected 3 input tensors (A, Bx, H)");
 
     const auto& a = input_tensors.at(0);
     const auto& bx = input_tensors.at(1);
-
     TT_FATAL(a.dtype() == bx.dtype(), "Expected input tensors to have the same data type");
-
     TT_FATAL(a.layout() == Layout::TILE && bx.layout() == Layout::TILE, "Expected input tensors to be tile layout");
-
     TT_FATAL(a.get_legacy_shape() == bx.get_legacy_shape(), "Expected input tensors to have the same shape");
 
     const auto& shape = a.get_legacy_shape();
@@ -686,14 +634,22 @@ void SSMPrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
     TT_FATAL(shape[2] >= TILE_HEIGHT && shape[2] % TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
 
-    TT_FATAL(a.is_sharded() && bx.is_sharded(), "Expected input tensors to be sharded");
-    TT_FATAL(a.shard_spec().has_value() && bx.shard_spec().has_value(), "Expected input tensors to be sharded");
+    const auto& h = input_tensors.at(2);
+    TT_FATAL(h.dtype() == DataType::BFLOAT16, "Expected initial hidden state to be bfloat16");
+    TT_FATAL(h.layout() == Layout::ROW_MAJOR, "Expected initial hidden state to be row-major");
+    //TT_FATAL(h.get_legacy_shape() == {1, 1, 1, shape[3]}, "Expected initial hidden state to have the same hidden size as A and Bx");
+
+    TT_FATAL(a.is_sharded() && bx.is_sharded() && h.is_sharded(), "Expected input tensors to be sharded");
+    TT_FATAL(a.shard_spec().has_value() && bx.shard_spec().has_value() && h.shard_spec().has_value(), "Expected input tensors to be sharded");
     TT_FATAL(
         a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Expected A tensor to be row major orientation");
     TT_FATAL(
         bx.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Expected Bx tensor to be row major orientation");
+    TT_FATAL(
+        h.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+        "Expected h tensor to be row major orientation");
 }
 
 std::vector<Shape> SSMPrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -710,16 +666,10 @@ operation::ProgramWithCallbacks SSMPrefixScan::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& a = input_tensors.at(0);
     const auto& bx = input_tensors.at(1);
+    const auto& h = input_tensors.at(2);
     auto& output = output_tensors.at(0);
     auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
-    return multi_core_ssm_prefix_scan(a, bx, output, math_fidelity, device_compute_with_storage_grid_size);
-}
-
-tt::stl::reflection::Attributes SSMPrefixScan::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
+    return multi_core_ssm_prefix_scan(a, bx, h, output, math_fidelity, device_compute_with_storage_grid_size);
 }
 
 }  // namespace transformers
