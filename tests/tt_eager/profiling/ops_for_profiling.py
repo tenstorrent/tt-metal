@@ -2485,15 +2485,15 @@ def addalpha_bw(x, y, z):
 
 
 def addcmul_bw(x, y, z):
-    tt_lib.tensor.addcmul_bw(x, x, y, z, value=5)
+    ttnn.addcmul_bw(x, x, y, z, value=5)
 
 
 def addcdiv_bw(x, y, z):
-    tt_lib.tensor.addcdiv_bw(x, x, y, z, value=5)
+    ttnn.addcdiv_bw(x, x, y, z, alpha=5)
 
 
 def where_bw(x, y, z):
-    tt_lib.tensor.where_bw(x, y, z, z)
+    ttnn.where_bw(x, y, z, z)
 
 
 def bias_gelu_bw_none(x, y, z):
@@ -2644,11 +2644,11 @@ all_ternary_ops = [
     },
     {
         "op": addcmul_bw,
-        "name": "tt_lib.tensor.addcmul_bw",
+        "name": "ttnn.addcmul_bw",
     },
     {
         "op": addcdiv_bw,
-        "name": "tt_lib.tensor.addcdiv_bw",
+        "name": "ttnn.addcdiv_bw",
     },
     {
         "op": ttnn.binary_assign_bw,
@@ -2701,7 +2701,7 @@ all_ternary_ops = [
     # },
     {
         "op": where_bw,
-        "name": "tt_lib.tensor.where_bw",
+        "name": "ttnn.where_bw",
     },
     {
         "op": ttnn.sub_bw,
