@@ -100,6 +100,11 @@ void py_module(py::module& module) {
         ttnn::complex_mul_bw,
         R"doc(Performs backward operations for multiplication of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_complex_binary_backward(
+        module,
+        ttnn::complex_div_bw,
+        R"doc(Performs backward operations for division of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

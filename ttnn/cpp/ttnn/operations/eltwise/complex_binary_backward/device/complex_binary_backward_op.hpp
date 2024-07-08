@@ -16,6 +16,7 @@ enum class ComplexBinaryBackwardOpType {
     COMPLEX_ADD_BW,
     COMPLEX_SUB_BW,
     COMPLEX_MUL_BW,
+    COMPLEX_DIV_BW,
 };
 
 

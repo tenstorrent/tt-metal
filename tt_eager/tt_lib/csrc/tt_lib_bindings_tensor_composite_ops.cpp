@@ -1601,30 +1601,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	        R"doc(Returns addition of a complex division of ``{0}`` by ``{1}``.)doc"
         );
 
-    m_tensor.def(
-        "complex_div_bw",
-        py::overload_cast<const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&>(
-            &complex_div_bw),
-        py::arg("grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("other").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Performs backward operations for division of complex tensors``input`` and ``other`` with given ``grad``.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensors will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "input", "First input tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "other", "Second input Tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
     // loss functions
     m_tensor.def(
         "mseloss",
