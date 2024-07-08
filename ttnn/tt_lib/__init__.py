@@ -78,6 +78,5 @@ from loguru import logger
 # _check_so_rpath("_C", site_pkgs_tt_lib / "build" / "lib")
 
 import sys
-from pathlib import Path
 
-from ttnn.experimental import tensor, device, profiler, operations
+from ttnn._ttnn.deprecated import tensor, device, profiler, operations

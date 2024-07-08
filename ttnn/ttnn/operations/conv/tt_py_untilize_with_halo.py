@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_op import TTPyOp
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
+from ttnn.operations.conv.tt_py_op import TTPyOp
+from ttnn.operations.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
     generate_untilize_with_halo_kernel_configs,
 )
 from tt_lib.utils import _nearest_y
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+from ttnn.operations.conv.sliding_window_op_utils import (
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
     get_sliding_window_op_output_shard_nhw_size,

@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "device/binary_backward_op.cpp"
+#include "device/binary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 

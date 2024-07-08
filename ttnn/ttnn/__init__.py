@@ -16,12 +16,11 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn._ttnn
-import tt_lib as _tt_lib
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-UnaryWithParam = _tt_lib.tensor.FusibleActivationWithParam
-UnaryOpType = _tt_lib.tensor.FusibleActivation
+UnaryWithParam = ttnn._ttnn.deprecated.tensor.FusibleActivationWithParam
+UnaryOpType = ttnn._ttnn.deprecated.tensor.FusibleActivation
 
 
 @dataclasses.dataclass

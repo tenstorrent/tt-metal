@@ -6,7 +6,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.cpp"
+#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
@@ -15,11 +15,14 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/embedding.hpp"
 
 namespace ttnn::operations::binary_backward {
 
 namespace utils {
 
+using namespace ttnn;
 
 std::vector<ttnn::Tensor> _atan2_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
@@ -419,7 +422,7 @@ std::vector<Tensor> _bias_gelu_bw(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    string approximate,
+    std::string approximate,
     const MemoryConfig& output_mem_config) {
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
@@ -489,7 +492,7 @@ std::vector<Tensor> _div_bw(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    string round_mode,
+    std::string round_mode,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     if (round_mode == "None") {
@@ -683,7 +686,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, string, const MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::BIAS_GELU_BW:
             return _bias_gelu_bw;
@@ -753,7 +756,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-}
+} // utils
 
 
 }  // namespace ttnn::operations::binary

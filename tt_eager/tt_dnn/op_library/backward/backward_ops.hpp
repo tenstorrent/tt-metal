@@ -620,6 +620,13 @@ std::vector<Tensor> unary_div_no_nan_bw(
     float scalar = 1.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> _lerp_overload(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& end,
+    const Tensor& weight,
+    const MemoryConfig& output_mem_config);
+
 }  // namespace tt_metal
 
 }  // namespace tt

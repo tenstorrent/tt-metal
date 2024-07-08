@@ -4,16 +4,16 @@
 
 from loguru import logger
 from typing import List, Union
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_op import TTPyOp
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
+from ttnn.operations.conv.tt_py_op import TTPyOp
+from ttnn.operations.conv.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+from ttnn.operations.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
+from ttnn.operations.conv.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+from ttnn.operations.conv.sliding_window_op_utils import (
     SlidingWindowOpParams,
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
@@ -28,7 +28,7 @@ from tt_lib.utils import (
     divup,
 )
 
-import tt_lib as ttl
+import ttnn._ttnn.deprecated as ttl
 import torch
 import math
 import warnings

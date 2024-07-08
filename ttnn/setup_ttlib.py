@@ -5,10 +5,9 @@
 from setuptools import setup
 from setuptools import find_packages
 
-
 setup(
-    name="ttnn",
+    name="tt_lib",
     version="0.0.0",
-    description="User-friendly API for running operations on TensTorrent hardware",
+    description="This is a temp lib to easy migration to ttnn",
     packages=find_packages(),
 )

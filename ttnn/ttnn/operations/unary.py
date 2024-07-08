@@ -4,7 +4,7 @@
 
 import sys
 
-import tt_lib as ttl
+import ttnn._ttnn.deprecated as ttl
 
 import ttnn
 

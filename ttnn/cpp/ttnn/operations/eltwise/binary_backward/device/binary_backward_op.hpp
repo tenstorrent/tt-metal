@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::binary_backward {
 
@@ -41,6 +42,17 @@ enum class BinaryBackwardOpType {
     LERP_BW,
     MUL_BW,
 };
+
+namespace utils {
+    std::function<std::vector<ttnn::Tensor>(const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType);
+    std::function<std::vector<ttnn::Tensor>(const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::Tensor&, float, const ttnn::MemoryConfig&)> get_function_type1_w_float(BinaryBackwardOpType OpType);
+    std::function<std::vector<ttnn::Tensor>(const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::Tensor&, std::string, const ttnn::MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType);
+    std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const ttnn::Tensor&, const ttnn::Tensor&, const Tensor&, float, const ttnn::MemoryConfig&, const std::vector<bool>&, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>)> get_function_type2(BinaryBackwardOpType OpType);
+    std::function<std::vector<std::optional<ttnn::Tensor>>(const ttnn::Tensor&, const Tensor&, const Tensor&, float, const ttnn::MemoryConfig&, const std::vector<bool>&, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType);
+    std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const ttnn::Tensor&, const Tensor&, const Tensor&, const ttnn::MemoryConfig&, const std::vector<bool>&, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>)> get_function_type3(BinaryBackwardOpType OpType);
+    std::function<std::vector<std::optional<ttnn::Tensor>>(const ttnn::Tensor&, const Tensor&, const ttnn::Tensor&, const ttnn::MemoryConfig&, const std::vector<bool>&, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType);
+    std::function<std::vector<ttnn::Tensor>(const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::Tensor&, const ttnn::MemoryConfig&)> get_overload_function(BinaryBackwardOpType OpType);
+}
 
 
 }  // namespace ttnn::operations::binary

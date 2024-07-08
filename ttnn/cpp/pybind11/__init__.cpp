@@ -19,8 +19,8 @@ namespace py = pybind11;
 PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
 
-    auto m_experimental = module.def_submodule("experimental", "ttnn experimental");
-    tt::bind_tt_lib(m_experimental);
+    auto m_deprecated = module.def_submodule("deprecated", "tt_lib deprecated bindigns tensor, device, profiler..");
+    tt::bind_deprecated(m_deprecated);
 
     auto m_types = module.def_submodule("types", "ttnn Types");
     ttnn::types::py_module(m_types);

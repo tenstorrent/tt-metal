@@ -11,5 +11,6 @@
 namespace py = pybind11;
 
 namespace tt {
-void bind_tt_lib(py::module m);
+void bind_deprecated(py::module m);
+
 }
