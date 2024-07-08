@@ -28,7 +28,14 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "batch",
+    (
+        16,
+        32,
+    ),
+)
+def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, batch):
     for device in t3k_device_mesh.get_device_ids():
         t3k_device_mesh.get_device(device).enable_async(True)
 
@@ -36,11 +43,20 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     dtype = ttnn.bfloat8_b
     iterations = 10
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    if batch == 32:
+        generation_start_pos = 0
+        max_seq_len = 16384
+    elif batch in [4, 8, 16]:
+        generation_start_pos = 0
+        max_seq_len = 32768
+    else:
+        raise ValueError(f"Batch size {batch} not supported")
+
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    prompts = ["Once"] * 32
+    prompts = ["Once"] * batch
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Load reference model
@@ -61,12 +77,10 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         dtype=dtype,
     )
 
-    generation_start_pos = 0
     generation_length = iterations
     all_tests_pass = True
 
     seqlen = 1  # Generating one token per user at a time
-    batch = 32
 
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
@@ -80,7 +94,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
         decode_input, attn_mask = prepare_inputs_ttnn(
             tt_decode_input,
@@ -97,10 +111,10 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
 
         # Measure PCC
         positions = torch.LongTensor([start_pos])

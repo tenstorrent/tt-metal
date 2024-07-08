@@ -13,6 +13,7 @@ class TtMixtralAttention(LightweightModule):
     def __init__(self, device_mesh, state_dict, args, layer_num, dtype):
         super().__init__()
         self.num_devices = 8
+        self.tile_size = 32
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.model_args = args
@@ -128,9 +129,9 @@ class TtMixtralAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-        reduce_mask_torch = torch.zeros(1, 1, self.max_batch_size, self.max_batch_size * 8)
-        for i in range(self.max_batch_size):
-            reduce_mask_torch[:, :, i, range(i, self.max_batch_size * 8, self.max_batch_size)] = 1
+        reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
+        for i in range(self.tile_size):
+            reduce_mask_torch[:, :, i, range(i, self.tile_size * 8, self.tile_size)] = 1
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
             device=self.device_mesh,
@@ -189,6 +190,12 @@ class TtMixtralAttention(LightweightModule):
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             program_config=self.model_config["QKV_MM_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
+        )
+
+        # Reshape such that true unpadded batch is tracked in shape
+        fqkv_shape = xqkv_fused.shape
+        xqkv_fused = ttnn.reshape(
+            xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
         )
 
         # split qkv into heads

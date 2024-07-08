@@ -202,6 +202,11 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
     assert seq_len == 1, "Only supporting decode mode"
 
     x_1SBH = x_bsh.view(1, seq_len, batch, hidden_size)
+    # Pad small batches to 32
+    if batch < 32:
+        zeros = torch.zeros(1, seq_len, 32, hidden_size)
+        zeros[:, :, :batch, :] = x_1SBH
+        x_1SBH = zeros
 
     # input goes to L1
     xs_1SBH = ttnn.from_torch(
@@ -216,13 +221,15 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
     # Attention mask
     k_chunk_size = get_chunk_size(current_pos + 1)
     padded_layer_past_len = nearest_n(current_pos + 1, k_chunk_size)
-    attn_mask = torch.zeros(seq_len, 32, 32, padded_layer_past_len)  # [SB4P]
+    attn_mask = torch.zeros(seq_len, batch, 32, padded_layer_past_len)  # [SB4P]
     attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
     if model_args.dummy_weights:
         cache_name = None
     else:
-        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask_interleaved.{current_pos}")
+        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (
+            f"attention_mask_interleaved.batch{batch}.{padded_layer_past_len}.{current_pos}"
+        )
 
     attn_mask = ttnn.as_tensor(
         attn_mask,
@@ -288,12 +295,16 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
             current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         pos = iter
 
+        k_chunk_size = get_chunk_size(pos + 1)
+        padded_layer_past_len = nearest_n(pos + 1, k_chunk_size)
+
         if model_args.dummy_weights:
             cache_name = None
         else:
-            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask_interleaved.{pos}")
+            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (
+                f"attention_mask_interleaved.batch{model_args.max_batch_size}.{padded_layer_past_len}.{pos}"
+            )
 
-        padded_layer_past_len = min(nearest_32(pos + 1), model_args.sliding_window)
         # 32 on dim 2 for 1 tile (padded n_heads)
         attn_mask = torch.zeros(1, model_args.max_batch_size, 32, padded_layer_past_len)
         attn_mask[:, :, :, pos + 1 :] = torch.finfo(attn_mask.dtype).min
@@ -311,7 +322,7 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
         _ = tt_attn(
             attention_inputs,
             pos,
-            pos + 1,
+            pos,
             attn_mask,
             current_rot_mat,
         )
