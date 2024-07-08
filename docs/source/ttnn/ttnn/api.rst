@@ -172,7 +172,7 @@ Pointwise Unary
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
-   ttnn/unary_eq_bw
+   ttnn/eq_bw
 
 Pointwise Binary
 ================
@@ -220,7 +220,6 @@ Pointwise Binary
    ttnn/logaddexp_bw
    ttnn/logaddexp2_bw
    ttnn/squared_difference_bw
-   ttnn/binary_eq_bw
    ttnn/concat_bw
    ttnn/binary_le_bw
    ttnn/rsub_bw

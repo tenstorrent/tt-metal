@@ -63,6 +63,9 @@ Example:
                 }else if(operation.base_name()=="add_bw"){
                     using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::ADD_BW>;
                     return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+                }else if(operation.base_name()=="eq_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::EQ_BW>;
+                    return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
                 }
                 return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
 
@@ -86,6 +89,9 @@ Example:
                 using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
                 if(operation.base_name()=="add_bw"){
                     using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::ADD_BW>;
+                    return BinaryBackwardOp::execute_on_main_thread(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
+                }else if(operation.base_name()=="eq_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::EQ_BW>;
                     return BinaryBackwardOp::execute_on_main_thread(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
                 }
                 return BinaryBackwardOp::execute_on_main_thread(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, input_a_grad, input_b_grad);
@@ -185,8 +191,9 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
-        ttnn::unary_eq_bw,
-        R"doc(Performs backward operations for equal to comparison on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+        ttnn::eq_bw,
+        R"doc(Performs backward operations for equal to comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_b` with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
 
 }
 
