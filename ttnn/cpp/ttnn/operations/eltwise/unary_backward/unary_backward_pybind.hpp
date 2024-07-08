@@ -161,6 +161,11 @@ void py_module(py::module& module) {
         ttnn::clamp_bw,
         R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::unary_assign_bw,
+        R"doc(Performs backward operations for assign on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
