@@ -1027,7 +1027,7 @@ tt_metal::Program create_program_single_core (
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
         matmul_block ?
-        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" :
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" :
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
         tt_metal::ComputeConfig{

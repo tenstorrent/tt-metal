@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1}
     );
@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
         auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2}
         );

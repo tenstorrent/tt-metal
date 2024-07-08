@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "common/constants.hpp"
 #include "tt_numpy/functions.hpp"
 

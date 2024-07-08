@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
@@ -401,7 +401,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     if (tilize_in0) {
         // in0 is row major, in1 is tiled
         // NOTE: this only makes sense for non-tile-shared datatypes for in0
-        reader_kernel = "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp";
         reader_rt_args = {
             // in0
             in0_dram_addr,
@@ -434,7 +434,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         };
     } else {
         // in0 is tiled, in1 is tiled
-        reader_kernel = "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_single_core.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_single_core.cpp";
         reader_rt_args = {
             // in0
             in0_dram_addr,
@@ -497,7 +497,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         };
     } else {
         // out is tiled
-        writer_kernel = "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/writer_bmm_single_core_tiled.cpp";
+        writer_kernel = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_single_core_tiled.cpp";
         writer_rt_args = {
             out_dram_addr,
             0,                                              // UNUSED
