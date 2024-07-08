@@ -169,7 +169,7 @@ Pointwise Unary
    ttnn/mul_bw
    ttnn/clamp_min_bw
    ttnn/clamp_bw
-   ttnn/unary_assign_bw
+   ttnn/assign_bw
    ttnn/multigammaln_bw
 
 Pointwise Binary
@@ -220,7 +220,6 @@ Pointwise Binary
    ttnn/squared_difference_bw
    ttnn/add_bw
    ttnn/binary_eq_bw
-   ttnn/binary_assign_bw
    ttnn/concat_bw
    ttnn/binary_le_bw
    ttnn/rsub_bw
