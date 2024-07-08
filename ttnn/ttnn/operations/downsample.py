@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Optional
+from typing import Tuple
 
-
-import tt_lib as ttl
 
 import ttnn
 import torch
@@ -23,9 +21,6 @@ def _golden_function(
     return ret
 
 
-downsample = ttnn.register_operation(
-    golden_function=_golden_function,
-)(ttnn._ttnn.operations.downsample.downsample)
-
+downsample = ttnn.attach_golden_function(ttnn.downsample, golden_function=_golden_function)
 
 __all__ = []

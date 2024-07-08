@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//conv2d.cpp
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d.hpp"
