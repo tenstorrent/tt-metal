@@ -26,7 +26,7 @@ enum class BinaryBackwardOpType {
     SQUARED_DIFFERENCE_BW,
     ADD_BW,
     BINARY_EQ_BW,
-    BINARY_ASSIGN_BW,
+    ASSIGN_BW,
     CONCAT_BW,
     BINARY_LE_BW,
     RSUB_BW,

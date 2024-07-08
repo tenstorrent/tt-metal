@@ -57,11 +57,12 @@ Example:
                 auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
                 using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
-                if(operation.base_name()=="mul_bw"){
-                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::MUL_BW>;
+                if(operation.base_name()=="assign_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::ASSIGN_BW>;
+                    return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
                 }
-
                 return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -163,7 +164,7 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
-        ttnn::unary_assign_bw,
+        ttnn::assign_bw,
         R"doc(Performs backward operations for assign on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward(

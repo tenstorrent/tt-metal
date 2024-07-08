@@ -286,11 +286,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
-        ttnn::binary_assign_bw,
-        R"doc(Performs backward operations for binary assign on :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
-
-    detail::bind_binary_backward(
-        module,
         ttnn::concat_bw,
         R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
 
