@@ -35,7 +35,7 @@ enum DispatchWorkerType : uint32_t {
     COUNT = 12
 };
 
-struct worker_build_settings_t{
+struct dispatch_worker_build_settings_t{
     std::string kernel_file;
     std::vector<uint32_t> compile_args;
     std::vector<tt_cxy_pair> upstream_cores;

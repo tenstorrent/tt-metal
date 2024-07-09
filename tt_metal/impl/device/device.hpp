@@ -143,7 +143,7 @@ class Device {
 
     void setup_tunnel_for_remote_devices();
 
-    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, worker_build_settings_t>>> &device_worker_variants);
+    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants);
 
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
@@ -254,7 +254,7 @@ class Device {
     uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
-    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
+    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
     JitBuildEnv build_env_;
