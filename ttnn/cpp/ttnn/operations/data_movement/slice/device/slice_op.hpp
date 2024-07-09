@@ -13,8 +13,8 @@ namespace ttnn::operations::data_movement {
 
 
 struct Slice {
-    const tt::tt_metal::Shape output_tensor_start;
-    const tt::tt_metal::Shape output_tensor_end;
+    const tt::tt_metal::Shape slice_start;
+    const tt::tt_metal::Shape slice_end;
     const MemoryConfig output_mem_config;
 
 
@@ -23,6 +23,9 @@ struct Slice {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+
+    const operation::Hash compute_program_hash(
+        const std::vector<Tensor> &input_tensors) const;
 };
 
 
