@@ -5,8 +5,10 @@
 import click
 import os
 import pathlib
+import pprint
 from elasticsearch import Elasticsearch
 from tests.sweep_framework.statuses import TestStatus
+from serialize import deserialize_vector
 from beautifultable import BeautifulTable, STYLE_COMPACT
 from termcolor import colored
 
@@ -17,17 +19,43 @@ ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 @click.option("--module-name", default=None, help="Name of the module to be queried.")
 @click.option("--batch-name", default=None, help="Batch name to filter by.")
 @click.option("--vector-id", default=None, help="Individual Vector ID to filter by.")
+@click.option("--run-id", default=None, help="Individual Run ID to filter by.")
 @click.option("--elastic", default="http://localhost:9200", help="Elastic Connection String")
 @click.option("--all", default=False, help="Displays total run statistics instead of the most recent run.")
 @click.pass_context
-def cli(ctx, module_name, batch_name, vector_id, elastic, all):
+def cli(ctx, module_name, batch_name, vector_id, run_id, elastic, all):
     ctx.ensure_object(dict)
 
     ctx.obj["module_name"] = module_name
     ctx.obj["batch_name"] = batch_name
     ctx.obj["vector_id"] = vector_id
+    ctx.obj["run_id"] = run_id
     ctx.obj["elastic"] = elastic
     ctx.obj["all"] = all
+
+
+@cli.command()
+@click.pass_context
+def vector(ctx):
+    if not ctx.obj["module_name"] or not ctx.obj["vector_id"]:
+        print("QUERY: Module name and vector ID are required for test vector lookup.")
+        exit(1)
+
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
+    response = client.get(index=(ctx.obj["module_name"] + "_test_vectors"), id=ctx.obj["vector_id"])
+    pprint.pp(deserialize_vector(response["_source"]))
+
+
+@cli.command()
+@click.pass_context
+def result(ctx):
+    if not ctx.obj["module_name"] or not ctx.obj["run_id"]:
+        print("QUERY: Module name and run ID are required for run result lookup.")
+        exit(1)
+
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
+    response = client.get(index=(ctx.obj["module_name"] + "_test_results"), id=ctx.obj["run_id"])
+    pprint.pp(response["_source"])
 
 
 @cli.command()
