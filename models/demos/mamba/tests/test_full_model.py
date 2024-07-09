@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 import torch
 import pytest
 from loguru import logger
@@ -84,7 +85,11 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 
     config = model_config.create_model_config(batch, reference_model.args.d_model, mode=mode, seq_len=seq_len)
 
+    logger.info(f"Using tensor cache path: '{cache_dir}'")
+
+    start = time.time()
     mamba_model_tt = MambaTT(reference_model, device, config, tt_cache_path=cache_dir, num_layers=num_layers)
+    logger.info(f"Finished initializing Mamba (took {time.time() - start:.3f} sec)")
 
     for _ in range(iterations):
         tt_output = mamba_model_tt(input_ids)
@@ -99,6 +104,8 @@ buildings, agriculture and land use are among the main sectors causing greenhous
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.timeout(600)
+@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, num_layers, iterations, pcc",
     (

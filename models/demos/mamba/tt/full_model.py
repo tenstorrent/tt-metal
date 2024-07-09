@@ -86,12 +86,12 @@ class MambaTT(torch.nn.Module):
             self.num_layers = len(reference_model.layers)
         else:
             self.num_layers = num_layers
-        logger.info(f"Initalizing MambaTT with {self.num_layers} layers")
+
+        logger.info(f"Initalizing Mamba with {self.num_layers} layers")
 
         self.embedding = reference_model.embedding
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
-
         self.layers = [
             TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i)) for i in range(self.num_layers)
         ]
