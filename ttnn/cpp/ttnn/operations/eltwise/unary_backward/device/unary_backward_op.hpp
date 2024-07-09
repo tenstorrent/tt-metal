@@ -43,6 +43,7 @@ enum class UnaryBackwardOpType {
     FLOOR_BW,
     ROUND_BW,
     LOG_BW,
+    RELU6_BW
 };
 
 struct UnaryBackwardFunction{

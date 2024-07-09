@@ -970,32 +970,26 @@ std::vector<Tensor> reciprocal_bw(const Tensor& grad, const Tensor& input, const
     return operation::decorate_as_composite(__func__, _reciprocal_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _rpow_bw(
+    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_tensor = zeros_like(input, output_mem_config);
-    Tensor one_tensor = ones_like(input, output_mem_config);
-    Tensor six_tensor = full_like(input, 6, output_mem_config);
-    Tensor grad_result =
-        where(ttnn::le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
-    grad_result = where(
-        ttnn::logical_and(
-            ttnn::gtz(input, output_mem_config),
-            ttnn::lt(input, six_tensor, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        grad,
-        grad_result,
-        output_mem_config);
-    grad_result =
-        where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
-
+    float t_nan = std::nanf("");
+    Tensor grad_result = zeros_like(input, output_mem_config);
+    if (exponent != 0.0) {
+        grad_result =
+            ttnn::multiply(grad,
+                ttnn::multiply(pow(input, exponent - 1, output_mem_config), exponent, std::nullopt, output_mem_config),
+                std::nullopt,
+                output_mem_config);
+        grad_result = where(ttnn::ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
+    }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
-std::vector<Tensor> relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _relu6_bw)(grad, input, output_mem_config);
+std::vector<Tensor> rpow_bw(
+    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _rpow_bw)(grad, input, exponent, output_mem_config);
 }
-
 
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))

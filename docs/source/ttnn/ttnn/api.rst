@@ -196,6 +196,7 @@ Pointwise Unary
    ttnn/floor_bw
    ttnn/round_bw
    ttnn/log_bw
+   ttnn/relu6_bw
 
 Pointwise Binary
 ================

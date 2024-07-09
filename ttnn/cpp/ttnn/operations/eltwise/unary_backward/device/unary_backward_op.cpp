@@ -388,6 +388,29 @@ std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const Memor
     return grad_tensor;
 }
 
+std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_tensor = tt::tt_metal::zeros_like(input, output_mem_config);
+    Tensor one_tensor = tt::tt_metal::ones_like(input, output_mem_config);
+    Tensor six_tensor = tt::tt_metal::full_like(input, 6, output_mem_config);
+    Tensor grad_result =
+        where(ttnn::le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
+    grad_result = where(
+        ttnn::logical_and(
+            ttnn::gtz(input, output_mem_config),
+            ttnn::lt(input, six_tensor, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        grad_result,
+        output_mem_config);
+    grad_result =
+        where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -424,6 +447,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _round_bw;
         case UnaryBackwardOpType::LOG_BW:
             return _log_bw;
+        case UnaryBackwardOpType::RELU6_BW:
+            return _relu6_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
