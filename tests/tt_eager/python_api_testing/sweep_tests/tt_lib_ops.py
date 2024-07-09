@@ -2377,12 +2377,12 @@ def pad(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.pad(
+    t1 = ttnn.pad(
         t0,
-        output_tensor_shape,
-        input_tensor_start,
+        ttnn.Shape(output_tensor_shape),
+        ttnn.Shape(input_tensor_start),
         pad_value,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
 
     return tt2torch_tensor(t1)
