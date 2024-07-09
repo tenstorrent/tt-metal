@@ -14,12 +14,15 @@ def main():
     parser.add_argument("--all", help="Show all times for each device", action="store_true")
     parser.add_argument("--signpost", help="Only include data after this signpost and before any others")
     parser.add_argument("--skip-last", help="Do not include timings from the last N ops", type=int, default=0)
+    parser.add_argument("--prefill", help="Prefill mode: will compute tok/s", action="store_true")
+    parser.add_argument("--seqlen", help="Sequence length used for prefill statistics.", type=int, default=0)
     parser.add_argument(
         "--estimate-full-model",
         help="Estimate the full model performance by multiplying by N and adding back in the skipped ops",
         type=int,
         default=0,
     )
+    parser.add_argument("--write-ops-to-csv", help="Write the summarized ops to a CSV file", type=str, default=None)
     args = parser.parse_args()
 
     header, rows = read_rows(args.csv)
@@ -46,22 +49,37 @@ def main():
     total_time_ns = sum(block.time() for block in blocks)
     total_time_s = total_time_ns / 1e9
     tokens_per_s = 1 / total_time_s
-    print(f"Tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)")
+    if args.prefill:
+        sequences_per_s = tokens_per_s
+        tokens_per_s *= args.seqlen
+        print(f"Tokens/s: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency, {sequences_per_s:.2f} seq/s)")
+    else:
+        print(f"Tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)")
 
     if args.estimate_full_model:
         total_time_ns *= args.estimate_full_model
         total_time_ns += sum(block.time() for block in skipped_ops)
         total_time_s = total_time_ns / 1e9
         tokens_per_s = 1 / total_time_s
-        print(
-            f"Estimated full model ({args.estimate_full_model} * above + skipped ops) tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)"
-        )
+        if args.prefill:
+            sequences_per_s = tokens_per_s
+            tokens_per_s *= args.seqlen
+            print(
+                f"Estimated full model ({args.estimate_full_model} * above + skipped ops) tokens/s: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency, {sequences_per_s:.2f} seq/s)"
+            )
+        else:
+            print(
+                f"Estimated full model ({args.estimate_full_model} * above + skipped ops) tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)"
+            )
 
     if signposts_seen and not args.signpost:
         print(f"Warning - this file contains the following signposts that were not used for this analysis:")
         for s in signposts_seen:
             print(f'   "{s}"')
         print("Rerun with --signpost to show only the performance for a specific signpost region")
+
+    if args.write_ops_to_csv:
+        write_blocks_to_csv(blocks, args.write_ops_to_csv)
 
 
 def read_rows(csv_file):
@@ -78,7 +96,7 @@ class Block:
         self.times = times
 
     def time(self):
-        return min(self.times) if "AllGather" in self.op_name else max(self.times)
+        return min(self.times) if "AllGather" in self.op_name or "ReduceScatter" in self.op_name else max(self.times)
 
     def short_str(self):
         short_name = self.op_name.split("::")[-1].split(")")[0]
@@ -146,6 +164,14 @@ def make_blocks(header, rows, signpost):
             merged_blocks[row].times += b.times
 
     return merged_blocks, signposts_seen
+
+
+def write_blocks_to_csv(blocks, csv_file):
+    with open(csv_file, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Op", "Time (us)"])
+        for block in blocks:
+            writer.writerow([block.op_name, block.time()])
 
 
 if __name__ == "__main__":
