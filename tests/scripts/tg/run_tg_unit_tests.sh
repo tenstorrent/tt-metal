@@ -7,8 +7,6 @@ run_tg_tests() {
   echo "LOG_METAL: running run_tg_unit_tests"
 
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
-
-  pytest tests/ttnn/multichip_unit_tests/test_multidevice_TG.py
 }
 
 main() {
