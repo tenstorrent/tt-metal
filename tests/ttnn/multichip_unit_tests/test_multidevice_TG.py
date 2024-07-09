@@ -8,9 +8,6 @@ import pytest
 import ttnn
 import tempfile
 from loguru import logger
-import ttnn.experimental
-import ttnn.experimental.operations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 from ttnn import (
@@ -65,7 +62,7 @@ def test_galaxy_matmul_1d_fracture(device_mesh):
     out = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
-    print(out_pcc)
+    logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
 
@@ -119,32 +116,19 @@ class ConcatMesh2DToTensor(MeshToTensor):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape",
-    [
-        (4, 8),
-        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
-    ],
-)
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
-    ],
-    indirect=True,
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M,K,N",
     [
-        (32, 8192, 32768),  # Llama3-70B decode FF1
-        (32, 32768, 8192),  # Llama3-70B decode FF2
-        (512, 8192, 32768),  # Llama3-70B prefill FF1
-        (512, 32768, 8192),  # Llama3-70B prefill FF2
-        (32, 16 * 1024, 64 * 1024),  # Llama3-400B decode FF1
-        (32, 64 * 1024, 16 * 1024),  # Llama3-400B decode FF2
-        # (512, 16*1024, 64*1024),# Llama3-400B prefill FF1 # Skipped, OOM
-        (512, 64 * 1024, 16 * 1024),  # Llama3-400B prefill FF2
-        (32, 8192, 1280),  # Llama3-70B decode QKV
+        pytest.param(32, 8192, 32768, id="Llama3-70B_decode_FF1"),
+        pytest.param(32, 32768, 8192, id="Llama3-70B_decode_FF2"),
+        pytest.param(512, 8192, 32768, id="Llama3-70B_prefill_FF1"),
+        pytest.param(512, 32768, 8192, id="Llama3-70B_prefill_FF2"),
+        pytest.param(32, 16 * 1024, 64 * 1024, id="Llama3-400B_decode_FF1"),
+        pytest.param(32, 64 * 1024, 16 * 1024, id="Llama3-400B_decode_FF2"),
+        # pytest.param(512, 16*1024, 64*1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
+        pytest.param(512, 64 * 1024, 16 * 1024, id="Llama3-400B_prefill_FF2"),
     ],
 )
 def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
@@ -192,27 +176,15 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape",
-    [
-        (4, 8),
-        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
-    ],
-)
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-        # (8, 4), # cluster shape should always be the same as the device mesh grid shape
-    ],
-    indirect=True,
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N",
     [
-        (32, 32768),  # Llama3-70B decode FF1
-        (512, 32768),  # Llama3-70B prefill FF1
-        # (32, 64 * 1024),  # Llama3-400B decode FF1
-        # (512, 64*1024),# Llama3-400B prefill FF1 # Skipped, OOM
+        pytest.param(32, 32768, id="Llama3-70B_decode_FF1"),
+        pytest.param(512, 32768, id="Llama3-70B_prefill_FF1"),
+        # pytest.param(32, 64 * 1024, id="Llama3-400B_decode_FF1"),  # Skipped
+        # pytest.param(512, 64*1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
     ],
 )
 def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
@@ -284,17 +256,7 @@ class ReplicateShardTensor2dMesh(TensorToMesh):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape",
-    [
-        (4, 8),
-    ],
-)
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N, head_dim, num_heads",
@@ -306,7 +268,7 @@ class ReplicateShardTensor2dMesh(TensorToMesh):
 )
 def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, N)
-    qkv_weights_pt = torch.randn(1, 1, N, head_dim * num_heads)
+    weights_pt = torch.randn(1, 1, N, head_dim * num_heads)
 
     act = ttnn.from_torch(
         act_pt,
@@ -316,8 +278,8 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    qkv_weights = ttnn.from_torch(
-        qkv_weights_pt,
+    weights = ttnn.from_torch(
+        weights_pt,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
@@ -332,14 +294,14 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
 
     out = ttnn.matmul(
         act,
-        qkv_weights,
+        weights,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=5, x=8) if num_heads == 80 else ttnn.CoreGrid(y=4, x=8),
         use_1d_systolic_array=True,
         compute_kernel_config=compute_kernel_attn,
     )
 
-    gt = act_pt @ qkv_weights_pt
+    gt = act_pt @ weights_pt
 
     out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
     out = out[:, 0:1, :, :]  # select the first column
@@ -349,43 +311,31 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
     assert out_pass
 
 
-def pad_and_reshape_heads(tensor, seq_len, batch, n_local_heads, head_dim, padded_heads=32):
-    reshaped = tensor.view(seq_len, batch, n_local_heads, head_dim)
-    padding = torch.zeros(seq_len, batch, padded_heads - n_local_heads, head_dim)
-    return torch.cat([reshaped, padding], dim=-2)
+def num_to_corerange(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
+    )
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads",
     [
-        (8, 1, 128, 8, 1),  # Llama3-70B decode attn
+        (8, 1, 128, 8, 1),  # Llama3-70B decode
     ],
-    ids=["Llama3-70B-decode-attn"],
+    ids=["Llama3-70B-decode"],
 )
 def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, device_mesh):
     total_heads = n_local_heads + n_local_kv_heads * 2
     qkv_heads_pt = torch.rand(1, seq_len, batch, head_dim * total_heads)
-
     total_cores = total_heads * head_dim // 32
-    core_x = min(total_cores, 8)
-    core_y = max(1, total_cores // core_x)
 
-    # TT configs
-    shard_spec_n_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(core_x - 1, core_y - 1),
-            ),
-        }
-    )
+    shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(total_cores)})
     CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -399,6 +349,7 @@ def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads,
             False,
         ),
     )
+
     qkv_heads = ttnn.from_torch(
         qkv_heads_pt,
         dtype=ttnn.bfloat16,
@@ -423,58 +374,46 @@ def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads,
     logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")
     logger.info(f"v_heads_tt: {v_heads_tt.memory_config()}")
 
-    q_heads_pt = pad_and_reshape_heads(
-        qkv_heads_pt[:, :, :batch, : head_dim * n_local_heads], seq_len, batch, n_local_heads, head_dim
+    q_heads_pt = qkv_heads_pt[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
+    k_heads_pt = qkv_heads_pt[:, :, :, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
+        seq_len, batch, n_local_kv_heads, head_dim
     )
-
-    k_heads_pt = pad_and_reshape_heads(
-        qkv_heads_pt[:, :, :batch, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)],
-        seq_len,
-        batch,
-        n_local_kv_heads,
-        head_dim,
-    )
-
-    v_heads_pt = pad_and_reshape_heads(
-        qkv_heads_pt[:, :, :batch, head_dim * (n_local_heads + n_local_kv_heads) :],
-        seq_len,
-        batch,
-        n_local_kv_heads,
-        head_dim,
+    v_heads_pt = qkv_heads_pt[:, :, :, head_dim * (n_local_heads + n_local_kv_heads) :].view(
+        seq_len, batch, n_local_kv_heads, head_dim
     )
 
     # compare
-    q_heads_tt_cpu = ttnn.to_torch(q_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0]
+    q_heads_tt_cpu = ttnn.to_torch(q_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0][..., :n_local_heads, :]
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_pt, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_q}")
 
-    k_heads_tt_cpu = ttnn.to_torch(k_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0]
+    k_heads_tt_cpu = ttnn.to_torch(k_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0][
+        ..., :n_local_kv_heads, :
+    ]
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_pt, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_k}")
 
-    v_heads_tt_cpu = ttnn.to_torch(v_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0]
+    v_heads_tt_cpu = ttnn.to_torch(v_heads_tt, mesh_composer=ListMeshToTensor(device_mesh))[0][
+        ..., :n_local_kv_heads, :
+    ]
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_pt, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_v}")
 
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads",
     [
         (8, 1, 128, 8, 1),  # Llama3-70B decode attn
     ],
-    ids=["Llama3-70B-decode-attn"],
+    ids=["Llama3-70B-decode"],
 )
 def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, device_mesh):
-    q_heads_pt = torch.rand(seq_len, batch, max(n_local_heads, 32), head_dim)  # Unpad batch=32 to 8
+    q_heads_pt = torch.rand(
+        seq_len, batch, max(n_local_heads, 32), head_dim
+    )  # Unpad batch=32 to 8 for each column group
     k_heads_pt = torch.rand(seq_len, batch, max(n_local_kv_heads, 32), head_dim)
     rot_mat_pt = torch.rand(1, batch, head_dim, head_dim)
 
@@ -579,18 +518,12 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
     assert out_pass_q and out_pass_k
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8])
 @pytest.mark.parametrize("num_heads", [1])
-@pytest.mark.parametrize("input_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16])
+@pytest.mark.parametrize("input_dtype", [ttnn.DataType.BFLOAT16])
 class TestUpdateCache:
     @pytest.mark.parametrize("seq_len", [128, 2048])
     def test_fill_cache(
@@ -649,7 +582,7 @@ class TestUpdateCache:
         assert eq
 
     @pytest.mark.parametrize("cache_idx", [0, 127, 2047])
-    @pytest.mark.parametrize("cache_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
+    @pytest.mark.parametrize("cache_dtype", [ttnn.DataType.BFLOAT8_B])
     @pytest.mark.parametrize(
         "batch_offset", [0, 16]
     )  # Only used when num_users < 32 and batch_offset + num_users <= 32
@@ -704,8 +637,8 @@ class TestUpdateCache:
             False,
         )
         input_mem_config = ttnn.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             input_shard_spec,
         )
 
@@ -732,7 +665,6 @@ class TestUpdateCache:
         assert eq_cache and eq_update
 
 
-# TODO: Import from SDPA pytests
 def nearest_n(x, n):
     return ((x + n - 1) // n) * n
 
@@ -744,20 +676,6 @@ def nearest_pow_2(x):
 
     power = math.ceil(math.log2(x))
     return 1 << power
-    # if (2**math.log2(x) == x):
-    #     return x
-    # return 2**(int(x).bit_length())
-
-
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
-    return ttnn.experimental.tensor.CoreRange(
-        ttnn.experimental.tensor.CoreCoord(0, 0),
-        ttnn.experimental.tensor.CoreCoord(num_x - 1, num_y - 1),
-    )
 
 
 def get_chunk_size(s):
@@ -909,20 +827,14 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "dtype, q_dtype, mask_dtype",
     [
         [
-            ttnn.experimental.tensor.DataType.BFLOAT16,
-            ttnn.experimental.tensor.DataType.BFLOAT16,
-            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.DataType.BFLOAT16,
+            ttnn.DataType.BFLOAT16,
+            ttnn.DataType.BFLOAT16,
         ],
     ],
     ids=[
@@ -942,19 +854,13 @@ def test_sdpa_decode_sharded(device_mesh, b, nh, nkv, s, d, dtype, grid_size, q_
     )
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads",
     [
-        (8, 1, 128, 8, 1, 32),  # Llama3-70B decode attn
+        (8, 1, 128, 8, 1, 32),  # Llama3-70B decode
     ],
-    ids=["Llama3-70B-decode-attn"],
+    ids=["Llama3-70B-decode"],
 )
 def test_galaxy_nlp_concat_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads, device_mesh
@@ -962,7 +868,7 @@ def test_galaxy_nlp_concat_heads_decode(
     concat_head_input = torch.rand(seq_len, batch, padded_local_heads, head_dim)
 
     shard_grid = ttnn.CoreRangeSet({num_to_corerange(batch)})
-    SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+    CONCAT_HEADS_INPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
@@ -980,7 +886,7 @@ def test_galaxy_nlp_concat_heads_decode(
         concat_head_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG,
+        memory_config=CONCAT_HEADS_INPUT_MEMCFG,
         device=device_mesh,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
@@ -1009,13 +915,7 @@ def rmsnorm(x, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma + beta
 
 
-@pytest.mark.parametrize(
-    "device_mesh",
-    [
-        (4, 8),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "M, N",
     [
@@ -1051,6 +951,20 @@ def test_galaxy_layernorm(M, N, device_mesh):
         ),
     )
 
+    LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    LN_PROGCFG = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[8, 4],
+        subblock_w=8,
+        block_h=M // 32,
+        block_w=8,
+        inplace=True,
+    )
+
     layernorm_input_tt = ttnn.from_torch(
         layernorm_input,
         dtype=ttnn.bfloat16,
@@ -1066,20 +980,6 @@ def test_galaxy_layernorm(M, N, device_mesh):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device_mesh,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
-    )
-
-    LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    LN_PROGCFG = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=M // 32,
-        block_w=8,
-        inplace=True,
     )
 
     norm_output = ttnn.experimental.operations.primary.rmsnorm(
