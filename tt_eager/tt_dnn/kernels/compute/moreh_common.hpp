@@ -142,7 +142,7 @@ ALWI void reduce_init_delta_with_dt(PoolType reduce_op, ReduceDim dim, uint32_t 
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
     #endif
-    reduce_init_delta<at_start, reduce_type, reduce_dim>(reduce_op, dim, ocb, icb0, icb1);
+    reduce_init_delta<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
 }
 
 

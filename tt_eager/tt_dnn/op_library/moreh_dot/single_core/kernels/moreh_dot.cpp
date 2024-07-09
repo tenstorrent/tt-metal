@@ -47,7 +47,7 @@ void MAIN {
         }
 
         cb_wait_front(tt::CB::c_intermed0, onetile);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         reduce_tile(tt::CB::c_intermed0, tt::CB::c_in2, 0, 0, 0);
         cb_pop_front(tt::CB::c_intermed0, onetile);
         reduce_revert_delta();
