@@ -6,7 +6,6 @@
 
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 

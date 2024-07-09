@@ -7,7 +7,6 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 using namespace tt::constants;
 
