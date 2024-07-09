@@ -20,7 +20,7 @@ set (TT_METAL_TESTS
     test_multiple_programs
     test_multi_core_kernel
     test_unpack_tilize
-    test_unpack_untilize
+    test_untilize
     test_interleaved_layouts
     test_interleaved_l1_buffer
     test_bcast
