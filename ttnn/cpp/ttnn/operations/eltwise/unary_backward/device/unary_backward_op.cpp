@@ -388,6 +388,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _relu_bw;
         case UnaryBackwardOpType::LOGIT_BW:
             return _logit_bw;
+        case UnaryBackwardOpType::FLOOR_BW:
+            return _floor_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

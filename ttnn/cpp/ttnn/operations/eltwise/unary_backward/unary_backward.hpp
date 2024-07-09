@@ -92,6 +92,7 @@ constexpr auto leaky_relu_bw = ttnn::register_operation<operations::unary_backwa
 constexpr auto elu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ELU_BW>>("ttnn::elu_bw");
 constexpr auto celu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CELU_BW>>("ttnn::celu_bw");
 constexpr auto rpow_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RPOW_BW>>("ttnn::rpow_bw");
+constexpr auto floor_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FLOOR_BW>>("ttnn::floor_bw");
 
 
 }  // namespace ttnn
