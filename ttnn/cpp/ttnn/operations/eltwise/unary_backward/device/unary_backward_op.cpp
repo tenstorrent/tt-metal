@@ -371,6 +371,23 @@ std::vector<Tensor> _round_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inf = tt::tt_metal::full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = tt::tt_metal::full_like(input, std::nanf(""), output_mem_config);
+    grad_tensor.emplace_back(where(
+        ttnn::eqz(input, output_mem_config),
+        where(
+            ttnn::eqz(grad, output_mem_config),
+            t_nan,
+            ttnn::multiply(t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
+            output_mem_config),
+        grad_a,
+        output_mem_config));
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -405,6 +422,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _floor_bw;
         case UnaryBackwardOpType::ROUND_BW:
             return _round_bw;
+        case UnaryBackwardOpType::LOG_BW:
+            return _log_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

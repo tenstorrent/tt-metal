@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 

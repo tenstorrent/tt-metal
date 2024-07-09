@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
     data_gen_with_val,
     compare_pcc,
@@ -23,7 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 def test_bw_log_0(input_shapes, device):
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, val=0)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    tt_output_tensor_on_device = tt_lib.tensor.log_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -47,7 +47,7 @@ def test_bw_log_0(input_shapes, device):
 def test_bw_log(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    tt_output_tensor_on_device = tt_lib.tensor.log_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

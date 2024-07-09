@@ -280,26 +280,6 @@ std::vector<Tensor> ne_bw(const Tensor& grad, const MemoryConfig& output_mem_con
     return operation::decorate_as_composite(__func__, _ne_bw)(grad, output_mem_config);
 }
 
-std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-    grad_tensor.emplace_back(where(
-        ttnn::eqz(input, output_mem_config),
-        where(
-            ttnn::eqz(grad, output_mem_config),
-            t_nan,
-            ttnn::multiply(t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        grad_a,
-        output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
