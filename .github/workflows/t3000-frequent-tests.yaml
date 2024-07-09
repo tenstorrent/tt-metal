@@ -19,6 +19,8 @@ jobs:
         test-group: [
           { name: "t3k tteager tests", arch: wormhole_b0, cmd: run_t3000_tteager_tests, timeout: 60, 
           runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
+          { name: "t3k ethernet tests", arch: wormhole_b0, cmd: run_t3000_ethernet_tests, timeout: 60, 
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
           { name: "t3k trace stress tests", arch: wormhole_b0, cmd: run_t3000_trace_stress_tests, timeout: 120, 
           runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03NG0A5ND7}, #Aditya Saigal
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 120, 
