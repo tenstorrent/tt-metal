@@ -217,11 +217,6 @@ if(WITH_PYTHON_BINDINGS)
     )
 endif()
 
-# Temporary workaround for Issue #8767
-install(DIRECTORY ${PROJECT_BINARY_DIR}/hw/toolchain
-    DESTINATION ${PROJECT_SOURCE_DIR}/runtime/hw
-)
-
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(clean-built
    COMMAND ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
