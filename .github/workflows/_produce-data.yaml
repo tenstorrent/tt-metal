@@ -19,7 +19,7 @@ on:
       - completed
 
 jobs:
-  produce-data:
+  produce-cicd-data:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pip3 install loguru && python3 .github/scripts/create_pipeline_csvs.py
+        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_pipeline_csvs.py
       - name: Show directory to see output files
         run: ls -hal
       - name: Show CSVs output
@@ -79,3 +79,14 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
+  upload-benchmark-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create key file
+        shell: bash
+        run: |
+          echo ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }} > id_benchmark_writer
+          chmod go-rwx id_benchmark_writer
+      - name: Upload files
+        run: sftp -i id_benchmark_writer -b .github/scripts/data_analysis/benchmark_data_batchfile.txt ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME_HOSTNAME }}
