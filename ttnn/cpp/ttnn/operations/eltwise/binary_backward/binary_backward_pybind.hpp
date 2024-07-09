@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -73,7 +74,8 @@ Example:
                const ttnn::Tensor& input_tensor_c,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
                 auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-                return self(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, output_memory_config);
+                using TernaryBackwardOp = ttnn::operations::ternary_backward::ExecuteTernaryBackward<ternary_backward::TernaryBackwardOpType::LERP_BW>;
+                return TernaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, output_memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
