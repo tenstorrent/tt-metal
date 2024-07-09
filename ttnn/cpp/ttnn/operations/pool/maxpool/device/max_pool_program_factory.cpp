@@ -201,7 +201,7 @@ Tensor max_pool2d(const Tensor &input,
                                              {input}).at(0);
 }
 
-Tensor max_pool2d_v2(const Tensor &input,
+Tensor max_pool2d_legacy(const Tensor &input,
                   const Tensor &reader_indices,
                   uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,

@@ -130,7 +130,7 @@ Tensor max_pool2d(const Tensor &input,
                   const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                   uint32_t nblocks = 1, bool use_multicore = true);
 
-Tensor max_pool2d_v2(const Tensor &input, const Tensor &reader_indices,
+Tensor max_pool2d_legacy(const Tensor &input, const Tensor &reader_indices,
                   uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,
                   uint32_t stride_h = 1, uint32_t stride_w = 1,

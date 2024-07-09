@@ -13,10 +13,6 @@
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/kv_cache.hpp"
-#include "pybind11/operations/maxpool2d.hpp"
-#include "pybind11/operations/matmul.hpp"
-#include "pybind11/operations/normalization.hpp"
-#include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/ternary.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
@@ -38,7 +34,6 @@
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
-
 
 namespace py = pybind11;
 

@@ -223,7 +223,7 @@ class TTPyMaxPool(TTPyOp):
 
             if self.deallocate_activation:
                 activation.deallocate()
-            # output = pool.max_pool2d_v2(
+            # output = pool.max_pool2d_legacy(
             output = self.pool_op(
                 haloed_act,
                 reader_indices,
