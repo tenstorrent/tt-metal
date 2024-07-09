@@ -12,9 +12,6 @@ namespace tt_metal {
 struct GrayskullComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::LoFi;
     bool math_approx_mode = true;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("math_fidelity", "math_approx_mode");
-    const auto attribute_values() const { return std::forward_as_tuple(this->math_fidelity, this->math_approx_mode); }
 };
 
 struct WormholeComputeKernelConfig {
@@ -22,13 +19,6 @@ struct WormholeComputeKernelConfig {
     bool math_approx_mode = true;
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("math_fidelity", "math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->math_fidelity, this->math_approx_mode, this->fp32_dest_acc_en, this->packer_l1_acc);
-    }
 };
 
 using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig>;

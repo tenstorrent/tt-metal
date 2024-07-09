@@ -6,6 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
+
 import tt_lib as ttl
 from models.utility_functions import (
     comp_allclose_and_pcc,
@@ -277,7 +278,7 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
     for i in range(2):
         passing = moreh_sum(input_shape, dim, keep_batch_dim[i], use_provide_output[i], False, device)
         assert passing
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2
 
 
 @pytest.mark.parametrize(
@@ -352,7 +353,7 @@ def moreh_sum_backward(input_shape, dim, keep_batch_dim, use_provide_output, com
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
             tt_output_grad,
-            tt_input,
+            input=tt_input,
             dim=dim,
             keep_batch_dim=keep_batch_dim,
             input_grad=tt_input_grad,
@@ -452,7 +453,7 @@ def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_c
     torch.manual_seed(3072)
     keep_batch_dim = [True, False]
     use_provide_output = [True, False]
-    num_cache_entires = [2, 1, 1]
+    num_cache_entires = [2, 2, 2]
     for i in range(2):
         passing = moreh_sum_backward(input_shape, dim, keep_batch_dim[i], use_provide_output[i], False, device)
         assert passing
@@ -494,7 +495,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
             tt_output_grad,
-            tt_input,
+            input=tt_input,
             dim=dim,
             input_grad=tt_input_grad,
             compute_kernel_config=compute_kernel_config,

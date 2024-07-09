@@ -144,40 +144,6 @@ std::string operation_type_to_string() {
     }
 }
 
-static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
-    return std::visit(
-        [&](const auto& storage) -> operation_history::TensorRecord {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt
-                };
-            }
-            else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.memory_config()};
-            }
-            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
-                };
-            }
-            else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
-                };
-            }
-            else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
-                };
-            } else {
-                raise_unsupported_storage<T>();
-            }
-        },
-        tensor.get_storage());
-}
-
 template <typename OperationType>
 static void append_operation_to_operation_history(
     const std::size_t ttnn_operation_id,
@@ -189,11 +155,11 @@ static void append_operation_to_operation_history(
     input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
 
     for (const auto& tensor : input_tensors) {
-        input_tensor_records.emplace_back(create_tensor_record(tensor));
+        input_tensor_records.emplace_back(operation_history::create_tensor_record(tensor));
     }
     for (const auto& tensor : optional_input_tensors) {
         if (tensor.has_value()) {
-            input_tensor_records.emplace_back(create_tensor_record(tensor.value()));
+            input_tensor_records.emplace_back(operation_history::create_tensor_record(tensor.value()));
         }
     }
 
@@ -237,9 +203,10 @@ inline void log_operation(
         tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
     }
 
-    if (not operation.attributes().empty()) {
+    auto attributes = operation.attributes();
+    if (not attributes.empty()) {
         tt::log_debug(tt::LogOp, "Attributes:");
-        for (auto&& [name, value] : operation.attributes()) {
+        for (auto&& [name, value] : attributes) {
             tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
         }
     }

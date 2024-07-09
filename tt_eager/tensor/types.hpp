@@ -83,9 +83,6 @@ struct Padding {
     struct PadDimension {
         std::size_t front;
         std::size_t back;
-
-        static constexpr auto attribute_names = std::forward_as_tuple("front", "back");
-        const auto attribute_values() const { return std::forward_as_tuple(this->front, this->back); }
     };
 
     std::size_t rank_;

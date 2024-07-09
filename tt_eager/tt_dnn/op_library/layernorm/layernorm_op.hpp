@@ -22,8 +22,6 @@ enum class LayerNormType {
 };
 
 struct LayerNormDefaultProgramConfig{
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    static constexpr auto attribute_values() { return std::forward_as_tuple(); }
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
@@ -31,13 +29,6 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t block_h;
     std::size_t block_w;
     bool inplace;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("compute_with_storage_grid_size", "subblock_w", "block_h", "block_w", "inplace");
-
-    const auto attribute_values() const {
-        return std::forward_as_tuple(compute_with_storage_grid_size, subblock_w, block_h, block_w, inplace);
-    }
 };
 
 using LayerNormProgramConfig = std::variant<
@@ -86,12 +77,6 @@ struct LayerNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("norm_type", "eps", "output_mem_config", "program_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(norm_type, eps, output_mem_config, program_config, compute_kernel_config);
-    }
 };
 
 template <LayerNormType norm_type>

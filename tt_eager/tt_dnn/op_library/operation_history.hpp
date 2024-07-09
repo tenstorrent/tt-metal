@@ -22,14 +22,41 @@ struct TensorRecord {
     const DataType data_type;
     const Layout layout;
     const std::optional<MemoryConfig> memory_config;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->storage_type, this->shape, this->data_type, this->layout, this->memory_config);
-    }
 };
+
+static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
+    return std::visit(
+        [&](const auto& storage) -> operation_history::TensorRecord {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(),
+                    tensor.get_legacy_shape(),
+                    tensor.get_dtype(),
+                    tensor.get_layout(),
+                    std::nullopt};
+            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(),
+                    tensor.get_legacy_shape(),
+                    tensor.get_dtype(),
+                    tensor.get_layout(),
+                    tensor.memory_config()};
+            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()};
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()};
+            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()};
+            } else {
+                raise_unsupported_storage<T>();
+            }
+        },
+        tensor.get_storage());
+}
 
 struct OperationRecord {
     const std::size_t ttnn_operation_id;

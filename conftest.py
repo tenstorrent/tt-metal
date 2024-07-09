@@ -430,11 +430,11 @@ def pytest_generate_tests(metafunc):
         )
 
     if uses_silicon_arch:
-        metafunc.parametrize("silicon_arch_name", available_archs)
+        metafunc.parametrize("silicon_arch_name", available_archs, scope="session")
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
-            metafunc.parametrize(test_requested_silicon_arch_fixture, [True])
+            metafunc.parametrize(test_requested_silicon_arch_fixture, [True], scope="session")
 
     input_method = metafunc.config.getoption("--input-method")
     if input_method == "json":

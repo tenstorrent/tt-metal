@@ -34,7 +34,7 @@ std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_r
 void MorehBiasAddBackward::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& bias_grad = output_tensors.at(0);
-    if (bias_grad.has_value()) {
+    if (bias_grad.has_value() && input_tensors.size() == 2) {
         const auto& bias = input_tensors.at(1);
         const auto& bias_grad_tensor = bias_grad.value();
         TT_ASSERT(is_same_shape(bias, bias_grad_tensor), "both tensors should be the same shape");
@@ -53,6 +53,7 @@ std::vector<Tensor> MorehBiasAddBackward::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
+    TT_FATAL(input_tensors.size() == 2);
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->bias_grad_mem_config);
 }
@@ -138,8 +139,11 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     }
 
     if (bias_required_grad) {
-        TT_ASSERT(bias.has_value(), "bias tensor should not be std::nullopt");
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, bias.value()}))};
+        std::vector<Tensor> input_tensors = { output_grad };
+        if (bias) {
+            input_tensors.emplace_back(*bias);
+        }
+        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad}))};
         operation::launch_op(
             [bias_grad_mem_config, kernel_config_val](
                 const std::vector<Tensor>& input_tensors,
@@ -151,7 +155,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
                     optional_input_tensors,
                     optional_output_tensors);
             },
-            {output_grad, bias.value()},
+            input_tensors,
             output_tensors,
             {},
             {bias_grad});
