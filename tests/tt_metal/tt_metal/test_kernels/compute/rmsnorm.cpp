@@ -117,7 +117,7 @@ void MAIN {
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         ACQ();
         cb_wait_front(cb_x2, Wt);
         //cb_wait_front(cb_xmm, Wt);

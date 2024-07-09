@@ -18,7 +18,7 @@
 namespace ckernel {
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
+ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler) ));
@@ -42,7 +42,7 @@ ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16
 }
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
+ALWI void reduce_init_delta(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
     // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_reduce_init<reduce_dim>(icb0, icb1) ));

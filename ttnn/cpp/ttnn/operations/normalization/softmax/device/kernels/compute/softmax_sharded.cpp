@@ -136,7 +136,7 @@ void MAIN {
 
         // sum(exp(x))
         ACQ();
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);

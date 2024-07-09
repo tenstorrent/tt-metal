@@ -55,7 +55,7 @@ void MAIN {
                 for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
                     cb_wait_front(cb_input, onetile);
 
-                    reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                    reduce_init_delta<false>();
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     reduce_revert_delta();
 
@@ -93,7 +93,7 @@ void MAIN {
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
-            reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+            reduce_init_delta<false>();
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             reduce_revert_delta();
 

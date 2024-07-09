@@ -159,7 +159,7 @@ void MAIN {
             }
 
             // Partial-E[x] for each core
-            reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+            reduce_init_delta<false>();
             cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
             cb_wait_front(cb_scaler, 1);
@@ -183,7 +183,7 @@ void MAIN {
 
             if constexpr(is_mcast_sender and num_cores_per_mcast_group > 1) {
                 index_b_offset = 0;
-                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_init_delta<false>();
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
@@ -310,7 +310,7 @@ void MAIN {
 
             // Partial-Var(x)
             index_b_offset = 0;
-            reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+            reduce_init_delta<false>();
             cb_reserve_back(cb_ex_partial, 1);
             cb_wait_front(cb_xmm2, block_hw);
             cb_wait_front(cb_scaler, 1);
@@ -333,7 +333,7 @@ void MAIN {
 
             // global reduce
             if constexpr(is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_init_delta<false>();
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
