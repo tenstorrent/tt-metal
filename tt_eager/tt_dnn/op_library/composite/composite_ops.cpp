@@ -22,6 +22,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace tt {
@@ -1087,13 +1088,13 @@ Tensor div_no_nan(const Tensor& input_a, float value, const MemoryConfig& output
 
 Tensor _remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     DataType input_dtype = input_a.get_dtype();
-    Tensor a = typecast(input_a, DataType::FLOAT32);
-    Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(b, floor_div(input_a, input_b, output_mem_config), std::nullopt, output_mem_config));
+    Tensor a = ttnn::typecast(input_a, DataType::FLOAT32);
+    Tensor b = ttnn::typecast(input_b, DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(b, floor_div(input_a, input_b, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
     result = where(ttnn::ltz(b), ttnn::add(result, b), result);
     result = where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f, output_mem_config), result, output_mem_config);
-    return typecast(result, input_dtype);
+    return ttnn::typecast(result, input_dtype);
 }
 Tensor remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _remainder)(input_a, input_b, output_mem_config);
@@ -1101,11 +1102,11 @@ Tensor remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfi
 
 Tensor _fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     DataType input_dtype = input_a.get_dtype();
-    Tensor a = typecast(input_a, DataType::FLOAT32);
-    Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config));
+    Tensor a = ttnn::typecast(input_a, DataType::FLOAT32);
+    Tensor b = ttnn::typecast(input_b, DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f, output_mem_config), result, output_mem_config);
-    return typecast(result, input_dtype);
+    return ttnn::typecast(result, input_dtype);
 }
 Tensor fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _fmod)(input_a, input_b, output_mem_config);
@@ -1202,11 +1203,6 @@ Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 // torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
 Tensor _celu(const Tensor& input_a, float alpha, const MemoryConfig& output_mem_config) {
     float recip_val = 1.0f / alpha;
-    // std::vector<UnaryWithParam> ops_chain = {
-    //     UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, recip_val},
-    //     UnaryWithParam{UnaryOpType::EXP, 1.0f},
-    //     UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
-    //     UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
     std::vector<UnaryWithParam> ops_chain = {
