@@ -140,6 +140,22 @@ def all_devices(request, device_params):
 
 @pytest.fixture(scope="function")
 def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    """
+    Pytest fixture to set up a device mesh for tests.
+
+    If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+    If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (4, 8) creates
+    a devish mesh grid of 4 rows and 8 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+    Args:
+        request: Pytest request object.
+        silicon_arch_name: Name of the silicon architecture.
+        silicon_arch_wormhole_b0: Silicon architecture parameter.
+        device_params: Additional device configuration parameters.
+
+    Yields:
+        device_mesh: Initialized device mesh object.
+    """
     import ttnn
     import tt_lib as ttl
 
@@ -439,11 +455,11 @@ def pytest_generate_tests(metafunc):
         )
 
     if uses_silicon_arch:
-        metafunc.parametrize("silicon_arch_name", available_archs, scope="session")
+        metafunc.parametrize("silicon_arch_name", available_archs)
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
-            metafunc.parametrize(test_requested_silicon_arch_fixture, [True], scope="session")
+            metafunc.parametrize(test_requested_silicon_arch_fixture, [True])
 
     input_method = metafunc.config.getoption("--input-method")
     if input_method == "json":
