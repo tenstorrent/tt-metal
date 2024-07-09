@@ -264,7 +264,6 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
-
 std::vector<Tensor> _hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -358,6 +357,20 @@ std::vector<Tensor> _rpow_bw(
 }
 
 
+std::vector<Tensor> _floor_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _round_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -390,6 +403,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _logit_bw;
         case UnaryBackwardOpType::FLOOR_BW:
             return _floor_bw;
+        case UnaryBackwardOpType::ROUND_BW:
+            return _round_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

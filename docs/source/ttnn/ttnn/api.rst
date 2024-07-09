@@ -194,6 +194,7 @@ Pointwise Unary
    ttnn/celu_bw
    ttnn/rpow_bw
    ttnn/floor_bw
+   ttnn/round_bw
 
 Pointwise Binary
 ================

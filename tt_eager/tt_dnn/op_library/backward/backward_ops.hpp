@@ -422,9 +422,6 @@ std::vector<Tensor> complex_sub_bw(
 std::vector<Tensor> repeat_bw(
     const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config);
 
-std::vector<Tensor> round_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> unary_div_no_nan_bw(
     const Tensor& grad,
     const Tensor& input,
