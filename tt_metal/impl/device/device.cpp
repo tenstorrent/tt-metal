@@ -9,6 +9,7 @@
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
@@ -1827,7 +1828,12 @@ void Device::init_command_queue_host() {
 
 void Device::init_command_queue_device() {
 
+    // TODO: we should probably just always enable persistent kernel cache, or enable it full stack based on an env
+    // variable This could be a bug if user enables cache before opening device...
+    detail::EnablePersistentKernelCache();
     this->compile_command_queue_programs();
+    detail::DisablePersistentKernelCache();
+
     if (this->is_mmio_capable()) {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
