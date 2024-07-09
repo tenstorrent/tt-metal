@@ -277,6 +277,10 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_norm_backward
 
+.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced
+
+.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced_backward
+
 Enums
 =====
 
