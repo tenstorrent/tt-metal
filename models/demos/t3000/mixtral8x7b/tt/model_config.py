@@ -245,9 +245,7 @@ class TtModelArgs:
             mcast_in0=True,
         )
 
-        self.model_config[
-            "FF3_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
