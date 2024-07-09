@@ -27,6 +27,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
+    env pytest -n auto models/experimental/functional_vovnet/tests/test_performance.py -m $test_marker
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
@@ -64,6 +66,8 @@ run_device_perf_models() {
     local test_marker=$1
 
     env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+
+    env models/experimental/functional_vovnet/tests/test_perf_device_vovnet.py -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
