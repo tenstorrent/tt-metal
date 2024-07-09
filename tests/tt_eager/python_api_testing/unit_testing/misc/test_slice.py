@@ -7,11 +7,12 @@ import pytest
 import numpy as np
 import torch
 
+import ttnn
 import tt_lib as ttl
 from models.utility_functions import is_grayskull
 
 
-def unpadding_test(
+def slice_test(
     input_layout,
     input_tensor_shape,
     output_tensor_start,
@@ -38,7 +39,7 @@ def unpadding_test(
     )
 
     a_pt = (
-        ttl.tensor.unpad(a, output_tensor_start, output_tensor_end, output_mem_config=out_mem_config)
+        ttnn.slice(a, ttnn.Shape(output_tensor_start), ttnn.Shape(output_tensor_end), memory_config=out_mem_config)
         .cpu()
         .to(ttl.tensor.Layout.ROW_MAJOR)
         .to_torch()
@@ -87,7 +88,7 @@ def unpadding_test(
     "input_tensor_shape_1, output_tensor_start_1, output_tensor_end_1",
     (((9, 8, 128, 128), (0, 0, 0, 0), (8, 7, 31, 31)),),
 )
-def test_run_unpadding_test(
+def test_run_slice_test(
     input_tensor_shape_0,
     output_tensor_start_0,
     output_tensor_end_0,
@@ -103,7 +104,7 @@ def test_run_unpadding_test(
     if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
-    a_pt, a_ref, num_cache_entries = unpadding_test(
+    a_pt, a_ref, num_cache_entries = slice_test(
         ttl.tensor.Layout.ROW_MAJOR,
         input_tensor_shape_0,
         output_tensor_start_0,
@@ -118,7 +119,7 @@ def test_run_unpadding_test(
     assert eq
     assert num_cache_entries == 1
 
-    a_pt, a_ref, num_cache_entries = unpadding_test(
+    a_pt, a_ref, num_cache_entries = slice_test(
         ttl.tensor.Layout.ROW_MAJOR,
         input_tensor_shape_1,
         output_tensor_start_1,
@@ -134,7 +135,7 @@ def test_run_unpadding_test(
     # different width for row major
     assert num_cache_entries == 2
 
-    a_pt, a_ref, num_cache_entries = unpadding_test(
+    a_pt, a_ref, num_cache_entries = slice_test(
         ttl.tensor.Layout.TILE,
         input_tensor_shape_0,
         output_tensor_start_0,
@@ -150,7 +151,7 @@ def test_run_unpadding_test(
     eq = torch.equal(a_pt, a_ref)
     assert eq
 
-    a_pt, a_ref, num_cache_entries = unpadding_test(
+    a_pt, a_ref, num_cache_entries = slice_test(
         ttl.tensor.Layout.TILE,
         input_tensor_shape_1,
         output_tensor_start_1,

@@ -11,7 +11,7 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
     return std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor &tensor, const Shape &output_tensor_start) {
+inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor &tensor, const Shape &slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
     const auto& shape = tensor.get_legacy_shape();
@@ -29,12 +29,12 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
         for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
             compressed_dims *= shape[dim_inner];
         }
-        start_offset += (num_pages / compressed_dims) * output_tensor_start[dim_outer];
+        start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
     }
     return start_offset;
 }
 
-uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &output_tensor_start) {
+uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &slice_start) {
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
     const auto& shape = input_tensor.get_legacy_shape();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
@@ -42,21 +42,21 @@ uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &output_
         num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
 
     // offset for every dim except last 2
-    uint32_t start_offset = get_upper_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = get_upper_start_offset(input_tensor, slice_start);
 
-    start_offset += output_tensor_start[-2] / TILE_HEIGHT * num_pages_width + output_tensor_start[-1] / TILE_WIDTH;
+    start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
     return start_offset;
 }
 
-uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &output_tensor_start) {
+uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &slice_start) {
     uint32_t start_offset = 0;
 
     if (tensor.get_legacy_shape().rank() >= 2) {
         const auto& shape = tensor.get_legacy_shape();
         uint32_t num_pages = tensor.volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-        start_offset = get_upper_start_offset(tensor, output_tensor_start);
-        start_offset += output_tensor_start[-2];
+        start_offset = get_upper_start_offset(tensor, slice_start);
+        start_offset += slice_start[-2];
     }
 
     return start_offset;
@@ -72,11 +72,11 @@ void Slice::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR);
 
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.get_legacy_shape()[i]);
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i]);
 
         // Check if start shape is <= end shape
-        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i]);
+        TT_FATAL(this->slice_start[i] <= this->slice_end[i]);
     }
 
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
@@ -84,15 +84,15 @@ void Slice::validate_with_output_tensors(
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
         TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
+            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
             "Can only unpad tilized tensor with full tiles");
         TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->output_tensor_start[-1] % TILE_WIDTH == 0),
+            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0) &&
-                (this->output_tensor_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
+                (this->slice_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
             "RM unpadding requires output X size to be packable");
     }
 }
@@ -102,7 +102,7 @@ std::vector<tt::tt_metal::Shape> Slice::compute_output_shapes(const std::vector<
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
-        out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
+        out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
     }
     tt::tt_metal::Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
@@ -120,7 +120,34 @@ operation::ProgramWithCallbacks Slice::create_program(
     const auto &input_tensor_a = input_tensors.at(0);
     auto &output_tensor = output_tensors.at(0);
 
-    return slice_multi_core(input_tensor_a, output_tensor, this->output_tensor_start, this->output_tensor_end);
+    return slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
+}
+
+const operation::Hash Slice::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    auto input_tensor = input_tensors.at(0);
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
+    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
+    auto output_mem_config = this->output_mem_config;
+    auto dtype = input_tensor.dtype();
+    auto num_dims = input_tensor.shape().rank();
+
+    std::string rm_width = "TILE";
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        rm_width = fmt::format("{}", input_tensor.legacy_shape()[3]);
+    }
+
+    auto str = operation::hash_operation<Unpad>(
+        num_dims,
+        input_tensor.layout(),
+        input_mem_config.memory_layout,
+        input_mem_config.buffer_type,
+        output_mem_config.memory_layout,
+        output_mem_config.buffer_type,
+        dtype,
+        rm_width
+
+    );
+    return str;
 }
 
 }  // namespace ttnn::operations::reduction

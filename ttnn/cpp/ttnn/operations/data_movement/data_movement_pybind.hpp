@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
+#include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
 
@@ -121,6 +122,7 @@ void py_module(py::module& module) {
     detail::bind_concat(module);
     bind_upsample(module);
     detail::bind_pad(module);
+    detail::bind_slice(module);
     bind_repeat(module);
     bind_repeat_interleave(module);
 }
