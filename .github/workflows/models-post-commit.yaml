@@ -56,4 +56,4 @@ jobs:
         with:
           path: |
             generated/test_reports/
-          prefix: "test_reports_workflow_"
+          prefix: "test_reports_"
