@@ -318,6 +318,11 @@ void py_module(py::module& module) {
         ttnn::relu6_bw,
         R"doc(Performs backward operations for relu6 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::abs_bw,
+        R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
 }
 
 }  // namespace binary_backward

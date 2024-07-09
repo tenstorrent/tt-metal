@@ -280,14 +280,24 @@ std::vector<Tensor> ne_bw(const Tensor& grad, const MemoryConfig& output_mem_con
     return operation::decorate_as_composite(__func__, _ne_bw)(grad, output_mem_config);
 }
 
-std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
+    Tensor result = mul_unary(ttnn::multiply(grad, rsqrt_result, std::nullopt, output_mem_config), -0.5, output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
+    result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
+    float t_nan = std::nanf("");
+    result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
+    result = where(
+        ttnn::logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_nan,
+        result,
+        output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-std::vector<Tensor> abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _abs_bw)(grad, input, output_mem_config);
+std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _rsqrt_bw)(grad, input, output_mem_config);
 }
 
 // bw(expm1) = grad * expm1(input) + 1

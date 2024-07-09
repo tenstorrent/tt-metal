@@ -816,8 +816,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_sub_bw
 
-.. autofunction:: tt_lib.tensor.abs_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
 
 .. autofunction:: tt_lib.tensor.lt_bw

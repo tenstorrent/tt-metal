@@ -411,6 +411,13 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -449,6 +456,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _log_bw;
         case UnaryBackwardOpType::RELU6_BW:
             return _relu6_bw;
+        case UnaryBackwardOpType::ABS_BW:
+            return _abs_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
