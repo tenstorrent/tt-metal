@@ -186,11 +186,11 @@ class TtLlamaMLP_optimized:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
         )
 
-        w3_out = tt_lib.operations.primary.matmul(
+        w3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
         )
         x.deallocate(True)
@@ -212,11 +212,11 @@ class TtLlamaMLP_optimized:
             memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
-        hidden_states = tt_lib.operations.primary.matmul(
+        hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         return hidden_states
