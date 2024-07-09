@@ -4,7 +4,9 @@ set -eo pipefail
 
 run_tg_tests() {
   # Add tests here
-  echo "Fill me!"
+  echo "LOG_METAL: running run_tg_frequent_tests"
+
+  pytest tests/ttnn/multichip_unit_tests/test_multidevice_TG.py
 }
 
 main() {

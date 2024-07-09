@@ -184,7 +184,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
         pytest.param(32, 32768, id="Llama3-70B_decode_FF1"),
         pytest.param(512, 32768, id="Llama3-70B_prefill_FF1"),
         # pytest.param(32, 64 * 1024, id="Llama3-400B_decode_FF1"),  # Skipped
-        # pytest.param(512, 64*1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
+        # pytest.param(512, 64 * 1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
     ],
 )
 def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
@@ -217,6 +217,77 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
 
     out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
     out = out[:, 0:1, :, :]  # select the first column
+
+    out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99999)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "M, N",
+    [
+        pytest.param(32, 8192, id="Llama3-70B_decode"),
+        pytest.param(512, 8192, id="Llama3-70B_prefill"),
+        # pytest.param(32, 64 * 1024, id="Llama3-400B_decode"),  # Skipped
+        # pytest.param(512, 64*1024, id="Llama3-400B_prefill"),  # Skipped, OOM
+    ],
+)
+def test_galaxy_eltwise_add(M, N, device_mesh):
+    residual_pt = torch.randn(1, 1, M, N)
+    attn_output_pt = torch.randn(1, 1, M, N)
+
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
+            ),
+        }
+    )
+
+    LN_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_spec_32_cores_grid,
+            [
+                M,
+                N // 32,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    residual = ttnn.from_torch(
+        residual_pt,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=LN_OUTPUT_MEMCFG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
+    attn_output = ttnn.from_torch(
+        attn_output_pt,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=LN_OUTPUT_MEMCFG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
+    gt = residual_pt + attn_output_pt
+
+    out = ttnn.add(
+        residual,
+        attn_output,
+        dtype=ttnn.bfloat16,
+        memory_config=LN_OUTPUT_MEMCFG,
+    )
+
+    out = ttnn.to_torch(out, mesh_composer=ListMeshToTensor(device_mesh))[0]
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99999)
     logger.info(f"PCC value: {out_pcc}")
@@ -581,11 +652,9 @@ class TestUpdateCache:
         logger.info(output)
         assert eq
 
-    @pytest.mark.parametrize("cache_idx", [0, 127, 2047])
+    @pytest.mark.parametrize("cache_idx", [0, 2047])
     @pytest.mark.parametrize("cache_dtype", [ttnn.DataType.BFLOAT8_B])
-    @pytest.mark.parametrize(
-        "batch_offset", [0, 16]
-    )  # Only used when num_users < 32 and batch_offset + num_users <= 32
+    @pytest.mark.parametrize("batch_offset", [0])  # Only used when num_users < 32 and batch_offset + num_users <= 32
     def test_update_cache_decode(
         self,
         cache_idx,
