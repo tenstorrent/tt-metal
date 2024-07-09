@@ -7,6 +7,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_op.hpp"
 
 namespace ttnn {
 

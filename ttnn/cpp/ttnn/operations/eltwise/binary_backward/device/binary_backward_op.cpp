@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
-#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.cpp"
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -17,7 +17,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/embedding.hpp"
+#include "ttnn/operations/embedding/embedding/embedding.hpp"
 
 namespace ttnn::operations::binary_backward {
 

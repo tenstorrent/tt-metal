@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/experimental//tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 

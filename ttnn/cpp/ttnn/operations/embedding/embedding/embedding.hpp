@@ -4,13 +4,8 @@
 
 #pragma once
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/embedding.hpp
-#include "ttnn/experimental//tt_dnn/op_library/embeddings/embeddings_op.hpp"
-#include "ttnn/experimental//tt_dnn/op_library/run_operation.hpp"
-=======
-#include "ttnn/cpp/ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
->>>>>>> origin/main:ttnn/cpp/ttnn/operations/embedding/embedding/embedding.hpp
+#include "ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 

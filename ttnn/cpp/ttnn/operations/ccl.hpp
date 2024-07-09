@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/experimental//tt_dnn/op_library/all_gather/all_gather_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
 #include "ttnn/cpp/ttnn/multi_device.hpp"
 
 namespace ttnn {

@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn::operations::ternary_backward {
 

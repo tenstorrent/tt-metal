@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/experimental//tt_dnn/op_library/update_cache/update_cache_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 
 namespace ttnn {
 namespace operations {
