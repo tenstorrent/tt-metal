@@ -70,7 +70,7 @@ void Slice::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR);
-
+    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank());
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
         TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i]);
         TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i]);

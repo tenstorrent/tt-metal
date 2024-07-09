@@ -107,6 +107,8 @@ struct Padding {
         }
     }
 
+    const uint32_t get_normalized_index(std::int64_t index) const;
+
     PadDimension &operator[](const std::int64_t index);
     const PadDimension operator[](const std::int64_t index) const;
 
