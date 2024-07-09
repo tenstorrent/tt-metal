@@ -167,6 +167,19 @@ void JitBuildState::finish_init() {
         this->link_objs_ += obj + " ";
     }
 
+    // Append hw build objects compiled offline
+    std::string build_dir = llrt::OptionsG.get_root_dir() + "runtime/hw/lib/";
+    if (this->is_fw_) {
+        if (this->target_name_ != "erisc") {
+            this->link_objs_ += build_dir + "tmu-crt0.o ";
+        }
+        if (this->target_name_ == "ncrisc" and ((this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0))) {
+            this->link_objs_ += build_dir + "ncrisc-halt.o ";
+        }
+    } else {
+        this->link_objs_ += build_dir + "tmu-crt0k.o ";
+    }
+
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".hex";
@@ -199,10 +212,8 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
             this->srcs_.push_back("tt_metal/hw/firmware/src/tdma_xmov.c");
             this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/brisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/brisck.cc");
             }
 
@@ -216,13 +227,8 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
             this->defines_ += "-DCOMPILE_FOR_NCRISC ";
 
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisc.cc");
-                if (this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-                    this->srcs_.push_back("tt_metal/hw/toolchain/ncrisc-halt.S");
-                }
             } else {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");
             }
 
@@ -256,10 +262,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
     } else {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
     }
 
     this->lflags_ = env_.lflags_ + "-O3 ";
@@ -335,7 +339,6 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                 this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
             }
 
             string linker_str;
@@ -369,10 +372,8 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
             this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
             this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             this->lflags_ = env_.lflags_ + "-Os ";
