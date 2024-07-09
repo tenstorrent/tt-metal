@@ -8,9 +8,8 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
-// #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_metal/host_api.hpp"
@@ -57,41 +56,42 @@ Tensor host_function(const Tensor& input_tensor) {
         input_tensor.get_layout());
 }
 
-template <auto UnaryOpType, typename... Args>
+template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
 bool run_test(Device* device, const Shape& shape, float low, float high, Args... args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
-// using ttnn::operations::unary;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
 
-    if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::SQRT) {
+    if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
         auto device_output = ttnn::sqrt(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::EXP) {
+    } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);
         auto device_output = ttnn::exp(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::RECIP) {
+    } else if constexpr (unary_op_type == UnaryOpType::RECIP) {
         auto host_output = host_function<::detail::recip>(input_tensor);
         auto device_output = ttnn::reciprocal(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::GELU) {
+    } else if constexpr (unary_op_type == UnaryOpType::GELU) {
         auto host_output = host_function<::detail::gelu>(input_tensor);
         auto device_output = ttnn::gelu(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::RELU) {
+    } else if constexpr (unary_op_type == UnaryOpType::RELU) {
         auto host_output = host_function<::detail::relu>(input_tensor);
         auto device_output = ttnn::relu(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::SIGMOID) {
+    } else if constexpr (unary_op_type == UnaryOpType::SIGMOID) {
         auto host_output = host_function<::detail::sigmoid>(input_tensor);
         auto device_output = ttnn::sigmoid(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::LOG) {
+    } else if constexpr (unary_op_type == UnaryOpType::LOG) {
         auto host_output = host_function<::detail::log>(input_tensor);
         auto device_output = ttnn::log(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
-    } else if constexpr (UnaryOpType == ttnn::operations::unary::UnaryOpType::TANH) {
+    } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);
         auto device_output =ttnn::tanh(input_tensor.to(device)).cpu();
         return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
@@ -102,7 +102,9 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
 
 void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
-    // using namespace tt::tt_metal;
+
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
@@ -111,7 +113,7 @@ void test_operation_infrastructure() {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     auto op = tt::tt_metal::operation::DeviceOperation(ttnn::operations::unary::Unary{
-        {ttnn::operations::unary::UnaryWithParam{ttnn::operations::unary::UnaryOpType::SQRT}},
+        {UnaryWithParam{UnaryOpType::SQRT}},
         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
@@ -131,6 +133,9 @@ void test_operation_infrastructure() {
 void test_shape_padding() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
@@ -147,7 +152,7 @@ void test_shape_padding() {
     auto output_tensor =
         tt::tt_metal::operation::run(
             ttnn::operations::unary::Unary{
-                {ttnn::operations::unary::UnaryWithParam{ttnn::operations::unary::UnaryOpType::SQRT}},
+                {UnaryWithParam{UnaryOpType::SQRT}},
                 tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}},
             {padded_input_tensor})
             .at(0);
@@ -176,50 +181,52 @@ void test_numerically() {
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::SQRT>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::RECIP>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::RECIP>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        auto allclose = run_test<UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        auto allclose = run_test<UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_FATAL(allclose);
     }
 
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::RELU>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::RELU>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::SIGMOID>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::SIGMOID>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
+        auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
         TT_FATAL(allclose);
     }
     {
-        auto allclose = run_test<ttnn::operations::unary::UnaryOpType::TANH>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<UnaryOpType::TANH>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
 
@@ -231,44 +238,46 @@ void test_program_cache() {
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     auto run_tests = [&]() {
         // Program Cache Miss
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<ttnn::operations::unary::UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor =
             tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
         // Program Cache Hit
-        run_test<ttnn::operations::unary::UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<ttnn::operations::unary::UnaryOpType::GELU>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<UnaryOpType::GELU>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Miss
-        run_test<ttnn::operations::unary::UnaryOpType::GELU>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<UnaryOpType::GELU>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Hit
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<ttnn::operations::unary::UnaryOpType::SQRT>(device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
     device->enable_program_cache();

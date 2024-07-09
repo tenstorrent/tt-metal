@@ -33,9 +33,9 @@ def test_eltwise_unary_chain(device):
     xtt = ttl.tensor.unary_chain(
         xt,
         [
-            ttl.tensor.FusibleActivation.RELU,
-            [ttl.tensor.FusibleActivation.EXP, False],
-            [ttl.tensor.FusibleActivation.POWER, 2],
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2),
         ],
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
@@ -81,10 +81,7 @@ def test_eltwise_binary_fused(device):
     xtt = ttnn.add(
         xt,
         yt,
-        activations=[
-            ttl.tensor.FusibleActivation.RELU,
-            [ttl.tensor.FusibleActivation.POWER, 2],
-        ],
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)],
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
