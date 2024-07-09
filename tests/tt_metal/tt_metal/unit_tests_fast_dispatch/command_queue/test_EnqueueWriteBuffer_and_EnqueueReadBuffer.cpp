@@ -758,9 +758,9 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
                                 fmt::format(
                                     "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: "
                                     "{}, num_iterations: {}",
+                                    device->id(),
                                     cores[0],
                                     cores[1],
-                                    device->id(),
                                     num_pages[0],
                                     num_pages[1],
                                     page_shape[0],
