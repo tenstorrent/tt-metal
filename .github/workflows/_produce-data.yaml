@@ -86,7 +86,7 @@ jobs:
       - name: Create key file
         shell: bash
         run: |
-          echo ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }} > id_benchmark_writer
+          echo "${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}" > id_benchmark_writer
           chmod go-rwx id_benchmark_writer
       - name: Upload files
         run: sftp -i id_benchmark_writer -b .github/scripts/data_analysis/benchmark_data_batchfile.txt ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME_HOSTNAME }}
