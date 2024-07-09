@@ -30,6 +30,12 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     expected = sequential_prefix_scan(a, bx, h_prev)
 
     compute_grid_size = device.compute_with_storage_grid_size()
+    num_availible_cores = compute_grid_size.x * compute_grid_size.y
+
+    # Note that 8x8 grid won't run on CI
+    if num_availible_cores < num_cores:
+        pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
+
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     shard_spec = ttl.tensor.ShardSpec(
         shard_grid,
@@ -80,19 +86,24 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 @skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    [ttl.tensor.DataType.BFLOAT8_B],
 )
 @pytest.mark.parametrize(
     "L, E, N, num_cores",
     (
+        (32, 32, 16, 1),
         (32, 32, 32, 1),
         (32, 64, 32, 1),
         (64, 32, 32, 1),
         (64, 64, 32, 1),
         (32, 2560, 32, 32),
         (32, 5120, 32, 40),
-        # (32, 5120, 32, 64), #-> 8x8 grid not supported on CI
-        # (64, 5120, 32, 64) #-> 8x8 grid not supported on CI
+        (32, 5120, 32, 64),
+        (64, 5120, 32, 64),
+        (32, 5120, 16, 16),
+        (128, 5120, 16, 32),
+        (128, 5120, 16, 64),
+        (256, 5120, 16, 64),
     ),
 )
 def test_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
@@ -113,6 +124,12 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     bx_chunks = torch.chunk(bx, num_chunks)
 
     compute_grid_size = device.compute_with_storage_grid_size()
+    num_availible_cores = compute_grid_size.x * compute_grid_size.y
+
+    # Note that 8x8 grid won't run on CI
+    if num_availible_cores < num_cores:
+        pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
+
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     shard_spec = ttl.tensor.ShardSpec(
         shard_grid,
@@ -162,6 +179,10 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
 
 @skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
+    "dtype",
+    [ttl.tensor.DataType.BFLOAT8_B],
+)
+@pytest.mark.parametrize(
     "L, E, N, chunk_size, num_cores",
     (
         (32, 32, 32, 32, 1),
@@ -170,8 +191,9 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
         (128, 2560, 32, 32, 32),
     ),
 )
-def test_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cores: int, device):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
+def test_chunked_ssm_prefix_scan(
+    L: int, E: int, N: int, chunk_size: int, num_cores: int, dtype: ttl.tensor.DataType, device
+):
     run_chunked_ssm_prefix_scan(L, E, N, chunk_size, num_cores, dtype, device)
 
 
