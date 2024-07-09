@@ -89,4 +89,4 @@ jobs:
           echo "${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}" > id_benchmark_writer
           chmod go-rwx id_benchmark_writer
       - name: Upload files
-        run: sftp -i id_benchmark_writer -b .github/scripts/data_analysis/benchmark_data_batchfile.txt -vvv ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME_HOSTNAME }}
+        run: sftp  -oStrictHostKeyChecking=no -i id_benchmark_writer -b .github/scripts/data_analysis/benchmark_data_batchfile.txt ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME_HOSTNAME }}
