@@ -17,10 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U044T8U8DEF}, #Johanna Rock
-          { name: "t3k llama3_70b tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 30, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U044T8U8DEF}, #Johanna Rock
+          { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 30, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, # Miguel Tairum
         ]
 
     name: ${{ matrix.test-group.name }}
@@ -54,6 +54,13 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
           ${{ matrix.test-group.cmd }}
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark_data_${{ matrix.test-group.name }}
+          path: generated/benchmark_data/
+          if-no-files-found: warn
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
