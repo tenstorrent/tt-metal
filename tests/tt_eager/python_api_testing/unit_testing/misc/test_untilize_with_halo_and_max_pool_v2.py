@@ -10,11 +10,11 @@ from loguru import logger
 import torch
 
 
-from ttnn.operations.pool import (
+from ttnn.operations.max_pool2d import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from ttnn.operations.pool import max_pool2d_legacy as ttnn_max_pool2d_legacy
+from ttnn.operations.max_pool2d import max_pool2d_legacy as ttnn_max_pool2d_legacy
 
 
 import tt_lib as ttl
@@ -178,7 +178,6 @@ def test_run_max_pool(
         device,
         max_pool_reader_patterns_cache,
         pad_val=pad_val,
-        pool_op=ttnn_max_pool2d_legacy,
     )
     ttact_sharded = max_pool.copy_input_to_device(ttact)
 
