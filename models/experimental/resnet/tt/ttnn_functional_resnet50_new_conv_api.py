@@ -839,25 +839,14 @@ class resnet50:
             x_height,
             x_width,
             conv_op_cache,
-            eltwise_binary_out_in_place=False,
+            eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
         )
 
         if is_wormhole_b0() and self.batch_size == 16:
             xshape = x.shape_without_padding()
-            ## NOTE: using multicore untilize_with_unpadding results in PCC error
-            x = ttnn.experimental.tensor.untilize_with_unpadding(
-                x,
-                [xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1],
-                ttnn.L1_MEMORY_CONFIG,
-                use_multicore=False,
-            )
-            x = ttnn.experimental.tensor.tilize_with_val_padding(
-                x,
-                xshape,
-                0,
-                output_mem_config=ttnn.L1_MEMORY_CONFIG,
-                use_multicore=True,
+            x = ttnn.slice(
+                x, ttnn.Shape([0, 0, 0, 0]), ttnn.Shape([xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1])
             )
 
         layer4_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
@@ -913,22 +902,6 @@ class resnet50:
             x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
-        unpadded_shape = x.shape_without_padding()
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x,
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
-        )
-        x = ttnn.reshape(
-            x,
-            (
-                self.batch_size,
-                x.get_legacy_shape()[1],
-                (int)(x.get_legacy_shape()[2] / self.batch_size),
-                x.get_legacy_shape()[3],
-            ),
-        )
-
         grid_size = (8, 4)
         shard_grid = ttnn.experimental.tensor.CoreRangeSet(
             {
@@ -949,6 +922,24 @@ class resnet50:
             ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
+
+        unpadded_shape = x.shape_without_padding()
+        x = ttnn.experimental.tensor.untilize_with_unpadding(
+            x,
+            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        x = ttnn.reshape(
+            x,
+            (
+                self.batch_size,
+                x.get_legacy_shape()[1],
+                x.get_legacy_shape()[2] // self.batch_size,
+                x.get_legacy_shape()[3],
+            ),
+        )
+
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
             unpadded_shape[0],
