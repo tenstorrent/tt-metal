@@ -15,11 +15,11 @@ DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 
 
 def get_num_devices() -> List[int]:
-    return ttnn._ttnn.device.GetNumAvailableDevices()
+    return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:
-    return ttnn._ttnn.device.GetNumPCIeDevices()
+    return ttnn._ttnn.deprecated.device.GetNumPCIeDevices()
 
 
 def get_pcie_device_ids() -> List[int]:

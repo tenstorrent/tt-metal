@@ -23,11 +23,11 @@ from tt_lib.fused_ops.conv import (
     resnet50_optimized_conv,
     resnet50_1x1_conv_s2_as_downsample_and_matmul,
 )
-from ttnn.operations.conv.tt_py_composite_conv import (
+from ttnn.operations.conv.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from ttnn.operations.conv.tt_py_max_pool import TTPyMaxPool
+from ttnn.operations.conv.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
 
 from models.utility_functions import (
     _nearest_32,

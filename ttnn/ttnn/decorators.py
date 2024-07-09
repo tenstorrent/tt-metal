@@ -388,8 +388,8 @@ class Operation:
                 original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
                 os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_CSV)
                 output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._tt_lib.operations, "dump_operation_history_to_csv"):
-                    ttnn._tt_lib.operations.dump_operation_history_to_csv()
+                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
+                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
                 if original_operation_history_csv is not None:
                     os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
                 else:

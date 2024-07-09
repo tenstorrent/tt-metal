@@ -80,3 +80,6 @@ from loguru import logger
 import sys
 
 from ttnn._ttnn.deprecated import tensor, device, profiler, operations
+
+import tt_lib.fallback_ops
+import tt_lib.fused_ops

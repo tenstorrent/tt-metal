@@ -12,7 +12,7 @@ import math
 import struct
 import pytest
 
-from ttnn.experimental_operations.fused_ops.conv import conv as TtConv
+from tt_lib.fused_ops.conv import conv as TtConv
 from ttnn.device import Arch
 
 

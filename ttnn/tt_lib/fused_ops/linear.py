@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from .. import tensor
+from tt_lib import tensor
 
 from loguru import logger
 from ttnn import matmul
