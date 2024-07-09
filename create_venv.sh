@@ -34,8 +34,6 @@ python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 
 echo "Installing tt-metal"
 pip install -e .
-pip install -e ttnn/setup_ttnn.py
-pip install -e ttnn/setup_tt_lib.py
 
 echo "Generating git hooks"
 pre-commit install

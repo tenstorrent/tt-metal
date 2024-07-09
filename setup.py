@@ -38,7 +38,7 @@ def get_arch_name():
     return attempt_get_env_var("ARCH_NAME")
 
 
-def get_metal_eager_local_version_scheme(metal_build_config, version):
+def get_metal_local_version_scheme(metal_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
 
     arch_name = metal_build_config.arch_name
@@ -49,7 +49,7 @@ def get_metal_eager_local_version_scheme(metal_build_config, version):
         return ""
 
 
-def get_metal_eager_main_version_scheme(metal_build_config, version):
+def get_metal_main_version_scheme(metal_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
 
     is_release_version = version.distance is None or version.distance == 0
@@ -71,8 +71,8 @@ def get_metal_eager_main_version_scheme(metal_build_config, version):
 
 def get_version(metal_build_config):
     return {
-        "version_scheme": partial(get_metal_eager_main_version_scheme, metal_build_config),
-        "local_scheme": partial(get_metal_eager_local_version_scheme, metal_build_config),
+        "version_scheme": partial(get_metal_main_version_scheme, metal_build_config),
+        "local_scheme": partial(get_metal_local_version_scheme, metal_build_config),
     }
 
 
@@ -115,9 +115,7 @@ class CMakeBuild(build_ext):
     # This should only run when building the wheel. Should not be running for any dev flow
     # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
     def run(self) -> None:
-        assert (
-            len(self.extensions) == 2
-        ), f"Detected {len(self.extensions)} extensions, but should be only 2: tt_lib_csrc and ttnn"
+        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 2: ttnn"
 
         if self.is_editable_install_():
             assert (
@@ -177,15 +175,13 @@ class CMakeBuild(build_ext):
 packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn", "ttnn.cpp"]
 
 # Empty sources in order to force extension executions
-eager_lib_C = Extension("tt_lib._C", sources=[])
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
 
-ext_modules = [eager_lib_C, ttnn_lib_C]
+ext_modules = [ttnn_lib_C]
 
 BuildConstants = namedtuple("BuildConstants", ["so_src_location"])
 
 build_constants_lookup = {
-    eager_lib_C: BuildConstants(so_src_location="lib/_C.so"),
     ttnn_lib_C: BuildConstants(so_src_location="lib/_ttnn.so"),
 }
 
@@ -194,12 +190,11 @@ setup(
     use_scm_version=get_version(metal_build_config),
     packages=packages,
     package_dir={
-        "": "tt_eager",
-        "tt_metal": "tt_metal",
-        "tt_lib.models": "models",
-        "tt_eager.tt_dnn": "tt_eager/tt_dnn",
-        "ttnn": "ttnn/ttnn",
-        "ttnn.cpp": "ttnn/cpp",
+        "": "ttnn",  # only this is relevant in case of editable install mode
+        "tt_metal": "tt_metal",  # kernels depend on headers here
+        "tt_eager.tt_dnn": "tt_eager/tt_dnn",  # we need to pickup kernels
+        "ttnn.cpp": "ttnn/cpp",  # we need to pickup kernels
+        "tt_lib.models": "models",  # make sure tt_lib/ttnn does not depend on model and remove!!!
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
