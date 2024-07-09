@@ -57,7 +57,7 @@ def execute_batch(test_module, test_vectors):
         result = dict()
         if deserialize(test_vector["status"]) == VectorStatus.INVALID:
             result["status"] = TestStatus.NOT_RUN
-            result["message"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+            result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             results.append(result)
             continue
@@ -68,10 +68,13 @@ def execute_batch(test_module, test_vectors):
             p.start()
         try:
             input_queue.put(test_vector)
-            response = output_queue.get(block=True, timeout=5)
+            response = output_queue.get(block=True, timeout=30)
             status, message, e2e_perf = response[0], response[1], response[2]
             result["status"] = TestStatus.PASS if status else TestStatus.FAIL_ASSERT_EXCEPTION
-            result["message"] = message
+            if status:
+                result["message"] = message
+            else:
+                result["exception"] = message
             result["e2e_perf"] = e2e_perf
         except Empty as e:
             print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
