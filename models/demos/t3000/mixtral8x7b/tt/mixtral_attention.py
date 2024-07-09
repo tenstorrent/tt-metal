@@ -411,10 +411,13 @@ class TtMixtralAttention(LightweightModule):
         )
         attn_output_14SD.deallocate(True)
 
-        wo_program_config = None
+        if seq_len >= 1024:  # Specific program config to make better usage of cores and to avoid di/dt ND issues
+            wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
+        else:
+            wo_program_config = None  # For 128 seqlen case just use default program config
+
         if seq_len > 2048:  # To big to compute. Reshape and manually parallelize across multiple cores
             attn_output_11SH = ttnn.reshape(attn_output_11SH, (1, seq_len // 2048, 2048, -1))
-            wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
