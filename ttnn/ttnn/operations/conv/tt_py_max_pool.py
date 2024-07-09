@@ -57,7 +57,7 @@ class TTPyMaxPool(TTPyOp):
             ), f"reader_patterns_cache should have 1 of the following keys - 'conv', 'max_pool' or 'halo'. Found key - {key}"
 
         snap_to_tile = parallel_config_override.get("snap_to_tile", False)
-        df_needs_tiled = act_dtype is not None and act_dtype == ttnn.bfloat8
+        df_needs_tiled = act_dtype is not None and act_dtype == ttnn.bfloat8_b
         conv_parallel_config = determine_parallel_config(
             True,
             0,
