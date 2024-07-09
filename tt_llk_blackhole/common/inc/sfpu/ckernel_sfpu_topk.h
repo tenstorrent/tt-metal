@@ -30,12 +30,12 @@ inline void bitonic_topk_load8(uint offset, uint dist) {
     uint ld_offset = (offset & 0xF) + face_offset*32;
 
     // Load 16 consecutive numbers
-    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, ld_offset + dist);
-    
+    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
+    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+
     // Load 16 consecutive indices
-    TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
-    TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
+    TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
 
 }
 
@@ -46,39 +46,39 @@ inline void bitonic_topk_store8(uint offset, uint dist) {
     uint ld_offset = (offset & 0xF) + face_offset*32;
 
     // Load 16 consecutive numbers
-    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, ld_offset);
-    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, ld_offset + dist);
-    
+    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
+    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+
     // Load 16 consecutive indices
-    TT_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
-    TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
 }
 
 inline void bitonic_topk_load16(uint dist0, uint dist1) {
     constexpr uint dst_indices_offset = 128;        // 2 tile x 64 rows per tile
 
     // Load 16 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, 12);
+        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 12);
     } else {
-        TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, dist1);
-        TT_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, dist1);
+        TT_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, dist1 + dist0);
     }
-    
+
      // Load 16 consecutive indices
-    TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + 12);
+        TTI_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + 12);
     } else {
-        TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + dist1);
+        TT_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
     }
 }
 
@@ -86,32 +86,32 @@ inline void bitonic_topk_store16(uint dist0, uint dist1) {
     constexpr uint dst_indices_offset = 128;        // 2 tile x 64 rows per tile
 
     // Load 16 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 4);
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, 8);
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, 12);
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 12);
     } else {
-        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, dist1);
-        TT_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, dist1);
+        TT_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, dist1 + dist0);
     }
-    
+
      // Load 16 consecutive indices
-    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 4);
+        TTI_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + 8);
+        TTI_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + 12);
     } else {
-        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + dist1);
+        TT_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
     }
 }
 
 inline void bitonic_topk_ph3_st4_to_1(bool dir) {
-    
+
     if (dir == (bool)SortDir::ArgMin) {
         TT_LOG("Issue max/min reverse");
         TTI_SFPCONFIG(0x104, 0xF, 1);      // Reverse the max/min behaviour of SWAP
@@ -130,7 +130,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir) {
     TTI_SFPNOP;
 
     TTI_SFPTRANSP(0,0,0,0);
-    
+
     // Step 2
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -152,7 +152,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir) {
 }
 
 inline void bitonic_topk_ph2_st3_to_1() {
-    
+
     // Step 3
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -176,7 +176,7 @@ inline void bitonic_topk_ph2_st3_to_1() {
 }
 
 inline void bitonic_topk_ph1_st2_to_1() {
-    
+
     TTI_SFPTRANSP(0,0,0,0);
 
     // Step 2
@@ -193,16 +193,16 @@ inline void bitonic_topk_ph1_st2_to_1() {
 }
 
 inline void bitonic_topk_ph0_st1_to_1() {
-    
+
     TTI_SFPTRANSP(0,0,0,0);
-    
+
     // Step 1
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPNOP;
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
     TTI_SFPNOP;
-    
+
     TTI_SFPTRANSP(0,0,0,0);
 }
 
@@ -249,10 +249,10 @@ inline void _bitonic_topk_phases_steps(
     uint dst_addr_offset = 0;
     for (int face=0; face<2; face++) {
         for (int col=0; col<2; col++) {
-        
+
             bool dir = idir;
             for (int ph=i_start_phase; ph<(i_end_phase+1); ph++) {
-                
+
                 TT_LOG("Local Sort: phase = {}, dir = {}, idir = {}", ph, dir, idir);
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                 switch (ph) {
@@ -360,7 +360,7 @@ inline void _bitonic_topk_phases_steps(
         }
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
-    }   
+    }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -411,7 +411,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
             uint rebuild_m = m_iter + 1;
             uint total_datums_to_compare = ((64 >> rebuild_m) < 2*k) ? 2*k : (64 >> rebuild_m);    // max(2*k, 64/(2^m)) total datums to compare; there's always at least 2*K datums
-            total_datums_to_compare = total_datums_to_compare >> total_datums_shift;               // Reduce by 2 if skipping last 
+            total_datums_to_compare = total_datums_to_compare >> total_datums_shift;               // Reduce by 2 if skipping last
             uint dist = (k << rebuild_m) > 32 ? 32 : (k << rebuild_m);                             // min(32, k*2^k)
             uint ld_offset = (dist >> 4)*32 + (dist & 0xF);
             uint ld_dist;
@@ -469,7 +469,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         dir = idir;
                         datums_compared = 0;
-                        uint dist = (ss == 5) ? 16 : 32; 
+                        uint dist = (ss == 5) ? 16 : 32;
                         uint inner_d = dist >> 3;           // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
                         uint dst_offset = 0;
                         while (datums_compared < total_datums_to_compare) {
@@ -507,12 +507,12 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                     }
                 }
-                
+
             dst_addr_offset += 2;
             set_dst_write_addr(dst_addr_offset);
         }
         dst_addr_offset = 16;
-        set_dst_write_addr(dst_addr_offset);    
+        set_dst_write_addr(dst_addr_offset);
     }
 }
 

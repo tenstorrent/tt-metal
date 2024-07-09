@@ -95,21 +95,21 @@ void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_facto
         //  ROUND  : unused
         //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
         //  STORE  : store the sanitized value back to dest
-        TTI_SFPLOADMACRO(4, 0, 3, 0);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting the even columns for rows   3: 0 
+        TTI_SFPLOADMACRO(4, 0, ADDR_MOD_7, 0);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting the even columns for rows   3: 0
         TTI_SFPNOP;                     // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
-        TTI_SFPLOADMACRO(5, 0, 3, 2);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting the odd  columns for rows   3: 0
+        TTI_SFPLOADMACRO(5, 0, ADDR_MOD_7, 2);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting the odd  columns for rows   3: 0
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(6, 0, 3, 4);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting the even columns for rows   7: 4
+        TTI_SFPLOADMACRO(6, 0, ADDR_MOD_7, 4);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting the even columns for rows   7: 4
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(7, 0, 3, 6);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting the odd  columns for rows   7: 4
+        TTI_SFPLOADMACRO(7, 0, ADDR_MOD_7, 6);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting the odd  columns for rows   7: 4
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(4, 0, 3, 8);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(4, 0, ADDR_MOD_7, 8);   // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting the even columns for rows  11: 8
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(5, 0, 3, 10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(5, 0, ADDR_MOD_7, 10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is targeting the even columns for rows  11: 8
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(6, 0, 3, 12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is targeting the odd  columns for rows  15:12
+        TTI_SFPLOADMACRO(6, 0, ADDR_MOD_7, 12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is targeting the odd  columns for rows  15:12
         TTI_SFPNOP;
-        TTI_SFPLOADMACRO(7, 0, 3, 14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is targeting the even columns for rows  15:12
+        TTI_SFPLOADMACRO(7, 0, ADDR_MOD_7, 14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is targeting the even columns for rows  15:12
         // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use the SIMPLE unit
 
         // Macro Sequence Register 0 configured to read back in the sanitized values and calculate the approximate exponential value
@@ -118,20 +118,20 @@ void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_facto
         //  ROUND  : convert the MAD result from FP32 to a 16-bit unsigned integer using stochastic rounding
         //  SIMPLE : shift the 16-bit integer to the left by 15 bits to place the MSB of the computed value into the MSB of the exponent bits of the fp32 format
         //  STORE  : store the shifted value back to dest
-        TTI_SFPLOADMACRO(0, 0, 3, 0);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest offset  0 is targeting the even columns for rows   3: 0
-        TTI_SFPLOADMACRO(1, 0, 3, 2);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest offset  2 is targeting the odd  columns for rows   3: 0
-        TTI_SFPLOADMACRO(2, 0, 3, 4);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest offset  4 is targeting the even columns for rows   7: 4
-        TTI_SFPLOADMACRO(3, 0, 3, 6);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest offset  6 is targeting the odd  columns for rows   7: 4
-        TTI_SFPLOADMACRO(0, 0, 3, 8);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest offset  8 is targeting the even columns for rows  11: 8
-        TTI_SFPLOADMACRO(1, 0, 3, 10);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest offset 10 is targeting the even columns for rows  11: 8
-        TTI_SFPLOADMACRO(2, 0, 3, 12);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest offset 12 is targeting the odd  columns for rows  15:12
-        TTI_SFPLOADMACRO(3, 0, 3, 14);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest offset 14 is targeting the even columns for rows  15:12
+        TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest offset  0 is targeting the even columns for rows   3: 0
+        TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 2);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest offset  2 is targeting the odd  columns for rows   3: 0
+        TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 4);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest offset  4 is targeting the even columns for rows   7: 4
+        TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 6);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest offset  6 is targeting the odd  columns for rows   7: 4
+        TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 8);   // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest offset  8 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 10);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest offset 10 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 12);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest offset 12 is targeting the odd  columns for rows  15:12
+        TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 14);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest offset 14 is targeting the even columns for rows  15:12
         // NOP needed to allow time for the final Computation Loadmacro to complete before returning to the Sanitation Loadmacro at the top for the next iteration
         //  - to be completely safe, use 3 NOP; in practice 1 seems to be enough, probably because the overhead of the DEST INCRW stuff introduces 2 cycles of delay
-        TTI_SFPNOP;                     
+        TTI_SFPNOP;
         // TTI_SFPNOP;
         // TTI_SFPNOP;
-    
+
     } else {
         // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
         for (int d = 0; d < iterations; d++)
@@ -199,40 +199,40 @@ inline void _init_exponential_()
         //          LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
         //          LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
-        TTI_SFPLOADI(0, 0xA, 0x0000);                                                     
-        TTI_SFPLOADI(0, 0x8, 0xC2B1);                                                     
-        TTI_SFPCONFIG(0, 14, 0);       // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000      
+        TTI_SFPLOADI(0, 0xA, 0x0000);
+        TTI_SFPLOADI(0, 0x8, 0xC2B1);
+        TTI_SFPCONFIG(0, 14, 0);       // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, 0xaa3b);                                                     
-        TTI_SFPLOADI(0, 0x8, 0x43B8);                                                     
-        TTI_SFPCONFIG(0, 12, 0);       // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b     
+        TTI_SFPLOADI(0, 0xA, 0xaa3b);
+        TTI_SFPLOADI(0, 0x8, 0x43B8);
+        TTI_SFPCONFIG(0, 12, 0);       // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, 0xe9a3);                                                     
-        TTI_SFPLOADI(0, 0x8, 0x46Fd);                                                     
+        TTI_SFPLOADI(0, 0xA, 0xe9a3);
+        TTI_SFPLOADI(0, 0x8, 0x46Fd);
         TTI_SFPCONFIG(0, 13, 0);       // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 
-        // Next, set up the macro instructions which will be necessary 
-        //  - for the sanitize function: we will need a SWAP instruction 
-        //  - for the main computation function: we will need MAD, ROUND, and SHIFT instructions 
+        // Next, set up the macro instructions which will be necessary
+        //  - for the sanitize function: we will need a SWAP instruction
+        //  - for the main computation function: we will need MAD, ROUND, and SHIFT instructions
 
         // There are two ways to program the macro instruction registers, and this setup leverages both ways
         //  - we can either use the SFPCONFIG flow, by setting up the bits of the instruction into LREG[0] and then targeting the Macro instruction register
         //  - or we can use the shortcut / backdoor load method which relies on having some illegal destination register values as part of the instruction
 
-        // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which is not normally a legal value 
+        // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which is not normally a legal value
         //      (we are cheating a bit here, since we only care about one half of the swap and we want to use a constant for the other half)
-        //      
+        //
         //              imm12 = 0,       lreg_src_c = 0 (will be fed by value loaded from Dest into Loadmacro lreg_dest),  lreg_dest = LREG[14] = - 88.5,   instr_mod1 = 1 swap the values with the larger of the two ending up in lreg_dest -> but we will use the Loadmacro lreg_dest register as output
         // TTI_SFP_SWAP(0,               0,                                                                                14,                            1);
-        TTI_SFPLOADI(0, 0xA, 0x00E1);                                                     
-        TTI_SFPLOADI(0, 0x8, 0x9200);                                                     
+        TTI_SFPLOADI(0, 0xA, 0x00E1);
+        TTI_SFPLOADI(0, 0x8, 0x9200);
         TTI_SFPCONFIG(0, 0, 0);       // SFPCONFIG Dest 0 = Programmable Macro instruction 0: TTI_SFPSWAP(0, 0, 14, 1); // compare against LREG[14] (-88.5), and put the larger value into LREG[loadmacro_lreg_dest]
         TTI_SFPNOP;
 
         // Backdoor load of Macro Instruction 1
         // Dummy version of MAD instruction with lreg_dest = 4'b11_01 = 13 to install into Programmable Macro instruction register 1, which is Macro Instruction Register 5
-        TTI_SFPMAD(12, 0, 13, 13, 0);   // MACRO Instruction 1 <--- lreg X = lreg[12] (A) * lreg[0] (y) + lreg[13] (B-C)  
+        TTI_SFPMAD(12, 0, 13, 13, 0);   // MACRO Instruction 1 <--- lreg X = lreg[12] (A) * lreg[0] (y) + lreg[13] (B-C)
 
         // Backdoor load of Macro Instruction 2
         // ROUND instruction to convert FP32 result into an integer value (int16)
@@ -240,7 +240,7 @@ inline void _init_exponential_()
         TTI_SFP_STOCH_RND(0,               0,             0,              0,                  14,                                                                     14);  //Round to unsigned Int16
 
         // Backdoor load of Macro Instruction 3
-        // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent; 
+        // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
         TTI_SFPSHFT(15,0,15,1); // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in Programmable Macro Instruction reg 2'b11, which is Macro Instruction Register 7
 
         // So at this point, we have the following instructions loaded into our macro registers:
@@ -257,24 +257,24 @@ inline void _init_exponential_()
         // Now we want to set up our two sequences
 
         // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
-        //       Delay slot:                  0     1        2      
-        //                                                                                                                                                                                                 Use     
-        //                                                                                                                                                                                                 Loaded  Result          Macro 
-        //                                                                                                                                                                                                 Value   Value   Delay   Instruction   
-        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select   
+        //       Delay slot:                  0     1        2
+        //                                                                                                                                                                                                 Use
+        //                                                                                                                                                                                                 Loaded  Result          Macro
+        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
         TTI_SFPLOADI(0, 0xA, 0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0 ; not using staging flop as dest; not using load reg as srcb : 8'b0_______0_______000_____100          = 0x04
                                        // slot2 : MAD    UNIT, unused                                                                                                                                 : 8'b0_______0_______000_____000          = 0x00
         TTI_SFPLOADI(0, 0x8, 0x1300);  // slot3 : ROUND  UNIT, unused                                                                                                                                 : 8'b0_______0_______000_____000          = 0x00
                                        // slot4 : STORE  UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2 ; not using staging flop as src ;                            : 8'b0_______0_______010_____011          = 0x13
-        TTI_SFPCONFIG(0, 5, 0);        // SFPCONFIG Dest 5 = Macro Sequence Register 1 
+        TTI_SFPCONFIG(0, 5, 0);        // SFPCONFIG Dest 5 = Macro Sequence Register 1
 
 
         // Sequence 0 setup: we want to Load, MAD, <delay>, ROUND, SHIFT, Store
         //       Delay slot:                  0    1        2      3      4
-        //                                                                                                                                                                                                 Use     
-        //                                                                                                                                                                                                 Loaded  Result          Macro 
-        //                                                                                                                                                                                                 Value   Value   Delay   Instruction   
-        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select   
+        //                                                                                                                                                                                                 Use
+        //                                                                                                                                                                                                 Loaded  Result          Macro
+        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
         TTI_SFPLOADI(0, 0xA, 0x85DF);  // slot1 : SIMPLE UNIT, want SHIFT instruction which is in macro instruction mux[7], delayed by 3 ;     using staging flop as dest;     using load reg as srcb : 8'b1_______1_______011_____111          = 0xDF
                                        // slot2 : MAD    UNIT, want MAD   instruction which is in macro instruction mux[5], delayed by 0 ; not using staging flop as dest;     using load reg as srcb : 8'b1_______0_______000_____101          = 0x85
         TTI_SFPLOADI(0, 0x8, 0x6316);  // slot3 : ROUND  UNIT, want ROUND instruction which is in macro instruction mux[6], delayed by 2 ; not using staging flop as dest;     using                  : 8'b0_______0_______010_____110          = 0x16
