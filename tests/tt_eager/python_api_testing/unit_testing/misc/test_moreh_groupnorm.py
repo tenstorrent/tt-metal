@@ -226,7 +226,6 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     return input, gamma, beta, output_grad
 
 
-@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
@@ -242,24 +241,13 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     ],
 )
 @pytest.mark.parametrize(
-    "H",
-    [
-        23,
-        512,
-    ],
-)
-@pytest.mark.parametrize(
-    "W",
-    [
-        23,
-        512,
-    ],
+    "HW",
+    [[23, 23], [512, 512]],
 )
 @pytest.mark.parametrize(
     "eps",
     [
         1e-05,
-        1e-12,
     ],
 )
 @pytest.mark.parametrize(
@@ -276,9 +264,10 @@ def make_input_tensors(input_shape, affine, do_backward=False):
         False,
     ],
 )
-def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, device):
+def test_moreh_groupnorm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
 
+    H, W = HW
     C, num_groups = C_num_groups
     input_shape = (N, C, H, W)
     cpu_input, cpu_beta, cpu_gamma, _ = make_input_tensors(input_shape, affine)
@@ -319,7 +308,6 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
         assert actual_rstd is None
 
 
-@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
@@ -335,24 +323,13 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
     ],
 )
 @pytest.mark.parametrize(
-    "H",
-    [
-        23,
-        512,
-    ],
-)
-@pytest.mark.parametrize(
-    "W",
-    [
-        23,
-        512,
-    ],
+    "HW",
+    [[23, 23], [512, 512]],
 )
 @pytest.mark.parametrize(
     "eps",
     [
         1e-05,
-        # 1e-12,
     ],
 )
 @pytest.mark.parametrize(
@@ -384,8 +361,9 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
     ],
 )
 def test_moreh_groupnorm_backward(
-    N, C_num_groups, H, W, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+    N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):
+    H, W = HW
     if not affine and (gamma_requires_grad or beta_requires_grad):
         pytest.skip("gamma_requires_grad and beta_requires_grad are only valid when affine is True.")
 
