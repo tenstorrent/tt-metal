@@ -20,7 +20,7 @@ def generate_through_selective_scan(
     model.eval()
     with torch.no_grad():
         output = model.generate(input_ids, n_tokens_to_gen)
-    return tokenizer.batch_decode(output)[0]
+    return tokenizer.batch_decode(output)
 
 
 def generate_through_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int = 51):
@@ -28,7 +28,7 @@ def generate_through_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int 
     model.eval()
     with torch.no_grad():
         output = model.generate(input_ids, n_tokens_to_gen)
-    return tokenizer.batch_decode(output)[0]
+    return tokenizer.batch_decode(output)
 
 
 def generate_through_prefill_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int = 51):
@@ -36,7 +36,7 @@ def generate_through_prefill_decode(model, tokenizer, prompt: str, n_tokens_to_g
     model.eval()
     with torch.no_grad():
         output = model.generate(input_ids, n_tokens_to_gen)
-    return tokenizer.batch_decode(output)[0]
+    return tokenizer.batch_decode(output)
 
 
 @pytest.mark.parametrize(
@@ -56,11 +56,11 @@ def test_cpu_reference_model_decode_vs_selective_scan(
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
     selective_scan_model = Mamba.from_pretrained(model_version)
-    decode_model = MambaDecode.from_pretrained(model_version)
-    prefill_decode_model = MambaPrefillDecode.from_pretrained(model_version)
+    decode_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
+    prefill_decode_model = MambaPrefillDecode.from_pretrained(model_version, batch_size=batch)
 
-    prefill_decode_output = generate_through_prefill_decode(prefill_decode_model, tokenizer, prompt, genlen)
-    selective_scan_output = generate_through_selective_scan(selective_scan_model, tokenizer, prompt, genlen)
-    decode_output = generate_through_decode(decode_model, tokenizer, prompt, genlen)
+    prefill_decode_output = generate_through_prefill_decode(prefill_decode_model, tokenizer, prompt, genlen)[0]
+    selective_scan_output = generate_through_selective_scan(selective_scan_model, tokenizer, prompt, genlen)[0]
+    decode_output = generate_through_decode(decode_model, tokenizer, prompt, genlen)[0]
 
     assert selective_scan_output == decode_output == prefill_decode_output, "Model outputs should match"
