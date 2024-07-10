@@ -14,4 +14,4 @@ source tests/scripts/single_card/run_demos_single_card_n150_tests.sh
 # Not working on N150, working on N300
 unset WH_ARCH_YAML
 rm -rf built
-pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
+pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
