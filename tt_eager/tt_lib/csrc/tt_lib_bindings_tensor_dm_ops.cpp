@@ -274,22 +274,6 @@ namespace tt::tt_metal::detail{
                 "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
-        m_tensor.def("unpad", &unpad,
-            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Unpad TT Tensor.
-
-            Returns an output tensor from output tensor start indices ``arg1`` to output tensor end indices ``arg2`` (inclusive) of the input tensor.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "", "Yes"
-                "output_tensor_start", "Start indices of input tensor", "List[int[tensor rank]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
-                "output_tensor_end", "End indices of input tensor in output tensor", "List[int[tensor rank]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
-                "pad_value", "Value to pad input tensor", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         m_tensor.def("fold", &fold,
             py::arg("input").noconvert(), py::arg("stride_h"), py::arg("stride_w"), R"doc(
             Fold TT Tensor.

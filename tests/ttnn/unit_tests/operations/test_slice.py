@@ -4,11 +4,9 @@
 
 import pytest
 
-import numpy as np
 import torch
 
 import ttnn
-import tt_lib as ttl
 from models.utility_functions import is_grayskull
 
 
@@ -22,31 +20,21 @@ def slice_test(
     out_mem_config,
     dtype,
 ):
-    if dtype == ttl.tensor.DataType.FLOAT32:
-        inp = torch.rand(*input_tensor_shape, dtype=torch.float)
+    if dtype == ttnn.float32:
+        torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.float)
     else:
-        inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
+        torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
-    a = (
-        ttl.tensor.Tensor(
-            inp.reshape(-1).tolist(),
-            inp.shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(input_layout)
-        .to(device)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
 
-    a_pt = (
-        ttnn.slice(a, ttnn.Shape(output_tensor_start), ttnn.Shape(output_tensor_end), memory_config=out_mem_config)
-        .cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to_torch()
-    )
+    tt_output_tensor = ttnn.slice(tt_input_tensor, output_tensor_start, output_tensor_end, memory_config=out_mem_config)
+
+    a_pt = ttnn.to_torch(tt_output_tensor)
 
     # Pytorch reference
-    a_ref = inp[
+    a_ref = torch_input_tensor[
         output_tensor_start[0] : output_tensor_end[0] + 1,
         output_tensor_start[1] : output_tensor_end[1] + 1,
         output_tensor_start[2] : output_tensor_end[2] + 1,
@@ -58,17 +46,17 @@ def slice_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (ttnn.bfloat16, ttnn.float32),
     ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.DRAM_MEMORY_CONFIG,),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.DRAM_MEMORY_CONFIG,),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
@@ -101,11 +89,11 @@ def test_run_slice_test(
     dtype,
     use_program_cache,
 ):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     a_pt, a_ref, num_cache_entries = slice_test(
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape_0,
         output_tensor_start_0,
         output_tensor_end_0,
@@ -120,7 +108,7 @@ def test_run_slice_test(
     assert num_cache_entries == 1
 
     a_pt, a_ref, num_cache_entries = slice_test(
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape_1,
         output_tensor_start_1,
         output_tensor_end_1,
@@ -136,7 +124,7 @@ def test_run_slice_test(
     assert num_cache_entries == 2
 
     a_pt, a_ref, num_cache_entries = slice_test(
-        ttl.tensor.Layout.TILE,
+        ttnn.TILE_LAYOUT,
         input_tensor_shape_0,
         output_tensor_start_0,
         output_tensor_end_0,
@@ -152,7 +140,7 @@ def test_run_slice_test(
     assert eq
 
     a_pt, a_ref, num_cache_entries = slice_test(
-        ttl.tensor.Layout.TILE,
+        ttnn.TILE_LAYOUT,
         input_tensor_shape_1,
         output_tensor_start_1,
         output_tensor_end_1,

@@ -402,11 +402,11 @@ class TtFalconMLPDecode(nn.Module):
         # remove padding from output
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.prefill_seq_len in [1024, 2048]:
             for i in range(self.num_devices):
-                hidden_states[i] = ttnn.experimental.tensor.unpad(
+                hidden_states[i] = ttnn.slice(
                     hidden_states[i],
                     [0, 0, 0, 0],
                     [0, 0, batch_size - 1, self.hidden_size - 1],
-                    output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                 )
 
         # return TT Tensor

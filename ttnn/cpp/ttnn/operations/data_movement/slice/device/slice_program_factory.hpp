@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
 
 #include "optional"
 #include "tt_dnn/op_library/math.hpp"
@@ -10,6 +11,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "slice_op.hpp"
 using namespace tt::constants;
 
 namespace tt {
@@ -73,7 +75,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
@@ -212,7 +214,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                  num_sticks_per_core_group_2] =
                     split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-            const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+            const auto tensor_start = static_cast<const ttnn::operations::data_movement::Slice *>(operation)->slice_start;
             auto all_runtime_args = get_slice_runtime_args_rm(
                 src_tensor,
                 dst_tensor,
@@ -321,7 +323,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
         set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
     }
 
-    uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
 
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
@@ -486,7 +488,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
                 split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-        const auto& tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+        const auto& tensor_start = static_cast<const ttnn::operations::data_movement::Slice*>(operation)->slice_start;
         set_slice_runtime_args_tile<false>(
             src_tensor,
             dst_tensor,

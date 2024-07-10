@@ -94,7 +94,7 @@ class TtLlamaRotary(torch.nn.Module):
         )
 
         xq = tt_lib.tensor.transpose(xq, 1, 2)
-        xq = tt_lib.tensor.unpad(
+        xq = ttnn.slice(
             xq,
             [0, 0, 0, 0],
             [1 - 1, 8 - 1, 128 - 1, self.head_dim - 1],
@@ -111,7 +111,7 @@ class TtLlamaRotary(torch.nn.Module):
         )
 
         xk = tt_lib.tensor.transpose(xk, 1, 2)
-        xk = tt_lib.tensor.unpad(
+        xk = ttnn.slice(
             xk,
             [0, 0, 0, 0],
             [1 - 1, 1 - 1, 128 - 1, self.head_dim - 1],

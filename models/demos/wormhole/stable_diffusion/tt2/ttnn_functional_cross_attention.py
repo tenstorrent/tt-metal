@@ -371,11 +371,11 @@ class cross_attention:
                     ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
 
-                k_slice = ttnn.experimental.tensor.unpad(
+                k_slice = ttnn.slice(
                     t_key,
                     (j, i, 0, 0),
                     (j, i, self.key_len - 1, self.seq_len - 1),
-                    output_mem_config=self.l1_interleaved_memory_config,
+                    memory_config=self.l1_interleaved_memory_config,
                 )
 
                 mm_slice = ttnn.matmul(
@@ -412,11 +412,11 @@ class cross_attention:
                         program_config=self.program_configs["tsa_softmax"],
                     )
 
-                v_slice = ttnn.experimental.tensor.unpad(
+                v_slice = ttnn.slice(
                     value,
                     (j, i, 0, 0),
                     (j, i, self.seq_len - 1, self.key_len - 1),
-                    output_mem_config=self.l1_interleaved_memory_config,
+                    memory_config=self.l1_interleaved_memory_config,
                 )
                 mm_slice = ttnn.matmul(
                     mm_slice,
