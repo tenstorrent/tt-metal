@@ -12,7 +12,7 @@ import ttnn
 
 SQLITE_DB_PATH = "db.sqlite"
 TENSORS_PATH = "tensors"
-OPERATION_HISTORY_CSV = "operation_history.csv"
+OPERATION_HISTORY_JSON = "operation_history.json"
 GRAPHS_PATH = "graph"
 CONFIG_PATH = "config.json"
 
