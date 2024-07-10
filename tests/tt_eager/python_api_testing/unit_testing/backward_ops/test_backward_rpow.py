@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
     compare_pcc,
     data_gen_with_range,
@@ -34,7 +34,7 @@ def test_bw_rpow(input_shapes, exponent, device):
 
     pyt_y = torch.pow(in_data, exponent)
 
-    tt_output_tensor_on_device = tt_lib.tensor.rpow_bw(grad_tensor, input_tensor, exponent)
+    tt_output_tensor_on_device = ttnn.rpow_bw(grad_tensor, input_tensor, exponent)
 
     in_data.retain_grad()
 

@@ -39,6 +39,7 @@ enum class UnaryBackwardOpType {
     LEAKY_RELU_BW,
     ELU_BW,
     CELU_BW,
+    RPOW_BW,
 };
 
 struct UnaryBackwardFunction{
