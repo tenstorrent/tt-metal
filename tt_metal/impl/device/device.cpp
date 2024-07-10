@@ -1816,7 +1816,6 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 }
 
 void Device::init_command_queue_host() {
-    TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
