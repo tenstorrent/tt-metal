@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "firmware_common.h"
 
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
@@ -53,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(35);
     constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(36);
     constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(37);
+    constexpr uint32_t act_block_h_datums_first_reader      = get_compile_time_arg_val(38);
 
     constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
@@ -85,8 +87,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
-    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
-    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
+    // constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
+    // constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
+    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // Extra /2 because of packed uint16 reads
+    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
+
 
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
@@ -146,6 +151,7 @@ void kernel_main() {
     };
 
 
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
@@ -161,7 +167,7 @@ void kernel_main() {
         // coalesce reads along weight_size_w
         uint32_t act_l1_offset = 0;
         uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-        uint32_t start_reader_idx = act_block_h_datums_read;
+        uint32_t start_reader_idx = act_block_h_datums_first_reader / 2;
 
         bool read_weights = true;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {

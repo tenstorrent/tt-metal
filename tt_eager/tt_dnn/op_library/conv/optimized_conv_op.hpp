@@ -114,7 +114,8 @@ struct OptimizedConv {
         "output_mem_config",
         "output_dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant");
+        "use_shallow_conv_variant",
+        "enable_act_doule_buffer");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -129,7 +130,8 @@ struct OptimizedConv {
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant));
+            std::cref(this->use_shallow_conv_variant),
+            std::cref(this->enable_act_doule_buffer));
     }
 };
 
@@ -205,7 +207,8 @@ struct OptimizedConvNew {
         "extra_padding_for_32B_alignment",
         "output_dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant");
+        "use_shallow_conv_variant",
+        "enable_act_doule_buffer");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -219,7 +222,8 @@ struct OptimizedConvNew {
             std::cref(this->extra_padding_for_32B_alignment),
             std::cref(this->output_dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant));
+            std::cref(this->use_shallow_conv_variant),
+            std::cref(this->enable_act_doule_buffer));
     }
 };
 
