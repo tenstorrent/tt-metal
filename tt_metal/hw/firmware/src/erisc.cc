@@ -79,6 +79,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         // FD: assume that no more host -> remote writes are pending
         if (mailboxes->launch.go.run == RUN_MSG_GO) {
             DeviceZoneScopedMainN("ERISC-FW");
+            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
             rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
