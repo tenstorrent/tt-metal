@@ -20,7 +20,7 @@ namespace ttnn::operations::unary_backward {
 std::vector<ttnn::Tensor> _mul_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul_unary(grad, scalar, output_mem_config);
+    Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -28,7 +28,7 @@ std::vector<ttnn::Tensor> _mul_bw(
 std::vector<Tensor> _clamp_min_bw(
     const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte_unary(input, min, output_mem_config);
+    Tensor minT = ttnn::ge(input, min, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -37,7 +37,7 @@ std::vector<Tensor> _clamp_min_bw(
 std::vector<Tensor> _clamp_max_bw(
     const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor maxT = lte_unary(input, max, output_mem_config);
+    Tensor maxT = ttnn::le(input, max, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -46,8 +46,8 @@ std::vector<Tensor> _clamp_max_bw(
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte_unary(input, min, output_mem_config);
-    Tensor maxT = lte_unary(input, max, output_mem_config);
+    Tensor minT = ttnn::ge(input, min, std::nullopt, output_mem_config);
+    Tensor maxT = ttnn::le(input, max, std::nullopt, output_mem_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
     result = ttnn::multiply(grad, result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -64,16 +64,16 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
     std::vector<Tensor> grad_tensor;
     Tensor digamma_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor digamma_result_2 = ttnn::multiply(
-        grad, tt::tt_metal::digamma(add_unary(-0.5, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 
     Tensor grad_result = ttnn::add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(add_unary(-1.0, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(add_unary(-1.5, input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
@@ -312,7 +312,7 @@ std::vector<Tensor> _elu_bw(
     Tensor grad_result = where(
         gez(input, output_mem_config),
         grad,
-        ttnn::multiply(grad, ttnn::multiply(exp(input, output_mem_config), alpha, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(grad, ttnn::multiply(ttnn::exp(input, false, output_mem_config), alpha, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
@@ -326,7 +326,7 @@ std::vector<Tensor> _celu_bw(
     std::vector<Tensor> grad_tensor;
     Tensor div_result = ttnn::multiply(
         input, recip(ttnn::operations::creation::full_like(input, alpha, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    Tensor exp_result = exp(div_result, output_mem_config);
+    Tensor exp_result = ttnn::exp(div_result, false, output_mem_config);
     Tensor grad_result = where(
         ttnn::gt(input, ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
         grad,
