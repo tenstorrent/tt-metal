@@ -236,6 +236,7 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result =
@@ -243,6 +244,7 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
             ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
+    Tensor status = ttnn::logical_and(
         ttnn::ge(input, 0.0f, std::nullopt, output_mem_config),
         ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
@@ -361,6 +363,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
         case UnaryBackwardOpType::ASSIGN_BW:
             return _assign_bw;
         case UnaryBackwardOpType::MULTIGAMMALN_BW:
+            return _multigammaln_bw;
+        case UnaryBackwardOpType::LGAMMA_BW:
             return _lgamma_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
