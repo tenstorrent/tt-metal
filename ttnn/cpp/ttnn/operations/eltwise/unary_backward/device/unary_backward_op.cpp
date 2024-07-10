@@ -597,6 +597,42 @@ std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, cons
     return grad_tensor;
 }
 
+std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float t_nan = std::nanf("");
+    float t_inf = std::numeric_limits<float>::infinity();
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam {UnaryOpType::SQUARE},
+    UnaryWithParam {UnaryOpType::SUB_UNARY_SFPU, 1.0f},
+    UnaryWithParam {UnaryOpType::NEG},
+    UnaryWithParam {UnaryOpType::RECIP}};
+
+    Tensor grad_a =
+        ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(ttnn::eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
+    grad_a = where(ttnn::logical_and(ttnn::eqz(grad, output_mem_config), ttnn::eqz(input, output_mem_config)), 0, grad_a, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(
+            ttnn::logical_or(
+                ttnn::eq(input, 1, std::nullopt, output_mem_config),
+                ttnn::eq(input, -1, std::nullopt, output_mem_config),
+                std::nullopt,
+                output_mem_config),
+            nez(grad, output_mem_config)),
+        t_inf,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eq(grad_a, t_inf, std::nullopt, output_mem_config), ttnn::ltz(grad, output_mem_config)),
+        -t_inf,
+        grad_a,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -661,6 +697,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _hardswish_bw;
         case UnaryBackwardOpType::TANHSHRINK_BW:
             return _tanhshrink_bw;
+        case UnaryBackwardOpType::ATANH_BW:
+            return _atanh_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

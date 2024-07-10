@@ -210,6 +210,7 @@ Pointwise Unary
    ttnn/square_bw
    ttnn/hardswish_bw
    ttnn/tanhshrink_bw
+   ttnn/atanh_bw
 
 Pointwise Binary
 ================

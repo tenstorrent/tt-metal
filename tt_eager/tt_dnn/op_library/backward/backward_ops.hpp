@@ -153,11 +153,6 @@ std::vector<Tensor> polygamma_bw(
     int n,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> atanh_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> asin_bw(
     const Tensor& grad,
     const Tensor& input,
