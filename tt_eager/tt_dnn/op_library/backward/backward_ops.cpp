@@ -255,16 +255,14 @@ std::vector<Tensor> sigmoid_bw(const Tensor& grad, const Tensor& input, const Me
     return operation::decorate_as_composite(__func__, _sigmoid_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor tan_result = ttnn::tan(input, output_mem_config);
-    Tensor result =
-        ttnn::multiply(grad, ttnn::add(ttnn::square(tan_result, output_mem_config), 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = zeros_like(grad, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _tan_bw)(grad, input, output_mem_config);
+std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
 }
 
 std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
