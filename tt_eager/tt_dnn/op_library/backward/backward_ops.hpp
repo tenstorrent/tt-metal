@@ -158,12 +158,6 @@ std::vector<Tensor> hardsigmoid_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> hardshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float lambd,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> softshrink_bw(
     const Tensor& grad,
     const Tensor& input,
