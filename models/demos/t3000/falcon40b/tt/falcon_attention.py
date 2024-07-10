@@ -205,7 +205,7 @@ class TtFalconAttention:
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
 
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
+        self.init_preprocessing(self.model_config["LLM_MODE"], self.model_config["SEQ_LEN"])
         self.layer_past = None
 
     def initialize_kvcache(self):
@@ -254,19 +254,23 @@ class TtFalconAttention:
         self.model_config = model_config
         self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
 
-    def preprocessing(self, llm_mode, batch_size, sequence_size):
+    def init_preprocessing(self, llm_mode, max_sequence_size):
         if llm_mode == "prefill":
-            assert self.model_config["row_height"] == sequence_size
+            # assert self.model_config["row_height"] == sequence_size
             if self.model_config["attention_params"]["attention_num_slices"] > 1:
                 # Pre-allocate memory to partially slice and sharde attention
                 self.attn_output = ttnn.as_tensor(
-                    torch.zeros([1, self.num_heads_per_device, sequence_size, self.head_dim]),
+                    torch.zeros([1, self.num_heads_per_device, max_sequence_size, self.head_dim]),
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device_mesh,
                     memory_config=self.model_config["DRAM_MEMCFG"],
                     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 )
+
+    def online_preprocessing(self, llm_mode, sequence_size):
+        if llm_mode == "prefill":
+            self.sliced_attn_output = self.attn_output[:, :, :sequence_size, :]
 
     def __call__(
         self,
@@ -380,6 +384,7 @@ class TtFalconAttention:
         num_slices = self.model_config["attention_params"]["attention_num_slices"]
 
         if num_slices > 1:
+            attn_output_tensor = self.sliced_attn_output
             for slice_i in range(num_slices):
                 # Partially slice and convert activations to sharded
                 q_slices = ttnn.experimental.tensor.interleaved_to_sharded_partial(
@@ -400,13 +405,13 @@ class TtFalconAttention:
                 )
                 ttnn.experimental.tensor.sharded_to_interleaved_partial(
                     attn_output_slice,
-                    self.attn_output,
+                    attn_output_tensor,
                     num_slices,
                     slice_i,
                     self.model_config["DRAM_MEMCFG"],
                 )
                 attn_output_slice.deallocate(True)
-                attn_output = self.attn_output
+                attn_output = attn_output_tensor
                 q_slices.deallocate(True)
         else:
             query_layer = convert_to_layout(

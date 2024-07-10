@@ -330,6 +330,7 @@ def run_test_FalconCausalLM_end_to_end(
     (
         ("prefill", 1, 32, 0, 60, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
         ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
         ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
         ("prefill", 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
         ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
@@ -339,6 +340,7 @@ def run_test_FalconCausalLM_end_to_end(
     ids=[
         "prefill_seq32_bfp8",
         "prefill_seq128_bfp8",
+        "prefill_seq128_bfp8_1layer",
         "prefill_seq2048_bfp8",
         "prefill_seq32_fp16",
         "prefill_seq128_fp16",

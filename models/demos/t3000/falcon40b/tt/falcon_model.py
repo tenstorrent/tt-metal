@@ -120,6 +120,35 @@ class TtFalconModelShared:
         )
 
         self.layernorm_eps = config.layer_norm_epsilon
+        # push attention_mask to device in row major order and then tilize on device (faster than tilizing on CPU)
+        self.max_attn_mask = self.create_attn_mask(max_position_embeddings)
+
+    def create_attn_mask(self, max_seq_len):
+        attn_mask_bool = torch.ones(1, 1, max_seq_len, max_seq_len, dtype=bool)
+        attn_mask_bool = attn_mask_bool.triu(diagonal=1)
+        attention_mask_memconfig = ttnn.DRAM_MEMORY_CONFIG
+
+        tt_attn_mask = ttnn.as_tensor(
+            tensor=attn_mask_bool,
+            dtype=self.model_config["BFLOAT16_DTYPE"],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device_mesh,
+            memory_config=attention_mask_memconfig,
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            preprocess=lambda x: (x * -1e5),
+        )
+
+        tt_attn_mask = ttnn.experimental.tensor.tilize(
+            tt_attn_mask,
+            output_mem_config=attention_mask_memconfig,
+            output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+        )
+        return tt_attn_mask
+
+    def slice_attn_mask(self, seq_len):
+        assert seq_len % 32 == 0, "seq_len must be multiple of 32!"
+        sliced_attn_mask = self.max_attn_mask[:, :, :seq_len, :seq_len]
+        return sliced_attn_mask
 
     def initialize_kv_cache(self):
         layer_past = ()
@@ -157,31 +186,8 @@ class TtFalconModelShared:
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
-            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
-            attention_mask_bool = attention_mask_bool.triu(diagonal=1)
+            tt_attention_mask = self.slice_attn_mask(sequence_size)
 
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = sequence_size
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
-            # TODO: set use_device_tilizer to True and remove tilize below
-            # Check if then layout is ttnn.RowMajor or Tile as argument
-            tt_attention_mask = ttnn.as_tensor(
-                tensor=attention_mask_bool,
-                dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device_mesh,
-                memory_config=attention_mask_memconfig,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
-                preprocess=lambda x: (x * -1e5).expand(-1, self.num_devices, -1, -1),
-            )
-            tt_attention_mask = ttnn.experimental.tensor.tilize(
-                tt_attention_mask,
-                output_mem_config=attention_mask_memconfig,
-                output_dtype=self.model_config["ATTN_MASK_DTYPE"],
-            )
             # Genereate ln output tensors for prefill if not existing
             do_generate_ln_tensors = (
                 sequence_size > self.model_config["layernorm_params"]["slice_size"]
@@ -239,7 +245,7 @@ class TtFalconModelShared:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
         for layer in self.layers:
-            layer.preprocessing(llm_mode, batch_size, sequence_size)
+            layer.online_preprocessing(llm_mode, sequence_size)
 
         return tt_inputs, tt_attention_mask
 

@@ -224,6 +224,13 @@ def run_test_FalconCausalLM_end_to_end(
     start_time = time.time()
 
     if llm_mode == "prefill":
+        model_inputs = torch.split(model_input, 1)
+        tt_inputs, tt_attention_mask = zip(
+            *[
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                for m_i in model_inputs
+            ]
+        )
         tt_outs = []
         for user_id in range(batch):
             # Forward pass
@@ -238,7 +245,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_outs.append(tt_out)
         # Return single tile to synchronize device (sync_device on all 8 devices is slow)
-        _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
+        # _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
@@ -249,12 +256,12 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
         # Return single tile to synchronize device (sync_device on all 8 devices is slow)
-        _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
-
-    inference_duration = time.time() - start_time
+        # _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
 
     for device in devices:
         ttnn.device.synchronize_device(device)
+
+    inference_duration = time.time() - start_time
 
     logger.info(f"falcon 40b compile time: {compile_duration}")
     logger.info(f"falcon 40b inference time: {inference_duration}")
