@@ -37,7 +37,6 @@ void kernel_main() {
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
     const uint32_t v_addr         = get_arg_val<uint32_t>(2);
-    const uint32_t mask_addr         = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -48,7 +47,6 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CB::c_in0;
     constexpr uint32_t cb_k_in = tt::CB::c_in1;
     constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
 
 
     constexpr uint32_t onetile = 1;
@@ -58,8 +56,6 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
-    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -116,12 +112,6 @@ void kernel_main() {
         .data_format = v_data_format
     };
 
-    const InterleavedAddrGenFast<is_dram> mask_reader = {
-        .bank_base_address = mask_addr,
-        .page_size = mask_tile_bytes,
-        .data_format = mask_data_format
-    };
-
     // Offset for current batch
     const uint32_t k_batch_offset = cur_batch * St * DHt;
     const uint32_t v_batch_offset = cur_batch * St * DHt;
@@ -162,29 +152,6 @@ void kernel_main() {
         k_start_tile_id += k_chunk_tiles;
 
         // DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
-
-        // Read mask chunk
-        cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-        uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-        barrier_count = 0;
-        for (uint32_t row = 0; row < PNHt; ++row) {
-            uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
-            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                mask_tile_id++;
-                mask_write_ptr += mask_tile_bytes;
-
-                if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
-                    barrier_count = 0;
-                }
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_mask_in, mask_chunk_tiles);
-        mask_start_tile_id += mask_chunk_tiles;
-
-        // DPRINT << "[Reader] Finished Reading Mask at " << k_chunk << ENDL();
 
         // Read V chunk
         cb_reserve_back(cb_v_in, k_chunk_tiles);
