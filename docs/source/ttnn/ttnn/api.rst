@@ -174,7 +174,7 @@ Pointwise Unary
    ttnn/add_bw
    ttnn/eq_bw
    ttnn/lgamma_bw
-   ttnn/unary_sub_bw
+   ttnn/sub_bw
 
 Pointwise Binary
 ================
@@ -215,7 +215,6 @@ Pointwise Binary
    ttnn/embedding_bw
    ttnn/addalpha_bw
    ttnn/subalpha_bw
-   ttnn/sub_bw
    ttnn/xlogy_bw
    ttnn/hypot_bw
    ttnn/ldexp_bw

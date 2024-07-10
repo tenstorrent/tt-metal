@@ -97,7 +97,7 @@ std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const Me
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_sub_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -127,8 +127,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _add_bw;
         case UnaryBackwardOpType::EQ_BW:
             return _eq_bw;
-        case UnaryBackwardOpType::UNARY_SUB_BW:
-            return _unary_sub_bw;
+        case UnaryBackwardOpType::SUB_BW:
+            return _sub_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
