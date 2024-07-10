@@ -340,6 +340,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues.
+    // See issue #9857.
+    if (device->arch() == ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+    }
+
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -1051,6 +1058,14 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues.
+    // See issue #9857.
+    if (device->arch() == ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+    }
+
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     }

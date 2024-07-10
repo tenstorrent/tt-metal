@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-
+    const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -462,6 +462,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
+    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues.
+    // See issue #9857.
+    if (device->arch() == ARCH::WORMHOLE_B0 && cores.size() > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
     }
 
     if (in0_receiver_interleaved.num_cores() == 0) {

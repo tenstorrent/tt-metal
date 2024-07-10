@@ -31,5 +31,7 @@ const double DEFAULT_PCC_THRESH = 0.999;
 constexpr uint32_t LF_MAN_PREC = 4;
 constexpr uint32_t FP16_MAN_PREC = 10;
 constexpr uint32_t FP16B_MAN_PREC = 7;
+
+constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
 }  // namespace constants
 }  // namespace tt

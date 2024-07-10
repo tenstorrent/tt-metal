@@ -647,6 +647,13 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     }
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
+    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues.
+    // See issue #9857.
+    if (device->arch() == ARCH::WORMHOLE_B0 && all_cores_in_rect_grid_vec.size() > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+    }
+
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
