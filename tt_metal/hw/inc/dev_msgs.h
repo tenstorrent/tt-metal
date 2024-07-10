@@ -194,6 +194,8 @@ struct mailboxes_t {
     struct debug_insert_delays_msg_t debug_insert_delays;
 };
 
+static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
+
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
