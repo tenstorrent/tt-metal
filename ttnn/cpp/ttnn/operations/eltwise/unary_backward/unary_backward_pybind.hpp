@@ -233,6 +233,10 @@ void py_module(py::module& module) {
         ttnn::i0_bw,
         R"doc(Performs backward operations for i0 on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::tan_bw,
+        R"doc(Performs backward operations for tan on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
 
 }
 
