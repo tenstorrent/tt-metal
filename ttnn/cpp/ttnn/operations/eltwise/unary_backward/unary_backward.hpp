@@ -82,5 +82,6 @@ constexpr auto i0_bw = ttnn::register_operation<operations::unary_backward::Exec
 constexpr auto tan_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::TAN_BW>>("ttnn::tan_bw");
 constexpr auto sigmoid_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW>>("ttnn::sigmoid_bw");
 constexpr auto rsqrt_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RSQRT_BW>>("ttnn::rsqrt_bw");
+constexpr auto neg_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::NEG_BW>>("ttnn::neg_bw");
 
 }  // namespace ttnn

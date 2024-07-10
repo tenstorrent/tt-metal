@@ -183,6 +183,7 @@ Pointwise Unary
    ttnn/tan_bw
    ttnn/sigmoid_bw
    ttnn/rsqrt_bw
+   ttnn/neg_bw
 
 Pointwise Binary
 ================

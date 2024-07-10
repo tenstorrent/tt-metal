@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 
 
@@ -20,7 +20,7 @@ def test_bw_neg(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.neg_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.neg_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

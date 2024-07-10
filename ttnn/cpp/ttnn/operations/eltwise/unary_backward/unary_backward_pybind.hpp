@@ -248,6 +248,11 @@ void py_module(py::module& module) {
         ttnn::rsqrt_bw,
         R"doc(Performs backward operations for rsqrt on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::neg_bw,
+        R"doc(Performs backward operations for neg on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
