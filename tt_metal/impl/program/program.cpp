@@ -120,7 +120,7 @@ KernelGroup::KernelGroup() : core_ranges({}) {}
 KernelGroup::KernelGroup(
     const Program &program,
     CoreType core_type,
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids,
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
     bool erisc_is_idle,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
@@ -141,17 +141,14 @@ KernelGroup::KernelGroup(
         this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_DM1] = max_runtime_args * sizeof(uint32_t);
         this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_COMPUTE] = 2 * max_runtime_args * sizeof(uint32_t);
 
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX_PROC; class_id++) {
+        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
             auto& optional_id = kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = program.get_kernel(optional_id.value());
                 this->launch_msg.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
-                this->launch_msg.enables[class_id] = true;
+                this->launch_msg.enables |= 1 << class_id;
 
-                if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                    // Use brisc's noc if brisc specifies a noc
-                    this->launch_msg.enables[DISPATCH_CLASS_TENSIX_DM0] = true;
-                } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -166,7 +163,7 @@ KernelGroup::KernelGroup(
         this->launch_msg.rta_offsets[DISPATCH_CLASS_ETH_DM0] = 0;
 
         TT_ASSERT(kernel_ids[DISPATCH_CLASS_ETH_DM0].has_value());
-        this->launch_msg.enables[DISPATCH_CLASS_ETH_DM0] = true;
+        this->launch_msg.enables |= DISPATCH_CLASS_MASK_ETH_DM0;
         // Ethernet cores use the brisc kernel id field
         const auto kernel = program.get_kernel(kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
         this->launch_msg.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] = kernel->get_watcher_kernel_id();
@@ -196,7 +193,7 @@ KernelGroup *Program::kernels_on_core(const CoreCoord &core, const CoreType &cor
 
 struct KernelGroupInt {
     bool valid;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
     void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
@@ -205,7 +202,7 @@ struct KernelGroupInt {
 };
 
 bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
-    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX_PROC; class_id++) {
+    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
         if (this->kernel_ids[class_id] != b.kernel_ids[class_id]) {
             return false;
         }
