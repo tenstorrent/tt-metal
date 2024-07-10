@@ -188,6 +188,7 @@ Pointwise Unary
    ttnn/relu_bw
    ttnn/logit_bw
    ttnn/hardshrink_bw
+   ttnn/softshrink_bw
 
 Pointwise Binary
 ================

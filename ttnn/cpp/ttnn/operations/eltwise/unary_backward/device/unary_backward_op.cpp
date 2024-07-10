@@ -273,6 +273,25 @@ std::vector<Tensor> _hardshrink_bw(
 }
 
 
+// softshrink
+//  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
+std::vector<Tensor> _softshrink_bw(
+    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = where(
+        ttnn::logical_or(
+            ttnn::lt(input_tensor, ttnn::operations::creation::full_like(input_tensor, -lambd, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::gt(input_tensor, ttnn::operations::creation::full_like(input_tensor, lambd, input_tensor.get_dtype(), input_tensor.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -323,6 +342,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _sub_bw;
         case UnaryBackwardOpType::HARDSHRINK_BW:
             return _hardshrink_bw;
+        case UnaryBackwardOpType::SOFTSHRINK_BW:
+            return _softshrink_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
