@@ -196,6 +196,23 @@ std::vector<Tensor> _sigmoid_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor rsqrt_result = ttnn::power(ttnn::rsqrt(input, true, output_mem_config), 3, output_mem_config);
+    Tensor result = ttnn::multiply(ttnn::multiply(grad, rsqrt_result, std::nullopt, output_mem_config), -0.5, std::nullopt, output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
+    result = where(ttnn::eqz(input, output_mem_config), t_inf, result, output_mem_config);
+    float t_nan = std::nanf("");
+    result = where(ttnn::ltz(input, output_mem_config), t_nan, result, output_mem_config);
+    result = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_nan,
+        result,
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -218,6 +235,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _tan_bw;
         case UnaryBackwardOpType::SIGMOID_BW:
             return _sigmoid_bw;
+        case UnaryBackwardOpType::RSQRT_BW:
+            return _rsqrt_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
