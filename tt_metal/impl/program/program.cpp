@@ -136,9 +136,9 @@ KernelGroup::KernelGroup(
     // Use 0 if neither brisc nor ncrisc specify a noc
     if (core_type == CoreType::WORKER) {
         // Dynamic address map
-        this->launch_msg.kernel_config_base = L1_KERNEL_CONFIG_BASE;
+        this->launch_msg.kernel_config.kernel_config_base = L1_KERNEL_CONFIG_BASE;
     } else {
-        this->launch_msg.kernel_config_base =
+        this->launch_msg.kernel_config.kernel_config_base =
             erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     }
 
@@ -146,26 +146,26 @@ KernelGroup::KernelGroup(
         auto& optional_id = kernel_ids[class_id];
         if (optional_id) {
             const auto kernel = program.get_kernel(optional_id.value());
-            this->launch_msg.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
-            this->launch_msg.enables |= 1 << class_id;
+            this->launch_msg.kernel_config.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
+            this->launch_msg.kernel_config.enables |= 1 << class_id;
 
             if (core_type == CoreType::WORKER) {
                 if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                     // Use brisc's noc if brisc specifies a noc
-                    this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
+                    this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
                 } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                    this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-                    this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
+                    this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+                    this->launch_msg.kernel_config.ncrisc_kernel_size16 = kernel->get_binary_size16();
                 }
             }
         }
     }
 
-    this->launch_msg.exit_erisc_kernel = false;
-    this->launch_msg.max_cb_index = last_cb_index + 1;
-    this->launch_msg.run = RUN_MSG_GO;
+    this->launch_msg.kernel_config.exit_erisc_kernel = false;
+    this->launch_msg.kernel_config.max_cb_index = last_cb_index + 1;
+    this->launch_msg.go.run = RUN_MSG_GO;
 }
 
 CoreType KernelGroup::get_core_type() const {
@@ -800,10 +800,10 @@ void Program::finalize_rt_args() {
                 if (optional_id) {
                     auto kernel = detail::GetKernel(*this, optional_id.value());
                     kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
-                    kg.launch_msg.mem_map[dispatch_class].rta_offset = offset;
+                    kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = offset;
                     offset += max_rtas[dispatch_class] * sizeof(uint32_t);
                 } else {
-                    kg.launch_msg.mem_map[dispatch_class].rta_offset = 0;
+                    kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = 0;
                 }
             }
 
@@ -847,7 +847,7 @@ void Program::finalize_rt_args() {
         // Set the kernel group common runtime arg offsets use in the launch message
         for (auto& kg : this->get_kernel_groups(core_type)) {
             for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-                kg.launch_msg.mem_map[dispatch_class].crta_offset = this->crta_offsets[core_type == CoreType::WORKER][dispatch_class];
+                kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset = this->crta_offsets[core_type == CoreType::WORKER][dispatch_class];
             }
         }
 

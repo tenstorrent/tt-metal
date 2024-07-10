@@ -153,7 +153,7 @@ void kernel_main() {
         }
 
         tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
-        if (launch_msg->exit_erisc_kernel) {
+        if (launch_msg->kernel_config.exit_erisc_kernel) {
             return;
         }
         // need to optimize this.

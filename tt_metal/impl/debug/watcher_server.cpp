@@ -126,9 +126,9 @@ void create_kernel_file() {
 
 static void log_running_kernels(const launch_msg_t *launch_msg) {
     log_info("While running kernels:");
-    log_info(" brisc : {}", kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-    log_info(" ncrisc: {}", kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
-    log_info(" triscs: {}", kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+    log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
+    log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
+    log_info(" triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
 }
 
 static void dump_l1_status(FILE *f, Device *device, CoreCoord core, const launch_msg_t *launch_msg) {
@@ -158,13 +158,13 @@ static const char *get_riscv_name(CoreCoord core, uint32_t type) {
 
 static string get_kernel_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type) {
     switch (type) {
-        case DebugBrisc: return kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
+        case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
-        case DebugIErisc: return kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugNCrisc: return kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
+        case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:
         case DebugTrisc1:
-        case DebugTrisc2: return kernel_names[launch_msg->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
+        case DebugTrisc2: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
         default:
             log_running_kernels(launch_msg);
             TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
@@ -460,57 +460,57 @@ static void dump_run_mailboxes(
     FILE *f, CoreCoord core, const launch_msg_t *launch_msg, const slave_sync_msg_t *slave_sync) {
     fprintf(f, "rmsg:");
 
-    if (launch_msg->mode == DISPATCH_MODE_DEV) {
+    if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
-    } else if (launch_msg->mode == DISPATCH_MODE_HOST) {
+    } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_HOST) {
         fprintf(f, "H");
     } else {
         log_running_kernels(launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
             core.str(),
-            launch_msg->mode,
+            launch_msg->kernel_config.mode,
             DISPATCH_MODE_DEV,
             DISPATCH_MODE_HOST);
     }
 
-    if (launch_msg->brisc_noc_id == 0 || launch_msg->brisc_noc_id == 1) {
-        fprintf(f, "%d", launch_msg->brisc_noc_id);
+    if (launch_msg->kernel_config.brisc_noc_id == 0 || launch_msg->kernel_config.brisc_noc_id == 1) {
+        fprintf(f, "%d", launch_msg->kernel_config.brisc_noc_id);
     } else {
         log_running_kernels(launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
             core.str(),
-            launch_msg->brisc_noc_id);
+            launch_msg->kernel_config.brisc_noc_id);
     }
 
-    dump_run_state(f, core, launch_msg, launch_msg->run);
+    dump_run_state(f, core, launch_msg, launch_msg->go.run);
 
     fprintf(f, "|");
 
-    if (launch_msg->enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
-                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
-                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+    if (launch_msg->kernel_config.enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
+                                              DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+                                              DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
         log_running_kernels(launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
             core.str(),
-            launch_msg->enables);
+            launch_msg->kernel_config.enables);
     }
 
-    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
+    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
         fprintf(f, "B");
     } else {
         fprintf(f, "b");
     }
 
-    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         fprintf(f, "N");
     } else {
         fprintf(f, "n");
     }
 
-    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
+    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         fprintf(f, "T");
     } else {
         fprintf(f, "t");
@@ -557,35 +557,35 @@ static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
 
 static void validate_kernel_ids(
     FILE *f, std::map<int, bool> &used_kernel_names, chip_id_t device_id, CoreCoord core, const launch_msg_t *launch) {
-    if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
+    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
         TT_THROW(
             "Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
+            launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
             kernel_names.size());
     }
-    used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
+    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
 
-    if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= kernel_names.size()) {
+    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= kernel_names.size()) {
         TT_THROW(
             "Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
+            launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
             kernel_names.size());
     }
-    used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
+    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
 
-    if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >= kernel_names.size()) {
+    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >= kernel_names.size()) {
         TT_THROW(
             "Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE],
+            launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE],
             kernel_names.size());
     }
-    used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] = true;
+    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] = true;
 }
 
 static void dump_core(
@@ -669,20 +669,20 @@ static void dump_core(
         }
     } else {
         fprintf(f, "rmsg:");
-        dump_run_state(f, core, &mbox_data->launch, mbox_data->launch.run);
+        dump_run_state(f, core, &mbox_data->launch, mbox_data->launch.go.run);
         fprintf(f, " ");
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
     if (is_eth_core) {
-        fprintf(f, "k_id:%d", mbox_data->launch.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
+        fprintf(f, "k_id:%d", mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
     } else {
         fprintf(
             f,
             "k_ids:%d|%d|%d",
-            mbox_data->launch.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
-            mbox_data->launch.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
-            mbox_data->launch.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
+            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
+            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
+            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
     }
 
     // Ring buffer at the end because it can print a bunch of data

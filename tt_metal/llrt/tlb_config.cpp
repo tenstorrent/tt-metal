@@ -185,7 +185,13 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     // Setup static TLBs for all worker cores
     for (auto &core : statically_mapped_cores) {
         auto tlb_index = get_static_tlb_index(core);
-        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address);
+        // TODO
+        // Note: see issue #10107
+        // Strict is less performant than Posted, however, metal doesn't presently
+        // use this on a perf path and the launch_msg "kernel config" needs to
+        // arrive prior to the "go" message during device init and slow dispatch
+        // Revisit this when we have a more flexible UMD api
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
 
     // TODO (#9932): Remove workaround for BH
