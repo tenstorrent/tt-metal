@@ -10,10 +10,12 @@
 #include <set>
 #include <string>
 
+#include "third_party/json/json.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 using std::pair;
 
@@ -44,6 +46,17 @@ constexpr inline bool operator==(const RelativeCoreCoord &a, const RelativeCoreC
 }
 
 constexpr inline bool operator!=(const RelativeCoreCoord &a, const RelativeCoreCoord &b) { return !(a == b); }
+
+namespace std {
+template <>
+struct hash<RelativeCoreCoord> {
+    std::size_t operator()(RelativeCoreCoord const &o) const {
+        std::size_t seed = 0;
+        seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
+        return seed;
+    }
+};
+}  // namespace std
 
 inline CoreCoord get_core_coord_from_relative(const RelativeCoreCoord &in, const CoreCoord &grid_size) {
     CoreCoord coord;
@@ -501,13 +514,38 @@ struct hash<CoreRangeSet> {
 };
 }  // namespace std
 
-namespace std {
+namespace tt::stl::json {
+
 template <>
-struct hash<RelativeCoreCoord> {
-    std::size_t operator()(RelativeCoreCoord const &o) const {
-        std::size_t seed = 0;
-        seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
-        return seed;
+struct to_json_t<CoreCoord> {
+    nlohmann::json operator()(const CoreCoord &core_coord) noexcept {
+        return {{"x", to_json(core_coord.x)}, {"y", to_json(core_coord.y)}};
     }
 };
-}  // namespace std
+
+template <>
+struct to_json_t<RelativeCoreCoord> {
+    nlohmann::json operator()(const RelativeCoreCoord &relative_core_coord) noexcept {
+        return {{"x", to_json(relative_core_coord.x)}, {"y", to_json(relative_core_coord.y)}};
+    }
+};
+
+template <>
+struct to_json_t<CoreRange> {
+    nlohmann::json operator()(const CoreRange &core_range) noexcept {
+        return {{"start", to_json(core_range.start)}, {"end", to_json(core_range.end)}};
+    }
+};
+
+template <>
+struct to_json_t<CoreRangeSet> {
+    nlohmann::json operator()(const CoreRangeSet &core_range_set) noexcept {
+        nlohmann::json core_range_set_json = nlohmann::json::array();
+        for (const auto &core_range : core_range_set.ranges()) {
+            core_range_set_json.push_back(to_json(core_range));
+        }
+        return core_range_set_json;
+    }
+};
+
+}  // namespace tt::stl::json

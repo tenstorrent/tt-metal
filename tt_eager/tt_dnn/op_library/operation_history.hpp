@@ -75,7 +75,8 @@ struct OperationHistory {
     ~OperationHistory();
 
     void append(OperationRecord&& record);
-    void dump_to_csv();
+    void dump_to_csv(const char* file_name);
+    void dump_to_json(const char* file_name);
     void clear();
 
    private:
@@ -93,10 +94,12 @@ inline void append(Args&&... args) {
 }
 
 const char* csv_file_name();
+const char* json_file_name();
 
 bool enabled();
 
 void dump_to_csv();
+void dump_to_json();
 void clear();
 
 }  // namespace operation_history

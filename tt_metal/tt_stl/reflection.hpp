@@ -16,6 +16,8 @@
 #include <variant>
 #include <vector>
 
+#include "concepts.hpp"
+#include "third_party/json/json.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "type_name.hpp"
 
@@ -39,6 +41,17 @@ template <IsVariant Variant>
 constexpr auto get_active_type_name_in_variant(const Variant& v) {
     return std::visit([](auto&& arg) -> std::string_view { return short_type_name<std::decay_t<decltype(arg)>>; }, v);
 }
+
+namespace detail {
+template <typename Test, template <typename...> class Ref>
+struct is_specialization : std::false_type {};
+
+template <template <typename...> class Ref, typename... Args>
+struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
+}  // namespace detail
+
+template <typename Test, template <typename...> class Ref>
+constexpr bool is_specialization_v = detail::is_specialization<Test, Ref>::value;
 
 // Forward Declare hash_object
 namespace hash {
@@ -74,6 +87,15 @@ inline hash_t hash_objects(hash_t, const Types&...) noexcept;
 
 }  // namespace hash
 
+namespace json {
+
+template <typename T>
+struct to_json_t;
+
+nlohmann::json to_json(const auto& object) { return to_json_t<std::decay_t<decltype(object)>>{}(object); }
+
+}  // namespace json
+
 namespace reflection {
 
 using AttributeName = std::variant<const char*, std::string>;
@@ -84,6 +106,7 @@ struct Attribute final {
 
     const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
     const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
+    const nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
     template <typename Type, typename BaseType = std::decay_t<Type>>
     Attribute(Type&& object) :
@@ -116,6 +139,10 @@ struct Attribute final {
             .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return hash::detail::hash_object(object);
+            },
+            .to_json_impl_ = [](const storage_t& storage) -> const nlohmann::json {
+                const auto& object = *reinterpret_cast<const BaseType*>(&storage);
+                return json::to_json(object);
             }} {
         static_assert(sizeof(BaseType) <= sizeof(storage_t));
         static_assert(ALIGNMENT % alignof(BaseType) == 0);
@@ -185,6 +212,7 @@ struct Attribute final {
     struct implementations_t {
         const std::string (*to_string_impl_)(const storage_t&) = nullptr;
         const std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
+        const nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
     };
 
     implementations_t implementations;
@@ -379,7 +407,7 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
 }
 
 template <typename T>
-    requires(std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value))
+    requires(tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
     os << "(";
@@ -440,7 +468,8 @@ constexpr auto visit_object_of_type(auto callback, T&& object) {
 }
 
 template <typename object_t, typename T>
-    requires(not std::same_as<std::decay_t<T>, object_t>) and requires { std::is_aggregate_v<std::decay_t<T>>; }
+    requires(not std::same_as<std::decay_t<T>, object_t>) and
+            requires { tt::stl::concepts::Reflectable<std::decay_t<T>>; }
 constexpr auto visit_object_of_type(auto callback, T&& object) {
     reflect::for_each(
         [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
@@ -488,7 +517,8 @@ constexpr auto get_first_object_of_type(T&& object) {
 }
 
 template <typename object_t, typename T>
-    requires (not std::same_as<std::decay_t<T>, object_t>) and requires { std::is_aggregate_v<std::decay_t<T>>; }
+    requires(not std::same_as<std::decay_t<T>, object_t>) and
+            requires { tt::stl::concepts::Reflectable<std::decay_t<T>>; }
 constexpr auto get_first_object_of_type(T&& object) {
     return get_first_object_of_type<object_t>(reflect::get<0>(object));
 }
@@ -607,8 +637,8 @@ struct fmt::formatter<std::set<T>> {
 
 template <typename T>
     requires(
-        std::is_aggregate_v<T> and not(std::integral<T> or std::is_array<T>::value or
-                                       tt::stl::reflection::detail::supports_conversion_to_string_v<T>))
+        tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
+                                                  tt::stl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
@@ -633,15 +663,6 @@ struct is_std_hashable<T, std::void_t<decltype(std::declval<std::hash<T>>()(std:
 
 template <typename T>
 constexpr bool is_std_hashable_v = is_std_hashable<T>::value;
-
-template <typename Test, template <typename...> class Ref>
-struct is_specialization : std::false_type {};
-
-template <template <typename...> class Ref, typename... Args>
-struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
-
-template <typename Test, template <typename...> class Ref>
-constexpr bool is_specialization_v = is_specialization<Test, Ref>::value;
 
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
@@ -709,7 +730,7 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return hash;
-    } else if constexpr (detail::is_specialization_v<T, std::vector>) {
+    } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
@@ -718,7 +739,7 @@ inline hash_t hash_object(const T& object) noexcept {
             hash = hash_objects(hash, element);
         }
         return hash;
-    } else if constexpr (detail::is_specialization_v<T, std::set>) {
+    } else if constexpr (is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
         }
@@ -727,7 +748,7 @@ inline hash_t hash_object(const T& object) noexcept {
             hash = hash_objects(hash, element);
         }
         return hash;
-    } else if constexpr (detail::is_specialization_v<T, std::optional>) {
+    } else if constexpr (is_specialization_v<T, std::optional>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::optional of type {}: {}\n", get_type_name<T>(), object);
         }
@@ -736,7 +757,7 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
-    } else if constexpr (std::is_aggregate_v<std::decay<T>>) {
+    } else if constexpr (tt::stl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
@@ -744,7 +765,8 @@ inline hash_t hash_object(const T& object) noexcept {
         reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);
         return hash;
     } else {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Type doesn't support std::hash");
+        static_assert(
+            tt::stl::concepts::always_false_v<T>, "Type doesn't support hashing using tt::stl::hash::hash_object");
     }
 }
 
@@ -767,5 +789,163 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
 }
 
 }  // namespace hash
+
+namespace json {
+
+template <typename T>
+    requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
+struct to_json_t<T> {
+    nlohmann::json operator()(T object) noexcept { return object; }
+};
+
+template <>
+struct to_json_t<std::string> {
+    nlohmann::json operator()(const std::string& object) noexcept { return object; }
+};
+
+template <>
+struct to_json_t<const char*> {
+    nlohmann::json operator()(const char* object) noexcept { return object; }
+};
+
+template <typename T>
+    requires std::is_pointer_v<T>
+struct to_json_t<T> {
+    nlohmann::json operator()(const T& object) noexcept {
+        if (object) {
+            return to_json(*object);
+        } else {
+            return nullptr;
+        }
+    }
+};
+
+template <typename T, std::size_t N>
+struct to_json_t<std::array<T, N>> {
+    nlohmann::json operator()(const std::array<T, N>& array) noexcept {
+        nlohmann::json json_array = nlohmann::json::array();
+        std::size_t hash = 0;
+        [&array, &json_array]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&array, &json_array] {
+                    const auto& element = std::get<Ns>(array);
+                    json_array.push_back(to_json(element));
+                }(),
+                ...);
+        }(std::make_index_sequence<N>{});
+        return json_array;
+    }
+};
+
+template <typename... Ts>
+struct to_json_t<std::variant<Ts...>> {
+    nlohmann::json operator()(const std::variant<Ts...>& variant) noexcept {
+        return std::visit([](const auto& value) { return to_json(value); }, variant);
+    }
+};
+
+template <typename T>
+struct to_json_t<std::reference_wrapper<T>> {
+    nlohmann::json operator()(const std::reference_wrapper<T>& reference) noexcept { return to_json(reference.get()); }
+};
+
+template <typename T>
+struct to_json_t<std::optional<T>> {
+    nlohmann::json operator()(const std::optional<T>& optional) noexcept {
+        if (optional.has_value()) {
+            return to_json(optional.value());
+        } else {
+            return nullptr;
+        }
+    }
+};
+
+template <typename T>
+struct to_json_t<std::vector<T>> {
+    nlohmann::json operator()(const std::vector<T>& vector) noexcept {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : vector) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
+
+template <typename T>
+struct to_json_t<std::set<T>> {
+    nlohmann::json operator()(const std::set<T>& set) noexcept {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : set) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
+
+template <typename... Ts>
+struct to_json_t<std::tuple<Ts...>> {
+    nlohmann::json operator()(const std::tuple<Ts...>& tuple) noexcept {
+        nlohmann::json json_array = nlohmann::json::array();
+        [&tuple, &json_array]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&tuple, &json_array] {
+                    const auto& element = std::get<Ns>(tuple);
+                    json_array.push_back(to_json(element));
+                }(),
+                ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+        return json_array;
+    }
+};
+
+template <>
+struct to_json_t<reflection::Attribute> {
+    nlohmann::json operator()(const reflection::Attribute& attribute) noexcept { return attribute.to_json(); }
+};
+
+template <typename T>
+    requires tt::stl::reflection::detail::supports_compile_time_attributes_v<T>
+struct to_json_t<T> {
+    nlohmann::json operator()(const T& object) noexcept {
+        nlohmann::json json_object = nlohmann::json::object();
+        const auto attribute_values = object.attribute_values();
+        [&object, &json_object, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &json_object, &attribute_values] {
+                    const auto& attribute_name = std::get<Ns>(object.attribute_names);
+                    const auto& attribute = std::get<Ns>(attribute_values);
+                    json_object[attribute_name] = to_json(attribute);
+                }(),
+                ...);
+        }(std::make_index_sequence<reflection::detail::get_num_attributes<T>()>{});
+        return json_object;
+    }
+};
+
+template <typename T>
+    requires tt::stl::concepts::Reflectable<T>
+struct to_json_t<T> {
+    nlohmann::json operator()(const T& object) noexcept {
+        nlohmann::json json_object = nlohmann::json::object();
+        reflect::for_each(
+            [&object, &json_object](auto I) {
+                const auto& attribute_name = reflect::member_name<I>(object);
+                const auto& attribute = reflect::get<I>(object);
+                json_object[std::string{attribute_name}] = to_json(attribute);
+            },
+            object);
+        return json_object;
+    }
+};
+
+template <typename T>
+struct to_json_t {
+    nlohmann::json operator()(const T& optional) noexcept {
+        return fmt::format("Unsupported type: {}", get_type_name<T>());
+    }
+};
+
+}  // namespace json
+
 }  // namespace stl
 }  // namespace tt
