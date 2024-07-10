@@ -37,6 +37,7 @@ enum class UnaryBackwardOpType {
     HARDSHRINK_BW,
     SOFTSHRINK_BW,
     LEAKY_RELU_BW,
+    ELU_BW,
 };
 
 struct UnaryBackwardFunction{

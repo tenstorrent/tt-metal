@@ -732,23 +732,6 @@ std::vector<Tensor> acos_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _acos_bw)(grad, input, output_mem_config);
 }
 
-// ELU
-// result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
-std::vector<Tensor> _elu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(
-        ttnn::gez(input, output_mem_config),
-        grad,
-        ttnn::multiply(grad, ttnn::multiply(ttnn::exp(input, false, output_mem_config), alpha, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> elu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _elu_bw)(grad, input, alpha, output_mem_config);
-}
 
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
