@@ -223,6 +223,11 @@ void py_module(py::module& module) {
         ttnn::log_sigmoid_bw,
         R"doc(Performs backward operations for log sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::fill_zero_bw,
+        R"doc(Performs backward operations of fill zero on :attr:`input_tensor` with given :attr:`grad_tensor`. Returns an tensor of zeros like :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
