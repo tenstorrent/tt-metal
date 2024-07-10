@@ -244,12 +244,6 @@ std::vector<Tensor> sinh_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> celu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> log10_bw(
     const Tensor& grad,
     const Tensor& input,

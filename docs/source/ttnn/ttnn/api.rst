@@ -191,6 +191,7 @@ Pointwise Unary
    ttnn/softshrink_bw
    ttnn/leaky_relu_bw
    ttnn/elu_bw
+   ttnn/celu_bw
 
 Pointwise Binary
 ================
