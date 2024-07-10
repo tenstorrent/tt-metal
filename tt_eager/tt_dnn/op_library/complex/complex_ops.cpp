@@ -30,17 +30,17 @@ Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConf
 
 Tensor get_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     Shape t_Shape = input.get_legacy_shape();
-    Shape start = {0, 0, 0, 0} ;
-    Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] / 2) - 1};
-    Tensor r_tensor = ttnn::slice(input, start, end, output_mem_config);
+    std::vector<uint32_t> start = {0, 0, 0, 0} ;
+    std::vector<uint32_t> end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] / 2) - 1};
+    Tensor r_tensor = ttnn::slice(0, input, start, end, output_mem_config);
     return r_tensor;
 }
 
 Tensor get_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
     Shape t_Shape = input.get_legacy_shape();
-    Shape start = {0, 0, 0, (t_Shape[3] / 2)};
-    Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] - 1)};
-    Tensor i_tensor = ttnn::slice(input, start, end, output_mem_config);
+    std::vector<uint32_t> start = {0, 0, 0, (t_Shape[3] / 2)};
+    std::vector<uint32_t> end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] - 1)};
+    Tensor i_tensor = ttnn::slice(0, input, start, end, output_mem_config);
     return i_tensor;
 }
 

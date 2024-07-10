@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
@@ -162,10 +163,11 @@ Tensor AutoFormat::format_output_tensor(
             // Output can be unpadded and layout supports the shape
             if ((formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
                 (formatted_output.get_layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
-                formatted_output = unpad(
+                formatted_output = ttnn::slice(
+                    0,
                     formatted_output,
-                    {0, 0, 0, 0},
-                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    std::vector<uint32_t>({0, 0, 0, 0}),
+                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
@@ -187,10 +189,11 @@ Tensor AutoFormat::format_output_tensor(
             } else if (
                 formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
                 AutoFormat::legal_tile_shape(shape)) {
-                formatted_output = unpad(
+                formatted_output = ttnn::slice(
+                    0,
                     formatted_output,
-                    {0, 0, 0, 0},
-                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    std::vector<uint32_t>({0, 0, 0, 0}),
+                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;

@@ -9,7 +9,7 @@ import pathlib
 
 import torch
 import numpy as np
-
+import ttnn
 import tt_lib as ttl
 
 
@@ -70,7 +70,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
     assert num_non_zeros == B - b
 
     a_pt = (
-        ttl.tensor.unpad(indices_tt, (0, 0, 0, 0), (0, 0, 0, num_non_zeros - 1), output_mem_config=mem_config)
+        ttnn.slice(indices_tt, (0, 0, 0, 0), (0, 0, 0, num_non_zeros - 1), memory_config=mem_config)
         .cpu()
         .to(ttl.tensor.Layout.ROW_MAJOR)
         .to_torch()

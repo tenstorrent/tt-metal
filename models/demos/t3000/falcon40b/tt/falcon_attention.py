@@ -591,7 +591,7 @@ class TtFalconAttention:
         key_layer.deallocate(True)
 
         # key and value layers will have kv_seq_len padded to nearest 32
-        key_layer = ttnn.experimental.tensor.unpad(
+        key_layer = ttnn.slice(
             layer_past[0],
             [0, 0, 0, 0],
             [
@@ -600,7 +600,7 @@ class TtFalconAttention:
                 padded_layer_past_len - 1,
                 self.head_dim - 1,
             ],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
             key_layer,
@@ -655,7 +655,7 @@ class TtFalconAttention:
         )
         value_layer.deallocate(True)
 
-        value_layer = ttnn.experimental.tensor.unpad(
+        value_layer = ttnn.slice(
             layer_past[1],
             [0, 0, 0, 0],
             [
@@ -664,7 +664,7 @@ class TtFalconAttention:
                 padded_layer_past_len - 1,
                 self.head_dim - 1,
             ],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
             value_layer,

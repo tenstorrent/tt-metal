@@ -452,7 +452,7 @@ class resnetBlock2D:
             for i in range(conv1_split_chunks):
                 # TODO: Can we replace this with interleaved_to_sharded_partial
                 split_hidden_states.append(
-                    ttnn.experimental.tensor.unpad(
+                    ttnn.slice(
                         hidden_states,
                         [0, 0, 0, output_tensor_start_width_dim],
                         [
@@ -461,7 +461,7 @@ class resnetBlock2D:
                             hidden_states.shape[2] - 1,
                             output_tensor_end_width_dim - 1,
                         ],
-                        output_mem_config=ttl.tensor.MemoryConfig(
+                        memory_config=ttl.tensor.MemoryConfig(
                             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
                         ),
                     )

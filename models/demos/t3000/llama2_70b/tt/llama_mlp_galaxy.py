@@ -212,7 +212,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                 # logger.info(f"Preparing input for FF1 on device {device_id} with chunk {chunk_id}")
                 start = chunk_id * self.hidden_size // 4
                 end = start + self.hidden_size // 4
-                x_multichip[device_id] = tt_lib.tensor.unpad(
+                x_multichip[device_id] = ttnn.slice(
                     x_multichip[device_id],
                     [0, 0, 0, start],
                     [
@@ -221,7 +221,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         batch - 1,
                         end - 1,
                     ],
-                    output_mem_config=self.model_config["L1_MEMCFG"],
+                    memory_config=self.model_config["L1_MEMCFG"],
                 )
 
         return x_multichip

@@ -2352,7 +2352,7 @@ class ResNet(nn.Module):
             )
         else:
             x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
-            x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
+            x = ttnn.slice(x, (0, 0, 0, 0), unpadded_shape_end, memory_config=self.memory_config)
 
         x_shape = x.get_legacy_shape()
         x = x.reshape(1, x_shape[1], self.batch_size * x_shape[2], x_shape[3])

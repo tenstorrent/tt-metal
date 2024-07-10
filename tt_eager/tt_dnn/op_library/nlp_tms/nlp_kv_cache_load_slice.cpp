@@ -4,7 +4,7 @@
 
 #include "optional"
 #include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -30,7 +30,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_id = get_tiled_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
         uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
-        const auto tensor_start = static_cast<const Unpad *>(operation)->output_tensor_start;
+        const auto tensor_start = static_cast<const ttnn::operations::data_movement::Slice *>(operation)->slice_start;
         auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
             src_tensor, dst_tensor, tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
 

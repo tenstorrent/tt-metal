@@ -14,10 +14,9 @@
 #include "tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -1353,18 +1352,18 @@ Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const Memo
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = permute(result, after_permute_dims, output_mem_config);
         Shape input_shape = input_a.get_legacy_shape();
-        const Shape start_index = {0, 0, 0, 0};
-        const Shape end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
-        return unpad(required, start_index, end_index);
+        std::vector<uint32_t> start_index = {0, 0, 0, 0};
+        std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
+        return ttnn::slice(0, required, start_index, end_index, std::nullopt);
     } else {  // dim 3
         // permute
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = permute(result, after_permute_dims, output_mem_config);
         // unpad
         Shape input_shape = input_a.get_legacy_shape();
-        const Shape start_index = {0, 0, 0, 0};
-        const Shape end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[2] - 1};
-        Tensor new_unpad_tensor = unpad(required, start_index, end_index);
+        std::vector<uint32_t> start_index = {0, 0, 0, 0};
+        std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[2] - 1};
+        Tensor new_unpad_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         return permute(new_unpad_tensor, after_permute_dims, output_mem_config);
@@ -1866,14 +1865,14 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<Tensor> t_split;
     Shape inshape = input_a.get_legacy_shape();
     TT_FATAL(((inshape[dim] / 2) % TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    Shape s_a = {0, 0, 0, 0};
-    Shape e_a = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
+    std::vector<uint32_t> s_a = {0, 0, 0, 0};
+    std::vector<uint32_t> e_a = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
 
-    Shape s_b = {0, 0, 0, inshape[3] / 2};
-    Shape e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
+    std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
 
-    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
-    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
+    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);

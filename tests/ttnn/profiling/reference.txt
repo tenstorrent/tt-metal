@@ -379,6 +379,7 @@ tt_lib.tensor.unary_mul_bw,40,0.9,1.23,1.46,1.31
 tt_lib.tensor.unary_pow_bw,40,13.79,14.6,15.44,14.3
 tt_lib.tensor.unary_remainder_bw,200,0.006,0.006,0.007,
 tt_lib.tensor.unpad,40,0.66,0.74,1.02,0.77
+ttnn.slice,40,0.66,0.74,1.02,0.77
 tt_lib.tensor.untilize,40,0.79,0.85,1.13,0.9
 tt_lib.tensor.untilize_with_unpadding,40,0.59,0.82,4.13,0.72
 tt_lib.tensor.var_hw,40,3.69,4.05,4.4,4.17

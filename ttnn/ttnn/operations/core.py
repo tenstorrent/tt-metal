@@ -79,7 +79,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
                 raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
 
             if ttnn.is_tensor_storage_on_device(input_tensor):
-                output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
+                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1)
             else:
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
                 output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)

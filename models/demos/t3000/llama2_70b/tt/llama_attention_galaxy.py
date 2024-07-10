@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+import ttnn
 import math
 import torch
 import tt_lib
@@ -196,7 +197,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
             batch_offset = self.batch_size_per_device_group * group_id
             for i in range(len(query_layer)):
                 # Unpad the batch dimension to original batch if the original batch is not 32
-                query_layer[i] = tt_lib.tensor.unpad(
+                query_layer[i] = ttnn.slice(
                     query_layer[i],
                     [batch_offset, 0, 0, 0],
                     [
@@ -205,7 +206,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
                         31,
                         self.head_dim - 1,
                     ],
-                    output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                    memory_config=self.model_config["DEFAULT_MEMCFG"],
                 )
 
             # Attention

@@ -136,7 +136,7 @@ const operation::Hash Slice::compute_program_hash(const std::vector<Tensor> &inp
         rm_width = fmt::format("{}", input_tensor.legacy_shape()[3]);
     }
 
-    auto str = operation::hash_operation<Unpad>(
+    auto str = operation::hash_operation<Slice>(
         num_dims,
         input_tensor.layout(),
         input_mem_config.memory_layout,
