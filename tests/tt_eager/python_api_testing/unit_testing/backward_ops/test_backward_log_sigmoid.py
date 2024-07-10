@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
     data_gen_with_range,
     compare_pcc,
@@ -26,7 +26,7 @@ def test_bw_log_sigmoid(input_shapes, device):
 
     pyt_y = torch.nn.functional.logsigmoid(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.log_sigmoid_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -52,7 +52,7 @@ def test_bw_log_sigmoid_neg_inp(input_shapes, device):
 
     pyt_y = torch.nn.functional.logsigmoid(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.log_sigmoid_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -78,7 +78,7 @@ def test_bw_log_sigmoid_pos_inp(input_shapes, device):
 
     pyt_y = torch.nn.functional.logsigmoid(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.log_sigmoid_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -104,7 +104,7 @@ def test_bw_log_sigmoid_zero_inp(input_shapes, device):
 
     pyt_y = torch.nn.functional.logsigmoid(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.log_sigmoid_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -129,7 +129,7 @@ def test_bw_log_sigmoid_zero_grad(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)
     pyt_y = torch.nn.functional.logsigmoid(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.log_sigmoid_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
