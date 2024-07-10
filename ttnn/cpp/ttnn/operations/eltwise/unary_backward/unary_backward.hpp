@@ -76,5 +76,6 @@ constexpr auto lgamma_bw = ttnn::register_operation<operations::unary_backward::
 constexpr auto sub_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SUB_BW>>("ttnn::sub_bw");
 constexpr auto frac_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FRAC_BW>>("ttnn::frac_bw");
 constexpr auto trunc_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::TRUNC_BW>>("ttnn::trunc_bw");
+constexpr auto log_sigmoid_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG_SIGMOID_BW>>("ttnn::log_sigmoid_bw");
 
 }  // namespace ttnn

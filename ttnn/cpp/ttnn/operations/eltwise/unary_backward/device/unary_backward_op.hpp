@@ -24,6 +24,7 @@ enum class UnaryBackwardOpType {
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,
+    LOG_SIGMOID_BW,
 };
 
 struct UnaryBackwardFunction{
