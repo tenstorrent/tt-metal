@@ -418,6 +418,23 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const Memor
     return grad_tensor;
 }
 
+// Silu
+// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
+std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = add1(
+        ttnn::multiply(sub_unary(1.0f, sigmoid(input, output_mem_config), output_mem_config),
+            input,
+            std::nullopt,
+            output_mem_config),
+        output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -458,6 +475,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _relu6_bw;
         case UnaryBackwardOpType::ABS_BW:
             return _abs_bw;
+        case UnaryBackwardOpType::SILU_BW:
+            return _silu_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

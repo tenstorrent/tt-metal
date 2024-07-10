@@ -1001,28 +1001,6 @@ std::vector<Tensor> rpow_bw(
     return operation::decorate_as_composite(__func__, _rpow_bw)(grad, input, exponent, output_mem_config);
 }
 
-// Silu
-// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor add_sub = ttnn::add(
-        ttnn::multiply(ttnn::subtract(ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
-            input,
-            std::nullopt,
-            output_mem_config),
-        1.0f,
-        std::nullopt,
-        output_mem_config);
-    Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _silu_bw)(grad, input, output_mem_config);
-}
-
 // Selu
 // result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
 std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

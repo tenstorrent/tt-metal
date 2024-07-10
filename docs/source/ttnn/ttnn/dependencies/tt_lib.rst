@@ -880,8 +880,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.rpow_bw
 
-.. autofunction:: tt_lib.tensor.silu_bw
-
 .. autofunction:: tt_lib.tensor.selu_bw
 
 .. autofunction:: tt_lib.tensor.square_bw

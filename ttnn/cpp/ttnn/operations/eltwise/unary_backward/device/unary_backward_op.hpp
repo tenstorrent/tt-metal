@@ -45,6 +45,7 @@ enum class UnaryBackwardOpType {
     LOG_BW,
     RELU6_BW,
     ABS_BW,
+    SILU_BW
 };
 
 struct UnaryBackwardFunction{

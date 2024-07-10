@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -22,7 +22,7 @@ def test_bw_silu(input_shapes, device):
 
     pyt_y = torch.nn.functional.silu(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.silu_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.silu_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
