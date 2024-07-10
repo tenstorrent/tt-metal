@@ -192,6 +192,7 @@ Pointwise Unary
    ttnn/leaky_relu_bw
    ttnn/elu_bw
    ttnn/celu_bw
+   ttnn/rpow_bw
 
 Pointwise Binary
 ================
