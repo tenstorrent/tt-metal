@@ -372,6 +372,12 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
         ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
         grad_result,
         output_mem_config);
+        
+// square
+// result:  2 * input * grad_data
+std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = ttnn::multiply(ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -624,6 +630,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _silu_bw;
         case UnaryBackwardOpType::SELU_BW:
             return _selu_bw;
+        case UnaryBackwardOpType::SQUARE_BW:
+            return _square_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

@@ -207,6 +207,7 @@ Pointwise Unary
    ttnn/abs_bw
    ttnn/silu_bw
    ttnn/selu_bw
+   ttnn/square_bw
 
 Pointwise Binary
 ================

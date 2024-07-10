@@ -975,16 +975,55 @@ std::vector<Tensor> prod_bw(
     return operation::decorate_as_composite(__func__, _prod_bw)(grad, input, all_dimensions, dim, output_mem_config);
 }
 
-// square
-// result:  2 * input * grad_data
-std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, digamma(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
-std::vector<Tensor> square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _square_bw)(grad, input, output_mem_config);
+std::vector<Tensor> lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _lgamma_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _frac_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+std::vector<Tensor> frac_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _frac_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _trunc_bw)(grad, input, output_mem_config);
+}
+
+// return: grad_output * (max_deriv - sign * (z / (1 + z)))
+// z = exp(-abs(input))
+std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor max_deriv = where(ltz(input, output_mem_config), 1, 0, output_mem_config);
+    Tensor in_sign = where(ltz(input, output_mem_config), 1, -1, output_mem_config);
+    Tensor in_abs = abs(input, output_mem_config);
+    Tensor z = exp(neg(in_abs, output_mem_config), output_mem_config);
+
+    Tensor mul_z = ttnn::multiply(z, recip((add1(z, output_mem_config)), output_mem_config), std::nullopt, output_mem_config);
+
+    Tensor mul_sign = ttnn::multiply(in_sign, mul_z, std::nullopt, output_mem_config);
+    Tensor sub_max = ttnn::subtract(max_deriv, mul_sign, std::nullopt, output_mem_config);
+
+    Tensor grad_result = ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
 }
 
 // tanhshrink

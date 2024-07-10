@@ -862,8 +862,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.reciprocal_bw
 
-.. autofunction:: tt_lib.tensor.square_bw
-
 .. autofunction:: tt_lib.tensor.tanhshrink_bw
 
 .. autofunction:: tt_lib.tensor.threshold_bw

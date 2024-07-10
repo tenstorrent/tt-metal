@@ -368,6 +368,11 @@ void py_module(py::module& module) {
         module,
         ttnn::selu_bw,
         R"doc(Performs backward operations for selu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+    
+    detail::bind_unary_backward(
+        module,
+        ttnn::square_bw,
+        R"doc(Performs backward operations for square on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 
