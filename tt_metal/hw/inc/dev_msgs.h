@@ -58,26 +58,41 @@ enum dispatch_core_processor_classes {
     // Ethernet processor classes
     DISPATCH_CLASS_ETH_DM0 = 0,
 
-    DISPATCH_CLASS_MAX_PROC = 3,
+    DISPATCH_CLASS_MAX = 3,
+};
+
+enum dispatch_core_processor_masks {
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0     = 1 << DISPATCH_CLASS_TENSIX_DM0,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1     = 1 << DISPATCH_CLASS_TENSIX_DM1,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
+
+    DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
+};
+
+// Address offsets to kernel runtime configuration components
+// struct to densely packs values used by each processor
+struct dyn_mem_map_t {
+    volatile uint16_t rta_offset;
+    volatile uint16_t crta_offset;
 };
 
 struct launch_msg_t {  // must be cacheline aligned
-    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX_PROC];
+    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
-    volatile uint16_t rta_offsets[DISPATCH_CLASS_MAX_PROC];
+    dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
-    volatile uint8_t enables[DISPATCH_CLASS_MAX_PROC];
+    volatile uint8_t enables;
     volatile uint8_t max_cb_index;
     volatile uint8_t dispatch_core_x;
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t run;  // must be in last cacheline of this msg
-};
+} __attribute__((packed));
 
 struct slave_sync_msg_t {
     union {
@@ -178,6 +193,8 @@ struct mailboxes_t {
     struct debug_pause_msg_t pause_status;
     struct debug_insert_delays_msg_t debug_insert_delays;
 };
+
+static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile
