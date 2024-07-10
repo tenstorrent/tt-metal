@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward.hpp"
+#include "tt_eager/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -107,6 +108,6 @@ void py_module(py::module& module) {
 
 }
 
-}  // namespace binary_backward
+}  // namespace complex_binary_backward
 }  // namespace operations
 }  // namespace ttnn

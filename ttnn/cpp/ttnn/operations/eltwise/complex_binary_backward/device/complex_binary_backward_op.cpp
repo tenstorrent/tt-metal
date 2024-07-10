@@ -12,13 +12,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
-
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn::operations::complex_binary_backward {
-
-namespace utils {
-
 
 // complex add
 // self: grad, other: grad * alpha
@@ -47,7 +43,6 @@ std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const Comp
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
-
 
 // complex mul
 // grad_input = grad * other.conj()
@@ -87,8 +82,7 @@ std::vector<ComplexTensor> _complex_div_bw(const ComplexTensor& grad, const Comp
     return grad_tensor;
 }
 
-
-std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> get_function_type1(ComplexBinaryBackwardOpType OpType){
+std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> ComplexBinaryBackwardFunction::get_function_type1(ComplexBinaryBackwardOpType OpType){
     switch (OpType) {
         case ComplexBinaryBackwardOpType::COMPLEX_ADD_BW:
             return _complex_add_bw;
@@ -100,7 +94,7 @@ std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTens
     }
 }
 
-std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&)> get_function_type2(ComplexBinaryBackwardOpType OpType){
+std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&)> ComplexBinaryBackwardFunction::get_function_type2(ComplexBinaryBackwardOpType OpType){
     switch (OpType) {
         case ComplexBinaryBackwardOpType::COMPLEX_MUL_BW:
             return _complex_mul_bw;
@@ -112,8 +106,4 @@ std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTens
     }
 }
 
-
-
-}
-
-}  // namespace ttnn::operations::binary
+}  // namespace ttnn::operations::complex_binary_backward
