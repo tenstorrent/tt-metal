@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -23,7 +23,7 @@ def test_bw_hardshrink(input_shapes, lambd, device):
 
     pyt_y = torch.nn.functional.hardshrink(in_data, lambd=lambd)
 
-    tt_output_tensor_on_device = tt_lib.tensor.hardshrink_bw(grad_tensor, input_tensor, lambd)
+    tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd)
 
     in_data.retain_grad()
 

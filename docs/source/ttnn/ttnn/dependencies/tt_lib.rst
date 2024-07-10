@@ -832,8 +832,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.hardsigmoid_bw
 
-.. autofunction:: tt_lib.tensor.hardshrink_bw
-
 .. autofunction:: tt_lib.tensor.softshrink_bw
 
 .. autofunction:: tt_lib.tensor.hardswish_bw

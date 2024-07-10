@@ -376,22 +376,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("hardshrink_bw", &tt::tt_metal::hardshrink_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("lambda") = 0.5f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Performs backward operations for hardshrink to the elements of the input tensor ``{0}`` between limits ``-{1}`` low and the ``+{1}`` high limits with given ``grad``.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensors will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Tensor hardshrink_bw is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "lambda", "lambda value", "float", "float", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
 
     m_tensor.def("softshrink_bw", &tt::tt_metal::softshrink_bw,
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("lambd") = 0.5f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
