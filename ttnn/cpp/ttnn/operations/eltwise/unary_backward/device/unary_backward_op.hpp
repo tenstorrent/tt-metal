@@ -29,6 +29,7 @@ enum class UnaryBackwardOpType {
     I0_BW,
     TAN_BW,
     SIGMOID_BW,
+    RSQRT_BW,
 };
 
 struct UnaryBackwardFunction{
