@@ -1469,16 +1469,6 @@ std::vector<Tensor> square_bw(const Tensor& grad, const Tensor& input, const Mem
     return operation::decorate_as_composite(__func__, _square_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, digamma(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lgamma_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _frac_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
