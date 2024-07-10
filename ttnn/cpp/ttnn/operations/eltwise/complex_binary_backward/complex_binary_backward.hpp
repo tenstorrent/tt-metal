@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "device/complex_binary_backward_op.cpp"
+#include "device/complex_binary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 
@@ -25,7 +25,7 @@ struct ExecuteComplexBinaryBackward {
         float alpha,
         const MemoryConfig &memory_config) {
 
-        auto op_type = utils::get_function_type1(complex_binary_backward_op_type);
+        auto op_type = ComplexBinaryBackwardFunction::get_function_type1(complex_binary_backward_op_type);
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, memory_config);
         }
 
@@ -37,7 +37,7 @@ struct ExecuteComplexBinaryBackward {
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config) {
 
-        auto op_type = utils::get_function_type2(complex_binary_backward_op_type);
+        auto op_type = ComplexBinaryBackwardFunction::get_function_type2(complex_binary_backward_op_type);
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
 

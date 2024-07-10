@@ -63,7 +63,7 @@ void py_module(py::module& module) {
 
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);
-    
+
     auto m_complex_binary_backward = module.def_submodule("complex_binary_backward", "complex_binary_backward operations");
     complex_binary_backward::py_module(m_complex_binary_backward);
 
