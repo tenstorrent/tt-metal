@@ -243,7 +243,6 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
             ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
-    Tensor status = ttnn::logical_and(
         ttnn::ge(input, 0.0f, std::nullopt, output_mem_config),
         ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
@@ -263,13 +262,22 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+
+std::vector<Tensor> _hardshrink_bw(
+    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor hardshrink_result = hardshrink(input_tensor, lambd, output_mem_config);
+    Tensor result = where(eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
             return _assign_bw;
         case UnaryBackwardOpType::MULTIGAMMALN_BW:
-            return _multigammaln_bw;
-        case UnaryBackwardOpType::LGAMMA_BW:
             return _lgamma_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
@@ -313,6 +321,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _eq_bw;
         case UnaryBackwardOpType::SUB_BW:
             return _sub_bw;
+        case UnaryBackwardOpType::HARDSHRINK_BW:
+            return _hardshrink_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
