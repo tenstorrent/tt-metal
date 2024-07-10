@@ -174,6 +174,7 @@ Pointwise Unary
    ttnn/add_bw
    ttnn/eq_bw
    ttnn/lgamma_bw
+   ttnn/unary_sub_bw
 
 Pointwise Binary
 ================
