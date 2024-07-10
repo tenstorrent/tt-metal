@@ -462,14 +462,12 @@ void MAIN {
         /* QK *= SCALE */
         mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
 
-        // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-        // Q-range = [q_low, q_high)
-        // K-range = [k_low, k_high)
-        // does_overlap = not (q_low >= k_high or k_low >= q_high)
-        // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-        /* QK += MASK */
-        unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
-        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+        // For decode, we only apply mask at the last chunk on reducer cor
+        if (k_chunk == k_chunk_end - 1 && do_reduce) {
+            /* QK += MASK */
+            unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+        }
         // DPRINT << "[C] D QK 2"<< ENDL();
 
         unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);

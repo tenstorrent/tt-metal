@@ -113,19 +113,18 @@ void py_module(py::module& m_transformers) {
         py::arg("input_tensor_q").noconvert(),
         py::arg("input_tensor_k").noconvert(),
         py::arg("input_tensor_v").noconvert(),
-        py::arg("mask").noconvert(),
+        py::arg("cur_pos").noconvert(),
         py::arg("scale").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = SDPADefaultProgramConfig{},
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("valid_seq_len").noconvert() = std::nullopt,
         "A version of scaled dot product attention specifically for decode."
         "The implementation is Flash-Decode and it currently only supports MQA on decoding single token.\n"
 
         "Q:      [1 x b x pnh x dh]"
         "K:      [1 x b x   s x dh]"
         "V:      [1 x b x   s x dh]"
-        "mask:   [1 x b x pnh x s ]"
+        "cur_pos: list of integers of length b"
         "output: [1 x b x pnh x dh]"
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
