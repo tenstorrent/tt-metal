@@ -828,8 +828,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.polygamma_bw
 
-.. autofunction:: tt_lib.tensor.asinh_bw
-
 .. autofunction:: tt_lib.tensor.cosh_bw
 
 .. autofunction:: tt_lib.tensor.erfinv_bw

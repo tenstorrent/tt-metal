@@ -212,6 +212,7 @@ Pointwise Unary
    ttnn/tanhshrink_bw
    ttnn/atanh_bw
    ttnn/asin_bw
+   ttnn/asinh_bw
 
 Pointwise Binary
 ================

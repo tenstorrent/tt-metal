@@ -672,6 +672,22 @@ std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+// Asinh
+// result: grad * (self * self + 1).rsqrt()
+std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam {UnaryOpType::SQUARE},
+    UnaryWithParam {UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam {UnaryOpType::RSQRT, true}};
+    Tensor grad_result =
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -740,6 +756,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _atanh_bw;
         case UnaryBackwardOpType::ASIN_BW:
             return _asin_bw;
+        case UnaryBackwardOpType::ASINH_BW:
+            return _asinh_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

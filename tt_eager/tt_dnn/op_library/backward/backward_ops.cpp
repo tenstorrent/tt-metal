@@ -421,25 +421,6 @@ std::vector<Tensor> polygamma_bw(
     return operation::decorate_as_composite(__func__, _polygamma_bw)(grad, input, n, output_mem_config);
 }
 
-// Asinh
-// result: grad * (self * self + 1).rsqrt()
-std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    using ttnn::operations::unary::UnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    std::vector<UnaryWithParam> ops_chain = {
-    UnaryWithParam{UnaryOpType::SQUARE},
-    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-    UnaryWithParam{UnaryOpType::RSQRT, true}};
-    Tensor grad_result =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _asinh_bw)(grad, input, output_mem_config);
-}
-
 // name: cosh(Tensor self) -> Tensor
 // self: grad * self.sinh()
 std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
