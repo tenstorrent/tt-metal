@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 
 
@@ -34,7 +34,7 @@ def test_bw_elu(input_shapes, alpha, device):
 
     pyt_y = torch.nn.functional.elu(in_data, alpha=alpha)
 
-    tt_output_tensor_on_device = tt_lib.tensor.elu_bw(grad_tensor, input_tensor, alpha)
+    tt_output_tensor_on_device = ttnn.elu_bw(grad_tensor, input_tensor, alpha)
 
     pyt_y.backward(gradient=grad_data)
 
