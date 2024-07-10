@@ -168,6 +168,7 @@ Pointwise Unary
    ttnn/threshold
    ttnn/mul_bw
    ttnn/clamp_min_bw
+   ttnn/clamp_max_bw
    ttnn/clamp_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw

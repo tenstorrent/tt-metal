@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -23,7 +23,7 @@ def test_bw_clamp_max(input_shapes, max, device):
 
     pyt_y = torch.clamp(in_data, max=max)
 
-    tt_output_tensor_on_device = tt_lib.tensor.clamp_max_bw(grad_tensor, input_tensor, max)
+    tt_output_tensor_on_device = ttnn.clamp_max_bw(grad_tensor, input_tensor, max)
 
     in_data.retain_grad()
 
