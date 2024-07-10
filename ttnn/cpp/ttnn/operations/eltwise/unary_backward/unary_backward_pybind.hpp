@@ -238,6 +238,11 @@ void py_module(py::module& module) {
         ttnn::tan_bw,
         R"doc(Performs backward operations for tan on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::sigmoid_bw,
+        R"doc(Performs backward operations for sigmoid on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

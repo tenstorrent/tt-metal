@@ -182,6 +182,20 @@ std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const Memor
     return grad_tensor;
 }
 
+// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
+std::vector<Tensor> _sigmoid_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    std::vector<Tensor> grad_tensor;
+    Tensor sig_result = ttnn::sigmoid(input, output_mem_config);
+    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
+    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
+    Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(prod_term_2);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -202,6 +216,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _i0_bw;
         case UnaryBackwardOpType::TAN_BW:
             return _tan_bw;
+        case UnaryBackwardOpType::SIGMOID_BW:
+            return _sigmoid_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
