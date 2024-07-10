@@ -107,7 +107,7 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program() :
-    id(program_counter++), worker_crs_({}), local_circular_buffer_allocation_needed_(false), finalized_(false) {
+    id(program_counter++), runtime_id(0), worker_crs_({}), local_circular_buffer_allocation_needed_(false), finalized_(false) {
     std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
     for (const auto &core_type : supported_core_types) {
         kernels_.insert({core_type, {}});
@@ -996,6 +996,8 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
     }
     compile_needed_[device->id()] = false;
 }
+
+void Program::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 Program::~Program() {}
 }  // namespace tt::tt_metal

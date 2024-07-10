@@ -298,6 +298,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
         auto& program = create_or_get_program_from_cache<device_operation_t>(
             program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
+        program.set_runtime_id(operation_id);
+
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -331,6 +333,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
                     program_factory_t::create(operation_attributes, tensor_args, tensor_return_value).program);
             },
             program);
+
+        program_ptr->set_runtime_id(operation_id);
 
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");

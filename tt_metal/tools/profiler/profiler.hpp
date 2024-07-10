@@ -72,6 +72,7 @@ class DeviceProfiler {
         // Dumping profile result to file
         void dumpResultToFile(
                 uint32_t runID,
+                uint32_t runHostID,
                 int device_id,
                 CoreCoord core,
                 int core_flat,

@@ -111,7 +111,6 @@ namespace kernel_profiler{
         {
             core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
 
-#pragma GCC unroll 65534
             for (int i = ID_HH; i < GUARANTEED_MARKER_1_H; i ++)
             {
                 eriscBuffer[i] = 0;
@@ -124,14 +123,13 @@ namespace kernel_profiler{
             profiler_control_buffer[FLAT_ID] = core_flat_id;
         }
 
-#pragma GCC unroll 65534
         for (int i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i ++)
         {
         //TODO(MO): Clean up magic numbers
             eriscBuffer[i] = 0x80000000;
         }
 
-        eriscBuffer [ID_LL] = runCounter;
+        eriscBuffer [ID_LL] = (runCounter & 0xFFFF) | (eriscBuffer [ID_LL] & 0xFFFF0000);
 
 #endif //ERISC_INIT
 #if  defined(COMPILE_FOR_BRISC)
@@ -146,7 +144,6 @@ namespace kernel_profiler{
         {
             core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
 
-#pragma GCC unroll 65534
             for (int i = ID_HH; i < GUARANTEED_MARKER_1_H; i ++)
             {
                 briscBuffer[i] = 0;
@@ -167,10 +164,9 @@ namespace kernel_profiler{
             profiler_control_buffer[FLAT_ID] = core_flat_id;
         }
 
-#pragma GCC unroll 65534
         for (int i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i ++)
         {
-        //TODO(MO): Clean up magic numbers
+            //TODO(MO): Clean up magic numbers
             briscBuffer[i] = 0x80000000;
             ncriscBuffer[i] = 0x80000000;
             trisc0Buffer[i] = 0x80000000;
@@ -178,12 +174,11 @@ namespace kernel_profiler{
             trisc2Buffer[i] = 0x80000000;
         }
 
-        //TODO(MO): Clean up magic numbers
-        briscBuffer [ID_LL] = runCounter;
-        ncriscBuffer[ID_LL] = runCounter;
-        trisc0Buffer[ID_LL] = runCounter;
-        trisc1Buffer[ID_LL] = runCounter;
-        trisc2Buffer[ID_LL] = runCounter;
+        briscBuffer [ID_LL] = (runCounter & 0xFFFF) | (briscBuffer [ID_LL] & 0xFFFF0000);
+        ncriscBuffer[ID_LL] = (runCounter & 0xFFFF) | (ncriscBuffer[ID_LL] & 0xFFFF0000);
+        trisc0Buffer[ID_LL] = (runCounter & 0xFFFF) | (trisc0Buffer[ID_LL] & 0xFFFF0000);
+        trisc1Buffer[ID_LL] = (runCounter & 0xFFFF) | (trisc1Buffer[ID_LL] & 0xFFFF0000);
+        trisc2Buffer[ID_LL] = (runCounter & 0xFFFF) | (trisc2Buffer[ID_LL] & 0xFFFF0000);
 
 
 #endif //BRISC_INIT
@@ -208,14 +203,6 @@ namespace kernel_profiler{
         buffer[index+1] = p_reg[WALL_CLOCK_LOW_INDEX];
     }
 
-    inline __attribute__((always_inline)) void mark_end_at_index_inlined(uint32_t index, uint32_t timer_id_s, uint32_t timer_id)
-    {
-        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_profiler::profilerBuffer);
-        volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (RISCV_DEBUG_REG_WALL_CLOCK_L);
-        buffer[index+2] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
-        buffer[index+3] = p_reg[WALL_CLOCK_LOW_INDEX];
-    }
-
     inline __attribute__((always_inline)) void mark_padding()
     {
         if (wIndex < PROFILER_L1_VECTOR_SIZE)
@@ -233,6 +220,28 @@ namespace kernel_profiler{
         profiler_control_buffer[DROPPED_ZONES] = (1 << index) | curr;
     }
 
+    inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue)
+    {
+#if defined(COMPILE_FOR_ERISC)
+        volatile tt_l1_ptr uint32_t *eriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
+
+        eriscBuffer[ID_LL] = (counterValue << 16) | (eriscBuffer[ID_LL] & 0xFFFF);
+#endif
+
+#if  defined(COMPILE_FOR_BRISC)
+        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
+        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
+        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
+        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
+        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
+
+        briscBuffer[ID_LL] = (counterValue << 16) | (briscBuffer[ID_LL] & 0xFFFF);
+        ncriscBuffer[ID_LL] = (counterValue << 16) | (ncriscBuffer[ID_LL] & 0xFFFF);
+        trisc0Buffer[ID_LL] = (counterValue << 16) | (trisc0Buffer[ID_LL] & 0xFFFF);
+        trisc1Buffer[ID_LL] = (counterValue << 16) | (trisc1Buffer[ID_LL] & 0xFFFF);
+        trisc2Buffer[ID_LL] = (counterValue << 16) | (trisc2Buffer[ID_LL] & 0xFFFF);
+#endif
+    }
 
     inline __attribute__((always_inline)) void risc_finished_profiling()
     {
@@ -374,6 +383,7 @@ namespace kernel_profiler{
 #if defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)
         SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
         mark_time_at_index_inlined(wIndex, hash);
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
         core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
 
         uint32_t dram_offset =
@@ -389,8 +399,8 @@ namespace kernel_profiler{
 
         uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-        mark_end_at_index_inlined(wIndex, hash, get_end_timer_id(hash));
-        wIndex += QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE;
+        mark_time_at_index_inlined(wIndex, get_end_timer_id(hash));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
         uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_NC] + wIndex;
 
@@ -523,6 +533,8 @@ namespace kernel_profiler{
 
 #define DeviceZoneScopedSumN2( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
+#define DeviceZoneSetCounter( counter ) kernel_profiler::set_host_counter(counter);
+
 #else
 
 #define DeviceZoneScopedMainN( name )
@@ -536,5 +548,7 @@ namespace kernel_profiler{
 #define DeviceZoneScopedSumN2( name )
 
 #define DeviceZoneScopedND( name , nocBuffer, nocIndex )
+
+#define DeviceZoneSetCounter( counter )
 
 #endif

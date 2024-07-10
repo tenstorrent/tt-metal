@@ -77,6 +77,8 @@ struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
+    volatile uint16_t host_assigned_id;
+
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
     dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
@@ -89,6 +91,7 @@ struct kernel_config_msg_t {
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t pad1;
+    volatile uint16_t pad2;
 } __attribute__((packed));
 
 struct go_msg_t {

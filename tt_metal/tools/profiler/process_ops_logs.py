@@ -197,6 +197,10 @@ def append_device_data(ops, deviceLogFolder):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
                     if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                        if "run_host_id" in timeID.keys():
+                            assert (
+                                timeID["run_host_id"] == deviceOp["global_call_count"]
+                            ), f"op id {timeID['run_host_id']} reproted by device is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
@@ -249,7 +253,6 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
             deviceOps[device] = []
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
             for deviceOpTime in deviceOpsTime:
-                rowDict = {csv_header_format("global_call_count"): i}
                 i += 1
                 deviceOp = {}
                 cores = set()
@@ -261,12 +264,17 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
                 deviceOp["device_time"] = {
                     analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
                 }
-                deviceOp["global_call_count"] = i
+
+                if "run_host_id" in timeID.keys():
+                    deviceOp["global_call_count"] = timeID["run_host_id"]
+                else:
+                    deviceOp["global_call_count"] = i
                 for analysis, data in deviceOp["device_time"].items():
                     for sample in data:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
                 deviceOps[device].append(deviceOp)
 
+                rowDict = {csv_header_format("global_call_count"): deviceOp["global_call_count"]}
                 for analysis, analysisData in deviceOp["device_time"].items():
                     headerField = f"{csv_header_format(analysis)} [ns]"
                     assert len(analysisData) == 1, "Unexpected device data format"

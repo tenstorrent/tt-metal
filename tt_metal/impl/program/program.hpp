@@ -75,11 +75,13 @@ class Program {
     Program(Program &&other) = default;
     Program& operator=(Program &&other) = default;
 
+    void set_runtime_id(uint64_t id);
     ~Program();
 
     void construct_core_range_set_for_worker_cores();
 
     const uint64_t get_id() const { return this->id; }
+    const uint64_t get_runtime_id() const { return this->runtime_id; }
 
     size_t num_kernels() const {
       size_t count = 0;
@@ -174,6 +176,7 @@ class Program {
     };
 
     uint64_t id; // Need to make non-const due to move constructor
+    uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
     std::unordered_map<CoreType, std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
     std::unordered_map<CoreType, CoreCoord> grid_extent_;
