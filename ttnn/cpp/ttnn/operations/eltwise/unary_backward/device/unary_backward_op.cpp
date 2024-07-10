@@ -90,6 +90,7 @@ std::vector<Tensor> _eq_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
+<<<<<<< HEAD
 std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
@@ -139,6 +140,34 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
+=======
+
+std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor value = mul_unary(
+        0.5,
+        ttnn::multiply(i0(input, output_mem_config), recip(input, output_mem_config), std::nullopt, output_mem_config),
+        output_mem_config);
+    Tensor result = where(
+        ltz(input, output_mem_config),
+        ttnn::multiply(grad,
+            ttnn::subtract(neg(i0(input, output_mem_config), output_mem_config), value, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        ttnn::multiply(grad,
+            ttnn::subtract(i0(input, output_mem_config), value, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        output_mem_config);
+    result = where(
+        gte_unary(abs(i0(input, output_mem_config), output_mem_config), 3.4e+38, output_mem_config),
+        t_inf,
+        result,
+        output_mem_config);
+    result =
+        where(gte_unary(abs(result, output_mem_config), 3.4e+38, output_mem_config), t_inf, result, output_mem_config);
+>>>>>>> 4f1074fb43... #10073: Merge i0_bw to TTNN
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -159,6 +188,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _log_sigmoid_bw;
         case UnaryBackwardOpType::FILL_ZERO_BW:
             return _fill_zero_bw;
+        case UnaryBackwardOpType::I0_BW:
+            return _i0_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
