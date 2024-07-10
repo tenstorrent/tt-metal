@@ -65,14 +65,15 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
     return setexp(result, new_exp);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool SAVE_REG = false>
 inline void _calculate_reciprocal_()
 {
-    #pragma GCC unroll 0
+    // Unroll factor is 4 because of Grayskull.
+    #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat out = _sfpu_reciprocal_<false, APPROXIMATION_MODE ? 2 : 3>(in);
+        vFloat out = _sfpu_reciprocal_<SAVE_REG, APPROXIMATION_MODE ? 2 : 3>(in);
 
         // Reload to reduce register pressure
         v_if (dst_reg[0] < 0.0F) {
