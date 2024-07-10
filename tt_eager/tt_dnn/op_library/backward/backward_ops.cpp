@@ -343,15 +343,6 @@ std::vector<Tensor> clamp_max_bw(
     const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _clamp_max_bw)(grad, input, max, output_mem_config);
 }
-std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> relu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _relu_bw)(grad, input, output_mem_config);
-}
 
 // bw(expm1) = grad * expm1(input) + 1
 std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

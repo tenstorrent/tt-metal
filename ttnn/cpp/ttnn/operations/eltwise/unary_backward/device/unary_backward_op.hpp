@@ -31,6 +31,7 @@ enum class UnaryBackwardOpType {
     SIGMOID_BW,
     RSQRT_BW,
     NEG_BW,
+    RELU_BW,
 };
 
 struct UnaryBackwardFunction{
