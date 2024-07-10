@@ -256,17 +256,14 @@ class TtFalconAttention:
 
     def init_preprocessing(self, llm_mode, max_sequence_size):
         if llm_mode == "prefill":
-            # assert self.model_config["row_height"] == sequence_size
-            if self.model_config["attention_params"]["attention_num_slices"] > 1:
-                # Pre-allocate memory to partially slice and sharde attention
-                self.attn_output = ttnn.as_tensor(
-                    torch.zeros([1, self.num_heads_per_device, max_sequence_size, self.head_dim]),
-                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device_mesh,
-                    memory_config=self.model_config["DRAM_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-                )
+            self.attn_output = ttnn.as_tensor(
+                torch.zeros([1, self.num_heads_per_device, max_sequence_size, self.head_dim]),
+                dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device_mesh,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            )
 
     def online_preprocessing(self, llm_mode, sequence_size):
         if llm_mode == "prefill":
