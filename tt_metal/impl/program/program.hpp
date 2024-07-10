@@ -35,14 +35,14 @@ namespace detail{
 struct KernelGroup {
     CoreType core_type;
     CoreRangeSet core_ranges;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
     launch_msg_t launch_msg;
 
     KernelGroup();
     KernelGroup(
         const Program &program,
         CoreType core_type,
-        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids,
+        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
