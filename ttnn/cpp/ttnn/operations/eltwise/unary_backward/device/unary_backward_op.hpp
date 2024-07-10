@@ -56,6 +56,7 @@ enum class UnaryBackwardOpType {
     SELU_BW,
     SQUARE_BW,
     HARDSWISH_BW,
+    TANHSHRINK_BW,
 };
 
 struct UnaryBackwardFunction{

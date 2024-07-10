@@ -379,6 +379,11 @@ void py_module(py::module& module) {
         ttnn::  hardswish_bw,
         R"doc(Performs backward operations for  hardswish on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::  tanhshrink_bw,
+        R"doc(Performs backward operations for  tanhshrink on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
 }
 
 }  // namespace binary_backward

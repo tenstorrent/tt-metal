@@ -587,6 +587,16 @@ std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
+
+// tanhshrink
+// result:  torch.square(torch.tanh(input)) * grad_data
+std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor tanh_res = ttnn::square(ttnn::tanh(input, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config));
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -649,6 +659,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _square_bw;
         case UnaryBackwardOpType::HARDSWISH_BW:
             return _hardswish_bw;
+        case UnaryBackwardOpType::TANHSHRINK_BW:
+            return _tanhshrink_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

@@ -1003,18 +1003,6 @@ std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, cons
     return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
 }
 
-// tanhshrink
-// result:  torch.square(torch.tanh(input)) * grad_data
-std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor tanh_res = ttnn::square(ttnn::tanh(input, output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _tanhshrink_bw)(grad, input, output_mem_config);
-}
-
 // threshold
 // if input <= threshold = 0 else grad
 std::vector<Tensor> _threshold_bw(

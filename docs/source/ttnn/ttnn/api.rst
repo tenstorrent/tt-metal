@@ -209,6 +209,7 @@ Pointwise Unary
    ttnn/selu_bw
    ttnn/square_bw
    ttnn/hardswish_bw
+   ttnn/tanhshrink_bw
 
 Pointwise Binary
 ================
