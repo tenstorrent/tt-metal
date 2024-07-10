@@ -164,7 +164,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 
     msg->mode = DISPATCH_MODE_HOST;
-    TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
     if (is_active_eth_core) {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
