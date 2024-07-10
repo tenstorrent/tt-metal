@@ -8,7 +8,6 @@ import pathlib
 import pprint
 from elasticsearch import Elasticsearch
 from tests.sweep_framework.statuses import TestStatus
-from serialize import deserialize_vector
 from beautifultable import BeautifulTable, STYLE_COMPACT
 from termcolor import colored
 
@@ -43,7 +42,7 @@ def vector(ctx):
 
     client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
     response = client.get(index=(ctx.obj["module_name"] + "_test_vectors"), id=ctx.obj["vector_id"])
-    pprint.pp(deserialize_vector(response["_source"]))
+    pprint.pp(response["_source"])
 
 
 @cli.command()
