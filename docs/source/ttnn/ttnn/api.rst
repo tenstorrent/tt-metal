@@ -185,6 +185,7 @@ Pointwise Unary
    ttnn/rsqrt_bw
    ttnn/neg_bw
    ttnn/relu_bw
+   ttnn/logit_bw
 
 Pointwise Binary
 ================

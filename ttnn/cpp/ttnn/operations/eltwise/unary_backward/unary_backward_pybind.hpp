@@ -258,6 +258,11 @@ void py_module(py::module& module) {
         ttnn::relu_bw,
         R"doc(Performs backward operations for relu on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::logit_bw,
+        R"doc(Performs backward operations for logit on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
