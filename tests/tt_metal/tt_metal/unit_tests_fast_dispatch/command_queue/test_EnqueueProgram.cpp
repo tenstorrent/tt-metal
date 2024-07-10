@@ -49,6 +49,14 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
+void initialize_dummy_semaphores(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
+{
+    for (uint32_t i = 0; i < init_values.size(); i++)
+    {
+        CreateSemaphore(program, core_ranges, init_values[i]);
+    }
+}
+
 bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
 
     bool pass = true;
@@ -144,40 +152,54 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
 }
 
-
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
-    bool pass = true;
-
-    Program program;
+bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program& program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
+    bool are_all_semaphore_values_correct = true;
 
     for (uint32_t sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
-        uint32_t allocated_sem_id  = CreateSemaphore(program, program_config.cr_set, sem_id);
-        pass &= (allocated_sem_id == sem_id);
+        const uint32_t allocated_sem_id  = CreateSemaphore(program, program_config.cr_set, sem_id);
+        are_all_semaphore_values_correct &= (allocated_sem_id == sem_id);
     }
 
-    EnqueueProgram(cq, program, false);
+    const bool is_blocking_op = false;
+    EnqueueProgram(cq, program, is_blocking_op);
     Finish(cq);
 
-    vector<uint32_t> sem_vector;
-    uint32_t sem_buffer_size = program_config.num_sems * L1_ALIGNMENT;
-
-    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
+    uint32_t expected_semaphore_vals_idx = 0;
+    for (const CoreRange& core_range : program_config.cr_set.ranges())
+    {
+        const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
+        expected_semaphore_vals_idx++;
         for (const CoreCoord& core_coord : core_range)
         {
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, sem_buffer_size, sem_vector);
-
-            uint32_t sem_id = 0;
-            for (uint32_t i = 0; i < sem_vector.size(); i += (L1_ALIGNMENT / sizeof(uint32_t))) {
-
-                bool sem_match = sem_vector.at(i) == sem_id;
-                sem_id++;
-
-                pass &= sem_match;
+            vector<uint32_t> semaphore_vals;
+            uint32_t expected_semaphore_vals_for_core_idx = 0;
+            const uint32_t semaphore_buffer_size = program_config.num_sems * L1_ALIGNMENT;
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, semaphore_buffer_size, semaphore_vals);
+            for (uint32_t i = 0; i < semaphore_vals.size(); i += (L1_ALIGNMENT / sizeof(uint32_t)))
+            {
+                const bool is_semaphore_value_correct = semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
+                expected_semaphore_vals_for_core_idx++;
+                if (!is_semaphore_value_correct)
+                {
+                    are_all_semaphore_values_correct = false;
+                }
             }
         }
     }
 
-    return pass;
+    return are_all_semaphore_values_correct;
+}
+
+bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+    Program program;
+    vector<uint32_t> expected_semaphore_values;
+
+    for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
+        expected_semaphore_values.push_back(initial_sem_value);
+    }
+
+    initialize_dummy_semaphores(program, program_config.cr_set, expected_semaphore_values);
+    return test_dummy_EnqueueProgram_with_sems(device, cq, program, program_config, {expected_semaphore_values});
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config, uint32_t num_runtime_args_dm0, uint32_t num_runtime_args_dm1, uint32_t num_runtime_args_compute, uint32_t num_iterations) {
@@ -804,6 +826,46 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
 
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentMultiCore) {
+    for (Device *device : devices_)
+    {
+        CoreRange first_cr({0, 0}, {1, 1});
+
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+
+        CoreRangeSet cr_set({first_cr, second_cr});
+
+        Program program;
+        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+
+        vector<vector<uint32_t>> expected_semaphore_vals;
+
+        uint32_t semaphore_val = 0;
+        vector<uint32_t> initial_semaphore_vals;
+        for (uint32_t i = 0; i < config.num_sems; i++)
+        {
+            initial_semaphore_vals.push_back(semaphore_val);
+            semaphore_val++;
+        }
+
+        local_test_functions::initialize_dummy_semaphores(program, first_cr, initial_semaphore_vals);
+        expected_semaphore_vals.push_back(initial_semaphore_vals);
+
+        initial_semaphore_vals.clear();
+        for (uint32_t i = 0; i < config.num_sems; i++)
+        {
+            initial_semaphore_vals.push_back(semaphore_val);
+            semaphore_val++;
+        }
+
+        local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
+        expected_semaphore_vals.push_back(initial_semaphore_vals);
+
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), program, config, expected_semaphore_vals));
     }
 }
 
