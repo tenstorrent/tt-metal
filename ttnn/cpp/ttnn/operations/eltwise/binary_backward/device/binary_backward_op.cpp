@@ -3,27 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
-#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
+
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/embedding/embedding/embedding.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/embedding/embedding/embedding.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
 namespace ttnn::operations::binary_backward {
-
-namespace utils {
-
-using namespace ttnn;
 
 std::vector<ttnn::Tensor> _atan2_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
@@ -299,7 +295,7 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _binary_eq_bw(
+std::vector<std::optional<Tensor>> _eq_bw(
     uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
@@ -333,9 +329,9 @@ std::vector<std::optional<Tensor>> _binary_eq_bw(
     return std::move(result);
 }
 
-std::vector<ttnn::Tensor> _binary_eq_bw_inter(
+std::vector<ttnn::Tensor> _eq_bw_inter(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    auto result = _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    auto result = _eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(result.size());
 
@@ -349,7 +345,7 @@ std::vector<ttnn::Tensor> _binary_eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
+std::vector<std::optional<Tensor>> _eq_bw_overload(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -358,10 +354,10 @@ std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     uint8_t default_queue_id = 0;
-    return _binary_eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+    return _eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
-std::vector<Tensor> _binary_assign_bw(
+std::vector<Tensor> _assign_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -423,7 +419,7 @@ std::vector<Tensor> _bias_gelu_bw(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    std::string approximate,
+    string approximate,
     const MemoryConfig& output_mem_config) {
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
@@ -493,7 +489,7 @@ std::vector<Tensor> _div_bw(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    std::string round_mode,
+    string round_mode,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     if (round_mode == "None") {
@@ -621,7 +617,7 @@ std::vector<std::optional<Tensor>> _mul_bw_overload(
 }
 
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
             return _atan2_bw;
@@ -643,10 +639,10 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _squared_difference_bw;
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_inter;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw_inter;
-        case BinaryBackwardOpType::BINARY_ASSIGN_BW:
-            return _binary_assign_bw;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw_inter;
+        case BinaryBackwardOpType::ASSIGN_BW:
+            return _assign_bw;
         case BinaryBackwardOpType::BINARY_LE_BW:
             return _binary_le_bw;
         case BinaryBackwardOpType::RSUB_BW:
@@ -671,7 +667,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(BinaryBackwardOpType OpType){
+std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_float(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::SUBALPHA_BW:
             return _subalpha_bw;
@@ -687,7 +683,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType){
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_string(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::BIAS_GELU_BW:
             return _bias_gelu_bw;
@@ -699,7 +695,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type2(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw;
@@ -709,7 +705,7 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type2_wo_qid(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw_overload;
@@ -719,12 +715,12 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw;
         default:
@@ -733,12 +729,12 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3_wo_qid(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_overload;
-        case BinaryBackwardOpType::BINARY_EQ_BW:
-            return _binary_eq_bw_overload;
+        case BinaryBackwardOpType::EQ_BW:
+            return _eq_bw_overload;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw_overload;
         default:
@@ -747,17 +743,4 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_overload_function(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::LERP_BW:
-            return ttnn::operations::ternary_backward::utils::_lerp_overload;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-} // utils
-
-
-}  // namespace ttnn::operations::binary
+}  // namespace ttnn::operations::binary_backward

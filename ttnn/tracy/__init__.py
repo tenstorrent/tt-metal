@@ -33,7 +33,7 @@ DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 
 
 def signpost(header, message=None):
-    from tracy_ttnn import tracy_message
+    from tracy.tracy_ttnn import tracy_message
 
     if message:
         tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
@@ -45,7 +45,7 @@ def signpost(header, message=None):
 
 class Profiler:
     def __init__(self):
-        from tracy_ttnn import tracy_marker_func, tracy_marker_line, finish_all_zones
+        from tracy.tracy_ttnn import tracy_marker_func, tracy_marker_line, finish_all_zones
 
         self.doProfile = tracy_state.doPartial and sys.gettrace() is None and sys.getprofile() is None
         self.doLine = tracy_state.doLine

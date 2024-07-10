@@ -796,12 +796,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.conj_bw
 
-.. autofunction:: tt_lib.tensor.unary_mul_bw
-
-.. autofunction:: tt_lib.tensor.unary_add_bw
-
-.. autofunction:: tt_lib.tensor.unary_assign_bw
-
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
 .. autofunction:: tt_lib.tensor.rdiv_bw
@@ -843,10 +837,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.relu_bw
 
 .. autofunction:: tt_lib.tensor.ne_bw
-
-.. autofunction:: tt_lib.tensor.clamp_bw
-
-.. autofunction:: tt_lib.tensor.clamp_min_bw
 
 .. autofunction:: tt_lib.tensor.clamp_max_bw
 
@@ -938,8 +928,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.threshold_bw
 
-.. autofunction:: tt_lib.tensor.unary_eq_bw
-
 .. autofunction:: tt_lib.tensor.logit_bw
 
 .. autofunction:: tt_lib.tensor.logiteps_bw
@@ -975,8 +963,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.complex_add_bw
 
 .. autofunction:: tt_lib.tensor.complex_sub_bw
-
-.. autofunction:: tt_lib.tensor.multigammaln_bw
 
 .. autofunction:: tt_lib.tensor.repeat_bw
 

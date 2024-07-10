@@ -138,7 +138,7 @@ std::string get_string(ARCH arch);
 std::string get_string_lowercase(ARCH arch);
 ARCH get_arch_from_string(const std::string &arch_str);
 
-enum class RISCV : uint8_t {
+enum RISCV : uint8_t {
     BRISC = 0,
     NCRISC = 1,
     TRISC0 = 2,
@@ -146,6 +146,7 @@ enum class RISCV : uint8_t {
     TRISC2 = 4,
     ERISC = 5,
     COMPUTE = 6,     // Encompasses TRISC0, TRISC1, and TRISC2
+    MAX = 7,
 };
 
 inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {

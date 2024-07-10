@@ -15,13 +15,13 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-import ttnn._ttnn
-
 # Sets env and updates shared libs rpath
 # This is a tweak required for a proper wheel functioning
 import ttnn.library_tweaks
 
 library_tweaks.setup_ttnn_so()
+
+import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 

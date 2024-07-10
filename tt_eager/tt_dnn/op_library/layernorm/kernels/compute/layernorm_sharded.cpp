@@ -141,7 +141,7 @@ void MAIN {
     #ifndef RMSNORM
     // E[x],
     index_h_offset = 0;
-    reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+    reduce_init_delta<false>();
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_ex_partial, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -162,7 +162,7 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -257,7 +257,7 @@ void MAIN {
     cb_wait_front(cb_scaler, 1);
     #endif
     cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+    reduce_init_delta<false>();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
@@ -276,7 +276,7 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {

@@ -8,7 +8,8 @@ from loguru import logger
 from typing import Optional
 import ttnn
 from models.demos.mamba.tt.full_model import TtTensorLoader
-from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
+from models.demos.mamba.reference.args import ModelMode
 from models.demos.mamba.tt.mamba_block import TtMambaBlock
 from models.demos.mamba.tt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -29,11 +30,20 @@ class PytorchMambaBlock(torch.nn.Module):
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, pcc",
+    "model_version, mode, batch, seq_len, pcc",
     (
         (
             "state-spaces/mamba-2.8b",
+            ModelMode.PREFILL,
+            1,
+            64,
+            0.98,
+        ),
+        (
+            "state-spaces/mamba-2.8b",
+            ModelMode.DECODE,
             32,
+            1,
             0.97,
         ),
     ),
@@ -42,43 +52,43 @@ def test_mamba_block_inference(
     device: ttnn.Device,
     use_program_cache,
     model_version: MambaPretrainedModelName,
+    mode: ModelMode,
     batch: int,
+    seq_len: int,
     pcc: float,
 ):
     torch.manual_seed(0)
 
     LAYER_NUM = 0
 
-    reference_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
-    reference_model.args.batch_size = batch
+    reference_model = Mamba.from_pretrained(model_version, batch_size=batch)
+    reference_model.args.mode = mode
 
     d_model = reference_model.args.d_model
-    input = torch.rand(batch, 1, d_model)
+    input = torch.rand(batch, seq_len, d_model)
 
     reference_output = PytorchMambaBlock(reference_model, LAYER_NUM)(input)
 
-    residual_block = reference_model.layers[LAYER_NUM]
-    assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
-
-    config = model_config.create_model_config(batch, d_model)
+    config = model_config.create_model_config(batch, reference_model.args.d_model, mode=mode, seq_len=seq_len)
 
     loader = TtTensorLoader(reference_model.state_dict(), device)
 
     model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
-    tt_input = input.view(1, 1, batch, d_model)
+
+    tt_input = input.view(1, 1, config["outer_dim"], d_model)
     tt_input = ttnn.to_device(
-        ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+        ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=config["dtype"]["activations"]),
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_output = model(tt_input)
     tt_output = ttnn.to_torch(tt_output)
-    tt_output = tt_output.view(batch, 1, -1)
+    tt_output = tt_output.view(batch, seq_len, -1)
     logger.info(comp_allclose(reference_output, tt_output))
 
     does_pass, output_pcc = comp_pcc(reference_output, tt_output, pcc)
     logger.info(f"PCC value: {output_pcc}")
 
     if not does_pass:
-        logger.warning("Mamba block output failed")
+        logger.warning("Mamba Block output failed")
         assert does_pass, f"PCC value is lower than {pcc}"

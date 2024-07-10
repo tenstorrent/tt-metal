@@ -19,6 +19,7 @@ const uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 32; // address is lower 36 bits and upper bits are the coordinates, 32 bits in lo reg and rest goes to mid
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_MID;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_MID;
+const uint32_t NOC_COORDINATE_MASK = 0xFFFFFFFF;
 
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];

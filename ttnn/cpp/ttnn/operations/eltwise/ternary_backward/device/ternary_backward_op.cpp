@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_op.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/unpad/unpad_op.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
+
+#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace ttnn::operations::ternary_backward {
-
-namespace utils {
-
 
 std::vector<Tensor> _addcmul_bw(
     const Tensor& grad,
@@ -27,9 +27,9 @@ std::vector<Tensor> _addcmul_bw(
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor grad_a = mul_unary(ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, output_mem_config);
+    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = mul_unary(ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -45,19 +45,19 @@ std::vector<Tensor> _addcdiv_bw(
     grad_tensor.emplace_back(grad);
     Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(mul_unary(grad, value, output_mem_config), recip(tensor2, output_mem_config));
+    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, output_mem_config), recip(tensor2, output_mem_config));
     grad_tensor.emplace_back(where(
         eqz(tensor2, output_mem_config),
         where(eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
         grad_a,
         output_mem_config));
     Tensor tmp = ttnn::multiply(
-        mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
+        ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config), tensor1, std::nullopt, output_mem_config);
     Tensor grad_b =
-        ttnn::multiply(tmp, recip(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(tmp, ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(where(
         eqz(tensor2, output_mem_config),
-        where(eqz(grad, output_mem_config), t_nan, neg(t_inf, output_mem_config), output_mem_config),
+        where(eqz(grad, output_mem_config), t_nan, ttnn::neg(t_inf, output_mem_config), output_mem_config),
         grad_b,
         output_mem_config));
     return grad_tensor;
@@ -118,14 +118,24 @@ std::vector<Tensor> _lerp_overload(
     const Tensor& weight,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result_1 = ttnn::multiply(grad, sub_unary(1.0, weight, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result_1 = ttnn::multiply(grad, ttnn::subtract(ttnn::operations::creation::full_like(weight, 1.0), weight, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);
     return grad_tensor;
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type(TernaryBackwardOpType OpType){
+std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> TernaryBackwardFunction::get_function_type0(TernaryBackwardOpType OpType){
+    switch (OpType) {
+        case TernaryBackwardOpType::LERP_BW:
+            return _lerp_overload;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
+std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> TernaryBackwardFunction::get_function_type(TernaryBackwardOpType OpType){
     switch (OpType) {
         case TernaryBackwardOpType::ADDCMUL_BW:
             return _addcmul_bw;
@@ -137,7 +147,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt(TernaryBackwardOpType OpType){
+std::function<std::vector<std::optional<Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> TernaryBackwardFunction::get_function_type_opt(TernaryBackwardOpType OpType){
     switch (OpType) {
         case TernaryBackwardOpType::WHERE_BW:
             return _where_bw;
@@ -147,7 +157,7 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt_wo_qid(TernaryBackwardOpType OpType){
+std::function<std::vector<std::optional<Tensor>>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> TernaryBackwardFunction::get_function_type_opt_wo_qid(TernaryBackwardOpType OpType){
     switch (OpType) {
         case TernaryBackwardOpType::WHERE_BW:
             return _where_bw_overload;
@@ -156,8 +166,5 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
             return 0;
     }
 }
-
-}
-
 
 }  // namespace ttnn::operations::ternary

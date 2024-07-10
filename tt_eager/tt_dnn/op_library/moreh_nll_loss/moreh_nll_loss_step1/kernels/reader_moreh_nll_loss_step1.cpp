@@ -53,40 +53,24 @@ void kernel_main() {
     const auto u16_zero = uint16_t(zero.u >> 16);
 
 #if defined(WEIGHT)
-    cb_reserve_back(cb_weight, weight_num_tile);
-    uint32_t l1_write_addr_weight = get_write_ptr(cb_weight);
-    volatile tt_l1_ptr uint16_t* weight_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_weight);
+    // weight: (1, C)
+    read_line(cb_weight, addrg_weight, weight_num_tile);
 
-    for (uint32_t i = 0; i < weight_num_tile * 2; ++i) {
-        uint32_t noc_id = i / 2;
-        uint32_t noc_offset = 0;
-        if (noc_id * 2 != i) {
-            noc_offset += 256 * element_size;
-        }
-        uint64_t src_noc_addr = get_noc_addr(noc_id, addrg_weight, noc_offset);
-        noc_async_read(src_noc_addr, l1_write_addr_weight, NOC_MINIMUM_READ_SIZE);
-        noc_async_read_barrier();
-        l1_write_addr_weight += NOC_MINIMUM_READ_SIZE;
-    }
+    cb_wait_front(cb_weight, weight_num_tile);
+    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
 #endif
 
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         // target: (N, d1, d2, .. dk)
-        cb_reserve_back(cb_target, onetile);
-        uint32_t l1_write_addr_target = get_write_ptr(cb_target);
-        volatile tt_l1_ptr int32_t* target_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(l1_write_addr_target);
         uint32_t target_noc_id = i;
-        uint64_t target_noc_addr = get_noc_addr(target_noc_id, addrg_target);
-        noc_async_read(target_noc_addr, l1_write_addr_target, target_tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_target, onetile);
+        read_tile(cb_target, addrg_target, target_noc_id);
 
         cb_reserve_back(cb_output, onetile);
+        cb_wait_front(cb_target, onetile);
 
-        uint32_t l1_write_addr_output = get_write_ptr(cb_output);
-        volatile tt_l1_ptr uint16_t* output_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_output);
+        auto output_l1_ptr = get_write_ptr<uint16_t>(cb_output);
+        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {

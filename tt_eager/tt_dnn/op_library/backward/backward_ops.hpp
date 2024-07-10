@@ -21,12 +21,6 @@ std::vector<Tensor> unary_mul_bw(
     float scalar,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_add_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<std::optional<Tensor>> unary_pow_bw(
     uint8_t cq_id,
     const Tensor& grad,
@@ -73,11 +67,6 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<Tensor> unary_assign_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> unary_div_bw(
     const Tensor& grad,
@@ -174,19 +163,6 @@ std::vector<Tensor> gt_bw(
 
 std::vector<Tensor> ne_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> clamp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float min,
-    float max,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> clamp_min_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float min,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> clamp_max_bw(
     const Tensor& grad,
@@ -448,12 +424,6 @@ std::vector<Tensor> threshold_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_eq_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> logit_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -553,11 +523,6 @@ std::vector<Tensor> complex_sub_bw(
     const Tensor& input,
     const Tensor& other,
     float alpha = 1.0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> multigammaln_bw(
-    const Tensor& grad,
-    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> repeat_bw(

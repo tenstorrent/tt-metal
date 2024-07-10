@@ -166,6 +166,13 @@ Pointwise Unary
    ttnn/triu
    ttnn/tanhshrink
    ttnn/threshold
+   ttnn/mul_bw
+   ttnn/clamp_min_bw
+   ttnn/clamp_bw
+   ttnn/assign_bw
+   ttnn/multigammaln_bw
+   ttnn/add_bw
+   ttnn/eq_bw
 
 Pointwise Binary
 ================
@@ -213,9 +220,6 @@ Pointwise Binary
    ttnn/logaddexp_bw
    ttnn/logaddexp2_bw
    ttnn/squared_difference_bw
-   ttnn/add_bw
-   ttnn/binary_eq_bw
-   ttnn/binary_assign_bw
    ttnn/concat_bw
    ttnn/binary_le_bw
    ttnn/rsub_bw
@@ -228,7 +232,6 @@ Pointwise Binary
    ttnn/max_bw
    ttnn/div_bw
    ttnn/lerp_bw
-   ttnn/mul_bw
 
 Pointwise Ternary
 =================

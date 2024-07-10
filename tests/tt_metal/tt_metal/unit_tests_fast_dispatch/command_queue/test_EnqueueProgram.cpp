@@ -86,9 +86,6 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
     }
 
     return pass;
-
-
-
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
@@ -343,6 +340,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     vector<uint32_t> dummy_cr0_args;
     vector<uint32_t> dummy_cr1_args;
+    vector<uint32_t> dummy_common_args;
     bool terminate = false;
 
     auto it = program_config.cr_set.ranges().begin();
@@ -350,22 +348,37 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     std::advance(it, 1);
     CoreRange core_range_1 = *it;
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    uint32_t idx = 0;
+    constexpr uint32_t num_common_runtime_args = 13;
+    for (uint32_t iter = 0; iter < num_iterations; iter++) {
         dummy_cr0_args.clear();
         dummy_cr1_args.clear();
-        uint32_t idx;
-        for (idx = 0; idx < num_runtime_args_for_cr0; idx++) {
-            dummy_cr0_args.push_back(idx * (i + 1));
+        dummy_common_args.clear();
+
+        for (uint32_t i = 0; i < num_runtime_args_for_cr0; i++) {
+            dummy_cr0_args.push_back(idx++);
         }
 
-        for (; idx < num_runtime_args_for_cr0 + num_runtime_args_for_cr1; idx++) {
-            dummy_cr1_args.push_back(idx * (i + 1));
+        for (uint32_t i = 0; i < num_runtime_args_for_cr1; i++) {
+            dummy_cr1_args.push_back(idx++);
+        }
+
+        for (uint32_t i = 0; i < num_common_runtime_args; i++) {
+            dummy_common_args.push_back(idx++);
         }
 
         CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
 
+        terminate = false;
+        bool first = true;
         do {
             auto [core_coord, terminate_] = core_range_generator_0();
+
+            // Don't set RTAs on all cores
+            if (first) {
+                first = false;
+                continue;
+            }
 
             SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr0_args);
             SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr0_args);
@@ -377,8 +390,15 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
 
         terminate = false;
+        first = true;
         do {
             auto [core_coord, terminate_] = core_range_generator_1();
+
+            // Don't set RTAs on all cores
+            if (first) {
+                first = false;
+                continue;
+            }
 
             SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr1_args);
             SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr1_args);
@@ -387,80 +407,102 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             terminate = terminate_;
         } while (not terminate);
 
-        tt::tt_metal::detail::CompileProgram(device, program);
+        // These aren't validated yet...
+        if (iter == 0) {
+            SetCommonRuntimeArgs(program, dummy_kernel0, dummy_common_args);
+            SetCommonRuntimeArgs(program, dummy_kernel1, dummy_common_args);
+            SetCommonRuntimeArgs(program, dummy_compute_kernel, dummy_common_args);
+        }
+
         EnqueueProgram(cq, program, false);
+        Finish(cq);
+
+        terminate = false;
+        {
+            CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
+            CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
+            bool first = true;
+            do {
+                auto [core_coord, terminate_] = core_range_generator_0();
+
+                // Don't test RTAs on first cores
+                if (first) {
+                    first = false;
+                    continue;
+                }
+
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
+
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr0_args == dummy_compute_args_readback);
+
+                terminate = terminate_;
+            } while (not terminate);
+
+            terminate = false;
+            first = true;
+            do {
+                auto [core_coord, terminate_] = core_range_generator_1();
+
+                // Don't test RTAs on first cores
+                if (first) {
+                    first = false;
+                    continue;
+                }
+
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
+
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr1_args == dummy_compute_args_readback);
+
+                terminate = terminate_;
+            } while (not terminate);
+        }
     }
-    Finish(cq);
-
-    terminate = false;
-    CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
-    CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
-    do {
-        auto [core_coord, terminate_] = core_range_generator_0();
-
-        vector<uint32_t> dummy_kernel0_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm0,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_kernel0_args_readback);
-        pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
-
-        vector<uint32_t> dummy_kernel1_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm1,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_kernel1_args_readback);
-        pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
-
-        vector<uint32_t> dummy_compute_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_compute,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_compute_args_readback);
-        pass &= (dummy_cr0_args == dummy_compute_args_readback);
-
-        terminate = terminate_;
-    } while (not terminate);
-
-    terminate = false;
-    do {
-        auto [core_coord, terminate_] = core_range_generator_1();
-
-        vector<uint32_t> dummy_kernel0_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm0,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_kernel0_args_readback);
-        pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
-
-        vector<uint32_t> dummy_kernel1_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm1,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_kernel1_args_readback);
-        pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
-
-        vector<uint32_t> dummy_compute_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_compute,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_compute_args_readback);
-        pass &= (dummy_cr1_args == dummy_compute_args_readback);
-
-        terminate = terminate_;
-    } while (not terminate);
 
     return pass;
 }
@@ -527,15 +569,18 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     CoreRangeSet cr_set = program_config.cr_set;
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
-    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, 0};
+    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, 0, 0};
 
     KernelHandle kernel_id = 0;
     uint32_t unique_args_addr = 0;
+    uint32_t common_args_addr = 0;
 
     switch (riscv) {
         case tt::RISCV::BRISC:
             unique_args_addr = L1_UNRESERVED_BASE;
+            common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -548,7 +593,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::NCRISC:
             unique_args_addr = L1_UNRESERVED_BASE + 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -561,7 +608,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::COMPUTE:
             unique_args_addr = L1_UNRESERVED_BASE + 2 * 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
@@ -572,7 +621,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::ERISC:
             unique_args_addr = idle_eth ? ERISC_L1_UNRESERVED_BASE: eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+            common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -606,8 +657,6 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     EnqueueProgram(device->command_queue(), program, false);
     Finish(device->command_queue());
 
-    // Verify Unique/Common Args. Incr values match kernel used.
-    auto common_args_addr = unique_args_addr + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (auto &core_range : kernel->logical_coreranges()) {
@@ -627,12 +676,11 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
 // Optionally force the max size for one of the vectors.
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool force_max_size = false, uint32_t unique_base = 0, uint32_t common_base = 100){
 
-    constexpr uint32_t MAX_RUNTIME_ARGS = 255;
+    constexpr uint32_t MAX_RUNTIME_ARGS = 256;
 
     // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via padding
-    uint32_t num_rt_args_unique = num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
-    uint32_t num_rt_args_unique_padded = align(num_rt_args_unique, L1_ALIGNMENT / sizeof(uint32_t));
-    uint32_t num_rt_args_common = num_rt_args_unique_padded < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique_padded + 1) : 0;
+    uint32_t num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
+    uint32_t num_rt_args_common = num_rt_args_unique < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique + 1) : 0;
 
     if (force_max_size) {
         if (rand() % 2) {
@@ -998,7 +1046,22 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 12, 1));
+            device, device->command_queue(), dummy_program_config, 12, 9, 2));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCoreRange) {
+    // Core ranges get merged in kernel groups, this one does not
+    for (Device* device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+
+        CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
+        CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr0, cr1});
+
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 12, 2));
     }
 }
 
@@ -1007,12 +1070,12 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
-        CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set({cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 12, 2));
+            device, device->command_queue(), dummy_program_config, 9, 31, 10));
     }
 }
 
@@ -1120,6 +1183,10 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
         bool USE_MAX_RT_ARGS;
+
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+        }
 
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
@@ -1265,8 +1332,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         auto rng = std::default_random_engine {};
         std::shuffle(std::begin(programs), std::end(programs), rng);
-        if (i % 10 == 0) {
-            log_debug(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
+        if (i % 50 == 0) {
+            log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
         }
         for (Program& program: programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);

@@ -140,20 +140,45 @@ def all_devices(request, device_params):
 
 @pytest.fixture(scope="function")
 def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    """
+    Pytest fixture to set up a device mesh for tests.
+
+    If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+    If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (4, 8) creates
+    a devish mesh grid of 4 rows and 8 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+    Args:
+        request: Pytest request object.
+        silicon_arch_name: Name of the silicon architecture.
+        silicon_arch_wormhole_b0: Silicon architecture parameter.
+        device_params: Additional device configuration parameters.
+
+    Yields:
+        device_mesh: Initialized device mesh object.
+    """
     import ttnn
     import tt_lib as ttl
 
     device_ids = ttnn.get_device_ids()
+
     try:
-        num_devices_requested = min(request.param, len(device_ids))
+        param = request.param
     except (ValueError, AttributeError):
-        num_devices_requested = len(device_ids)
+        param = len(device_ids)  # Default to using all available devices
+
+    if isinstance(param, tuple):
+        grid_dims = param
+        assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
+        device_grid = ttnn.DeviceGrid(*grid_dims)
+        num_devices_requested = grid_dims[0] * grid_dims[1]
+        assert num_devices_requested <= len(device_ids), "Requested more devices than available."
+    else:
+        num_devices_requested = min(param, len(device_ids))
+        device_grid = ttnn.DeviceGrid(1, num_devices_requested)
 
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested], **device_params
-    )
+    device_mesh = ttnn.open_device_mesh(device_grid, device_ids[:num_devices_requested], **device_params)
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh

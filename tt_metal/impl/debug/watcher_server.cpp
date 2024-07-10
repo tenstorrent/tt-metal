@@ -294,7 +294,7 @@ static string get_noc_target_str(Device *device, CoreCoord &core, int noc, const
             "{} core w/ physical coords {} {}", type_and_mem.first, target_phys_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR_OFFSET(san->noc_addr), san->len);
+    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR(san->noc_addr), san->len);
     return out;
 }
 
@@ -488,40 +488,32 @@ static void dump_run_mailboxes(
 
     fprintf(f, "|");
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0] == 1) {
+    if (launch_msg->enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
+                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+        log_running_kernels(launch_msg);
+        TT_THROW(
+            "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
+            core.str(),
+            launch_msg->enables);
+    }
+
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
         fprintf(f, "B");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0] == 0) {
+    } else {
         fprintf(f, "b");
-    } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected brisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0]);
     }
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1] == 1) {
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         fprintf(f, "N");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1] == 0) {
-        fprintf(f, "n");
     } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1]);
+        fprintf(f, "n");
     }
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE] == 1) {
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         fprintf(f, "T");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE] == 0) {
-        fprintf(f, "t");
     } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected trisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE]);
+        fprintf(f, "t");
     }
 
     fprintf(f, " ");
