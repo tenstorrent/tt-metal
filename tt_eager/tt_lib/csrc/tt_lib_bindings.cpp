@@ -354,7 +354,7 @@ void bind_deprecated(py::module m) {
     tt::operations::py_module(m_operations);
 
 #if defined(TRACY_ENABLE)
-    py::function tracy_decorator = py::module::import("tt_eager.tt_lib_profiler_wrapper").attr("callable_decorator");
+    py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
 
     tracy_decorator(m_device);
     tracy_decorator(m_tensor);

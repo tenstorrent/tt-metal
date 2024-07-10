@@ -27,13 +27,13 @@ from tt_metal.tools.profiler.common import (
     TRACY_CSVEXPROT_TOOL,
 )
 
-import tracy_state
+import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 
 
 def signpost(header, message=None):
-    from tracy_tt_lib import tracy_message
+    from tracy_ttnn import tracy_message
 
     if message:
         tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
@@ -45,7 +45,7 @@ def signpost(header, message=None):
 
 class Profiler:
     def __init__(self):
-        from tracy_tt_lib import tracy_marker_func, tracy_marker_line, finish_all_zones
+        from tracy_ttnn import tracy_marker_func, tracy_marker_line, finish_all_zones
 
         self.doProfile = tracy_state.doPartial and sys.gettrace() is None and sys.getprofile() is None
         self.doLine = tracy_state.doLine
@@ -69,7 +69,7 @@ class Profiler:
 
 
 def runctx(cmd, globals, locals, partialProfile):
-    from tracy_tt_lib import tracy_marker_func, finish_all_zones
+    from tracy.tracy_ttnn import tracy_marker_func, finish_all_zones
 
     if not partialProfile:
         sys.setprofile(tracy_marker_func)
@@ -188,7 +188,7 @@ def split_comma_list(option, opt, value, parser):
 def main():
     from optparse import OptionParser
 
-    usage = "python -m tracy.py [-m module | scriptfile] [arg] ..."
+    usage = "python -m tracy [-m module | scriptfile] [arg] ..."
     parser = OptionParser(usage=usage)
     parser.allow_interspersed_args = False
     parser.add_option("-m", dest="module", action="store_true", help="Profile a library module.", default=False)

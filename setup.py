@@ -172,7 +172,7 @@ class CMakeBuild(build_ext):
 # Include tt_metal_C for kernels and src/ and tools
 # And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside
 # tt_dnn
-packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn", "ttnn.cpp"]
+packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn", "ttnn.cpp", "tracy"]
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -191,6 +191,7 @@ setup(
     packages=packages,
     package_dir={
         "": "ttnn",  # only this is relevant in case of editable install mode
+        "tracy": "ttnn/tracy",
         "tt_metal": "tt_metal",  # kernels depend on headers here
         "tt_eager.tt_dnn": "tt_eager/tt_dnn",  # we need to pickup kernels
         "ttnn.cpp": "ttnn/cpp",  # we need to pickup kernels
