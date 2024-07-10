@@ -278,6 +278,11 @@ void py_module(py::module& module) {
         ttnn::softshrink_bw,
         R"doc(Performs backward operations for softshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::leaky_relu_bw,
+        R"doc(Performs backward operations for leaky relu on :attr:`input_tensor`, :attr:`negative_slope` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
