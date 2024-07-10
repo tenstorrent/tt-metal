@@ -292,6 +292,11 @@ void py_module(py::module& module) {
         module,
         ttnn::celu_bw,
         R"doc(Performs backward operations for celu on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::rpow_bw,
+        R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward

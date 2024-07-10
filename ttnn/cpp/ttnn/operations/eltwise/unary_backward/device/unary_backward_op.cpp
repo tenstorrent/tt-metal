@@ -338,6 +338,24 @@ std::vector<Tensor> _celu_bw(
 }
 
 
+std::vector<Tensor> _rpow_bw(
+    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float t_nan = std::nanf("");
+    Tensor grad_result = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    if (exponent != 0.0) {
+        grad_result =
+            ttnn::multiply(grad,
+                ttnn::multiply(pow(input, exponent - 1, output_mem_config), exponent, std::nullopt, output_mem_config),
+                std::nullopt,
+                output_mem_config);
+        grad_result = where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
+    }
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -396,6 +414,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _elu_bw;
         case UnaryBackwardOpType::CELU_BW:
             return _celu_bw;
+        case UnaryBackwardOpType::RPOW_BW:
+            return _rpow_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
