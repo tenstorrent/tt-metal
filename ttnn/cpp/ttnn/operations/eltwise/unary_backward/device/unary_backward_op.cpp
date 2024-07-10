@@ -135,6 +135,14 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
+
+std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -149,6 +157,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _trunc_bw;
         case UnaryBackwardOpType::LOG_SIGMOID_BW:
             return _log_sigmoid_bw;
+        case UnaryBackwardOpType::FILL_ZERO_BW:
+            return _fill_zero_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
