@@ -808,6 +808,8 @@ FORCE_INLINE void generate_mask_tiles(
 }
 
 uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+    h = h % TILE_HEIGHT;
+    w = w % TILE_WIDTH;
     uint32_t idx = 0;
     if (w >= FACE_WIDTH) {
         w -= FACE_WIDTH;
@@ -880,6 +882,24 @@ void read_tile(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t size = 0, ui
     auto l1_write_addr = get_write_ptr(cb_id);
     auto noc_addr = get_noc_addr(noc_id, addrgen, offset);
     noc_async_read(noc_addr, l1_write_addr, size);
+
+    noc_async_read_barrier();
+
+    if (do_push_back) cb_push_back(cb_id, onetile);
+}
+
+template<typename T>
+void read_value(uint32_t cb_id, T addrgen, uint32_t noc_id, uint32_t tilized_idx = 0, bool do_reserve = true, bool do_push_back = true) {
+
+    constexpr uint32_t onetile = 1;
+
+    if (do_reserve) cb_reserve_back(cb_id, onetile);
+
+    uint32_t size = get_tile_size(cb_id) / 1024;
+
+    auto l1_write_addr = get_write_ptr(cb_id);
+    auto noc_addr = get_noc_addr(noc_id, addrgen);
+    noc_async_read(noc_addr + tilized_idx * size, l1_write_addr + tilized_idx * size, size);
     noc_async_read_barrier();
 
     if (do_push_back) cb_push_back(cb_id, onetile);
