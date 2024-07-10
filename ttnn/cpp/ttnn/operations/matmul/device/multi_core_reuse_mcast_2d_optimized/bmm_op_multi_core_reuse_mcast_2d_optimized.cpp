@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-
+    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -463,6 +463,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -794,9 +796,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
-    const auto& in0_sender_interleaved_cores = grid_to_cores(
-        in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
+    const auto& in0_sender_interleaved_cores =
+        grid_to_cores(in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
     const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;

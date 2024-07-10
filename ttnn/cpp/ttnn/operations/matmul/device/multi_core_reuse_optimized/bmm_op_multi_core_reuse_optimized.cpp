@@ -41,7 +41,6 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out
-
 ) {
     tt_metal::Program program{};
 
@@ -212,6 +211,8 @@ operation::ProgramWithCallbacks create_program(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
