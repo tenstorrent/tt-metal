@@ -212,14 +212,14 @@ def run_test_sdpa_decode(
     while start_idx < s:
         scale = d**-0.5
 
-        k_chunk_size = get_chunk_size(start_idx)
+        k_chunk_size = get_chunk_size(start_idx + 1)
         program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
         )
 
-        padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+        padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
         # Test various sequence lengths
         logger.info(f"Testing with sequence length: {start_idx}")
@@ -229,7 +229,7 @@ def run_test_sdpa_decode(
 
         attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
         # Assume all users are at same position
-        attn_mask[:, :, :, start_idx:] = torch.finfo(torch.float32).min
+        attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
         Q = torch.randn(1, b, padded_num_heads, d)
 
@@ -241,18 +241,13 @@ def run_test_sdpa_decode(
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
 
-        tt_attn_mask = ttnn.as_tensor(
-            attn_mask, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
-        )
-
         tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
             tt_V,
-            tt_attn_mask,
+            [start_idx for _ in range(b)],
             scale=scale,
             program_config=program_config,
-            valid_seq_len=padded_layer_len,
             compute_kernel_config=compute_kernel_config,
             output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
         )
@@ -336,14 +331,14 @@ def run_test_sdpa_decode_single_iter(
     start_idx = s // 2
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(start_idx)
+    k_chunk_size = get_chunk_size(start_idx + 1)
     program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
     )
 
-    padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+    padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
     # Test various sequence lengths
     logger.debug(f"Testing with sequence length: {start_idx}")
@@ -353,7 +348,7 @@ def run_test_sdpa_decode_single_iter(
 
     attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
     # Assume all users are at same position
-    attn_mask[:, :, :, start_idx:] = torch.finfo(torch.float32).min
+    attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = torch.randn(1, b, padded_num_heads, d)
 
@@ -365,18 +360,13 @@ def run_test_sdpa_decode_single_iter(
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
 
-    tt_attn_mask = ttnn.as_tensor(
-        attn_mask, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
-    )
-
     tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
-        tt_attn_mask,
+        [start_idx for _ in range(b)],
         scale=scale,
         program_config=program_config,
-        valid_seq_len=padded_layer_len,
         compute_kernel_config=compute_kernel_config,
         output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
@@ -558,14 +548,14 @@ def run_test_sdpa_decode_ndpcc(
         for i in range(16):
             scale = d**-0.5
 
-            k_chunk_size = get_chunk_size(start_idx)
+            k_chunk_size = get_chunk_size(start_idx + 1)
             program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
                 compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
                 q_chunk_size=padded_num_heads,
                 k_chunk_size=k_chunk_size,
             )
 
-            padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+            padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
             # Test various sequence lengths
             logger.info(f"Testing with sequence length: {start_idx}")
@@ -575,7 +565,7 @@ def run_test_sdpa_decode_ndpcc(
 
             attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
             # Assume all users are at same position
-            attn_mask[:, :, :, start_idx:] = torch.finfo(torch.float32).min
+            attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
             # Q = torch.eye(padded_num_heads, d).expand(1, b, padded_num_heads, d)
             # Q = torch.ones(1, b, padded_num_heads, d) * 1
@@ -589,10 +579,6 @@ def run_test_sdpa_decode_ndpcc(
             )
             # print(f"Q memcfg: {tt_Q.memory_config()}")
 
-            tt_attn_mask = ttnn.as_tensor(
-                attn_mask, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
-            )
-
             # logger.info(f"Q shape: {Q.shape}")
             # logger.info(f"K shape: {K.shape}")
             # logger.info(f"V shape: {V.shape}")
@@ -602,10 +588,9 @@ def run_test_sdpa_decode_ndpcc(
                 tt_Q,
                 tt_K,
                 tt_V,
-                tt_attn_mask,
+                [start_idx for _ in range(b)],
                 scale=scale,
                 program_config=program_config,
-                valid_seq_len=padded_layer_len,
                 compute_kernel_config=compute_kernel_config,
                 output_mem_config=dram_memcfg,  # height_sharded_memcfg,
             )
