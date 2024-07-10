@@ -178,6 +178,7 @@ Pointwise Unary
    ttnn/frac_bw
    ttnn/trunc_bw
    ttnn/log_sigmoid_bw
+   ttnn/fill_zero_bw
 
 Pointwise Binary
 ================
