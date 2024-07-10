@@ -153,6 +153,8 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 }
 
 bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program& program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
+    TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
+
     bool are_all_semaphore_values_correct = true;
 
     for (uint32_t sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
@@ -168,6 +170,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
     for (const CoreRange& core_range : program_config.cr_set.ranges())
     {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
+        TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
         expected_semaphore_vals_idx++;
         for (const CoreCoord& core_coord : core_range)
         {
