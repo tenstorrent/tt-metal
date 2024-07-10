@@ -283,6 +283,10 @@ void py_module(py::module& module) {
         ttnn::leaky_relu_bw,
         R"doc(Performs backward operations for leaky relu on :attr:`input_tensor`, :attr:`negative_slope` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::elu_bw,
+        R"doc(Performs backward operations for elu on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward

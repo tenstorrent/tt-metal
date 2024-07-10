@@ -89,5 +89,6 @@ constexpr auto clamp_max_bw = ttnn::register_operation<operations::unary_backwar
 constexpr auto hardshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW>>("ttnn::hardshrink_bw");
 constexpr auto softshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SOFTSHRINK_BW>>("ttnn::softshrink_bw");
 constexpr auto leaky_relu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LEAKY_RELU_BW>>("ttnn::leaky_relu_bw");
+constexpr auto elu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ELU_BW>>("ttnn::elu_bw");
 
 }  // namespace ttnn

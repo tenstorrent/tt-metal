@@ -856,8 +856,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.erfinv_bw
 
-.. autofunction:: tt_lib.tensor.elu_bw
-
 .. autofunction:: tt_lib.tensor.hardtanh_bw
 
 .. autofunction:: tt_lib.tensor.angle_bw
