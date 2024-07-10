@@ -10,6 +10,7 @@ class TestStatus(Enum):
     FAIL_ASSERT_EXCEPTION = 1
     FAIL_CRASH_HANG = 2
     NOT_RUN = 3
+    FAIL_L1_OUT_OF_MEM = 4
 
 
 class VectorStatus(Enum):
