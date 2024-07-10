@@ -142,3 +142,28 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
         }
     }
 }
+
+TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
+    // Test functionality for the buffer destructor, which will call deallocate asynchronously
+    // We must ensure that the deallocate step, which can run after the buffer has been destroyed
+    // does not rely on stale buffer state, after the buffer has been destroyed on host
+    Device* device = this->device_;
+    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    MemoryConfig mem_cfg = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        .buffer_type = BufferType::DRAM,
+        .shard_spec = std::nullopt};
+
+    uint32_t buf_size_datums = 1024 * 1024;
+    uint32_t datum_size_bytes = 2;
+    ttnn::Shape shape = ttnn::Shape(Shape({1, 1, 1024, 1024}));
+    // Inside the loop, initialize a buffer with limited lifetime.
+    // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the buffer), destroy the buffer (which will asynchronously
+    // deallocate the buffer) in a loop
+    for (int loop = 0; loop < 100000; loop++) {
+        {
+            auto input_buffer_dummy = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+            device->synchronize();
+        }
+    }
+}
