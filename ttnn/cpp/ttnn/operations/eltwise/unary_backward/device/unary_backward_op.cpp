@@ -525,10 +525,6 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
     grad_result =
         where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
 
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-
 std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
@@ -572,6 +568,25 @@ std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+// Hardswish
+// result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
+std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(
+        ttnn::lt(input, tt::tt_metal::full_like(input, -3.0f), std::nullopt, output_mem_config),
+        0.0,
+        where(
+            ttnn::le(input, tt::tt_metal::full_like(input, 3.0f), std::nullopt, output_mem_config),
+            ttnn::multiply(grad,
+                ttnn::add(ttnn::multiply(input, 0.3333f, std::nullopt, output_mem_config), 0.5f, std::nullopt, output_mem_config),
+                std::nullopt,
+                output_mem_config),
+            grad),
+        output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -632,6 +647,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _selu_bw;
         case UnaryBackwardOpType::SQUARE_BW:
             return _square_bw;
+        case UnaryBackwardOpType::HARDSWISH_BW:
+            return _hardswish_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

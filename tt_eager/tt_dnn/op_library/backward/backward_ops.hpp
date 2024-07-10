@@ -140,11 +140,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> hardswish_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> softplus_bw(
     const Tensor& grad,
     const Tensor& input,

@@ -361,29 +361,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-// Hardswish
-// result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
-std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(
-        ttnn::lt(input, full_like(input, -3.0f), std::nullopt, output_mem_config),
-        0.0,
-        where(
-            ttnn::le(input, full_like(input, 3.0f), std::nullopt, output_mem_config),
-            ttnn::multiply(grad,
-                ttnn::add(ttnn::multiply(input, 0.3333f, std::nullopt, output_mem_config), 0.5f, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            grad),
-        output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardswish_bw)(grad, input, output_mem_config);
-}
-
 // Softplus
 std::vector<Tensor> _softplus_bw(
     const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {

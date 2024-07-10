@@ -208,6 +208,7 @@ Pointwise Unary
    ttnn/silu_bw
    ttnn/selu_bw
    ttnn/square_bw
+   ttnn/hardswish_bw
 
 Pointwise Binary
 ================

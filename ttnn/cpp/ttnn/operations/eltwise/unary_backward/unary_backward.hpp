@@ -107,5 +107,6 @@ constexpr auto abs_bw = ttnn::register_operation<operations::unary_backward::Exe
 constexpr auto silu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SILU_BW>>("ttnn::silu_bw");
 constexpr auto selu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SELU_BW>>("ttnn::selu_bw");
 constexpr auto square_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SQUARE_BW>>("ttnn::square_bw");
+constexpr auto hardswish_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW>>("ttnn::hardswish_bw");
 
 }  // namespace ttnn

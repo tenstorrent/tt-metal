@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -22,7 +22,7 @@ def test_bw_hardswish(input_shapes, device):
 
     pyt_y = torch.nn.functional.hardswish(in_data, inplace=False)
 
-    tt_output_tensor_on_device = tt_lib.tensor.hardswish_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.hardswish_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

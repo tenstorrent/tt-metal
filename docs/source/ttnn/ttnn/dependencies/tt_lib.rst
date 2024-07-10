@@ -824,8 +824,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.hardswish_bw
-
 .. autofunction:: tt_lib.tensor.softplus_bw
 
 .. autofunction:: tt_lib.tensor.polygamma_bw
