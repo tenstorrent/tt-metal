@@ -144,7 +144,6 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
-
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
