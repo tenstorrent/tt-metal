@@ -4,13 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
-<<<<<<< HEAD
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
-=======
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
->>>>>>> 6c017222cc... #10073: Update files
 
 
 @pytest.mark.parametrize(
@@ -21,24 +16,17 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_where(input_shapes, device):
-    condition_data = torch.zeros(input_shapes, dtype=torch.bool)
-    condition_data.view(-1)[::2] = True
-
-    condition_tensor = (
-        tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
+def test_bw_add(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -4, 4, device)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = ttnn.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
+    tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, other_tensor)
 
     in_data.retain_grad()
     other_data.retain_grad()
 
-    pyt_y = torch.where(condition_data, in_data, other_data)
+    pyt_y = torch.add(in_data, other_data)
 
     pyt_y.backward(gradient=grad_data)
 
@@ -56,18 +44,11 @@ def test_bw_where(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
-def test_bw_where_output(input_shapes, are_required_outputs, device):
-    condition_data = torch.zeros(input_shapes, dtype=torch.bool)
-    condition_data.view(-1)[::2] = True
-
-    condition_tensor = (
-        tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -4, 4, device)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -70, 90, device)
     input_grad = None
     other_grad = None
 
@@ -78,9 +59,8 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
 
     cq_id = 0
 
-    tt_output_tensor_on_device = ttnn.where_bw(
+    tt_output_tensor_on_device = ttnn.add_bw(
         grad_tensor,
-        condition_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
@@ -92,7 +72,7 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
     in_data.retain_grad()
     other_data.retain_grad()
 
-    pyt_y = torch.where(condition_data, in_data, other_data)
+    pyt_y = torch.add(in_data, other_data)
 
     pyt_y.backward(gradient=grad_data)
 
@@ -102,4 +82,31 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
     for i in range(len(are_required_outputs)):
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("alpha", [1.0, 0.5, 0.035])
+def test_bw_unary_add(input_shapes, alpha, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, alpha=alpha)
+
+    in_data.retain_grad()
+
+    pyt_y = torch.add(in_data, torch.tensor(alpha))
+
+    pyt_y.backward(gradient=grad_data)
+
+    golden_tensor = [in_data.grad]
+
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

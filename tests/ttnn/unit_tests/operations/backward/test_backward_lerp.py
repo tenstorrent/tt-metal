@@ -5,7 +5,11 @@
 import torch
 import pytest
 import ttnn
+<<<<<<< HEAD
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
+=======
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+>>>>>>> 6c017222cc... #10073: Update files
 
 
 @pytest.mark.parametrize(
