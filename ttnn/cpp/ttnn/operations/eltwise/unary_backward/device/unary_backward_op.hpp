@@ -21,7 +21,7 @@ enum class UnaryBackwardOpType {
     ADD_BW,
     EQ_BW,
     LGAMMA_BW,
-    UNARY_SUB_BW,
+    SUB_BW,
 };
 
 struct UnaryBackwardFunction{

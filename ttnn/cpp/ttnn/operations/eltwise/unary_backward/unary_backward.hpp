@@ -73,6 +73,6 @@ constexpr auto multigammaln_bw = ttnn::register_operation<operations::unary_back
 constexpr auto add_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ADD_BW>>("ttnn::add_bw");
 constexpr auto eq_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::EQ_BW>>("ttnn::eq_bw");
 constexpr auto lgamma_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LGAMMA_BW>>("ttnn::lgamma_bw");
-constexpr auto unary_sub_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::UNARY_SUB_BW>>("ttnn::unary_sub_bw");
+constexpr auto sub_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SUB_BW>>("ttnn::sub_bw");
 
 }  // namespace ttnn
