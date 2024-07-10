@@ -310,19 +310,6 @@ std::vector<Tensor> abs_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _abs_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _clamp_max_bw(
-    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor maxT = ttnn::le(input, max, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> clamp_max_bw(
-    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _clamp_max_bw)(grad, input, max, output_mem_config);
-}
-
 // bw(expm1) = grad * expm1(input) + 1
 std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
