@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -23,7 +23,7 @@ def test_bw_leaky_relu(input_shapes, negative_slope, device):
 
     pyt_y = torch.nn.functional.leaky_relu(in_data, negative_slope=negative_slope, inplace=False)
 
-    tt_output_tensor_on_device = tt_lib.tensor.leaky_relu_bw(grad_tensor, input_tensor, negative_slope)
+    tt_output_tensor_on_device = ttnn.leaky_relu_bw(grad_tensor, input_tensor, negative_slope)
 
     in_data.retain_grad()
 
