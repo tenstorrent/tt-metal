@@ -864,8 +864,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.sinh_bw
 
-.. autofunction:: tt_lib.tensor.celu_bw
-
 .. autofunction:: tt_lib.tensor.log10_bw
 
 .. autofunction:: tt_lib.tensor.log1p_bw

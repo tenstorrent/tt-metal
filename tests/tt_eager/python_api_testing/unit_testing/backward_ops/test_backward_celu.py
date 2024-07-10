@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -23,7 +23,7 @@ def test_bw_celu(input_shapes, device):
     alpha = 1
     pyt_y = torch.nn.functional.celu(in_data, alpha)
 
-    tt_output_tensor_on_device = tt_lib.tensor.celu_bw(grad_tensor, input_tensor, alpha)
+    tt_output_tensor_on_device = ttnn.celu_bw(grad_tensor, input_tensor, alpha)
 
     in_data.retain_grad()
 

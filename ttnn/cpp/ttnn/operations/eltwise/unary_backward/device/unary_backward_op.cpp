@@ -319,6 +319,25 @@ std::vector<Tensor> _elu_bw(
 }
 
 
+// Celu
+// result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
+std::vector<Tensor> _celu_bw(
+    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor div_result = ttnn::multiply(
+        input, recip(ttnn::operations::creation::full_like(input, alpha, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor exp_result = exp(div_result, output_mem_config);
+    Tensor grad_result = where(
+        ttnn::gt(input, ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+        grad,
+        ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
+        output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -373,6 +392,10 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _softshrink_bw;
         case UnaryBackwardOpType::LEAKY_RELU_BW:
             return _leaky_relu_bw;
+        case UnaryBackwardOpType::ELU_BW:
+            return _elu_bw;
+        case UnaryBackwardOpType::CELU_BW:
+            return _celu_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

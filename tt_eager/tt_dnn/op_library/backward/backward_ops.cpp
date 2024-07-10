@@ -795,29 +795,6 @@ std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _sinh_bw)(grad, input, output_mem_config);
 }
 
-// Celu
-// result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
-std::vector<Tensor> _celu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor div_result = ttnn::multiply(
-        input, ttnn::reciprocal(full_like(input, alpha, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    Tensor exp_result = ttnn::exp(div_result, false, output_mem_config);
-    Tensor grad_result = where(
-        ttnn::gt(input, zeros_like(input, output_mem_config), std::nullopt, output_mem_config),
-        grad,
-        ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
-        output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> celu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _celu_bw)(grad, input, alpha, output_mem_config);
-}
-
-
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
