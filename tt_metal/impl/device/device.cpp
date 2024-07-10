@@ -1207,7 +1207,7 @@ void Device::setup_tunnel_for_remote_devices() {
             tt_cxy_pair mux_d_location = dispatch_core_manager::get(num_hw_cqs).mux_d_core(device_id, channel, cq_id);
             settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, get_physical_core_coordinate(mux_d_location, dispatch_core_type));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_mux.cpp";
-            settings.semaphores = std::vector<uint32_t>((tunnel.size() - 1) * num_hw_cqs);
+            settings.semaphores = std::vector<uint32_t>(num_hw_cqs);
             settings.consumer_semaphore_id = 0;
             settings.cb_start_address = dispatch_constants::DISPATCH_BUFFER_BASE;
             settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
