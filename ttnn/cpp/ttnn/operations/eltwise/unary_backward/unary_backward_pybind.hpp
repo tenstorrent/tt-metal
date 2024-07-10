@@ -218,6 +218,11 @@ void py_module(py::module& module) {
         ttnn::trunc_bw,
         R"doc(Performs backward operations for truncation on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::log_sigmoid_bw,
+        R"doc(Performs backward operations for log sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

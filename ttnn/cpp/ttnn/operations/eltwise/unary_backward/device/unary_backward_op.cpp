@@ -116,6 +116,25 @@ std::vector<Tensor> _trunc_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// return: grad_output * (max_deriv - sign * (z / (1 + z)))
+// z = exp(-abs(input))
+std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor max_deriv = where(ttnn::ltz(input, output_mem_config), 1, 0, output_mem_config);
+    Tensor in_sign = where(ttnn::ltz(input, output_mem_config), 1, -1, output_mem_config);
+    Tensor in_abs = ttnn::abs(input, output_mem_config);
+    Tensor z = ttnn::exp(ttnn::neg(in_abs, output_mem_config), false, output_mem_config);
+
+    Tensor mul_z = ttnn::multiply(z, ttnn::reciprocal((ttnn::add(z, 1.0f, std::nullopt, output_mem_config)), output_mem_config), std::nullopt, output_mem_config);
+
+    Tensor mul_sign = ttnn::multiply(in_sign, mul_z, std::nullopt, output_mem_config);
+    Tensor sub_max = ttnn::subtract(max_deriv, mul_sign, std::nullopt, output_mem_config);
+
+    Tensor grad_result = ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -128,6 +147,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:
             return _trunc_bw;
+        case UnaryBackwardOpType::LOG_SIGMOID_BW:
+            return _log_sigmoid_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
