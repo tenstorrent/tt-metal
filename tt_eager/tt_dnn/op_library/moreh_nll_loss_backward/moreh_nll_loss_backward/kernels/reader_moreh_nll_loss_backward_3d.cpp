@@ -56,40 +56,21 @@ void kernel_main() {
         .page_size = weight_tile_bytes,
     };
 
-    cb_reserve_back(cb_weight, weight_num_tile);
-    uint32_t l1_write_addr_weight = get_write_ptr(cb_weight);
-    volatile tt_l1_ptr uint16_t* weight_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_weight);
+    // weight: (1, C)
+    read_line(cb_weight, addrg_weight, weight_num_tile);
 
-    for (uint32_t i = 0; i < weight_num_tile * 2; ++i) {
-        uint32_t noc_id = i / 2;
-        uint32_t noc_offset = 0;
-        if (noc_id * 2 != i) {
-            noc_offset += 256 * element_size;
-        }
-        uint64_t src_noc_addr = get_noc_addr(noc_id, addrg_weight, noc_offset);
-        noc_async_read(src_noc_addr, l1_write_addr_weight, NOC_MINIMUM_READ_SIZE);
-        noc_async_read_barrier();
-        l1_write_addr_weight += NOC_MINIMUM_READ_SIZE;
-    }
+    cb_wait_front(cb_weight, weight_num_tile);
+    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
 #endif
 
 #if defined(DIVISOR)
     const InterleavedAddrGenFast<divisor_is_dram> addrg_divisor = {
         .bank_base_address = divisor_addr, .page_size = divisor_tile_bytes, .data_format = divisor_data_format};
 
-    cb_reserve_back(cb_divisor, onetile);
-    uint32_t l1_write_addr_divisor = get_write_ptr(cb_divisor);
-    noc_async_read_tile(0, addrg_divisor, l1_write_addr_divisor);
-    noc_async_read_barrier();
-    cb_push_back(cb_divisor, onetile);
+    read_tile(cb_divisor, addrg_divisor, 0);
 #endif
 
-    cb_reserve_back(cb_output_grad, onetile);
-    uint32_t l1_write_addr_output_grad = get_write_ptr(cb_output_grad);
-    noc_async_read_tile(0, addrg_output_grad, l1_write_addr_output_grad);
-    noc_async_read_barrier();
-    cb_push_back(cb_output_grad, onetile);
-
+    read_tile(cb_output_grad, addrg_output_grad, 0);
 
     uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
@@ -102,25 +83,17 @@ void kernel_main() {
 
         // target: (N, W)
         // noc_id: nt * Wt + wt
-        cb_reserve_back(cb_target, onetile);
-        uint32_t l1_write_addr_target = get_write_ptr(cb_target);
-        volatile tt_l1_ptr uint32_t* target_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_target);
         uint32_t wt = inner;
         uint32_t Wt = num_inner_tile;
         uint32_t nt = n / TILE_HEIGHT;
         uint32_t target_noc_id = nt * Wt + wt;
-
-        uint64_t target_noc_addr = get_noc_addr(target_noc_id, addrg_target);
-        noc_async_read(target_noc_addr, l1_write_addr_target, target_tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_target, onetile);
+        read_tile(cb_target, addrg_target, target_noc_id);
 
         cb_reserve_back(cb_tmp_weight, onetile);
-        uint32_t l1_write_addr_tmp_weight = get_write_ptr(cb_tmp_weight);
+        cb_wait_front(cb_target, onetile);
 
-        volatile tt_l1_ptr FP32_DEST_ACC_FTYPE* tmp_weight_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr FP32_DEST_ACC_FTYPE*>(l1_write_addr_tmp_weight);
+        auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
+        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -144,7 +117,6 @@ void kernel_main() {
 
         cb_push_back(cb_tmp_weight, onetile);
 
-        cb_wait_front(cb_target, onetile);
         cb_pop_front(cb_target, onetile);
     }
 }
