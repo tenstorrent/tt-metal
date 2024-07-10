@@ -685,4 +685,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_multiply_and_apply_activation_,
         "pytorch_op": pytorch_ops.multiply_and_apply_activation,
     },
+    "pad": {
+        "tt_op": ttnn_ops.pad,
+        "pytorch_op": pytorch_ops.pad,
+    },
 }

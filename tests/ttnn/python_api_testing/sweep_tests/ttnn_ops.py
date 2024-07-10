@@ -3275,3 +3275,28 @@ def eltwise_multiply_and_apply_activation_(
     t2 = ttnn.multiply_(t0, t1, activations=activations, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
+
+
+def pad(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.pad(
+        t0,
+        ttnn.Shape(output_tensor_shape),
+        ttnn.Shape(input_tensor_start),
+        pad_value,
+        memory_config=output_mem_config,
+    )
+
+    return ttnn_tensor_to_torch(t1)
