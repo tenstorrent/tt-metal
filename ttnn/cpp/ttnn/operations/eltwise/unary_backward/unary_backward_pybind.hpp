@@ -272,6 +272,12 @@ void py_module(py::module& module) {
         module,
         ttnn::hardshrink_bw,
         R"doc(Performs backward operations for hardshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::softshrink_bw,
+        R"doc(Performs backward operations for softshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

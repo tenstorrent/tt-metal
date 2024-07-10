@@ -35,6 +35,7 @@ enum class UnaryBackwardOpType {
     LOGIT_BW,
     CLAMP_MAX_BW,
     HARDSHRINK_BW,
+    SOFTSHRINK_BW,
 };
 
 struct UnaryBackwardFunction{
