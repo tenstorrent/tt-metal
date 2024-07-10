@@ -66,6 +66,9 @@ Example:
                 }else if(operation.base_name()=="eq_bw"){
                     using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::EQ_BW>;
                     return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+                }else if(operation.base_name()=="sub_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::SUB_BW>;
+                    return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
                 }
                 return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
 
@@ -202,8 +205,8 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
-        ttnn::unary_sub_bw,
-        R"doc(Performs backward operations for subtraction on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        ttnn::sub_bw,
+        R"doc(Performs backward operations for subtraction on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
 }
 
