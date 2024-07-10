@@ -422,15 +422,34 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const Memor
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
 std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor add_sub = add1(
-        ttnn::multiply(sub_unary(1.0f, sigmoid(input, output_mem_config), output_mem_config),
+    Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = ttnn::add(
+        ttnn::multiply(ttnn::subtract(tt::tt_metal::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
             input,
             std::nullopt,
             output_mem_config),
+        1.0f,
+        std::nullopt,
         output_mem_config);
     Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
 
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+// Selu
+// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
+std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_lambd = ttnn::multiply(grad, 1.0507f, std::nullopt, output_mem_config);
+    Tensor grad_result = where(
+        ttnn::gtz(input, output_mem_config),
+        grad_lambd,
+        ttnn::multiply(ttnn::multiply(grad_lambd, 1.673260f, std::nullopt, output_mem_config),
+            ttnn::exp(input, false, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -477,6 +496,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _abs_bw;
         case UnaryBackwardOpType::SILU_BW:
             return _silu_bw;
+        case UnaryBackwardOpType::SELU_BW:
+            return _selu_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

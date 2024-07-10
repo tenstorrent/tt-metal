@@ -1001,27 +1001,6 @@ std::vector<Tensor> rpow_bw(
     return operation::decorate_as_composite(__func__, _rpow_bw)(grad, input, exponent, output_mem_config);
 }
 
-// Selu
-// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
-std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_lambd = ttnn::multiply(grad, 1.0507f, std::nullopt, output_mem_config);
-    Tensor grad_result = where(
-        ttnn::gtz(input, output_mem_config),
-        grad_lambd,
-        ttnn::multiply(ttnn::multiply(grad_lambd, 1.673260f, std::nullopt, output_mem_config),
-            ttnn::exp(input, false, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
-}
-
-
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;

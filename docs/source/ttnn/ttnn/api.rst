@@ -199,6 +199,7 @@ Pointwise Unary
    ttnn/relu6_bw
    ttnn/abs_bw
    ttnn/silu_bw
+   ttnn/selu_bw
 
 Pointwise Binary
 ================
