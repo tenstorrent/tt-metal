@@ -180,13 +180,31 @@ def operations(report_hash):
     operations = list(ttnn.database.query_operations(get_report_path()))
 
     try:
-        operation_history = pd.read_csv(report_path / ttnn.database.OPERATION_HISTORY_CSV, index_col=False)
+        with open(report_path / ttnn.database.OPERATION_HISTORY_JSON) as f:
+            operation_history = json.load(f)
     except FileNotFoundError:
-        logger.warning(f"Operation history file not found: {report_path / ttnn.database.OPERATION_HISTORY_CSV}")
+        logger.warning(f"Operation history file not found: {report_path / ttnn.database.OPERATION_HISTORY_JSON}")
 
     def load_underlying_operations(operation_id):
         try:
-            underlying_operations = operation_history[operation_history["ttnn_operation_id"] == operation_id]
+            underlying_operations = [
+                underlying_operation
+                for underlying_operation in operation_history
+                if underlying_operation["ttnn_operation_id"] == operation_id
+            ]
+
+            def convert_to_pandas_df(underlying_operations):
+                df = pd.DataFrame(columns=["operation_name", "operation_type", "program_cache_hit", "program_hash"])
+                for underlying_operion in underlying_operations:
+                    df.loc[len(df)] = [
+                        underlying_operion["operation_name"],
+                        underlying_operion["operation_type"],
+                        underlying_operion["program_cache_hit"],
+                        underlying_operion["program_hash"],
+                    ]
+                return df
+
+            underlying_operations = convert_to_pandas_df(underlying_operations)
 
             def normalize_program_cache_hit(value):
                 if value == "std::nullopt":
