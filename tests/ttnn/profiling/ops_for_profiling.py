@@ -1248,7 +1248,7 @@ def unpad(x):
         shape[3] - 33,
     ]
 
-    tt_lib.tensor.unpad(x, output_tensor_start=(0, 0, 0, 0), output_tensor_end=output_tensor_end)
+    ttnn.slice(x, output_tensor_start=(0, 0, 0, 0), output_tensor_end=output_tensor_end)
 
 
 def typecast(x):
@@ -1949,7 +1949,7 @@ all_unary_ops = [
     },
     {
         "op": unpad,
-        "name": "tt_lib.tensor.unpad",
+        "name": "ttnn.slice",
     },
     {
         "op": tt_lib.tensor.clone,

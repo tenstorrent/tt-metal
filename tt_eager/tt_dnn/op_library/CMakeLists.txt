@@ -26,7 +26,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/multi_core/eltwise_unary_op_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/unpad/multi_core/unpad_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/unpad/unpad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/indexed_fill_op.cpp

@@ -56,17 +56,6 @@ def _golden_function(
 ttnn.attach_golden_function(ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors, _golden_function)
 
 
-def _golden_function(tensor, starts, stops, *args, **kwargs):
-    import torch
-
-    for dim, (start, stop) in enumerate(zip(starts, stops)):
-        tensor = torch.index_select(tensor, dim, torch.arange(start, stop + 1))
-    return tensor
-
-
-ttnn.attach_golden_function(ttnn.experimental.tensor.unpad, _golden_function)
-
-
 def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **kwargs):
     tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
     slice_size = tensor.shape[-2] // num_slices

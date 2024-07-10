@@ -17,7 +17,7 @@ namespace py = pybind11;
 void bind_slice(py::module& module) {
     auto doc =
         R"doc(
-            slice(input_tensor: ttnn.Tensor, slice_start: ttnn.Shape, slice_end: ttnn.Shape,  value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+            slice(input_tensor: ttnn.Tensor, slice_start: List[int[tensor rank], slice_end: List[int[tensor rank],  value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
             Returns a sliced tensor.
 
@@ -29,8 +29,8 @@ void bind_slice(py::module& module) {
 
             Args:
                 * :attr:`input_tensor`: Input Tensor.
-                * :attr:`slice_start`: Shape describing where to start slice.
-                * :attr:`slice_end`: Shape describing where to end slice.
+                * :attr:`slice_start`: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                * :attr:`slice_end`: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
@@ -45,8 +45,8 @@ void bind_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                const ttnn::Shape & slice_start,
-                const ttnn::Shape & slice_end,
+                const std::vector<uint32_t> & slice_start,
+                const std::vector<uint32_t> & slice_end,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 uint8_t queue_id) {
                     return self(queue_id, input_tensor, slice_start, slice_end, memory_config);

@@ -205,11 +205,11 @@ def test_time_sharded_attnention_hwb(
             fused_activation=None,
             mcast_in0=False,
         )
-        v_slice = ttl.tensor.unpad(
+        v_slice = ttnn.slice(
             reference_value_layer,
             (0, (i * heads_per_slice), 0, 0),
             (0, (i * heads_per_slice) + (heads_per_slice - 1), seq_len - 1, 63),
-            output_mem_config=dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         mm_slice = ttnn.matmul(
@@ -348,11 +348,11 @@ def test_time_sharded_attnention(
             mcast_in0=False,
         )
 
-        k_slice = ttl.tensor.unpad(
+        k_slice = ttnn.slice(
             reference_key_layer_transposed,
             (0, (i * heads_per_slice), 0, 0),
             (0, (i * heads_per_slice) + (heads_per_slice - 1), 63, seq_len - 1),
-            output_mem_config=l1_interleaved_memory_config,
+            memory_config=l1_interleaved_memory_config,
         )
         mm_slice = ttnn.matmul(
             slice,
@@ -385,11 +385,11 @@ def test_time_sharded_attnention(
             fused_activation=None,
             mcast_in0=False,
         )
-        v_slice = ttl.tensor.unpad(
+        v_slice = ttnn.slice(
             reference_value_layer,
             (0, (i * heads_per_slice), 0, 0),
             (0, (i * heads_per_slice) + (heads_per_slice - 1), seq_len - 1, 63),
-            output_mem_config=l1_interleaved_memory_config,
+            memory_config=l1_interleaved_memory_config,
         )
         mm_slice = ttnn.matmul(
             mm_slice,

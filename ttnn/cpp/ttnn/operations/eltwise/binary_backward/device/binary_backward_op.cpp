@@ -374,17 +374,17 @@ std::vector<Tensor> _assign_bw(
 std::vector<Tensor> _concat_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    const tt::tt_metal::Shape start_index = {0, 0, 0, 0};
-    const tt::tt_metal::Shape end_index = {
+    std::vector<uint32_t> start_index = {0, 0, 0, 0};
+    std::vector<uint32_t> end_index = {
         input.get_legacy_shape()[0] - 1,
         input.get_legacy_shape()[1] - 1,
         input.get_legacy_shape()[2] - 1,
         input.get_legacy_shape()[3] - 1};
 
-    Tensor grad_a = ttnn::slice(grad, start_index, end_index, std::nullopt);
+    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt);
     grad_tensor.emplace_back(grad_a);
 
-    tt::tt_metal::Shape start_index_2 = {0, 0, 0, 0};
+    std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
     if (dim == 0) {
         start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
     } else if (dim == 1) {
@@ -395,12 +395,12 @@ std::vector<Tensor> _concat_bw(
     } else if (dim == 3) {
         start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
     }
-    const tt::tt_metal::Shape end_index_2 = {
+    std::vector<uint32_t> end_index_2 = {
         grad.get_legacy_shape()[0] - 1,
         grad.get_legacy_shape()[1] - 1,
         grad.get_legacy_shape()[2] - 1,
         grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = ttnn::slice(grad, start_index_2, end_index_2, std::nullopt);
+    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;

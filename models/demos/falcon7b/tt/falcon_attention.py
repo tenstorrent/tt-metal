@@ -707,11 +707,11 @@ class TtFalconAttentionDecode(nn.Module):
             key_layer[i].deallocate(True)
         for i in range(self.num_devices):
             # key and value layers will have kv_seq_len padded to nearest 32
-            key_layer[i] = ttnn.experimental.tensor.unpad(
+            key_layer[i] = ttnn.slice(
                 layer_past[i][0],
                 [0, 0, 0, 0],
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
             )
 
         if self.model_config["l1_sharded"]:
@@ -871,11 +871,11 @@ class TtFalconAttentionDecode(nn.Module):
             # Update kv_cache in place
             ttnn.experimental.tensor.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
         for i in range(self.num_devices):
-            value_layer[i] = ttnn.experimental.tensor.unpad(
+            value_layer[i] = ttnn.slice(
                 layer_past[i][1],
                 [0, 0, 0, 0],
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
             )
         if self.model_config["l1_sharded"]:
             for i in range(self.num_devices):
@@ -936,7 +936,7 @@ class TtFalconAttentionDecode(nn.Module):
             # UNPAD
             attn_output_shape = attn_output[0].get_legacy_shape()
             for i in range(self.num_devices):
-                attn_output[i] = ttnn.experimental.tensor.unpad(
+                attn_output[i] = ttnn.slice(
                     attn_output[i],
                     [0, 0, 0, 0],
                     [
@@ -945,7 +945,7 @@ class TtFalconAttentionDecode(nn.Module):
                         attn_output_shape[2] - 1,
                         attn_output_shape[3] - 1,
                     ],
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 )
         else:
             for i in range(self.num_devices):
