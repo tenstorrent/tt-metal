@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "firmware_common.h"
 
+// #include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;

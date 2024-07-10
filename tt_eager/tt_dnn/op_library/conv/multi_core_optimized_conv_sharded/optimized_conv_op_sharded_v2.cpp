@@ -176,6 +176,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             if (output.is_sharded()) {
                 cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
             }
+            log_debug(LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", matmul_partials_cb, num_output_tiles, out_tile_size);
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
         } else {
             // Separate buffer if not same data format
@@ -472,7 +473,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
     assert(act_block_h_ntiles % out_subblock_h_ntiles == 0);
-    assert(out_block_h_ntiles % out_subblock_h_ntiles == 0);
+    // assert(out_block_h_ntiles % out_subblock_h_ntiles == 0);
     uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
     uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
@@ -615,10 +616,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
         assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
     }
-    assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
-    uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
-    assert(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
-    uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
+    // assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
+    // uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
+    uint32_t num_blocks_act_h_per_core = (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
+    // assert(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
+    // uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
+    uint32_t num_blocks_out_h_per_core = (per_core_out_matrix_height_ntiles + out_block_h_ntiles-1) / out_block_h_ntiles;
     bool act_height_sliced = per_core_out_matrix_height_ntiles < act_matrix_height_ntiles;
     if (not act_height_sliced) {
         assert(num_blocks_act_h_per_core == num_blocks_act_h);
@@ -745,12 +748,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
-    if (conv_act_size_c / conv_act_c_blocks < 160 &&
-        per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
-        num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
-    }
+    num_act_cb_tiles = num_act_cb_tiles * 2;
 
-    uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
+    // if (conv_act_size_c / conv_act_c_blocks < 160 &&
+    //     per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
+    //     num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
+    // }
+
+    uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
+    uint32_t writer_output_block_num_tiles = out_block_h_ntiles_padded * weight_block_w_ntiles;
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;

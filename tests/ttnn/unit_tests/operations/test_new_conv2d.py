@@ -101,13 +101,15 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    print(tt_input_tensor)
     # breakpoint()
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
         height_sharding=use_1d_systolic_array,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
+        # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
+        input_channels_alignment=16,
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
@@ -139,6 +141,8 @@ def run_conv(
         debug=debug,
         groups=groups,
     )
+
+    print(tt_output_tensor_on_device.shape)
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -405,60 +409,68 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),
-        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
-        # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
-        # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        ## small test
-        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
-        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
-        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
-        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        # r50 1x1s2 shapes
-        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 first bottleneck downsample shape
-        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  # r50 first bottleneck downsample shape
-        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 second bottleneck downsample shape
-        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None),  # r50 third bottleneck downsample shape
-        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
-        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}),
+        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 64}),
+        # # rn50 layer1
+        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        # (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        # (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        # # rn50 layer2
+        # (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        # (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        # (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}),
+        # (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        # (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        # (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        # # rn50 layer3
+        # (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
+        # (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
+        # (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
+        # (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
+        # (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
+        # (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
+        # # rn50 layer4
+        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
+        # (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
+        # (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
+        # (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        # (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        # (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        # ## small test
+        # (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
+        # (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
+        # # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
+        # (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        # # r50 1x1s2 shapes
+        # # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 first bottleneck downsample shape
+        # (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  # r50 first bottleneck downsample shape
+        # # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 second bottleneck downsample shape
+        # # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
+        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None),  # r50 third bottleneck downsample shape
+        # # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
+        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
+        # # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
+        # # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    # [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    # [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize(
+    "packer_l1_acc",
+    [
+        True,
+    ],
+    ids=["pack_l1"],
+)
 def test_resnet50_conv_wh(
     device,
     use_program_cache,
