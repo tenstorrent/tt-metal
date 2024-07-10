@@ -34,6 +34,15 @@ std::vector<Tensor> _clamp_min_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _clamp_max_bw(
+    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor maxT = lte_unary(input, max, output_mem_config);
+    Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -296,6 +305,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _mul_bw;
         case UnaryBackwardOpType::CLAMP_MIN_BW:
             return _clamp_min_bw;
+        case UnaryBackwardOpType::CLAMP_MAX_BW:
+            return _clamp_max_bw;
         case UnaryBackwardOpType::ADD_BW:
             return _add_bw;
         case UnaryBackwardOpType::EQ_BW:
