@@ -504,39 +504,6 @@ std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, cons
     return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor value = ttnn::multiply(
-        ttnn::multiply(ttnn::i0(input, output_mem_config), ttnn::reciprocal(input, output_mem_config), std::nullopt, output_mem_config),
-        0.5,
-        std::nullopt,
-        output_mem_config);
-    Tensor result = where(
-        ttnn::ltz(input, output_mem_config),
-        ttnn::multiply(grad,
-            ttnn::subtract(ttnn::neg(ttnn::i0(input, output_mem_config), output_mem_config), value, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        ttnn::multiply(grad,
-            ttnn::subtract(ttnn::i0(input, output_mem_config), value, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    result = where(
-        ttnn::ge(ttnn::abs(ttnn::i0(input, output_mem_config), output_mem_config), 3.4e+38, std::nullopt, output_mem_config),
-        t_inf,
-        result,
-        output_mem_config);
-    result =
-        where(ttnn::ge(ttnn::abs(result, output_mem_config), 3.4e+38, std::nullopt, output_mem_config), t_inf, result, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _i0_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

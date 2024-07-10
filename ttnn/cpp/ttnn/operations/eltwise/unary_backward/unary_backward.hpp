@@ -78,5 +78,6 @@ constexpr auto frac_bw = ttnn::register_operation<operations::unary_backward::Ex
 constexpr auto trunc_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::TRUNC_BW>>("ttnn::trunc_bw");
 constexpr auto log_sigmoid_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG_SIGMOID_BW>>("ttnn::log_sigmoid_bw");
 constexpr auto fill_zero_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FILL_ZERO_BW>>("ttnn::fill_zero_bw");
+constexpr auto i0_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::I0_BW>>("ttnn::i0_bw");
 
 }  // namespace ttnn

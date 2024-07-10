@@ -228,6 +228,12 @@ void py_module(py::module& module) {
         ttnn::fill_zero_bw,
         R"doc(Performs backward operations of fill zero on :attr:`input_tensor` with given :attr:`grad_tensor`. Returns an tensor of zeros like :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::i0_bw,
+        R"doc(Performs backward operations for i0 on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+
 }
 
 }  // namespace binary_backward
