@@ -285,7 +285,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
                 llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
             uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
             if (riscv_id == 1) {
-                launch_msg->ncrisc_kernel_size16 = kernel_size16;
+                launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
             }
             log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
             llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
@@ -301,7 +301,7 @@ void Device::reset_cores() {
     ZoneScoped;
 
     auto kernel_still_running = [](launch_msg_t *launch_msg) {
-        return launch_msg->run == RUN_MSG_GO && launch_msg->exit_erisc_kernel == 0;
+        return launch_msg->go.run == RUN_MSG_GO && launch_msg->kernel_config.exit_erisc_kernel == 0;
     };
 
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
@@ -320,8 +320,8 @@ void Device::reset_cores() {
                 this->id(),
                 physical_core.str(),
                 this->id());
-            launch_msg->exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg);
+            launch_msg->kernel_config.exit_erisc_kernel = 1;
+            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg, false);
             device_to_early_exit_cores[this->id()].insert(physical_core);
         }
     }
@@ -345,8 +345,8 @@ void Device::reset_cores() {
                         this->id(),
                         phys_core.str(),
                         id_and_cores.first);
-                    launch_msg->exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg);
+                    launch_msg->kernel_config.exit_erisc_kernel = 1;
+                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg, false);
                     device_to_early_exit_cores[id_and_cores.first].insert(phys_core);
                 }
             }
@@ -387,8 +387,8 @@ void Device::initialize_and_launch_firmware() {
 
     launch_msg_t launch_msg;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
-    launch_msg.mode = DISPATCH_MODE_HOST,
-    launch_msg.run = RUN_MSG_INIT,
+    launch_msg.kernel_config.mode = DISPATCH_MODE_HOST,
+    launch_msg.go.run = RUN_MSG_INIT,
 
     // Download to worker cores
     log_debug("Initializing firmware");
