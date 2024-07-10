@@ -109,6 +109,13 @@ std::vector<Tensor> _frac_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+std::vector<Tensor> _trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -119,6 +126,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _lgamma_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
+        case UnaryBackwardOpType::TRUNC_BW:
+            return _trunc_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
