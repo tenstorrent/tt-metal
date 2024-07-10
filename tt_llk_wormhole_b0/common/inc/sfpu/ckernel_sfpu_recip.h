@@ -24,7 +24,9 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
     vFloat val = setsgn(in, 1);
 
     val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    // Use 1.44 as first guess at x, ideal value would be 1.33, but we happen to have 1.44 available, so use that to avoid a load
+    // Use 1.44 as first guess at x, ideal value would be 1.33.
+    // Grayskull has hardwired 1.44 and uses it to avoid a load.
+    // We use it here for consistency.
     vFloat vConstLn2Recip = vConstFloatPrgm0;
     vFloat two = vConstFloatPrgm1;
     vFloat result = vConstLn2Recip * (val * vConstLn2Recip + two);
