@@ -1451,36 +1451,6 @@ std::vector<Tensor> logiteps_bw(
     return operation::decorate_as_composite(__func__, _logiteps_bw)(grad, input, eps, output_mem_config);
 }
 
-std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result =
-        ttnn::multiply(grad,
-            ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
-            std::nullopt,
-            output_mem_config);
-    Tensor status = ttnn::logical_and(
-        ttnn::ge(input, 0.0f, std::nullopt, output_mem_config),
-        ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_result = where(
-        ttnn::eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, std::nanf(""));
-    grad_result = where(
-        ttnn::logical_or(
-            ttnn::eq(input, 0.0, std::nullopt, output_mem_config),
-            ttnn::eq(input, 1.0, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
-        grad_result,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _logit_bw)(grad, input, output_mem_config);
-}
-
 // softsign
 // result = grad_data / torch.square(1 + torch.abs(input))
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

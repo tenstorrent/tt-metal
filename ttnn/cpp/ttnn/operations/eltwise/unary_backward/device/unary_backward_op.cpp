@@ -227,6 +227,33 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result =
+        ttnn::multiply(grad,
+            ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+            std::nullopt,
+            output_mem_config);
+    Tensor status = ttnn::logical_and(
+        ttnn::ge(input, 0.0f, std::nullopt, output_mem_config),
+        ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    grad_result = where(
+        ttnn::eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, std::nanf(""));
+    grad_result = where(
+        ttnn::logical_or(
+            ttnn::eq(input, 0.0, std::nullopt, output_mem_config),
+            ttnn::eq(input, 1.0, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
+        grad_result,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -255,6 +282,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _neg_bw;
         case UnaryBackwardOpType::RELU_BW:
             return _relu_bw;
+        case UnaryBackwardOpType::LOGIT_BW:
+            return _logit_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
