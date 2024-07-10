@@ -929,9 +929,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
         constexpr uint32_t aligned_go_signal_sizeB = align(go_signal_sizeB, L1_ALIGNMENT);
         constexpr uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
         for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
-            kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-            kernel_group.launch_msg.dispatch_core_x = this->dispatch_core.x;
-            kernel_group.launch_msg.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+            kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
+            kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
@@ -956,9 +956,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
 
         for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
-            kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-            kernel_group.launch_msg.dispatch_core_x = this->dispatch_core.x;
-            kernel_group.launch_msg.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+            kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
+            kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
@@ -1145,8 +1145,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
             i++;
         }
         for (auto& go_signal : cached_program_command_sequence.go_signals) {
-            go_signal->dispatch_core_x = this->dispatch_core.x;
-            go_signal->dispatch_core_y = this->dispatch_core.y;
+            go_signal->kernel_config.dispatch_core_x = this->dispatch_core.x;
+            go_signal->kernel_config.dispatch_core_y = this->dispatch_core.y;
         }
     }
 }

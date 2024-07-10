@@ -147,7 +147,7 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, bool send_go) {
 
     bool is_eth_core = is_ethernet_core(core, chip);
     bool is_active_eth_core = false;
@@ -163,18 +163,26 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
         assert(is_active_eth_core or is_inactive_eth_core);
     }
 
-    msg->mode = DISPATCH_MODE_HOST;
+    msg->kernel_config.mode = DISPATCH_MODE_HOST;
+    uint32_t launch_addr;
+    uint32_t go_addr;
     if (is_active_eth_core) {
-        tt::Cluster::instance().write_core(
-            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
+        launch_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.kernel_config);
+        go_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.go);
     } else {
         if (is_inactive_eth_core) {
-            tt::Cluster::instance().write_core(
-                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_IERISC_MAILBOX_ADDRESS_HOST(launch));
+            launch_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.kernel_config);
+            go_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go);
         } else {
-            tt::Cluster::instance().write_core(
-                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+            launch_addr = GET_MAILBOX_ADDRESS_HOST(launch.kernel_config);
+            go_addr = GET_MAILBOX_ADDRESS_HOST(launch.go);
         }
+    }
+
+    tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
+    tt_driver_atomics::sfence();
+    if (send_go) {
+        tt::Cluster::instance().write_core((void *)&msg->go, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
 }
 
@@ -313,15 +321,15 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         assert(is_active_eth_core or is_inactive_eth_core);
     }
 
-    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.run) :
-                              is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.run) : GET_MAILBOX_ADDRESS_HOST(launch.run);
+    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.go.run) :
+        is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go.run) : GET_MAILBOX_ADDRESS_HOST(launch.go.run);
 
     auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
         // read a single uint32_t even though launch.run is smaller than that
         run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, go.run) & 3));
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(
                 stderr,

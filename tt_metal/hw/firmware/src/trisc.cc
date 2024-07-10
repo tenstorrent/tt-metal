@@ -106,12 +106,14 @@ int main(int argc, char *argv[]) {
         DeviceZoneScopedMainN("TRISC-FW");
 
 #if !defined(UCK_CHLKC_MATH)
-        setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
+        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write);
 #endif
 
-        uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
-        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
+        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         DEBUG_STATUS("R");
         kernel_init();

@@ -76,7 +76,7 @@ struct dyn_mem_map_t {
     volatile uint16_t crta_offset;
 };
 
-struct launch_msg_t {  // must be cacheline aligned
+struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
@@ -91,7 +91,16 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint8_t dispatch_core_x;
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t run;  // must be in last cacheline of this msg
+    volatile uint8_t pad1;
+} __attribute__((packed));
+
+struct go_msg_t {
+    volatile uint32_t run;  // must be in last cacheline of this msg
+} __attribute__((packed));
+
+struct launch_msg_t {  // must be cacheline aligned
+    kernel_config_msg_t kernel_config;
+    go_msg_t go;
 } __attribute__((packed));
 
 struct slave_sync_msg_t {
@@ -194,7 +203,7 @@ struct mailboxes_t {
     struct debug_insert_delays_msg_t debug_insert_delays;
 };
 
-static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
+static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile

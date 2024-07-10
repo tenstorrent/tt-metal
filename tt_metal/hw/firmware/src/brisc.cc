@@ -273,7 +273,7 @@ inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
-    uint16_t fw_size16 = mailboxes->launch.ncrisc_kernel_size16;
+    uint16_t fw_size16 = mailboxes->launch.kernel_config.ncrisc_kernel_size16;
     ncrisc_kernel_start_offset16 = fw_size16;
 
     // Copies from L1 to IRAM on chips where NCRISC has IRAM
@@ -354,42 +354,44 @@ int main() {
     // Wait for ncrisc to halt
     wait_for_ncrisc_to_halt();
 
-    mailboxes->launch.run = RUN_MSG_DONE;
+    mailboxes->launch.go.run = RUN_MSG_DONE;
 
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
 
         DEBUG_STATUS("GW");
-        while (mailboxes->launch.run != RUN_MSG_GO);
+        while (mailboxes->launch.go.run != RUN_MSG_GO);
         DEBUG_STATUS("GD");
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
 
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
-            l1_to_ncrisc_iram_copy(mailboxes->launch.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);
+            l1_to_ncrisc_iram_copy(mailboxes->launch.kernel_config.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);
 
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)mailboxes->launch.enables;
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)mailboxes->launch.kernel_config.enables;
             run_triscs(enables);
 
-            noc_index = mailboxes->launch.brisc_noc_id;
+            noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
             finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
-            uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
-            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
+            uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
+            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
+            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
 
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
                 kernel_init();
             } else {
                 // This was not initialized in kernel_init
@@ -399,12 +401,13 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            mailboxes->launch.run = RUN_MSG_DONE;
+            mailboxes->launch.go.run = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
-            if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
+            if (mailboxes->launch.kernel_config.mode == DISPATCH_MODE_DEV) {
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
+                        NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
                 noc_fast_atomic_increment(
                     noc_index,

@@ -11,7 +11,7 @@
 // Helper function to determine if the dispatch kernel needs to early exit, only valid for IERISC.
 FORCE_INLINE bool early_exit() {
     tt_l1_ptr mailboxes_t * const mailbox = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
-    return mailbox->launch.exit_erisc_kernel;
+    return mailbox->launch.kernel_config.exit_erisc_kernel;
 }
 
 #define IDLE_ERISC_RETURN(...) \
