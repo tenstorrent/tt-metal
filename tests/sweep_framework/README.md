@@ -158,9 +158,10 @@ The test runner reads in test vectors from the test vector database and executes
 - Hang Detection / Timeout: Default timeout for one single test is 30 seconds. This can be overridden by setting a global `TIMEOUT` variable in the test file. Test processes are killed after this timeout and tt-smi is automatically run to reset the chip after a hang, before continuing the test suite.
 - Result Classification: Tests will be assigned one of the following statuses after a run:
     1. PASS: The test met expected criteria. In this case the test message reponse is stored with the status, typically this is a PCC value.
-    2. FAIL: ASSERT / EXCEPTION: The test failed due to an assertion in the op itself, failed PCC assertion, or any other exception that is raised during execution. The exception is stored with the test result. (FUTURE: More granular classification, i.e. TT_FATAL, PCC Error, L1 Out of Memory Error, etc.)
+    2. FAIL: ASSERT / EXCEPTION: The test failed due to an assertion in the op itself, failed PCC assertion, or any other exception that is raised during execution. The exception is stored with the test result.
     3. FAIL: CRASH / HANG: The test timed out and is assumed to be in a hung state.
     4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
+    5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
 - Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual batch to allow for faster/slower test runs, spanning larger/smaller suites of tests.
 - Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
 - Data Aggreation: Results are accumulated in a database that can be queried to see desired details of test runs.

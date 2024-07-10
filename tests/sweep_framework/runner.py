@@ -70,10 +70,14 @@ def execute_batch(test_module, test_vectors):
             input_queue.put(test_vector)
             response = output_queue.get(block=True, timeout=30)
             status, message, e2e_perf = response[0], response[1], response[2]
-            result["status"] = TestStatus.PASS if status else TestStatus.FAIL_ASSERT_EXCEPTION
             if status:
+                result["status"] = TestStatus.PASS
                 result["message"] = message
             else:
+                if "Out of Memory: Not enough space to allocate" in message:
+                    result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                else:
+                    result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                 result["exception"] = message
             result["e2e_perf"] = e2e_perf
         except Empty as e:
