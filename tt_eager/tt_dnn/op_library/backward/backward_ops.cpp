@@ -421,47 +421,6 @@ std::vector<Tensor> polygamma_bw(
     return operation::decorate_as_composite(__func__, _polygamma_bw)(grad, input, n, output_mem_config);
 }
 
-// Asin
-// result: grad * (-self * self + 1).rsqrt()
-std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    using ttnn::operations::unary::UnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    std::vector<UnaryWithParam> ops_chain = {
-    UnaryWithParam {UnaryOpType::SQUARE},
-    UnaryWithParam {UnaryOpType::NEG},
-    UnaryWithParam {UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-    UnaryWithParam {UnaryOpType::RSQRT, true}};
-    Tensor grad_result =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-    Tensor sub_one = ttnn::add(input, -1, std::nullopt, output_mem_config);
-    Tensor sub_minus_one = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
-    Tensor result = where(
-        ttnn::ltz(sub_minus_one, output_mem_config),
-        t_nan,
-        where(
-            ttnn::gtz(sub_one, output_mem_config),
-            t_nan,
-            where(
-                ttnn::eqz(sub_minus_one, output_mem_config),
-                ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                where(
-                    ttnn::eqz(sub_one, output_mem_config),
-                    ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                    grad_result,
-                    output_mem_config),
-                output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _asin_bw)(grad, input, output_mem_config);
-}
-
 // Asinh
 // result: grad * (self * self + 1).rsqrt()
 std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

@@ -110,5 +110,6 @@ constexpr auto square_bw = ttnn::register_operation<operations::unary_backward::
 constexpr auto hardswish_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW>>("ttnn::hardswish_bw");
 constexpr auto tanhshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::TANHSHRINK_BW>>("ttnn::tanhshrink_bw");
 constexpr auto atanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ATANH_BW>>("ttnn::atanh_bw");
+constexpr auto asin_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ASIN_BW>>("ttnn::asin_bw");
 
 }  // namespace ttnn

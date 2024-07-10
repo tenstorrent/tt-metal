@@ -58,6 +58,7 @@ enum class UnaryBackwardOpType {
     HARDSWISH_BW,
     TANHSHRINK_BW,
     ATANH_BW,
+    ASIN_BW
 };
 
 struct UnaryBackwardFunction{

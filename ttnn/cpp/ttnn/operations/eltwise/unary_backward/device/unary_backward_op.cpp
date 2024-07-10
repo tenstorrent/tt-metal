@@ -633,6 +633,45 @@ std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// Asin
+// result: grad * (-self * self + 1).rsqrt()
+std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam {UnaryOpType::SQUARE},
+    UnaryWithParam {UnaryOpType::NEG},
+    UnaryWithParam {UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam {UnaryOpType::RSQRT, true}};
+
+    Tensor grad_result =
+        ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inf = tt::tt_metal::full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = tt::tt_metal::full_like(input, std::nanf(""), output_mem_config);
+    Tensor sub_one = ttnn::add(input, -1, std::nullopt, output_mem_config);
+    Tensor sub_minus_one = ttnn::add(input, 1, std::nullopt, output_mem_config);
+    Tensor result = where(
+        ttnn::ltz(sub_minus_one, output_mem_config),
+        t_nan,
+        where(
+            ttnn::gtz(sub_one, output_mem_config),
+            t_nan,
+            where(
+                ttnn::eqz(sub_minus_one, output_mem_config),
+                ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                where(
+                    ttnn::eqz(sub_one, output_mem_config),
+                    ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                    grad_result,
+                    output_mem_config),
+                output_mem_config),
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -699,6 +738,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _tanhshrink_bw;
         case UnaryBackwardOpType::ATANH_BW:
             return _atanh_bw;
+        case UnaryBackwardOpType::ASIN_BW:
+            return _asin_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

@@ -376,18 +376,23 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
-        ttnn::  hardswish_bw,
+        ttnn::hardswish_bw,
         R"doc(Performs backward operations for  hardswish on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
     detail::bind_unary_backward(
         module,
-        ttnn::  tanhshrink_bw,
+        ttnn::tanhshrink_bw,
         R"doc(Performs backward operations for  tanhshrink on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
     detail::bind_unary_backward(
         module,
-        ttnn::  atanh_bw,
+        ttnn::atanh_bw,
         R"doc(Performs backward operations for  atanh on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::asin_bw,
+        R"doc(Performs backward operations for  asin on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 
