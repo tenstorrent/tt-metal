@@ -647,7 +647,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                                 }
 
                                 if (rt_args.size() > 0) {
-                                    auto args_base_addr = kernel_config_base + kg.launch_msg.mem_map[dispatch_class].rta_offset;
+                                    auto args_base_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
                                     log_trace(
                                               tt::LogMetal,
                                               "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
@@ -662,7 +662,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
 
                                 const auto &common_rt_args = kernel->common_runtime_args();
                                 if (common_rt_args.size() > 0) {
-                                    auto common_rt_args_addr = kernel_config_base + kg.launch_msg.mem_map[dispatch_class].crta_offset;
+                                    auto common_rt_args_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset;
                                     log_trace(
                                               tt::LogMetal,
                                               "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",

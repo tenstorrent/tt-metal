@@ -92,7 +92,7 @@ int main() {
     //device_setup();
     noc_init();
 
-    mailboxes->launch.run = RUN_MSG_DONE;
+    mailboxes->launch.go.run = RUN_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
@@ -100,7 +100,7 @@ int main() {
         init_sync_registers();
         // Wait...
         DEBUG_STATUS("GW");
-        while (mailboxes->launch.run != RUN_MSG_GO)
+        while (mailboxes->launch.go.run != RUN_MSG_GO)
         {
             RISC_POST_HEARTBEAT(heartbeat);
         };
@@ -109,7 +109,7 @@ int main() {
         {
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
 
-            noc_index = mailboxes->launch.brisc_noc_id;
+            noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
             //UC FIXME: do i need this?
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
@@ -118,10 +118,12 @@ int main() {
             DEBUG_STATUS("R");
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-                uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-                rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
-                crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
+                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
+                uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
+                rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                    mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
+                crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                    mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
 
                 kernel_init();
             //} else {
@@ -130,12 +132,14 @@ int main() {
             //}
             DEBUG_STATUS("D");
 
-            mailboxes->launch.run = RUN_MSG_DONE;
+            mailboxes->launch.go.run = RUN_MSG_DONE;
 
 
             // Notify dispatcher core that it has completed
-            if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-                uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
+            if (mailboxes->launch.kernel_config.mode == DISPATCH_MODE_DEV) {
+                uint64_t dispatch_addr =
+                    NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
+                        NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
             }
