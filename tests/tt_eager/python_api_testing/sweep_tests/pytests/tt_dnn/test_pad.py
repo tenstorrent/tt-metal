@@ -36,4 +36,5 @@ def test_run_pad_test(input_shapes, pad_args, device, function_level_defaults):
         comparison_func,
         device,
         pad_args,
+        ttnn_op=True,
     )
