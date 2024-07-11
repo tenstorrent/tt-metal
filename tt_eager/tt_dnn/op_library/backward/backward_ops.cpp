@@ -729,17 +729,6 @@ std::vector<Tensor> threshold_bw(
 }
 
 
-std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    return grad_tensor;
-}
-std::vector<Tensor> sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sign_bw)(grad, input, output_mem_config);
-}
-
-
 std::vector<Tensor> _ge_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_zero = zeros_like(grad, output_mem_config);
