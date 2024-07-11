@@ -19,6 +19,7 @@ namespace operations {
 namespace data_movement {
 
 constexpr uint8_t DefaultQueueId = 0;
+constexpr std::size_t NUM_DIMENSIONS = 4;
 
 
 struct ExecutePad {
@@ -27,20 +28,20 @@ struct ExecutePad {
     static ttnn::Tensor _execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        std::vector<uint32_t> output_padded_shape,
-        std::vector<uint32_t> input_tensor_start,
+        const std::array<uint32_t, NUM_DIMENSIONS> & output_padded_shape,
+        const std::array<uint32_t, NUM_DIMENSIONS> & input_tensor_start,
         const float value,
         const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
-    
-    
+
+        uint32_t rank = input_tensor.shape().rank();
         // on host
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             if (input_tensor.get_legacy_shape() == output_padded_shape) {
                 return input_tensor;
             }
             else {
-                return input_tensor.pad(tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value);
+                return input_tensor.pad(tt::tt_metal::Shape(output_padded_shape, rank), tt::tt_metal::Shape(input_tensor_start, rank), value);
             }
         }
         // on device
@@ -53,43 +54,36 @@ struct ExecutePad {
 
             auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
             auto output_tensor = operation::run(
-                Pad{tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value, memory_config, use_multicore},
+                Pad{tt::tt_metal::Shape(output_padded_shape, rank), tt::tt_metal::Shape(input_tensor_start, rank), value, memory_config, use_multicore},
                 {input_tensor}, {}, {}, queue_id).front();
 
             return output_tensor;
         }
     }
 
-    // This function signature is closer to what the kernel expects
-    // Assuming 4D tensor
     static ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const Shape output_padded_shape,
-        const Shape input_tensor_start,
+        const std::array<uint32_t, NUM_DIMENSIONS> & output_padded_shape,
+        const std::array<uint32_t, NUM_DIMENSIONS> & input_tensor_start,
         const float value,
         const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
-        std::vector<uint32_t> output_padded_vector(output_padded_shape.rank());
-        std::vector<uint32_t> input_start_vector(output_padded_shape.rank());
+        return _execute_on_worker_thread(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
 
-        for(uint32_t dim=0; dim<output_padded_shape.rank(); dim++) {
-            output_padded_vector[dim] = output_padded_shape[dim];
-            input_start_vector[dim] = input_tensor_start[dim];
-        }
-
-        return _execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, use_multicore, memory_config_arg);
     }
 
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
-        const Shape & output_padded_shape,
-        const Shape & input_tensor_start,
-        const float value) {
+        const std::array<uint32_t, NUM_DIMENSIONS> & output_padded_shape,
+        const std::array<uint32_t, NUM_DIMENSIONS> & input_tensor_start,
+        const float value
+        ) {
 
-        return execute_on_worker_thread(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+        return _execute_on_worker_thread(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+
     }
 
 
@@ -121,7 +115,7 @@ struct ExecutePad {
         ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         padding.insert(padding.begin(), 4 - original_rank, {0, 0});
         auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
-        std::vector<uint32_t> output_padded_shape(padding.size());
+        std::array<uint32_t, NUM_DIMENSIONS> output_padded_shape;
         for(size_t i = 0; i < padding.size(); i++) {
             output_padded_shape[i] = input_shape_with_tile_padding[i] + padding[i].second;
         }
@@ -134,18 +128,21 @@ struct ExecutePad {
             front_padding_is_zero,
             "ttnn.pad: on device padding does not support front padding");
 
-        const int target_height = output_padded_shape[output_padded_shape.size() - 2];
-        const int target_width = output_padded_shape[output_padded_shape.size() - 1];
+        const int target_height = output_padded_shape[padding.size() - 2];
+        const int target_width = output_padded_shape[padding.size() - 1];
         TT_FATAL(
             target_height % ttnn::TILE_SIZE == 0 || target_width % ttnn::TILE_SIZE == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
 
         // Performing actual padding
-        std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
+        std::array<uint32_t, NUM_DIMENSIONS> pad_front_array;
+        for(size_t i = 0; i < pad_front.size(); i++) {
+            pad_front_array[i] = pad_front[i];
+        }
 
 
-        auto output_tensor = _execute_on_worker_thread(queue_id, input_tensor_4D, output_padded_shape, pad_front_vec, value, use_multicore, memory_config_arg);
+        auto output_tensor = _execute_on_worker_thread(queue_id, input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg);
 
 
         // output_tensor is currently 4D. We have to squeeze back to the original rank

@@ -140,11 +140,11 @@ void test_shape_padding() {
     auto device = tt::tt_metal::CreateDevice(device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
 
-    auto input_shape = Shape{1, 1, 13, 18};
-    auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::ShapeArray input_shape = {1, 1, 13, 18};
+    tt::tt_metal::ShapeArray padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
-    auto padded_input_tensor = ttnn::pad(input_tensor, ttnn::Shape(padded_input_shape), ttnn::Shape({0, 0, 0, 0}), 0);
+    auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::ShapeArray({0, 0, 0, 0}), 0);
 
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
@@ -158,8 +158,8 @@ void test_shape_padding() {
     output_tensor = output_tensor.cpu();
 
     auto output_shape = output_tensor.get_legacy_shape();
-    TT_FATAL(output_shape == padded_input_shape);
-    TT_FATAL(output_shape.without_padding() == input_shape);
+    TT_FATAL(output_shape == tt::tt_metal::Shape(padded_input_shape));
+    TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape));
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
 }

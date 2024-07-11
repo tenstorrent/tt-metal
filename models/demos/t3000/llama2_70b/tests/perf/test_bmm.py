@@ -61,7 +61,7 @@ class TT_bmm:
 
         #### OPTION 2: pad, then tranpsose, then shard?
 
-        q = ttnn.pad(q, ttnn.Shape([1, N_HEADS_PADDED, BATCH, HEAD_DIM]), ttnn.Shape([0, 0, 0, 0]), 0.0)
+        q = ttnn.pad(q, [1, N_HEADS_PADDED, BATCH, HEAD_DIM], [0, 0, 0, 0], 0.0)
 
         q = tt_lib.tensor.transpose(q, -2, -3)
 
