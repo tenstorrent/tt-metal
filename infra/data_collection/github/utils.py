@@ -4,6 +4,8 @@
 
 import json
 import csv
+import pathlib
+import os
 from datetime import datetime
 
 from loguru import logger
@@ -36,6 +38,21 @@ JOB_CSV_FIELDS = (
     "is_build_job",
     "job_matrix_config",
     "docker_image",
+)
+
+
+BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
+    "git_repo_name",
+    "git_commit_hash",
+    "git_commit_ts",
+    "github_pipeline_id",
+    "github_job_id",
+    "user_name",
+    "docker_image",
+    "device_hostname",
+    "device_ip",
+    "device_type",
+    "device_memory_size",
 )
 
 
@@ -229,3 +246,74 @@ def create_csvs_for_data_analysis(
 
     create_csv(github_pipeline_csv_filename, PIPELINE_CSV_FIELDS, [pipeline_row])
     create_csv(github_jobs_csv_filename, JOB_CSV_FIELDS, job_rows)
+
+
+def get_github_benchmark_environment_csv_filename():
+    logger.info("We are assuming generated/benchmark_data exists from previous passing test")
+
+    current_utils_path = pathlib.Path(__file__)
+    benchmark_data_dir = current_utils_path.parent.parent.parent.parent / "generated/benchmark_data"
+    assert benchmark_data_dir.exists()
+    assert benchmark_data_dir.is_dir()
+
+    measurement_csv_paths = list(benchmark_data_dir.glob("measurement_*.csv"))
+    assert (
+        len(measurement_csv_paths) == 1
+    ), f"There needs to be exactly one measurement csv as we're assuming a single test is run for now: {measurement_csv_paths}"
+    timestamp_str = str(measurement_csv_paths[0].name).replace("measurement_", "").replace(".csv", "")
+
+    csv_filename = str(benchmark_data_dir / f"environment_{timestamp_str}.csv")
+    logger.info(f"Saving to {csv_filename}")
+    return csv_filename
+
+
+def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv_filename):
+    assert "GITHUB_REPOSITORY" in os.environ
+    git_repo_name = os.environ["GITHUB_REPOSITORY"]
+
+    assert "GITHUB_SHA" in os.environ
+    git_commit_hash = os.environ["GITHUB_SHA"]
+
+    logger.warning("Hardcoded null for git_commit_ts")
+    git_commit_ts = ""
+
+    assert "GITHUB_RUN_ID" in os.environ
+    github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+
+    logger.warning("Hardcoded null for github_job_id")
+    github_job_id = ""
+
+    assert "GITHUB_TRIGGERING_ACTOR" in os.environ
+    user_name = os.environ["GITHUB_TRIGGERING_ACTOR"]
+
+    logger.warning("Hardcoded null for ")
+    docker_image = ""
+
+    assert "RUNNER_NAME" in os.environ
+    device_hostname = os.environ["GH_RUNNER_NAME"]
+
+    logger.warning("Hardcoded null for device_ip")
+    device_ip = ""
+
+    assert "ARCH_NAME" in os.environ
+    device_type = os.environ["ARCH_NAME"]
+    assert device_type in ("grayskull", "wormhole_b0")
+
+    logger.warning("Hardcoded null for device_memory_size")
+    device_memory_size = ""
+
+    benchmark_environment_row = {
+        "git_repo_name": git_repo_name,
+        "git_commit_hash": git_commit_hash,
+        "git_commit_ts": git_commit_ts,
+        "github_pipeline_id": github_pipeline_id,
+        "github_job_id": github_job_id,
+        "user_name": user_name,
+        "docker_image": docker_image,
+        "device_hostname": device_hostname,
+        "device_ip": device_ip,
+        "device_type": device_type,
+        "device_memory_size": device_memory_size,
+    }
+
+    create_csv(github_benchmark_environment_csv_filename, BENCHMARK_ENVIRONMENT_CSV_FIELDS, [benchmark_environment_row])
