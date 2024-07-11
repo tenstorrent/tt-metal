@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -21,7 +21,7 @@ def test_bw_sign(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
 
     pyt_y = torch.sign(in_data)
-    tt_output_tensor_on_device = tt_lib.tensor.sign_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.sign_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

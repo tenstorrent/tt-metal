@@ -919,6 +919,14 @@ std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 
 
+std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1007,6 +1015,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _cosh_bw;
         case UnaryBackwardOpType::LOG2_BW:
             return _log2_bw;
+        case UnaryBackwardOpType::SIGN_BW:
+            return _sign_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
