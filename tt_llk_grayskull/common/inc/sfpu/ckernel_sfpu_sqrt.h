@@ -17,9 +17,10 @@ namespace ckernel
 namespace sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS=2>
+template <bool APPROXIMATION_MODE, int ITERATIONS=4, int RECIPROCAL_ITERATIONS=2>
 inline void _calculate_sqrt_()
 {
+    #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
