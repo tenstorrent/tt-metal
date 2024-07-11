@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     compare_all_close,
 )
@@ -26,11 +26,12 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 #   result: at::fill(self_t, value_t)
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
     pyt_y = torch.zeros_like(grad_data)
     grad_sum = grad_data.sum()
     pyt_y.fill_(grad_sum)
 
-    tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
+    tt_output_tensor_on_device = ttnn.fill_bw(grad_tensor, input_tensor)
 
     golden_tensor = [pyt_y]
     comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=100, rtol=1e-6)
