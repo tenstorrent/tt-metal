@@ -256,6 +256,7 @@ def detail(ctx):
         colored("Status", "light_red"),
         colored("Details", "light_red"),
         colored("Git Hash", "light_red"),
+        colored("e2e Perf", "light_red"),
     ]
 
     client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
@@ -285,6 +286,7 @@ def detail(ctx):
                     source["status"][11:],
                     detail,
                     source["git_hash"],
+                    source["e2e_perf"] + " ms" if "e2e_perf" in source else "None",
                 ],
                 result["_id"],
             )
