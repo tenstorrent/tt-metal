@@ -222,6 +222,11 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::acosh_bw,
+        R"doc(Performs backward operations for inverse cosine (acos) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::acos_bw,
         R"doc(Performs backward operations for inverse hyperbolic cosine (acosh) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward(

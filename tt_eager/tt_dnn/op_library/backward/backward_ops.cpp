@@ -628,40 +628,38 @@ std::vector<Tensor> cosh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _cosh_bw)(grad, input, output_mem_config);
 }
 
-// # - name: acos(Tensor self) -> Tensor
-// #   self: grad * -((-self * self + 1).rsqrt())
-std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+// Leaky_Relu
+// result: torch.where(self > 0, grad_output, grad_output * negative_slope)
+std::vector<Tensor> _leaky_relu_bw(
+    const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor neg_in = ttnn::neg(input, output_mem_config);
-    Tensor in_rsqrt =
-        ttnn::rsqrt(ttnn::add(ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config), true, output_mem_config);
-    in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    Tensor neg_one = full_like(input, -1.0, output_mem_config);
-    Tensor pos_one = full_like(input, 1.0, output_mem_config);
-    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    grad_a = where(
-        ttnn::logical_or(
-            ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
-            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        std::nanf(" "),
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::eq(input, neg_one, std::nullopt, output_mem_config),
-        t_inf,
-        where(ttnn::eq(input, pos_one, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
+    Tensor grad_result = where(
+        ttnn::gtz(input, output_mem_config), grad, ttnn::multiply(grad, negative_slope, std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
-
-std::vector<Tensor> acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _acos_bw)(grad, input, output_mem_config);
+std::vector<Tensor> leaky_relu_bw(
+    const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _leaky_relu_bw)(grad, input, negative_slope, output_mem_config);
 }
 
+// ELU
+// result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
+std::vector<Tensor> _elu_bw(
+    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(
+        ttnn::gez(input, output_mem_config),
+        grad,
+        ttnn::multiply(grad, ttnn::multiply(ttnn::exp(input, false, output_mem_config), alpha, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> elu_bw(
+    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _elu_bw)(grad, input, alpha, output_mem_config);
+}
 
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
