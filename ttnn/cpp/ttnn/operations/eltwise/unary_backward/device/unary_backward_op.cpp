@@ -813,6 +813,40 @@ std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const 
     return grad_tensor;
 }
 
+
+// name: cosh(Tensor self) -> Tensor
+// self: grad * self.sinh()
+std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor t_neg_inf =
+        ttnn::multiply(ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor grad_a = where(
+        ttnn::gt(input,
+        ttnn::operations::creation::full_like(input, 88.50, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config), t_inf,
+        where(
+            ttnn::lt(input,
+            ttnn::operations::creation::full_like(input, -88.50, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+            t_neg_inf,
+            ttnn::multiply(grad, sinh(input, output_mem_config), std::nullopt, output_mem_config),
+            output_mem_config),
+        output_mem_config);
+    t_neg_inf.deallocate();
+    t_inf.deallocate();
+    grad_a = where(
+        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
+        std::numeric_limits<float>::infinity(),
+        where(
+            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
+            -std::numeric_limits<float>::infinity(),
+            grad_a,
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -897,6 +931,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _ceil_bw;
         case UnaryBackwardOpType::SOFTSIGN_BW:
             return _softsign_bw;
+        case UnaryBackwardOpType::COSH_BW:
+            return _cosh_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

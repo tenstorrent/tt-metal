@@ -308,7 +308,7 @@ void py_module(py::module& module) {
         module,
         ttnn::clamp_max_bw,
         R"doc(Performs backward operations for clamp max value on :attr:`input_tensor`, :attr:`max` with given :attr:`grad_tensor`.)doc");
-    
+
     detail::bind_unary_backward(
         module,
         ttnn::hardshrink_bw,
@@ -434,6 +434,11 @@ void py_module(py::module& module) {
         ttnn::softsign_bw,
         R"doc(Performs backward operations for softsign on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::cosh_bw,
+        R"doc(Performs backward operations for cosh on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward
