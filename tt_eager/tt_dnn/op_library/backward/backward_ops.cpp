@@ -587,6 +587,7 @@ std::vector<Tensor> erf_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _erf_bw)(grad, input, output_mem_config);
 }
 
+<<<<<<< HEAD
 std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
@@ -604,6 +605,8 @@ std::vector<Tensor> erfc_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _erfc_bw)(grad, input, output_mem_config);
 }
 
+=======
+>>>>>>> #10079: Merge erfc_bw to TTNN
 std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_inf = std::numeric_limits<float>::infinity();

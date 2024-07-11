@@ -848,8 +848,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.erf_bw
 
-.. autofunction:: tt_lib.tensor.erfc_bw
-
 .. autofunction:: tt_lib.tensor.digamma_bw
 
 .. autofunction:: tt_lib.tensor.deg2rad_bw

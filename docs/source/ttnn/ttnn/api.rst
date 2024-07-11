@@ -217,6 +217,7 @@ Pointwise Unary
    ttnn/sinh_bw
    ttnn/log10_bw
    ttnn/log1p_bw
+   ttnn/erfc_bw
 
 Pointwise Binary
 ================

@@ -776,6 +776,20 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
+            grad,
+            std::nullopt,
+            output_mem_config),
+        -M_2_SQRTPI,
+        std::nullopt,
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -854,6 +868,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _log10_bw;
         case UnaryBackwardOpType::LOG1P_BW:
             return _log1p_bw;
+        case UnaryBackwardOpType::ERFC_BW:
+            return _erfc_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
