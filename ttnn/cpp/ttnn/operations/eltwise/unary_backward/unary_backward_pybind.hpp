@@ -398,6 +398,11 @@ void py_module(py::module& module) {
         module,
         ttnn::asinh_bw,
         R"doc(Performs backward operations for  asinh on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+         
+    detail::bind_unary_backward(
+        module,
+        ttnn::sin_bw,
+        R"doc(Performs backward operations for sin on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 

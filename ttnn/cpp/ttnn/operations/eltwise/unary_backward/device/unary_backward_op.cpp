@@ -695,6 +695,15 @@ std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// name: sin(Tensor self) -> Tensor
+// self: grad * self.cos()
+std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_input);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -765,6 +774,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _asin_bw;
         case UnaryBackwardOpType::ASINH_BW:
             return _asinh_bw;
+        case UnaryBackwardOpType::SIN_BW:
+            return _sin_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

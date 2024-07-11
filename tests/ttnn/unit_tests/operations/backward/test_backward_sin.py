@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 from math import pi
 
 
@@ -21,7 +21,7 @@ def test_bw_sin(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 2 * pi, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, False)
 
-    tt_output_tensor_on_device = tt_lib.tensor.sin_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.sin_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

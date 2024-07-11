@@ -474,6 +474,7 @@ std::vector<Tensor> hardtanh_bw(
     return operation::decorate_as_composite(__func__, _hardtanh_bw)(grad, input, min, max, output_mem_config);
 }
 
+<<<<<<< HEAD
 // name: sin(Tensor self) -> Tensor
 // self: grad * self.cos()
 std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
@@ -486,6 +487,8 @@ std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _sin_bw)(grad, input, output_mem_config);
 }
 
+=======
+>>>>>>> #10079: Merge sin_bw to TTNN
 // name: sinh(Tensor self) -> Tensor
 // self: grad * self.cosh()
 std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

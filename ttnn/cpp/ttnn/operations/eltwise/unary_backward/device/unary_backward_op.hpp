@@ -60,6 +60,7 @@ enum class UnaryBackwardOpType {
     ATANH_BW,
     ASIN_BW,
     ASINH_BW
+    SIN_BW,
 };
 
 struct UnaryBackwardFunction{
