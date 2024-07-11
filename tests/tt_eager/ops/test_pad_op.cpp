@@ -8,7 +8,7 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -29,7 +29,7 @@ void test_operation_infrastructure() {
     auto padded_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
-    auto output_tensor = operation::run(PadOnHost{padded_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+    auto output_tensor = ttnn::pad(input_tensor, ttnn::Shape(padded_shape), ttnn::Shape({0, 0, 0, 0}), 0);
 
     auto output_shape = output_tensor.get_legacy_shape();
     TT_FATAL(output_shape == padded_shape);
