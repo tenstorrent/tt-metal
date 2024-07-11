@@ -79,3 +79,13 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
+  produce-benchmark-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sdf
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pip3 install loguru && python3 -c 'from infra.data_collection.github.utils import create_csv_for_github_benchmark_environment; create_csv_for_github_benchmark_environment("environment.csv")'
+      - name: Show file
+        run: cat environment.csv
