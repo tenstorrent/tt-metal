@@ -149,7 +149,7 @@ class EriscDatamoverBuilder {
         if (channel.largest_message_size_bytes > 0) {
             args.push_back(std::min<uint32_t>(channel.largest_message_size_bytes, this->eth_buffer_size_bytes));
             if (channel.largest_message_size_bytes < this->eth_buffer_size_bytes) {
-                tt::log_info(tt::LogTest, "Trimming buffer size for channel {} to {}", channel.channel, args.back());
+                log_trace(tt::LogOp, "Trimming buffer size for channel {} to {}", channel.channel, args.back());
             }
         } else {
             args.push_back(this->eth_buffer_size_bytes);

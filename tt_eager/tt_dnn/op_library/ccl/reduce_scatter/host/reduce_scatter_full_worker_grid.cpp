@@ -352,10 +352,7 @@ static void add_worker_config_to_edm_builders(
         }
 
         // Get the expected message size in bytes for this worker
-        auto worker_slice_shape = tensor_slicer.get_worker_slice_shapes().at(global_worker_idx);
-        uint32_t expected_message_size_bytes = worker_slice_shape.x *
-                                                worker_slice_shape.y *
-                                                tensor_slicer.input_page_size;
+        uint32_t expected_message_size_bytes = tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
 
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
         if (sender_enabled) {
