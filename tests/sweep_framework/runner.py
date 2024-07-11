@@ -8,13 +8,11 @@ import pathlib
 import importlib
 import datetime
 import time
+import os
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
-from ttnn import *
-from serialize import *
 from statuses import TestStatus, VectorStatus
-from serialize import deserialize
 import architecture
 from elasticsearch import Elasticsearch
 
@@ -76,6 +74,8 @@ def execute_batch(test_module, test_vectors):
             else:
                 if "Out of Memory: Not enough space to allocate" in message:
                     result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                elif "Watcher" in message:
+                    result["status"] = TestStatus.FAIL_WATCHER
                 else:
                     result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                 result["exception"] = message
@@ -211,6 +211,18 @@ def export_test_results(header_info, results):
     client.close()
 
 
+def enable_watcher():
+    print("SWEEPS: Enabling Watcher")
+    os.environ["TT_METAL_WATCHER"] = "120"
+    os.environ["TT_METAL_WATCHER_APPEND"] = "1"
+
+
+def disable_watcher():
+    print("SWEEPS: Disabling Watcher")
+    os.environ.pop("TT_METAL_WATCHER")
+    os.environ.pop("TT_METAL_WATCHER_APPEND")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="Sweep Test Runner",
@@ -228,6 +240,9 @@ if __name__ == "__main__":
         choices=["grayskull", "wormhole", "wormhole_b0", "blackhole"],
         help="Device architecture",
     )
+    parser.add_argument(
+        "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -242,4 +257,13 @@ if __name__ == "__main__":
     global ARCH
     ARCH = architecture.str_to_arch(args.arch)
 
+    if args.watcher:
+        enable_watcher()
+
+    from ttnn import *
+    from serialize import *
+
     run_sweeps(args.module_name, args.batch_name)
+
+    if args.watcher:
+        disable_watcher()

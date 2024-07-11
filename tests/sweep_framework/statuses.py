@@ -11,6 +11,7 @@ class TestStatus(Enum):
     FAIL_CRASH_HANG = 2
     NOT_RUN = 3
     FAIL_L1_OUT_OF_MEM = 4
+    FAIL_WATCHER = 5
 
 
 class VectorStatus(Enum):
