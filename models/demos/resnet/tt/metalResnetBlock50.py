@@ -2324,8 +2324,8 @@ class ResNet(nn.Module):
         else:
             x = ttnn.pad(
                 x,
-                ttnn.Shape(padded_shape),
-                ttnn.Shape([0, 0, 0, 0]),
+                padded_shape,
+                [0, 0, 0, 0],
                 0,
                 memory_config=self.memory_config,
                 use_multicore=True,
@@ -2375,8 +2375,8 @@ class ResNet(nn.Module):
         else:
             x = ttnn.pad(
                 x,
-                ttnn.Shape(padded_shape),
-                ttnn.Shape([0, 0, 0, 0]),
+                padded_shape,
+                [0, 0, 0, 0],
                 0,
                 memory_config=self.memory_config,
                 use_multicore=True,
