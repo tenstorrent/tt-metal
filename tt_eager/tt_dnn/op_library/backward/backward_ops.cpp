@@ -237,16 +237,6 @@ std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& inp
     return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
-}
-
 std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor val = grad;
@@ -258,17 +248,6 @@ std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_
 }
 std::vector<Tensor> fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _fill_bw)(grad, output_mem_config);
-}
-
-// - name: sub.Scalar(Tensor self, Scalar other, Scalar alpha=1) -> Tensor
-//   self: grad
-std::vector<Tensor> _unary_sub_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-std::vector<Tensor> unary_sub_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_sub_bw)(grad, input, output_mem_config);
 }
 
 std::vector<Tensor> _lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
