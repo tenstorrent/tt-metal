@@ -935,13 +935,24 @@ std::vector<Tensor> _fmod_bw(
 }
 
 
-std::vector<Tensor> _unary_remainder_bw(
+std::vector<Tensor> _remainder_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
 
+
+std::vector<Tensor> _div_no_nan_bw(
+    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zeros = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    Tensor val = ttnn::operations::creation::full_like(input, scalar, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    Tensor result = where(
+        ttnn::eq(val, 0, std::nullopt, output_mem_config), zeros, ttnn::multiply(grad, 1 / scalar, std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
@@ -1071,6 +1082,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _fmod_bw;
         case UnaryBackwardOpType::REMAINDER_BW:
             return _remainder_bw;
+        case UnaryBackwardOpType::DIV_NO_NAN_BW:
+            return _div_no_nan_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
