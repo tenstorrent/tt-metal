@@ -86,6 +86,6 @@ jobs:
       - uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/scripts/data_analysis/dummy_ls.txt
+          sftp-batchfile: .github/actions/upload-data-via-sftp/dummy_ls.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
