@@ -1,5 +1,5 @@
 op,count,python min dispatch time (ms),python mean dispatch time(ms),python mean dispatch + sync time (ms),C++ mean dispatch time (ms)
-tt_lib.fused_ops.linear.Linear,40,2.56,3.9,4.2,3.49
+ttnn.linear,40,2.56,3.9,4.2,3.49
 tt_lib.fused_ops.softmax.softmax,40,3.22,3.36,3.74,3.37
 tt_lib.operations.primary.add_layernorm,40,0.99,1.19,1.65,1.26
 tt_lib.operations.primary.layernorm,40,0.95,1.3,1.62,1.22
@@ -34,8 +34,8 @@ tt_lib.operations.primary.moreh_softmin_backward_dim_3,40,0.92,1.26,1.46,1.14
 tt_lib.operations.primary.moreh_softmin_dim_0,40,0.88,0.97,1.33,1.01
 tt_lib.operations.primary.moreh_softmin_dim_1,40,0.88,0.92,1.1,0.91
 tt_lib.operations.primary.moreh_softmin_dim_2,40,0.9,1.0,1.29,1.05
-tt_lib.operations.primary.softmax_in_place,40,0.91,0.95,1.2,1.0
-tt_lib.operations.primary.transformers.scale_mask_softmax_in_place,40,0.96,0.99,1.06,0.97
+ttnn.softmax_in_place,40,0.91,0.95,1.2,1.0
+ttnn.scale_mask_softmax_in_place,40,0.96,0.99,1.06,0.97
 tt_lib.operations.primary_moreh_softmin_dim_3,40,0.86,1.02,1.29,1.09
 tt_lib.tensor.abs,40,0.81,0.87,1.13,0.92
 tt_lib.tensor.abs_bw,40,1.68,1.77,2.08,1.82
@@ -159,7 +159,7 @@ tt_lib.tensor.fill_ones_rm,40,0.28,0.33,2.37,0.38
 tt_lib.tensor.fill_rm,40,0.28,0.32,2.38,0.36
 tt_lib.tensor.fill_zero_bw,40,0.99,1.66,1.94,1.73
 tt_lib.tensor.floor_bw,40,0.99,1.04,1.31,1.07
-tt_lib.tensor.frac_bw,40,0.0,0.01,0.09,0.0
+tt_lib.tensor.frac_bw,200,0.003,0.003,0.006,
 tt_lib.tensor.full,40,0.86,0.88,1.84,0.0
 tt_lib.tensor.full_like,40,1.94,2.43,2.62,2.24
 tt_lib.tensor.ge_bw,40,0.98,1.06,1.35,1.09
@@ -370,16 +370,16 @@ tt_lib.tensor.tril,24,99.64,99.76,99.54,1.65
 tt_lib.tensor.triu,24,99.97,100.18,99.82,1.2
 tt_lib.tensor.trunc_bw,40,0.94,1.41,1.73,1.49
 tt_lib.tensor.typecast,40,0.76,0.81,1.32,0.92
-tt_lib.tensor.unary_add_bw,40,0.0,0.01,0.1,0.0
-tt_lib.tensor.unary_assign_bw,40,0.0,0.01,0.08,0.0
+tt_lib.tensor.unary_add_bw,200,0.006,0.006,0.007,
+tt_lib.tensor.unary_assign_bw,200,0.006,0.006,0.006,
 tt_lib.tensor.unary_div_bw,40,2.86,3.1,3.43,3.01
 tt_lib.tensor.unary_div_no_nan_bw,40,8.79,9.99,10.69,9.93
 tt_lib.tensor.unary_eq_bw,40,0.96,1.05,1.34,1.07
-tt_lib.tensor.unary_fmod_bw,40,0.0,0.01,0.09,0.0
+tt_lib.tensor.unary_fmod_bw,200,0.006,0.006,0.007,
 tt_lib.tensor.unary_mul_bw,40,0.9,1.23,1.46,1.31
 tt_lib.tensor.unary_pow_bw,40,13.79,14.6,15.44,14.3
-tt_lib.tensor.unary_remainder_bw,40,0.0,0.01,0.08,0.0
-tt_lib.tensor.unary_sub_bw,40,0.0,0.01,0.09,0.0
+tt_lib.tensor.unary_remainder_bw,200,0.006,0.006,0.007,
+tt_lib.tensor.unary_sub_bw,200,0.006,0.006,0.006,
 tt_lib.tensor.unpad,40,0.66,0.74,1.02,0.77
 tt_lib.tensor.untilize,40,0.79,0.85,1.13,0.9
 tt_lib.tensor.untilize_with_unpadding,40,0.59,0.82,4.13,0.72
