@@ -329,7 +329,9 @@ class resnet50Bottleneck:
             conv_op_cache=conv_op_cache,
         )
 
-        logger.info(f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}")
+        logger.debug(
+            f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}"
+        )
 
         if (
             is_wormhole_b0()
@@ -424,6 +426,8 @@ class resnet50:
         parameters,
         batch_size,
         model_config,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
@@ -435,6 +439,7 @@ class resnet50:
         self.model_config = model_config
         self.conv_op_cache = {}
         self.inplanes = 64
+        self.final_output_mem_config = final_output_mem_config
         if is_grayskull():
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -536,6 +541,39 @@ class resnet50:
             compute_kernel_config=compute_kernel_config,
         )  # num_classes = 1000
 
+        self.transpose_shards = True
+        if is_wormhole_b0():
+            self.transpose_shards = False
+            if batch_size == 16:
+                act_block_h_override = 1568
+            elif batch_size == 20:
+                act_block_h_override = 640
+        else:
+            act_block_h_override = 0
+        input_channels_alignment = 16 if not is_wormhole_b0() else 32
+        self.conv1_config = ttnn.Conv2dConfig(
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            weights_dtype=self.model_config["WEIGHTS_DTYPE"],
+            math_fidelity=self.model_config["MATH_FIDELITY"],
+            activation="relu",
+            deallocate_activation=dealloc_input,
+            input_channels_alignment=input_channels_alignment,
+            act_block_h_override=act_block_h_override,
+            transpose_shards=self.transpose_shards,
+        )
+
+        self.conv1_kernel_size = (4, 4)
+        self.conv1_stride = (1, 1)
+        self.conv1_padding = (0, 0)
+        self.conv1_input_height = 115
+        self.conv1_input_width = 115
+        self.conv1_output_height = (
+            (self.conv1_input_height - self.conv1_kernel_size[0] + 2 * self.conv1_padding[0]) // self.conv1_stride[0]
+        ) + 1
+        self.conv1_output_width = (
+            (self.conv1_input_width - self.conv1_kernel_size[1] + 2 * self.conv1_padding[1]) // self.conv1_stride[1]
+        ) + 1
+
     def __del__(self):
         # Need to clear global configs for each Resnet run
         self.conv_op_cache.clear()
@@ -584,31 +622,19 @@ class resnet50:
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
-    def __call__(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
+    def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
         return self.run(
-            input_tensor, device, batch_size, ops_parallel_config, {} if not ops_parallel_config else self.conv_op_cache
+            input_tensor, device, ops_parallel_config, {} if not ops_parallel_config else self.conv_op_cache
         )
 
     ## merged runs (first and optimized)
-    def run(self, input_tensor, device, batch_size, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
+    def run(self, input_tensor, device, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
         is_first_run = False
         if not ops_parallel_config:
             is_first_run = True
             logger.debug(f"==== First run")
         else:
             logger.debug(f"==== Optimized run")
-
-        transpose_shards = True
-        if is_wormhole_b0():
-            transpose_shards = False
-
-        if is_wormhole_b0():
-            if batch_size == 16:
-                act_block_h_override = 1568
-            elif batch_size == 20:
-                act_block_h_override = 640
-        else:
-            act_block_h_override = 0
 
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
@@ -617,22 +643,13 @@ class resnet50:
             out_channels=self.conv1_output_channels,
             device=device,
             bias_tensor=self.conv1_bias_tensor,
-            kernel_size=(4, 4),
-            stride=(1, 1),
-            padding=(0, 0),
+            kernel_size=self.conv1_kernel_size,
+            stride=self.conv1_stride,
+            padding=self.conv1_padding,
             batch_size=self.batch_size,
-            input_height=115,
-            input_width=115,
-            conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
-                activation="relu",
-                deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
-                act_block_h_override=act_block_h_override,
-                transpose_shards=transpose_shards,
-            ),
+            input_height=self.conv1_input_height,
+            input_width=self.conv1_input_width,
+            conv_config=self.conv1_config,
             conv_op_cache=conv_op_cache,
         )
         # Relu is fused with conv1
@@ -680,13 +697,13 @@ class resnet50:
         x, x_height, x_width = self.layer1_module1(
             x,
             device,
-            batch_size,
+            self.batch_size,
             x_height,
             x_width,
             conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
-            transpose_shards=transpose_shards,
+            transpose_shards=self.transpose_shards,
         )
 
         if is_first_run:
@@ -701,12 +718,12 @@ class resnet50:
 
         logger.debug(f"==== Running layer 1 module 2")
         x, x_height, x_width = self.layer1_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 1 module 3")
         x, x_height, x_width = self.layer1_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         if self.batch_size == 20 and is_wormhole_b0():
@@ -727,13 +744,13 @@ class resnet50:
         x, x_height, x_width = self.layer2_module1(
             x,
             device,
-            batch_size,
+            self.batch_size,
             x_height,
             x_width,
             conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
-            transpose_shards=transpose_shards,
+            transpose_shards=self.transpose_shards,
         )
 
         if is_first_run:
@@ -748,17 +765,17 @@ class resnet50:
 
         logger.debug(f"==== Running layer 2 module 2")
         x, x_height, x_width = self.layer2_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 2 module 3")
         x, x_height, x_width = self.layer2_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 2 module 4")
         x, x_height, x_width = self.layer2_module4(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         layer3_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
@@ -775,13 +792,13 @@ class resnet50:
         x, x_height, x_width = self.layer3_module1(
             x,
             device,
-            batch_size,
+            self.batch_size,
             x_height,
             x_width,
             conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
-            transpose_shards=transpose_shards,
+            transpose_shards=self.transpose_shards,
         )
 
         if is_first_run:
@@ -796,51 +813,40 @@ class resnet50:
 
         logger.debug(f"==== Running layer 3 module 2")
         x, x_height, x_width = self.layer3_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 3 module 3")
         x, x_height, x_width = self.layer3_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 3 module 4")
         x, x_height, x_width = self.layer3_module4(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 3 module 5")
         x, x_height, x_width = self.layer3_module5(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 3 module 6")
         x, x_height, x_width = self.layer3_module6(
             x,
             device,
-            batch_size,
+            self.batch_size,
             x_height,
             x_width,
             conv_op_cache,
-            eltwise_binary_out_in_place=False,
-            transpose_shards=transpose_shards,
+            eltwise_binary_out_in_place=True,
+            transpose_shards=self.transpose_shards,
         )
 
-        if is_wormhole_b0() and batch_size == 16:
+        if is_wormhole_b0() and self.batch_size == 16:
             xshape = x.shape_without_padding()
-            ## NOTE: using multicore untilize_with_unpadding results in PCC error
-            x = ttnn.experimental.tensor.untilize_with_unpadding(
-                x,
-                [xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1],
-                ttnn.L1_MEMORY_CONFIG,
-                use_multicore=False,
-            )
-            x = ttnn.experimental.tensor.tilize_with_val_padding(
-                x,
-                xshape,
-                0,
-                output_mem_config=ttnn.L1_MEMORY_CONFIG,
-                use_multicore=True,
+            x = ttnn.slice(
+                x, ttnn.Shape([0, 0, 0, 0]), ttnn.Shape([xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1])
             )
 
         layer4_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
@@ -867,13 +873,13 @@ class resnet50:
         x, x_height, x_width = self.layer4_module1(
             x,
             device,
-            batch_size,
+            self.batch_size,
             x_height,
             x_width,
             conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
-            transpose_shards=transpose_shards,
+            transpose_shards=self.transpose_shards,
         )
 
         if is_first_run:
@@ -888,28 +894,12 @@ class resnet50:
 
         logger.debug(f"==== Running layer 4 module 2")
         x, x_height, x_width = self.layer4_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         logger.debug(f"==== Running layer 4 module 3")
         x, x_height, x_width = self.layer4_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, transpose_shards=transpose_shards
-        )
-
-        unpadded_shape = x.shape_without_padding()
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x,
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
-        )
-        x = ttnn.reshape(
-            x,
-            (
-                self.batch_size,
-                x.get_legacy_shape()[1],
-                (int)(x.get_legacy_shape()[2] / self.batch_size),
-                x.get_legacy_shape()[3],
-            ),
+            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
         )
 
         grid_size = (8, 4)
@@ -932,6 +922,24 @@ class resnet50:
             ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
+
+        unpadded_shape = x.shape_without_padding()
+        x = ttnn.experimental.tensor.untilize_with_unpadding(
+            x,
+            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        x = ttnn.reshape(
+            x,
+            (
+                self.batch_size,
+                x.get_legacy_shape()[1],
+                x.get_legacy_shape()[2] // self.batch_size,
+                x.get_legacy_shape()[3],
+            ),
+        )
+
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
             unpadded_shape[0],
@@ -985,7 +993,7 @@ class resnet50:
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
+            self.final_output_mem_config,
         )
         x = ttnn.reshape(
             x,

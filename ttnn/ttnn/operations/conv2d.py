@@ -31,6 +31,8 @@ def _nearest_32(x):
 
 Conv2dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
 
+get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv2d.get_conv_padded_input_shape_and_mem_config
+
 
 class Conv2d:
     def __init__(

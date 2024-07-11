@@ -317,5 +317,5 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
-from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim
+from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
 from ttnn.operations.pool import MaxPool2d
