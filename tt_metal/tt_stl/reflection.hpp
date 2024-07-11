@@ -94,11 +94,19 @@ struct to_json_t;
 
 nlohmann::json to_json(const auto& object) { return to_json_t<std::decay_t<decltype(object)>>{}(object); }
 
+template <typename T>
+struct from_json_t;
+
+template <typename T>
+T from_json(const nlohmann::json& json_object) {
+    return from_json_t<T>{}(json_object);
+}
+
 }  // namespace json
 
 namespace reflection {
 
-using AttributeName = std::variant<const char*, std::string>;
+using AttributeName = std::string;
 
 struct Attribute final {
     static constexpr std::size_t ALIGNMENT = 32;
@@ -795,7 +803,25 @@ namespace json {
 template <typename T>
     requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
 struct to_json_t<T> {
-    nlohmann::json operator()(T object) noexcept { return object; }
+    nlohmann::json operator()(const T& object) noexcept { return T{object}; }
+};
+
+template <typename T>
+    requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
+struct from_json_t<T> {
+    T operator()(const nlohmann::json& json_object) noexcept { return json_object.get<T>(); }
+};
+
+template <>
+struct to_json_t<const char*> {
+    nlohmann::json operator()(const char* object) noexcept { return object; }
+};
+
+template <>
+struct from_json_t<const char*> {
+    const char* operator()(const nlohmann::json& json_object) {
+        throw std::runtime_error("Cannot load const char* from JSON");
+    }
 };
 
 template <>
@@ -804,8 +830,8 @@ struct to_json_t<std::string> {
 };
 
 template <>
-struct to_json_t<const char*> {
-    nlohmann::json operator()(const char* object) noexcept { return object; }
+struct from_json_t<std::string> {
+    std::string operator()(const nlohmann::json& json_object) noexcept { return json_object.get<std::string>(); }
 };
 
 template <typename T>
@@ -816,6 +842,18 @@ struct to_json_t<T> {
             return to_json(*object);
         } else {
             return nullptr;
+        }
+    }
+};
+
+template <typename T>
+    requires std::is_pointer_v<T>
+struct from_json_t<T> {
+    T operator()(const nlohmann::json& json_object) noexcept {
+        if (json_object.is_null()) {
+            return nullptr;
+        } else {
+            throw std::runtime_error("Cannot load pointer from JSON");
         }
     }
 };
@@ -837,10 +875,50 @@ struct to_json_t<std::array<T, N>> {
     }
 };
 
+template <typename T, std::size_t N>
+struct from_json_t<std::array<T, N>> {
+    std::array<T, N> operator()(const nlohmann::json& json_object) noexcept {
+        std::array<T, N> array;
+        [&array, &json_object]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&array, &json_object] {
+                    const auto& element = json_object[Ns];
+                    array[Ns] = from_json<T>(element);
+                }(),
+                ...);
+        }(std::make_index_sequence<N>{});
+        return array;
+    }
+};
+
 template <typename... Ts>
 struct to_json_t<std::variant<Ts...>> {
     nlohmann::json operator()(const std::variant<Ts...>& variant) noexcept {
-        return std::visit([](const auto& value) { return to_json(value); }, variant);
+        return std::visit(
+            [index = variant.index()](const auto& value) -> nlohmann::json {
+                nlohmann::json json_object = nlohmann::json::object();
+                return {{"index", index}, {"value", to_json(value)}};
+            },
+            variant);
+    }
+};
+
+namespace detail {
+template <class variant_t, std::size_t I = 0>
+variant_t variant_from_index(std::size_t index, const nlohmann::json& json_object) {
+    if constexpr (I >= std::variant_size_v<variant_t>)
+        throw std::runtime_error{"Variant index " + std::to_string(I + index) + " out of bounds"};
+    else
+        return index == 0 ? from_json<std::variant_alternative_t<I, variant_t>>(json_object)
+                          : variant_from_index<variant_t, I + 1>(index - 1, json_object);
+}
+}  // namespace detail
+
+template <typename... Ts>
+struct from_json_t<std::variant<Ts...>> {
+    std::variant<Ts...> operator()(const nlohmann::json& json_object) {
+        auto index = json_object["index"].get<std::size_t>();
+        return detail::variant_from_index<std::variant<Ts...>>(index, json_object["value"]);
     }
 };
 
@@ -861,6 +939,17 @@ struct to_json_t<std::optional<T>> {
 };
 
 template <typename T>
+struct from_json_t<std::optional<T>> {
+    std::optional<T> operator()(const nlohmann::json& json_object) noexcept {
+        if (json_object.is_null()) {
+            return std::nullopt;
+        } else {
+            return from_json<T>(json_object);
+        }
+    }
+};
+
+template <typename T>
 struct to_json_t<std::vector<T>> {
     nlohmann::json operator()(const std::vector<T>& vector) noexcept {
         nlohmann::json json_array = nlohmann::json::array();
@@ -872,6 +961,17 @@ struct to_json_t<std::vector<T>> {
 };
 
 template <typename T>
+struct from_json_t<std::vector<T>> {
+    std::vector<T> operator()(const nlohmann::json& json_object) noexcept {
+        std::vector<T> vector;
+        for (const auto& element : json_object) {
+            vector.push_back(from_json<T>(element));
+        }
+        return vector;
+    }
+};
+
+template <typename T>
 struct to_json_t<std::set<T>> {
     nlohmann::json operator()(const std::set<T>& set) noexcept {
         nlohmann::json json_array = nlohmann::json::array();
@@ -879,6 +979,39 @@ struct to_json_t<std::set<T>> {
             json_array.push_back(to_json(element));
         }
         return json_array;
+    }
+};
+
+template <typename T>
+struct from_json_t<std::set<T>> {
+    std::set<T> operator()(const nlohmann::json& json_object) noexcept {
+        std::set<T> set;
+        for (const auto& element : json_object) {
+            set.insert(from_json<T>(element));
+        }
+        return set;
+    }
+};
+
+template <typename K, typename V>
+struct to_json_t<std::map<K, V>> {
+    nlohmann::json operator()(const std::map<K, V>& object) {
+        nlohmann::json json_object = nlohmann::json::object();
+        for (const auto& [key, value] : object) {
+            json_object[to_json(key)] = to_json(value);
+        }
+        return json_object;
+    }
+};
+
+template <typename K, typename V>
+struct from_json_t<std::map<K, V>> {
+    std::map<K, V> operator()(const nlohmann::json& json_object) {
+        std::map<K, V> object;
+        for (const auto& [key, value] : json_object.items()) {
+            object[from_json<K>(key)] = from_json<V>(value);
+        }
+        return object;
     }
 };
 
@@ -895,6 +1028,22 @@ struct to_json_t<std::tuple<Ts...>> {
                 ...);
         }(std::make_index_sequence<sizeof...(Ts)>{});
         return json_array;
+    }
+};
+
+template <typename... Ts>
+struct from_json_t<std::tuple<Ts...>> {
+    std::tuple<Ts...> operator()(const nlohmann::json& json_object) noexcept {
+        std::tuple<Ts...> tuple;
+        [&tuple, &json_object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&tuple, &json_object] {
+                    const auto& element = json_object[Ns];
+                    std::get<Ns>(tuple) = from_json<Ts>(element);
+                }(),
+                ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+        return tuple;
     }
 };
 
@@ -935,6 +1084,24 @@ struct to_json_t<T> {
             },
             object);
         return json_object;
+    }
+};
+
+template <typename T>
+    requires tt::stl::concepts::Reflectable<T>
+struct from_json_t<T> {
+    T operator()(const nlohmann::json& json_object) noexcept {
+        T object;
+        reflect::for_each(
+            [&object, &json_object](auto I) {
+                const auto& attribute_name = reflect::member_name<I>(object);
+                const auto& attribute = reflect::get<I>(object);
+                if (json_object.contains(attribute_name)) {
+                    reflect::get<I>(object) = from_json<std::decay_t<decltype(attribute)>>(json_object[attribute_name]);
+                }
+            },
+            object);
+        return object;
     }
 };
 
