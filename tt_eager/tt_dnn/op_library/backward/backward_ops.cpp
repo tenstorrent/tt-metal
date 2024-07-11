@@ -628,36 +628,6 @@ std::vector<Tensor> cosh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _cosh_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor in_rsqrt = ttnn::square(input, output_mem_config);
-    in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor cond_result = ttnn::logical_or(
-        ttnn::lt(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::gt(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_a = where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
-    cond_result = ttnn::logical_or(
-        ttnn::eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::eq(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_a = where(
-        ttnn::eq(cond_result, ones_like(input, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _acosh_bw)(grad, input, output_mem_config);
-}
-
 // # - name: acos(Tensor self) -> Tensor
 // #   self: grad * -((-self * self + 1).rsqrt())
 std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
