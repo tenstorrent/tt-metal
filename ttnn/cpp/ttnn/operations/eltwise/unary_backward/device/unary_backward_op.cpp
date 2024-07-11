@@ -1095,6 +1095,37 @@ std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const M
     return grad_tensor;
 }
 
+std::vector<Tensor> _polygamma_bw(
+    const Tensor& grad, const Tensor& input, int n, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float t_nan = std::nanf("");
+    float pos_neg = 1.0f;
+    if (n == 2 || n == 4 || n == 6 || n == 8 || n == 10) {
+        pos_neg = -1.0f;
+    }
+    Tensor grad_a = ttnn::multiply(grad, polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(
+            ttnn::le(input, 0.0, std::nullopt, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_nan,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(
+            ttnn::operations::creation::full_like(input, -std::numeric_limits<float>::infinity(), std::nullopt, std::nullopt, std::nullopt, output_mem_config), pos_neg, std::nullopt, output_mem_config),
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(
+            ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), std::nullopt, std::nullopt, std::nullopt, output_mem_config), pos_neg, std::nullopt, output_mem_config),
+        grad_a,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan

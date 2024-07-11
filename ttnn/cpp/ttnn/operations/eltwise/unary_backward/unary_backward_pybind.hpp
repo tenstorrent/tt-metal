@@ -656,6 +656,11 @@ void py_module(py::module& module) {
         ttnn::deg2rad_bw,
         R"doc(Performs backward operations for deg2rad on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::polygamma_bw,
+        R"doc(Performs backward operations for polygamma on :attr:`input_tensor` or attr:`input_tensor_a`, attr:`scalar` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

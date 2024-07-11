@@ -89,6 +89,7 @@ enum class UnaryBackwardOpType {
     ERFINV_BW,
     ERF_BW,
     DEG2RAD_BW,
+    POLYGAMMA_BW,
 };
 
 struct UnaryBackwardFunction{
