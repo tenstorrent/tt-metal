@@ -462,11 +462,11 @@ std::vector<Tensor> _min_or_max_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     Tensor zeros_t = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     std::vector<Tensor> grad_tensor;
-    Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
+    Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
-    Tensor t_sub_gtz = gtz(t_sub, output_mem_config);
-    Tensor t_sub_eqz = eqz(t_sub, output_mem_config);
-    Tensor t_sub_ltz = ltz(t_sub, output_mem_config);
+    Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
+    Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
+    Tensor t_sub_ltz = ttnn::ltz(t_sub, output_mem_config);
     Tensor grad_other =
         ttnn::add(ttnn::multiply(t_sub_ltz, grad, std::nullopt, output_mem_config),
             ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
