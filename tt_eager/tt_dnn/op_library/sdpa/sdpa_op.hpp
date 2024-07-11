@@ -74,6 +74,7 @@ struct ScaledDotProductAttentionDecode {
     const MemoryConfig output_mem_config;
     const tt::operations::primary::transformers::SDPAProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
+    const uint32_t k_chunk_size;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -93,7 +94,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const std::vector<uint32_t> cur_pos,
     std::optional<float> scale,
     DeviceComputeKernelConfig compute_kernel_config,
-    tt::operations::primary::transformers::SDPAProgramConfig program_config
+    tt::operations::primary::transformers::SDPAProgramConfig program_config,
+    const uint32_t k_chunk_size
 );
 
 namespace transformers {
