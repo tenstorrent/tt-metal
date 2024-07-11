@@ -361,24 +361,40 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _hardshrink_bw(
+    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = where(
-        ttnn::logical_or(
-            ttnn::le(input, -3, std::nullopt, output_mem_config),
-            ttnn::ge(input, 3, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        zeros_like(input, output_mem_config),
-        ttnn::multiply(grad, 1.0 / 6),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
+    Tensor hardshrink_result = hardshrink(input_tensor, lambd, output_mem_config);
+    Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
+    grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
+std::vector<Tensor> hardshrink_bw(
+    const Tensor& grad, const Tensor& input, float lambd, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _hardshrink_bw)(grad, input, lambd, output_mem_config);
 }
 
+// softshrink
+//  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
+std::vector<Tensor> _softshrink_bw(
+    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = where(
+        ttnn::logical_or(
+            ttnn::lt(input_tensor, full_like(input_tensor, -lambd, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::gt(input_tensor, full_like(input_tensor, lambd, output_mem_config), std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        zeros_like(grad, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> softshrink_bw(
+    const Tensor& grad, const Tensor& input, float lambd, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _softshrink_bw)(grad, input, lambd, output_mem_config);
+}
 
 // Hardswish
 // result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
