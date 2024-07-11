@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -23,7 +23,7 @@ struct ReduceScatter {
     const std::optional<chip_id_t> receiver_device_id;
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
-    const ccl::Topology topology;
+    const ttnn::utils::ccl::Topology topology;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology);
+   ttnn::utils::ccl::Topology topology);
 }
 }; // namespace ccl
 

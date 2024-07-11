@@ -17,9 +17,9 @@
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 =======
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 >>>>>>> 9c82037fb9... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/all_gather/device/multi_core/all_gather_op_multi_core.cpp
@@ -75,13 +75,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
     bool is_linear = topology == all_gather_op::Topology::Linear;
-    std::unique_ptr<tt::tt_metal::ccl::CclOpTensorConfig> input_tensor_config = tt::tt_metal::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
-    std::unique_ptr<tt::tt_metal::ccl::CclOpTensorConfig> output_tensor_config = tt::tt_metal::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
+    std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
+    std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     tt::tt_metal::Program program{};
     const auto& device = input_tensor.device();
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology);
-    auto const& topology_config = tt::tt_metal::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
+    auto const& topology_config = ttnn::utils::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     auto const& sharding_info = ShardedAllGatherConfig(input_tensor, output_tensor, dim);
     bool enable_print = false; // ring_index == 0
@@ -179,9 +179,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         }
 
         clockwise_edm_builders.emplace_back(
-            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), tt::tt_metal::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, tt::tt_metal::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
+            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::utils::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
         counter_clockwise_edm_builders.emplace_back(
-            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), tt::tt_metal::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, tt::tt_metal::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
+            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::utils::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
     }
 
     for (uint32_t direction = 0; direction < num_full_send_directions; direction++) {
@@ -242,7 +242,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             pages_per_link.at(i)++;
         }
 
-        auto tensor_slicer = tt::tt_metal::ccl::InterleavedRingAllGatherTensorSlicer (
+        auto tensor_slicer = ttnn::utils::ccl::InterleavedRingAllGatherTensorSlicer (
             input_tensor,
             output_tensor,
             dim,
@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                     auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -407,7 +407,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 receiver_semaphores_base_address.push_back(all_gather_config.get_eth_sems_l1_base_byte_address() + b * all_gather_config.get_semaphore_size());
                 link_buffer_receiver_addresses.push_back(all_gather_config.get_eth_buffers_l1_base_byte_address() + b * all_gather_config.get_eth_buffer_size());
             }
-
             std::vector<uint32_t> sender_eth_sem_addrs; sender_eth_sem_addrs.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             std::vector<uint32_t> sender_eth_buffer_addrs; sender_eth_buffer_addrs.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             std::vector<uint32_t> receiver_eth_sem_addrs; receiver_eth_sem_addrs.reserve(all_gather_config.get_num_eth_buffers_per_edm());
@@ -415,15 +414,15 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             for (uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                 uint32_t num_workers_per_eth_buffer = std::min(workers_per_link, all_gather_config.get_num_eth_buffers_per_edm() - worker_index);
 
-                std::vector<tt::tt_metal::ccl::WorkerXY> sender_worker_coords;
-                std::vector<tt::tt_metal::ccl::WorkerXY> receiver_worker_coords;
+                std::vector<ccl::WorkerXY> sender_worker_coords;
+                std::vector<ccl::WorkerXY> receiver_worker_coords;
                 for (uint32_t w = b * num_workers_per_eth_buffer; w < (b + 1) * num_workers_per_eth_buffer; ++w) {
                     sender_worker_coords.push_back(
-                        tt::tt_metal::ccl::WorkerXY(
+                        ttnn::utils::ccl::WorkerXY(
                             device->worker_core_from_logical_core(sender_worker_cores.at(w)).x,
                             device->worker_core_from_logical_core(sender_worker_cores.at(w)).y));
                     receiver_worker_coords.push_back(
-                        tt::tt_metal::ccl::WorkerXY(
+                        ttnn::utils::ccl::WorkerXY(
                             device->worker_core_from_logical_core(receiver_worker_cores.at(w)).x,
                             device->worker_core_from_logical_core(receiver_worker_cores.at(w)).y));
                 }
@@ -565,7 +564,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             auto input_tensor_shard_arg_generator =
                                 InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -588,8 +587,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 OutputTensorShardAddrGenArgGenerator(
                                     all_gather_config,
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
-                                    dynamic_cast<CclOpShardedTensorConfig*>(output_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(output_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -738,7 +737,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 global_worker_index);
                             auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -753,8 +752,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 OutputTensorShardAddrGenArgGenerator(
                                     all_gather_config,
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
-                                    dynamic_cast<CclOpShardedTensorConfig*>(output_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(output_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -943,7 +942,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             CoreCoord const& worker_eth_receiver_core = is_clockwise_direction ? eth_receiver_cores.at(i) : eth_sender_cores.at(i);
                             auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -1104,8 +1103,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             OutputTensorShardAddrGenArgGenerator output_tensor_shard_arg_generator(
                                 all_gather_config,
                                 device,
-                                dynamic_cast<CclOpShardedTensorConfig*>(input_tensor_config.get()),
-                                dynamic_cast<CclOpShardedTensorConfig*>(output_tensor_config.get()),
+                                dynamic_cast<ccl::CclOpShardedTensorConfig*>(input_tensor_config.get()),
+                                dynamic_cast<ccl::CclOpShardedTensorConfig*>(output_tensor_config.get()),
                                 ring_index,
                                 ring_size,
                                 global_num_workers,
@@ -1192,7 +1191,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         }
     } // num_full_send_directions
 
-    ccl::generate_edm_kernels_for_ring_or_linear_topology(
+    ttnn::utils::ccl::generate_edm_kernels_for_ring_or_linear_topology(
         program,
         device,
         topology_config,
@@ -1251,6 +1250,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-}  // namespace tt_metal
+}  // namespacett::tt_metal
 
 }  // namespace tt
