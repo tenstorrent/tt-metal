@@ -478,5 +478,5 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     EriscDataMoverTerminationMode termination_mode);
 
 }  // namespace ccl
-}  // namespacett::tt_metal
-}  // namespace tt
+}  // namespace utils
+}  // namespace ttnn

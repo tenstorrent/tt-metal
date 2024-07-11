@@ -1250,6 +1250,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-}  // namespacett::tt_metal
+}  // namespace utils
 
-}  // namespace tt
+}  // namespace ttnn

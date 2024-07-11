@@ -518,5 +518,5 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 
 
 }  // namespace ccl
-}  // namespacett::tt_metal
-}  // namespace tt
+}  // namespace utils
+}  // namespace ttnn

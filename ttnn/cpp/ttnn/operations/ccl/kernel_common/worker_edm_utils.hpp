@@ -27,8 +27,8 @@ static FORCE_INLINE coord_t coord_from_args(uint32_t& arg_idx) {
 }
 
 }  // namespace ccl
-}  // namespacett::tt_metal
-}  // namespace tt
+}  // namespace utils
+}  // namespace ttnn
 
 FORCE_INLINE void push_filler_pages_to_cb(const uint32_t& cb_id, uint32_t num_pages) {
     ASSERT(num_pages < cb_interface[cb_id].fifo_num_pages);

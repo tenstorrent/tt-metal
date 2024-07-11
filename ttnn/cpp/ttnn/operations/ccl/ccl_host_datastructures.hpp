@@ -337,5 +337,5 @@ class EriscDatamoverBuilder {
 };
 
 };  // namespace ccl
-};  // namespacett::tt_metal
-};  // namespace tt
+};  // namespace utils
+};  // namespace ttnn

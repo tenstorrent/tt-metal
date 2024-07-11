@@ -304,5 +304,5 @@ inline void full_worker_grid_addr_gen_width_sharded_advance(
 };  // namespace all_gather
 
 }  // namespace ccl
-}  // namespacett::tt_metal
-}  // namespace tt
+}  // namespace utils
+}  // namespace ttnn
