@@ -1805,9 +1805,16 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
     // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in the
     // core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
     // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-    for (uint8_t num_hw_cqs = 1; num_hw_cqs <= Device::max_num_hw_cqs; ++num_hw_cqs) {
-        if (dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->id()) == CoreType::ETH) {
-            auto& dispatch_core_manager = dispatch_core_manager::get(num_hw_cqs);
+    if (dispatch_core_manager::get(this->num_hw_cqs()).get_dispatch_core_type(this->id()) == CoreType::ETH) {
+        if (!tt::Cluster::instance().is_galaxy_cluster()) {
+            for (uint8_t num_hw_cqs = 1; num_hw_cqs <= Device::max_num_hw_cqs; ++num_hw_cqs) {
+                auto& dispatch_core_manager = dispatch_core_manager::get(num_hw_cqs);
+                for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
+                    dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
+                }
+            }
+        } else {
+            auto& dispatch_core_manager = dispatch_core_manager::get(this->num_hw_cqs());
             for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
                 dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
             }

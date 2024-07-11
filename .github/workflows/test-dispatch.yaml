@@ -7,9 +7,11 @@ on:
         required: true
         type: choice
         options:
-          - E150
-          - N150
-          - N300
+          - grayskull
+          - wormhole_b0
+      runner-label:
+        required: true
+        type: string
       command:
         required: true
         type: string
@@ -28,7 +30,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
     environment: dev
-    runs-on: ${{ ${{ inputs.arch }}.labels }}
+    runs-on: ${{ inputs.runner-label }}
     name: Custom test command ${{ inputs.description }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
