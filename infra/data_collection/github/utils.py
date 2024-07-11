@@ -290,7 +290,7 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
     docker_image = ""
 
     assert "RUNNER_NAME" in os.environ
-    device_hostname = os.environ["GH_RUNNER_NAME"]
+    device_hostname = os.environ["RUNNER_NAME"]
 
     logger.warning("Hardcoded null for device_ip")
     device_ip = ""
