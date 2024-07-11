@@ -69,7 +69,7 @@ def _setup_env(site_pkgs_ttnn):
     # jit build needs linker script under $TT_METAL_HOME/build/hw/toolchain/,
     # so when TT_METAL_HOME is site-packags,
     # it needs to softlink build/ from site-packages/tt_lib
-    build_soft_link = site_pkgs_ttnn / ".." / ".." / "build"
+    build_soft_link = site_pkgs_ttnn / ".." / "build"
     build_soft_link_src = site_pkgs_ttnn / "build"
     if not os.path.exists(build_soft_link) and os.path.exists(build_soft_link_src):
         os.symlink(build_soft_link_src, build_soft_link)
@@ -80,4 +80,4 @@ def setup_ttnn_so():
 
     _setup_env(site_pkgs_ttnn)
     _setup_so_rpath_in_build_lib(site_pkgs_ttnn)
-    _setup_so_rpath(site_pkgs_ttnn, "_ttnn.so", site_pkgs_ttnn / "build" / "lib")
+    _setup_so_rpath(site_pkgs_ttnn, "_ttnn", site_pkgs_ttnn / "build" / "lib")
