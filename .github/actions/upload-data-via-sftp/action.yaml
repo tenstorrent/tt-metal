@@ -18,9 +18,10 @@ runs:
   using: "composite"
   steps:
     - name: Create key file
-      jhell: bash
+      shell: bash
       run: |
         echo "${{ inputs.ssh-private-key }}" > id_key
         chmod go-rwx id_key
     - name: Upload files
+      shell: bash
       run: sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
