@@ -9,7 +9,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -35,6 +34,31 @@ const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
 const uint32_t out0_cb = CB::c_out0;
 const uint32_t temp_sum_cb = CB::c_intermed3;
+
+
+operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
+    tt_metal::Program& program,
+    const Tensor& a,
+    const Tensor& b,
+    const Shape& ashape,
+    std::optional<const Tensor> bias,
+    const std::optional<const Tensor> conv_reader_indices,
+    vector<int> conv_params,
+    uint32_t output_channels,
+    bool untilize_out,
+    bool has_bias,
+    bool fuse_relu,
+    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvBlockConfig& block_config,
+    uint32_t extra_padding_for_32B_alignment,
+    bool use_shallow_conv_variant,
+    bool transpose_mcast,
+    Tensor& output,
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool enable_act_double_buffer,
+    bool enable_split_reader,
+    bool enable_subblock_padding);
+
 
 // TODO: Add namespace for utilities?
 std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
@@ -715,6 +739,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "split readers: {}", split_reader);
         log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
         log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
+        log_debug(LogOp, "conv_act_c_blocks: {}", conv_act_c_blocks);
         log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
         log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
         log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
@@ -809,9 +834,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_blocks_out_h_per_core = (per_core_out_matrix_height_ntiles + out_block_h_ntiles-1) / out_block_h_ntiles;
     bool act_height_sliced = per_core_out_matrix_height_ntiles < act_matrix_height_ntiles;
     if (not act_height_sliced) {
-        assert(num_blocks_act_h_per_core == num_blocks_act_h);
-        assert(num_blocks_out_h_per_core == num_blocks_out_h);
-        assert(num_cores_x == 1);
+        TT_ASSERT(num_blocks_act_h_per_core == num_blocks_act_h);
+        TT_ASSERT(num_blocks_out_h_per_core == num_blocks_out_h);
+        TT_ASSERT(num_cores_x == 1);
     }
     uint32_t act_block_h_datums_last_block = (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
 
@@ -819,28 +844,28 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
     log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
 
-    assert(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
+    TT_ASSERT(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
     uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
-    assert(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
+    TT_ASSERT(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
     uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
     if (weight_width_sliced) {
-        assert(total_noop_cores == 0);
-        assert(total_active_num_cores == total_num_cores);
+        TT_ASSERT(total_noop_cores == 0);
+        TT_ASSERT(total_active_num_cores == total_num_cores);
     }
 
     if (has_bias) {
-        assert(bias_ntiles % num_weight_slices_width == 0);
-        assert(bias_ntiles == weight_matrix_width_ntiles);
+        TT_ASSERT(bias_ntiles % num_weight_slices_width == 0);
+        TT_ASSERT(bias_ntiles == weight_matrix_width_ntiles);
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     CoreRange all_cores(CoreCoord(0, 0), CoreCoord(num_cores_x - 1, num_cores_y - 1));
-    assert(total_active_num_cores >= num_cores_x);
+    TT_ASSERT(total_active_num_cores >= num_cores_x);
     uint32_t num_active_cores_x = num_cores_x;
     uint32_t num_active_cores_y_with_full_x = total_active_num_cores / num_cores_x;
     uint32_t num_active_cores_x_last_y = total_active_num_cores % num_cores_x;
-    assert((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores);
+    TT_ASSERT((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores);
 
     std::set<CoreRange> all_active_cores_set;
     all_active_cores_set.insert(
@@ -1668,6 +1693,31 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     bool enable_split_reader,
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
+    if(a.memory_config().memory_layout==TensorMemoryLayout::WIDTH_SHARDED)
+    {
+        return multi_core_optimized_conv_width_sharded_v2_impl(
+        program,
+        a,
+        b,
+        ashape,
+        bias,
+        conv_reader_indices,
+        conv_params,
+        output_channels,
+        untilize_out,
+        has_bias,
+        fuse_relu,
+        parallelization_config,
+        block_config,
+        extra_padding_for_32B_alignment,
+        use_shallow_conv_variant,
+        transpose_mcast,
+        output,
+        compute_kernel_config,
+        enable_act_double_buffer,
+        enable_split_reader,
+        enable_subblock_padding);
+    }
     return multi_core_optimized_conv_sharded_v2_impl(
         program,
         a,
@@ -1775,6 +1825,31 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
 
     // add config tensor to program
     tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
+    if(a.memory_config().memory_layout==TensorMemoryLayout::WIDTH_SHARDED)
+    {
+        return multi_core_optimized_conv_width_sharded_v2_impl(
+        program,
+        a,
+        b,
+        Shape(input_tensor_shape),
+        bias,
+        conv_reader_indices_tensor,
+        conv_params,
+        output_channels,
+        untilize_out,
+        bias.has_value(),
+        fuse_relu,
+        parallelization_config,
+        block_config,
+        extra_padding_for_32B_alignment,
+        use_shallow_conv_variant,
+        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        output,
+        compute_kernel_config.value(),
+        enable_act_double_buffer,
+        enable_split_reader,
+        enable_subblock_padding);
+    }
     return multi_core_optimized_conv_sharded_v2_impl(
         program,
         a,

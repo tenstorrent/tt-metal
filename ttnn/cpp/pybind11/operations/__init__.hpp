@@ -85,6 +85,9 @@ void py_module(py::module& module) {
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module(m_core);
 
+    auto memory = module.def_submodule("memory", "read/write from Memory");
+    memory::py_module(memory);
+
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
 

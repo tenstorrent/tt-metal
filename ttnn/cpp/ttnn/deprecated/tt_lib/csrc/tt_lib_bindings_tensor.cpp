@@ -389,7 +389,7 @@ void TensorModule(py::module& m_tensor) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
 
-    m_tensor.def(
+   m_tensor.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,
         py::arg("input").noconvert(),

@@ -20,6 +20,7 @@ enum class OptimizedConvOpParallelizationStrategy {
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
     uint32_t num_cores_nhw;
+    uint32_t num_cores_c;
     uint32_t per_core_out_matrix_height_ntiles;
     uint32_t per_core_out_matrix_width_ntiles;
     // std::size_t in0_block_w;
