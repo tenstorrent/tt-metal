@@ -4,6 +4,11 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 
+RUN apt update -y && apt install software-properties-common gpg-agent -y
+
+# add custom repo
+RUN add-apt-repository ppa:deadsnakes/ppa 
+
 # Install build and runtime deps
 COPY /scripts/docker/requirements-22.04.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
@@ -62,5 +67,15 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
 
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+
+# Set python 3.11 and gcc-12 to be default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 10
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 11
+
+RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 11
+RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 11
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
 
 # CMD ["tail", "-f", "/dev/null"]
