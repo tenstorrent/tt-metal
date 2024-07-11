@@ -84,8 +84,8 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     }
 }
 
-template <uint32_t cb_mask_in, uint32_t PNHt, uint32_t PSt>
-void generate_mask(uint32_t k_num_chunks, uint32_t cur_pos) {
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
     PSt = 2
@@ -196,22 +196,22 @@ void generate_mask(uint32_t k_num_chunks, uint32_t cur_pos) {
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);  // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
-    constexpr uint32_t PSt = get_compile_time_arg_val(2);  // padded layer length in tiles
-    constexpr uint32_t St = get_compile_time_arg_val(3);  // full sequence length of kv cache in tiles
-    constexpr uint32_t DHt = get_compile_time_arg_val(4);  // head dim
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);  // num cores per batch
-    constexpr uint32_t num_cores = get_compile_time_arg_val(8);  // num running cores in total
-    constexpr uint32_t in0_receiver_semaphore_addr   = get_compile_time_arg_val(9);  // semaphore for reciever
-    constexpr uint32_t cur_batch = get_compile_time_arg_val(10);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
-    constexpr uint32_t k_chunk_start = get_compile_time_arg_val(12);
-    constexpr uint32_t k_chunk_end = get_compile_time_arg_val(13);
-    constexpr bool is_out_sharded = get_compile_time_arg_val(14);
+    constexpr uint32_t St = get_compile_time_arg_val(2);  // full sequence length of kv cache in tiles
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);  // head dim
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(4);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(5);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(6);  // num cores per batch
+    constexpr uint32_t num_cores = get_compile_time_arg_val(7);  // num running cores in total
+    constexpr uint32_t in0_receiver_semaphore_addr   = get_compile_time_arg_val(8);  // semaphore for reciever
+    constexpr uint32_t cur_batch = get_compile_time_arg_val(9);
+    constexpr bool is_out_sharded = get_compile_time_arg_val(10);
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);
     const uint32_t cur_pos = get_arg_val<uint32_t>(1);
+    const uint32_t PSt = get_arg_val<uint32_t>(2);  // padded layer length in tiles
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(3);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
+    const uint32_t k_chunk_start = get_arg_val<uint32_t>(4);
+    const uint32_t k_chunk_end = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t out_chunk_tiles = PNHt * DHt;
     constexpr uint32_t num_cores_to_wait = num_cores_per_batch-1;
@@ -248,7 +248,7 @@ void kernel_main() {
     // generate and send scalar to compute
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    generate_mask<cb_mask_in, PNHt, PSt>(k_num_chunks, cur_pos);
+    generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
 
     // DPRINT << "[Writer Reducer] Pushed statistics to copmute" << ENDL();
 
