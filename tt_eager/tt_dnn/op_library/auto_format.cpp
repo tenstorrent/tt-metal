@@ -12,7 +12,6 @@
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -115,7 +114,7 @@ Tensor AutoFormat::format_input_tensor(
             formatted_input = layout_conversion_on_host(formatted_input, Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
-        formatted_input = pad_on_host(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
+        formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input, ttnn::Shape(padded_shape), ttnn::Shape({0, 0, 0, 0}), pad_value);
     }
 
     if (convert_layout) {

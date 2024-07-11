@@ -10,8 +10,8 @@
 #include "tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -144,9 +144,8 @@ void test_shape_padding() {
     auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
-    auto padded_input_tensor =
-        tt::tt_metal::operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor})
-            .at(0);
+    auto padded_input_tensor = ttnn::pad(input_tensor, ttnn::Shape(padded_input_shape), ttnn::Shape({0, 0, 0, 0}), 0);
+
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
     auto output_tensor =

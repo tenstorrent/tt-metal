@@ -9,7 +9,6 @@
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
-#include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"

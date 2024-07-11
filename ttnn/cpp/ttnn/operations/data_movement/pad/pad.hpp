@@ -24,7 +24,6 @@ constexpr uint8_t DefaultQueueId = 0;
 struct ExecutePad {
 
 
-    // Wrapper for TTDNN
     static ttnn::Tensor _execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
@@ -33,21 +32,32 @@ struct ExecutePad {
         const float value,
         const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
-
-        const auto input_tensor_shape = input_tensor.get_shape();
-        const auto rank = input_tensor_shape.rank();
-        if (rank != 4) {
-            TT_FATAL("Tensor rank is not 4");
+    
+    
+        // on host
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
+            if (input_tensor.get_legacy_shape() == output_padded_shape) {
+                return input_tensor;
+            }
+            else {
+                return input_tensor.pad(tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value);
+            }
         }
+        // on device
+        else {
+            const auto input_tensor_shape = input_tensor.get_shape();
+            const auto rank = input_tensor_shape.rank();
+            if (rank != 4) {
+                TT_FATAL("Tensor rank is not 4");
+            }
 
-        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+            auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+            auto output_tensor = operation::run(
+                Pad{tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value, memory_config, use_multicore},
+                {input_tensor}, {}, {}, queue_id).front();
 
-        auto output_tensor = operation::run(
-            Pad{tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value, memory_config, use_multicore},
-            {input_tensor}, {}, {}, queue_id).front();
-
-        return output_tensor;
-
+            return output_tensor;
+        }
     }
 
     // This function signature is closer to what the kernel expects
@@ -70,6 +80,16 @@ struct ExecutePad {
         }
 
         return _execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, use_multicore, memory_config_arg);
+    }
+
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const ttnn::Tensor& input_tensor,
+        const Shape & output_padded_shape,
+        const Shape & input_tensor_start,
+        const float value) {
+
+        return execute_on_worker_thread(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
     }
 
 
