@@ -75,7 +75,7 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
 
     cq_id = 0
 
-    tt_output_tensor_on_device = ttnn.where_bw(
+    ttnn.where_bw(
         grad_tensor,
         condition_tensor,
         input_tensor,
@@ -85,6 +85,8 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
         input_b_grad=other_grad,
         queue_id=cq_id,
     )
+
+    output_tensor = [input_grad, other_grad]
 
     in_data.retain_grad()
     other_data.retain_grad()
@@ -98,5 +100,5 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
     status = True
     for i in range(len(are_required_outputs)):
         if are_required_outputs[i]:
-            status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
+            status = status & compare_pcc([output_tensor[i]], [golden_tensor[i]])
     assert status
