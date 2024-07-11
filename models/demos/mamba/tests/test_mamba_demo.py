@@ -6,6 +6,7 @@ from models.demos.mamba.demo.demo import run_mamba_demo
 import pytest
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "user_input, model_version, max_gen_len",
     ((["Hello World"], "state-spaces/mamba-2.8b-slimpj", 2),),
