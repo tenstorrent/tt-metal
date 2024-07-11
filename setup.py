@@ -97,12 +97,12 @@ class CMakeBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "CXX": "clang++-17",
-            # Currently, the ttnn (ttnn/_ttnn.so) and tt_lib (tt_lib/_C.so)
+            # Currently, the ttnn (ttnn/_ttnn.so)
             # both link to the tt_metal runtime. The specific thing in
             # ttnn linking to tt_metal is likely the implementation of
             # ttnn.manage_device.
             # However, because of the singleton design of
-            # tt_cluster in tt_metal, both tt_lib and ttnn will have a
+            # tt_cluster in tt_metal, ttnn will have a
             # copy of the cluster object, causing a hang during
             # device operations in ttnn, such as calling
             # output = ttnn.to_torch(output).
@@ -143,11 +143,11 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
-        tt_build_dir = self.build_lib + "/tt_lib/build"
+        tt_build_dir = self.build_lib + "/ttnn/build"
         os.makedirs(tt_build_dir, exist_ok=True)
         self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
         self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
-        arch_name_file = self.build_lib + "/tt_lib/.ARCH_NAME"
+        arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
         subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built SOs into appropriate locations
@@ -195,7 +195,7 @@ setup(
         "tt_metal": "tt_metal",  # kernels depend on headers here
         "tt_eager.tt_dnn": "tt_eager/tt_dnn",  # we need to pickup kernels
         "ttnn.cpp": "ttnn/cpp",  # we need to pickup kernels
-        "tt_lib.models": "models",  # make sure tt_lib/ttnn does not depend on model and remove!!!
+        "tt_lib.models": "models",  # make sure ttnn does not depend on model and remove!!!
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
