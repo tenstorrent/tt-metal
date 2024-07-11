@@ -46,17 +46,9 @@ ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const bool transpose_a,
-    const bool transpose_b,
-    const std::optional<const MatmulProgramConfig> program_config,
-    const ttnn::MemoryConfig& memory_config,
-    std::optional<const DataType> dtype,
-    const std::optional<const std::string>& activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid,
-    const bool propagate_is_b_batched) {
-    const auto& input_tensor_a_adjusted = transpose_a ? tt::tt_metal::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
-    const auto& input_tensor_b_adjusted = transpose_b ? tt::tt_metal::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
+    const struct tt::operations::primary::Matmul& parameters) {
+    const auto& input_tensor_a_adjusted = parameters.transpose_a ? tt::tt_metal::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
+    const auto& input_tensor_b_adjusted = parameters.transpose_b ? tt::tt_metal::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
 
     const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
     const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
@@ -68,17 +60,8 @@ ttnn::Tensor matmul(
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
 
-    auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
-    bool batch_with_bias = input_b_is_batched && bias.has_value();
-    TT_FATAL(!batch_with_bias, "Batched input not supported when bias exists (linear operation).");
-
-    std::optional<CoreCoord> user_core_coord;
-    const bool has_user_grid = core_grid.has_value();
-    if (has_user_grid) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
-
-    const bool has_program_config = program_config.has_value();
+    const bool has_program_config = parameters.program_config.has_value();
+    const bool has_user_grid = parameters.user_core_coord.has_value();
     bool post_process_bias = false;
     if (bias.has_value()) {
         if (!has_program_config && !has_user_grid) {
@@ -90,27 +73,21 @@ ttnn::Tensor matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
-        program_config,
-        memory_config,
-        dtype,
-        compute_kernel_config,
-        false /*untilize_out*/,
-        user_core_coord,
-        get_fused_activation(activation),
-        propagate_is_b_batched && input_b_is_batched);
+        parameters);
 
     if (post_process_bias) {
         output_tensor = tt::operations::primary::bcast(
-            output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
+            output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, parameters.output_mem_config);
     }
 
-    if (activation.has_value() && !has_user_grid) {
-        if (activation.value() == "relu") {
-            output_tensor = ttnn::relu(output_tensor, memory_config);
-        } else if (activation.value() == "gelu") {
-            output_tensor = ttnn::gelu(output_tensor, false, memory_config);
-        } else if (activation.value() == "silu") {
-            output_tensor = ttnn::silu(output_tensor, memory_config);
+    if (parameters.user_fused_activation.has_value() && !has_user_grid) {
+        const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
+        if (op_type == UnaryOpType::RELU) {
+            output_tensor = ttnn::relu(output_tensor, parameters.output_mem_config);
+        } else if (op_type == UnaryOpType::GELU) {
+            output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config);
+        } else if (op_type == UnaryOpType::SILU) {
+            output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config);
         } else {
             TT_THROW("ttnn.matmul: Unsupported activation function");
         }
