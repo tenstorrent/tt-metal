@@ -151,9 +151,8 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(delta_t1)
 
         # calculate abar
-        abar0 = ttnn.to_memory_config(self.A, memory_config=ttnn.L1_MEMORY_CONFIG)
         abar1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
-            abar0,
+            self.A,
             delta_t2,
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
@@ -161,7 +160,6 @@ class TtMambaSSM(torch.nn.Module):
             output_dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
-        ttnn.deallocate(abar0)
 
         abar2 = ttl.tensor.exp(
             abar1,
@@ -212,17 +210,13 @@ class TtMambaSSM(torch.nn.Module):
 
         if self.configs["mode"] == ModelMode.DECODE:
             # multiply abar and hidden_state
-            hidden_state0 = ttnn.to_memory_config(
-                self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-            )
             hidden_state0 = ttnn.multiply(
                 abar2,
-                hidden_state0,
+                self.tt_hidden_state,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=self.configs["dtype"]["activations"],
-                output_tensor=hidden_state0,
+                output_tensor=abar2,
             )
-            ttnn.deallocate(abar2)
 
             # add amulh and bmulx
             hidden_state0 = ttnn.add(
@@ -299,11 +293,8 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(C1)
 
         # x * D
-        D = ttnn.to_memory_config(
-            self.D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-        )
         x = ttnn.multiply(
-            x, D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"], output_tensor=x
+            x, self.D, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"], output_tensor=x
         )
 
         x = ttnn.add(
