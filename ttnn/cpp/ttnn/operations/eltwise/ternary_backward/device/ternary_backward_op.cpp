@@ -45,10 +45,10 @@ std::vector<Tensor> _addcdiv_bw(
     grad_tensor.emplace_back(grad);
     Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, output_mem_config), recip(tensor2, output_mem_config));
+    Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
     grad_tensor.emplace_back(where(
-        eqz(tensor2, output_mem_config),
-        where(eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
+        ttnn::eqz(tensor2, output_mem_config),
+        where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
         grad_a,
         output_mem_config));
     Tensor tmp = ttnn::multiply(
@@ -56,8 +56,8 @@ std::vector<Tensor> _addcdiv_bw(
     Tensor grad_b =
         ttnn::multiply(tmp, ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(where(
-        eqz(tensor2, output_mem_config),
-        where(eqz(grad, output_mem_config), t_nan, ttnn::neg(t_inf, output_mem_config), output_mem_config),
+        ttnn::eqz(tensor2, output_mem_config),
+        where(ttnn::eqz(grad, output_mem_config), t_nan, ttnn::neg(t_inf, output_mem_config), output_mem_config),
         grad_b,
         output_mem_config));
     return grad_tensor;
