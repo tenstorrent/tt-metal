@@ -73,6 +73,7 @@ enum class UnaryBackwardOpType {
     SIGN_BW,
     FMOD_BW,
     REMAINDER_BW,
+    DIV_NO_NAN_BW,
 };
 
 struct UnaryBackwardFunction{

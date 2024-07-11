@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 def torch_div_no_nan(input, scalar):
@@ -25,7 +25,7 @@ def test_bw_unary_div_no_nan(input_shapes, scalar, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, required_grad=True)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_div_no_nan_bw(grad_tensor, input_tensor, scalar=scalar)
+    tt_output_tensor_on_device = ttnn.div_no_nan_bw(grad_tensor, input_tensor, scalar)
 
     in_data.retain_grad()
 
