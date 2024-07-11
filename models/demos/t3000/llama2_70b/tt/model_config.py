@@ -607,17 +607,13 @@ def get_model_config(
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
-        model_config[
-            "PADDED_FF3_MM_PROGCFG"
-        ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
             fused_activation=None,
         )
-        model_config[
-            "PADDED_FF2_MM_PROGCFG"
-        ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,
             per_core_N=1,
