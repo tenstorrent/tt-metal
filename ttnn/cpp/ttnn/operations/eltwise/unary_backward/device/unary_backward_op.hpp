@@ -21,6 +21,7 @@ enum class UnaryBackwardOpType {
     ADD_BW,
     EQ_BW,
     LGAMMA_BW,
+    FILL_BW,
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,
