@@ -66,7 +66,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
 
 
 def run_all_gather_on_t3000_impl(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -79,12 +79,12 @@ def run_all_gather_on_t3000_impl(
     num_iters=1,
     enable_async=False,
 ):
-    if pcie_device_mesh.get_num_devices() <= 1:
+    if t3k_device_mesh.get_num_devices() <= 1:
         pytest.skip("Not T3000!")
 
     # Use Async mode based on test input config
-    for device in pcie_device_mesh.get_device_ids():
-        pcie_device_mesh.get_device(device).enable_async(enable_async)
+    for device in t3k_device_mesh.get_devices():
+        device.enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for All Gather Op Dispatch")
     logger.info(f"Input shape: {input_shape}")
@@ -103,8 +103,8 @@ def run_all_gather_on_t3000_impl(
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
     for i in range(num_iters):
         tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
@@ -123,7 +123,7 @@ def run_all_gather_on_t3000_impl(
 
 
 def run_all_gather_on_t3000_impl_tight_loop(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -137,7 +137,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     enable_async=False,
 ):
     run_all_gather_on_t3000_impl(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -186,7 +186,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
 @pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_post_commit_looping(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -200,7 +200,7 @@ def test_all_gather_on_t3000_post_commit_looping(
     enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -247,7 +247,7 @@ def test_all_gather_on_t3000_post_commit_looping(
 @pytest.mark.parametrize("num_iters", [1000])  # TODO: restore to 500
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_nightly_commit_looping(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -261,7 +261,7 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -336,7 +336,7 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     ],
 )
 def test_all_gather_on_t3000_post_commit(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -348,7 +348,7 @@ def test_all_gather_on_t3000_post_commit(
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -362,7 +362,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 def run_line_all_gather(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -375,11 +375,11 @@ def run_line_all_gather(
     enable_async,
     num_iters=1,
 ):
-    if pcie_device_mesh.get_num_devices() <= 1:
+    if t3k_device_mesh.get_num_devices() <= 1:
         pytest.skip("Not T3000!")
 
-    for device in pcie_device_mesh.get_device_ids():
-        pcie_device_mesh.get_device(device).enable_async(enable_async)
+    for device in t3k_device_mesh.get_devices():
+        device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -397,8 +397,8 @@ def run_line_all_gather(
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
     for i in range(num_iters):
         tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
@@ -452,7 +452,7 @@ def run_line_all_gather(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -466,7 +466,7 @@ def test_line_all_gather_on_t3000_post_commit(
     num_iters=1,
 ):
     run_line_all_gather(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -515,7 +515,7 @@ def test_line_all_gather_on_t3000_post_commit(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -529,7 +529,7 @@ def test_line_all_gather_on_t3000_nightly(
     num_iters=1,
 ):
     run_line_all_gather(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -669,7 +669,7 @@ def test_line_all_gather_on_t3000_nightly(
     ],
 )
 def test_all_gather_on_t3000_nightly(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -725,7 +725,7 @@ def test_all_gather_on_t3000_nightly(
         pytest.xfail(reason="Known failure")
 
     run_all_gather_on_t3000_impl(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,
@@ -739,7 +739,7 @@ def test_all_gather_on_t3000_nightly(
 
 
 def run_all_gather_sharded(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -754,7 +754,7 @@ def run_all_gather_sharded(
     use_program_cache,
     function_level_defaults,
 ):
-    if pcie_device_mesh.get_num_devices() <= 1:
+    if t3k_device_mesh.get_num_devices() <= 1:
         pytest.skip("Not T3000!")
 
     if input_shard_shape[0] > 32 and num_devices == 8:
@@ -826,8 +826,8 @@ def run_all_gather_sharded(
         pytest.skip("Unsupported test case")
 
     unchunked_input_tensor = torch.rand((unchunked_input_shape), dtype=torch.bfloat16)
-    ttnn_tensor = ttnn.from_torch(unchunked_input_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
+    ttnn_tensor = ttnn.from_torch(unchunked_input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
 
@@ -937,7 +937,7 @@ def run_all_gather_sharded(
     ),
 )
 def test_all_gather_sharded_post_commit(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -953,7 +953,7 @@ def test_all_gather_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1061,7 +1061,7 @@ def test_all_gather_sharded_post_commit(
     ),
 )
 def test_all_gather_sharded_nightly(
-    pcie_device_mesh,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1077,7 +1077,7 @@ def test_all_gather_sharded_nightly(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        pcie_device_mesh,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1109,13 +1109,13 @@ def test_all_gather_sharded_nightly(
 )
 @pytest.mark.parametrize("num_links", [1, 2])
 def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686 ... need to tag with post_commit
-    pcie_device_mesh, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
+    t3k_device_mesh, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
 ):
     if (
         layout == ttl.tensor.Layout.ROW_MAJOR or num_links == 2
     ) and mem_config.buffer_type == ttl.tensor.BufferType.DRAM:
         pytest.skip("All gather tests are hanging for RM in DRAM")
-    devices = pcie_device_mesh.get_device_ids()
+    devices = t3k_device_mesh.get_device_ids()
     input_tensor = torch.rand(input_shape).bfloat16()
     num_devices = len(devices)
     if num_devices < 2:
@@ -1127,8 +1127,8 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         pytest.skip("Unsupported test case")
 
     input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
