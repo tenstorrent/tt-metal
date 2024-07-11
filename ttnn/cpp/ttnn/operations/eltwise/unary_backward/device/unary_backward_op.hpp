@@ -27,6 +27,7 @@ enum class UnaryBackwardOpType {
     ACOSH_BW,
     ACOS_BW,
     ATAN_BW,
+    RAD2DEG_BW,
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,

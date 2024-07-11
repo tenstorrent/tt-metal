@@ -98,11 +98,6 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
 
-std::vector<Tensor> log_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> binary_le_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -143,18 +138,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     const Tensor& input,
     float bias,
     string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> hardshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float lambd,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> softshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float lambd,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> hardswish_bw(
@@ -249,11 +232,6 @@ std::vector<Tensor> digamma_bw(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> deg2rad_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> rad2deg_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
