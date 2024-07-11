@@ -68,6 +68,7 @@ enum class UnaryBackwardOpType {
     CEIL_BW,
     SOFTSIGN_BW,
     COSH_BW,
+    LOGITEPS_BW,
 };
 
 struct UnaryBackwardFunction{

@@ -728,60 +728,6 @@ std::vector<Tensor> threshold_bw(
     return operation::decorate_as_composite(__func__, _threshold_bw)(grad, input, threshold, value, output_mem_config);
 }
 
-// Torch reference
-// # if eps is not None:
-// #         lo = eps
-// #         hi = 1.0 - lo
-// #         return torch.where(
-// #             torch.ttnn::logical_and(self >= lo, self <= hi),
-// #             grad_output / (self * (1.0 - self)),
-// #             0.0,
-// #         )
-// #     else:
-// #         return torch.where(
-// #             torch.ttnn::logical_and(self >= 0.0, self <= 1.0),
-// #             grad_output / (self * (1.0 - self)),
-// #             self.new_full((), float("nan")),
-// #         )
-std::vector<Tensor> _logiteps_bw(
-    const Tensor& grad, const Tensor& input, float eps, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float low, high;
-    low = eps;
-    high = 1.0 - low;
-    Tensor grad_result =
-        ttnn::multiply(grad,
-            ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
-            std::nullopt,
-            output_mem_config);
-    Tensor t_eps = full_like(input, eps, output_mem_config);
-    Tensor t_low = full_like(input, low, output_mem_config);
-    Tensor t_high = full_like(input, high, output_mem_config);
-    Tensor ltl_gth = ttnn::logical_or(
-        ttnn::lt(input, t_low, std::nullopt, output_mem_config),
-        ttnn::gt(input, t_high, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_result = where(
-        ttnn::eq(ltl_gth, ones_like(input, output_mem_config), std::nullopt, output_mem_config),
-        where(ttnn::ltz(t_eps, output_mem_config), std::nanf(" "), 0.0, output_mem_config),
-        where(
-            ttnn::logical_or(
-                ttnn::eq(input, 0.0, std::nullopt, output_mem_config),
-                ttnn::eq(input, 1.0, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
-            grad_result,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> logiteps_bw(
-    const Tensor& grad, const Tensor& input, float eps, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _logiteps_bw)(grad, input, eps, output_mem_config);
-}
 
 std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
