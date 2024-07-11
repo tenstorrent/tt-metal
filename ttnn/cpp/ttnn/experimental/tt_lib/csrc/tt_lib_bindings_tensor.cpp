@@ -404,41 +404,6 @@ void TensorModule(py::module& m_tensor) {
     //     +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     // )doc");
 
-    // py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
-    //     .def(
-    //         py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
-    //         py::kw_only(),
-    //         py::arg("grid_size"),
-    //         py::arg("num_cores_nhw"),
-    //         py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-    //         py::arg("per_core_out_matrix_width_ntiles").noconvert())
-    //     .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
-    //     .def_property_readonly(
-    //         "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
-    //     .def_property_readonly(
-    //         "per_core_out_matrix_height_ntiles",
-    //         [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-    //     .def_property_readonly("per_core_out_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
-    //         return c.per_core_out_matrix_width_ntiles;
-    //     });
-
-    // py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
-    //     .def(
-    //         py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
-    //         py::kw_only(),
-    //         py::arg("act_block_h_ntiles").noconvert(),
-    //         py::arg("act_block_w_ntiles").noconvert(),
-    //         py::arg("out_subblock_h_ntiles").noconvert(),
-    //         py::arg("out_subblock_w_ntiles").noconvert())
-    //     .def_property_readonly(
-    //         "act_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_h_ntiles; })
-    //     .def_property_readonly(
-    //         "act_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_w_ntiles; })
-    //     .def_property_readonly(
-    //         "out_subblock_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_h_ntiles; })
-    //     .def_property_readonly(
-    //         "out_subblock_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_w_ntiles; });
-
     // m_tensor.def(
     //     "optimized_conv",
     //     &optimized_conv,

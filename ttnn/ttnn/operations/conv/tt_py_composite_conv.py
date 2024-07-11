@@ -209,7 +209,7 @@ def determine_parallel_config(
         f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
     )
 
-    return ttl.tensor.OptimizedConvParallelizationConfig(
+    return ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=num_cores_nhw,
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
@@ -297,7 +297,7 @@ def determine_per_core_block_config(
         assert (
             "out_subblock_h" in config_override
         ), "out_subblock_h must also be provided as override config if out_subblock_w is provided"
-    conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
+    conv_blocking_config = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
         out_subblock_h_ntiles=out_subblock_h_ntiles,
@@ -814,7 +814,7 @@ class TTPyCompositeConv(TTPyOp):
             return ds_out
 
         def conv_(activation):
-            return ttl.tensor.optimized_conv(
+            return ttnn.operations.conv2d.optimized_conv(
                 activation,
                 self.weight,
                 self.bias,

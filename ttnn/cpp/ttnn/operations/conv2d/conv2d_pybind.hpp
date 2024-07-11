@@ -55,6 +55,65 @@ void py_module(py::module& module) {
         py::arg("bias_tensor") = std::nullopt,
         py::arg("conv_config") = std::nullopt);
 
+    module.def(
+        "optimized_conv",
+        &optimized_conv,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg("bias").noconvert() = std::nullopt,
+        py::arg("conv_reader_indices").noconvert() = std::nullopt,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg().noconvert() = 0,
+        py::arg("output_mem_config").noconvert() = std::nullopt,
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("input_tensor_shape").noconvert() = std::nullopt,
+        py::arg("use_shallow_conv_variant").noconvert() = false,
+        py::arg("transpose_mcast").noconvert() = true,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        R"doc(
+        Perform a conv ``A x B`` with two tensors
+        This op tilizes tensor A and untilizes the output
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
+
+    module.def(
+        "get_conv_padded_input_shape_and_mem_config",
+        [](ttnn::Device& device,
+            const ttnn::Tensor& input_tensor,
+            const Conv2dConfig& conv_config,
+            uint32_t batch_size,
+            uint32_t height,
+            uint32_t width,
+            uint32_t in_channels,
+            uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config(
+                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
+        },
+        py::kw_only(),
+        py::arg("device"),
+        py::arg("input_tensor"),
+        py::arg("conv_config"),
+        py::arg("batch_size"),
+        py::arg("height"),
+        py::arg("width"),
+        py::arg("in_channels"),
+        py::arg("out_channels"));
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
             py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
@@ -101,28 +160,41 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
-    module.def(
-        "get_conv_padded_input_shape_and_mem_config",
-        [](ttnn::Device& device,
-            const ttnn::Tensor& input_tensor,
-            const Conv2dConfig& conv_config,
-            uint32_t batch_size,
-            uint32_t height,
-            uint32_t width,
-            uint32_t in_channels,
-            uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config(
-                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
-        },
-        py::kw_only(),
-        py::arg("device"),
-        py::arg("input_tensor"),
-        py::arg("conv_config"),
-        py::arg("batch_size"),
-        py::arg("height"),
-        py::arg("width"),
-        py::arg("in_channels"),
-        py::arg("out_channels"));
+    py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
+        .def(
+            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
+            py::kw_only(),
+            py::arg("grid_size"),
+            py::arg("num_cores_nhw"),
+            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
+            py::arg("per_core_out_matrix_width_ntiles").noconvert())
+        .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
+        .def_property_readonly(
+            "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
+        .def_property_readonly(
+            "per_core_out_matrix_height_ntiles",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_out_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_out_matrix_width_ntiles;
+        });
+
+    py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")
+        .def(
+            py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
+            py::kw_only(),
+            py::arg("act_block_h_ntiles").noconvert(),
+            py::arg("act_block_w_ntiles").noconvert(),
+            py::arg("out_subblock_h_ntiles").noconvert(),
+            py::arg("out_subblock_w_ntiles").noconvert())
+        .def_property_readonly(
+            "act_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_h_ntiles; })
+        .def_property_readonly(
+            "act_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_w_ntiles; })
+        .def_property_readonly(
+            "out_subblock_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_h_ntiles; })
+        .def_property_readonly(
+            "out_subblock_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_w_ntiles; });
+
 }
 
 }  // namespace conv2d
