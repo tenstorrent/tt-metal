@@ -4,12 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
-    data_gen_with_range,
-    compare_pcc,
-    data_gen_with_val,
-)
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range, data_gen_with_val
 from models.utility_functions import (
     skip_for_wormhole_b0,
 )
@@ -32,7 +28,7 @@ def test_bw_polygamma(input_shapes, order, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
     n = order
 
-    tt_output_tensor_on_device = tt_lib.tensor.polygamma_bw(grad_tensor, input_tensor, n)
+    tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
     in_data.retain_grad()
 
@@ -59,7 +55,7 @@ def test_bw_polygamma_range_pos(input_shapes, order, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device)
     n = order
 
-    tt_output_tensor_on_device = tt_lib.tensor.polygamma_bw(grad_tensor, input_tensor, n)
+    tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
     in_data.retain_grad()
 
@@ -88,7 +84,7 @@ def test_bw_polygamma_zero(input_shapes, order, device):
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)
     n = order
 
-    tt_output_tensor_on_device = tt_lib.tensor.polygamma_bw(grad_tensor, input_tensor, n)
+    tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
     in_data.retain_grad()
 
@@ -116,7 +112,7 @@ def test_bw_polygamma_grad_zero(input_shapes, order, device):
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)
     n = order
 
-    tt_output_tensor_on_device = tt_lib.tensor.polygamma_bw(grad_tensor, input_tensor, n)
+    tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
     in_data.retain_grad()
 
@@ -144,7 +140,7 @@ def test_bw_polygamma_input_zero(input_shapes, order, device):
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, 0)
     n = order
 
-    tt_output_tensor_on_device = tt_lib.tensor.polygamma_bw(grad_tensor, input_tensor, n)
+    tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
     in_data.retain_grad()
 

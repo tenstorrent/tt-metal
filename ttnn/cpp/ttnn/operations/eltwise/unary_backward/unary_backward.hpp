@@ -179,5 +179,6 @@ constexpr auto digamma_bw = ttnn::register_operation<operations::unary_backward:
 constexpr auto erfinv_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ERFINV_BW>>("ttnn::erfinv_bw");
 constexpr auto erf_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ERF_BW>>("ttnn::erf_bw");
 constexpr auto deg2rad_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::DEG2RAD_BW>>("ttnn::deg2rad_bw");
+constexpr auto polygamma_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::POLYGAMMA_BW>>("ttnn::polygamma_bw");
 
 }  // namespace ttnn

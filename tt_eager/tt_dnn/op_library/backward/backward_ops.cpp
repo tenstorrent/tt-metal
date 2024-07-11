@@ -304,41 +304,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _polygamma_bw(
-    const Tensor& grad, const Tensor& input, int n, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    float pos_neg = 1.0f;
-    if (n == 2 || n == 4 || n == 6 || n == 8 || n == 10) {
-        pos_neg = -1.0f;
-    }
-    Tensor grad_a = ttnn::multiply(grad, polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(
-            ttnn::le(input, 0.0, std::nullopt, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
-        t_nan,
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::multiply(
-            full_like(input, -std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, std::nullopt, output_mem_config),
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::multiply(
-            full_like(input, std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, std::nullopt, output_mem_config),
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> polygamma_bw(
-    const Tensor& grad, const Tensor& input, int n, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _polygamma_bw)(grad, input, n, output_mem_config);
-}
-
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
