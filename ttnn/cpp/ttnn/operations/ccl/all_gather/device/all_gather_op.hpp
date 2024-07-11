@@ -29,10 +29,10 @@ enum AllGatherMode {
 };
 
 namespace all_gather_op {
-using ttnn::utils::ccl::Topology;
+using ccl::Topology;
 }; // namespace all_gather_op
 
-using ttnn::utils::ccl::EriscDatamoverBuilder;
+using ccl::EriscDatamoverBuilder;
 
 AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim);
 
@@ -255,13 +255,13 @@ struct ShardedAllGatherConfig {
 
         switch(input_tensor.memory_config().memory_layout) {
             case TensorMemoryLayout::WIDTH_SHARDED:
-                this->shard_type = ttnn::utils::ccl::ShardType::Width;
+                this->shard_type = ccl::ShardType::Width;
                 break;
             case TensorMemoryLayout::BLOCK_SHARDED:
-                this->shard_type = ttnn::utils::ccl::ShardType::Block;
+                this->shard_type = ccl::ShardType::Block;
                 break;
             case TensorMemoryLayout::HEIGHT_SHARDED:
-                this->shard_type = ttnn::utils::ccl::ShardType::Height;
+                this->shard_type = ccl::ShardType::Height;
                 break;
             case TensorMemoryLayout::INTERLEAVED:
             case TensorMemoryLayout::SINGLE_BANK:
@@ -285,7 +285,7 @@ struct ShardedAllGatherConfig {
         return single_tile_shard_on_dim;
     }
 
-    ttnn::utils::ccl::ShardType get_shard_type() const {
+    ccl::ShardType get_shard_type() const {
         TT_ASSERT(is_sharding_enabled, "Tried getting sharding config for non-sharded tensor");
         return shard_type;
     }
@@ -293,7 +293,7 @@ struct ShardedAllGatherConfig {
     private:
     bool requires_post_all_gather_reshard;
     bool single_tile_shard_on_dim;
-    ttnn::utils::ccl::ShardType shard_type;
+    ccl::ShardType shard_type;
     bool is_sharding_enabled;
 };
 
@@ -312,14 +312,14 @@ struct ShardAddrGenArgGenerator {
         std::vector<uint32_t> args;
         args.reserve(7 * this->args_struct.num_dest_cores * 2);
 
-        TT_ASSERT(this->args_struct.shard_size_in_bytes != ttnn::utils::ccl::UNINITIALIZED_VALUE_U32);
-        TT_ASSERT(this->args_struct.total_chunks_per_core != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
-        TT_ASSERT(this->args_struct.shards_start_address != ttnn::utils::ccl::UNINITIALIZED_VALUE_U32);
-        TT_ASSERT(this->args_struct.starting_core_index != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
-        TT_ASSERT(this->args_struct.starting_chunk_into_shard != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
-        TT_ASSERT(this->args_struct.intra_core_stride_in_shards != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
-        TT_ASSERT(this->args_struct.contiguous_chunks_before_stride != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
-        TT_ASSERT(this->args_struct.num_dest_cores != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.shard_size_in_bytes != ccl::UNINITIALIZED_VALUE_U32);
+        TT_ASSERT(this->args_struct.total_chunks_per_core != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.shards_start_address != ccl::UNINITIALIZED_VALUE_U32);
+        TT_ASSERT(this->args_struct.starting_core_index != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.starting_chunk_into_shard != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.intra_core_stride_in_shards != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.contiguous_chunks_before_stride != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.num_dest_cores != ccl::UNINITIALIZED_VALUE_U16);
         TT_ASSERT(this->args_struct.dest_cores.size() != 0);
 
         args.push_back(this->args_struct.is_clockwise);
@@ -360,7 +360,7 @@ struct ShardAddrGenArgGenerator {
         TT_ASSERT(this->args_struct.starting_core_index < this->args_struct.dest_cores.size());
     }
 
-    ttnn::utils::ccl::ShardAddrGenArgs<true> args_struct;
+    ccl::ShardAddrGenArgs<true> args_struct;
 
     bool initialized;
 };
@@ -392,7 +392,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
     }
     InputTensorShardAddrGenArgGenerator(
         Device const* device,
-        ttnn::utils::ccl::CclOpShardedTensorConfig *input_tensor_config,
+        ccl::CclOpShardedTensorConfig *input_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,
@@ -425,7 +425,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
         this->args_struct.dest_cores.reserve(dest_core_coords.size());
         std::transform(dest_core_coords.begin(), dest_core_coords.end(), std::back_inserter(this->args_struct.dest_cores),
             [&device](CoreCoord const& core) {
-                return ttnn::utils::ccl::WorkerXY(
+                return ccl::WorkerXY(
                     static_cast<uint16_t>(device->worker_core_from_logical_core(core).x),
                     static_cast<uint16_t>(device->worker_core_from_logical_core(core).y)
                     );
@@ -444,7 +444,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
 
 struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
     static std::vector<CoreCoord> compute_worker_coord_worker_dest_cores (
-        ttnn::utils::ccl::ShardType shard_type,
+        ccl::ShardType shard_type,
         std::vector<CoreCoord> const& global_shard_dest_cores,
         uint32_t input_num_shards,
         uint32_t output_num_shards,
@@ -495,7 +495,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
 
 
     static std::vector<ccl::WorkerXY> compute_worker_dest_cores (
-        ttnn::utils::ccl::ShardType shard_type,
+        ccl::ShardType shard_type,
         Device const& device,
         CoreRangeSet const& shard_core_range,
         uint32_t input_num_shards,
@@ -516,7 +516,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
             dest_cores_of_worker.reserve(worker_coord_worker_dest_cores.size());
             std::transform(worker_coord_worker_dest_cores.begin(), worker_coord_worker_dest_cores.end(), std::back_inserter(dest_cores_of_worker),
                 [&device](CoreCoord const& core) {
-                    return ttnn::utils::ccl::WorkerXY(
+                    return ccl::WorkerXY(
                         static_cast<uint16_t>(device.worker_core_from_logical_core(core).x),
                         static_cast<uint16_t>(device.worker_core_from_logical_core(core).y)
                         );
@@ -588,8 +588,8 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
     OutputTensorShardAddrGenArgGenerator(
         AllGatherConfig const& all_gather_config,
         Device const* device,
-        ttnn::utils::ccl::CclOpShardedTensorConfig *input_tensor_config,
-        ttnn::utils::ccl::CclOpShardedTensorConfig *output_tensor_config,
+        ccl::CclOpShardedTensorConfig *input_tensor_config,
+        ccl::CclOpShardedTensorConfig *output_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,
@@ -617,7 +617,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         uint32_t input_num_shards = sharded_tensor_num_cores;
         uint32_t output_num_shards = input_num_shards * ring_size;
         this->args_struct.dest_cores = OutputTensorShardAddrGenArgGenerator::compute_worker_dest_cores (
-                ttnn::utils::ccl::ShardType::Width,
+                ccl::ShardType::Width,
                 *device,
                 tensor_shard_grid,
                 input_num_shards,
@@ -630,7 +630,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         TT_ASSERT(this->args_struct.dest_cores.size() > 0);
         std::vector<CoreCoord> const& global_shard_dest_cores = corerange_to_cores(tensor_shard_grid, std::nullopt, is_shard_orientation_row_major);
         CoreCoord const& dest_core_coord = global_shard_dest_cores.at(global_starting_dest_worker_index);
-        ttnn::utils::ccl::WorkerXY noc0_starting_dest_core_xy(
+        ccl::WorkerXY noc0_starting_dest_core_xy(
             static_cast<uint16_t>(device->worker_core_from_logical_core(dest_core_coord).x),
             static_cast<uint16_t>(device->worker_core_from_logical_core(dest_core_coord).y)
             );
@@ -655,17 +655,17 @@ struct FullWorkerGridShardAddrGenArgGenerator {
         args.reserve(12 + args_struct.total_num_cores);
 
         TT_ASSERT(args_struct.dest_cores.size() > 0, "dest_cores was uninitialized");
-        TT_ASSERT(args_struct.tile_size_in_bytes != ttnn::utils::ccl::UNINITIALIZED_VALUE_U32, "tile_size_in_bytes was uninitialized");
-        TT_ASSERT(args_struct.shards_start_address != ttnn::utils::ccl::UNINITIALIZED_VALUE_U32, "shards_start_address was uninitialized");
-        TT_ASSERT(args_struct.curr_core_index != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "curr_core_index was uninitialized");
-        TT_ASSERT(args_struct.total_num_cores != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "total_num_cores was uninitialized");
-        TT_ASSERT(args_struct.curr_shard_tile_x != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_x was uninitialized");
-        TT_ASSERT(args_struct.curr_shard_tile_y != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_y was uninitialized");
-        TT_ASSERT(args_struct.curr_tile_index != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "curr_tile_index was uninitialized");
-        TT_ASSERT(args_struct.curr_shard != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "curr_shard was uninitialized");
-        TT_ASSERT(args_struct.input_shard_num_tiles_x != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_x was uninitialized");
-        TT_ASSERT(args_struct.input_shard_num_tiles_y != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_y was uninitialized");
-        TT_ASSERT(args_struct.total_shards_x != ttnn::utils::ccl::UNINITIALIZED_VALUE_U16, "total_shards_x was uninitialized");
+        TT_ASSERT(args_struct.tile_size_in_bytes != ccl::UNINITIALIZED_VALUE_U32, "tile_size_in_bytes was uninitialized");
+        TT_ASSERT(args_struct.shards_start_address != ccl::UNINITIALIZED_VALUE_U32, "shards_start_address was uninitialized");
+        TT_ASSERT(args_struct.curr_core_index != ccl::UNINITIALIZED_VALUE_U16, "curr_core_index was uninitialized");
+        TT_ASSERT(args_struct.total_num_cores != ccl::UNINITIALIZED_VALUE_U16, "total_num_cores was uninitialized");
+        TT_ASSERT(args_struct.curr_shard_tile_x != ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_x was uninitialized");
+        TT_ASSERT(args_struct.curr_shard_tile_y != ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_y was uninitialized");
+        TT_ASSERT(args_struct.curr_tile_index != ccl::UNINITIALIZED_VALUE_U16, "curr_tile_index was uninitialized");
+        TT_ASSERT(args_struct.curr_shard != ccl::UNINITIALIZED_VALUE_U16, "curr_shard was uninitialized");
+        TT_ASSERT(args_struct.input_shard_num_tiles_x != ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_x was uninitialized");
+        TT_ASSERT(args_struct.input_shard_num_tiles_y != ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_y was uninitialized");
+        TT_ASSERT(args_struct.total_shards_x != ccl::UNINITIALIZED_VALUE_U16, "total_shards_x was uninitialized");
 
         args.push_back(args_struct.tile_size_in_bytes);
         args.push_back(args_struct.shards_start_address);
@@ -717,7 +717,7 @@ struct FullWorkerGridShardAddrGenArgGenerator {
 
             auto const& tensor_shard_grid = input_tensor.buffer()->shard_spec().grid();
             this->args_struct.dest_cores = OutputTensorShardAddrGenArgGenerator::compute_worker_dest_cores (
-                    ttnn::utils::ccl::ShardType::Width,
+                    ccl::ShardType::Width,
                     *device,
                     tensor_shard_grid,
                     tensor_shard_grid.num_cores(),
@@ -730,7 +730,7 @@ struct FullWorkerGridShardAddrGenArgGenerator {
             this->initialized = true;
         }
 
-    ttnn::utils::ccl::FullWorkerGridShardAddrGenArgs<true> args_struct;
+    ccl::FullWorkerGridShardAddrGenArgs<true> args_struct;
     bool initialized;
 };
 

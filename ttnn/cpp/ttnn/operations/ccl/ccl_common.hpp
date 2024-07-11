@@ -318,8 +318,8 @@ class RingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
         uint32_t max_slice_size_in_bytes,
         uint32_t half_cb_n_pages);
 
-    ttnn::utils::ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index) {
-        return ttnn::utils::ccl::InterleavedTensorWorkerSlice(
+    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index) {
+        return ccl::InterleavedTensorWorkerSlice(
             this->flattened_tensor_shape,
             this->tensor_slice_shape,
             this->worker_slice_shapes.at(global_worker_index),
@@ -452,7 +452,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     Device const* device,
-    ttnn::utils::ccl::EriscDatamoverBuilder const& edm_builder,
+    ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
@@ -468,7 +468,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
     uint32_t page_size,
-    ttnn::utils::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
+    ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
 
 }  // namespace ccl

@@ -167,8 +167,8 @@ class EriscDatamoverBuilder {
     uint32_t eth_buffer_size_bytes;
     uint32_t handshake_addr;
     uint32_t const num_channel_buffers;
-    ttnn::utils::ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
-    ttnn::utils::ccl::EriscDataMoverTerminationMode const termination_mode;
+    ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
+    ccl::EriscDataMoverTerminationMode const termination_mode;
     uint32_t num_senders;
     uint32_t num_receivers;
 
@@ -187,9 +187,9 @@ class EriscDatamoverBuilder {
         uint32_t handshake_addr,
         std::vector<uint32_t> const& local_semaphore_addresses,
         std::vector<uint32_t> const& local_buffer_addresses,
-        ttnn::utils::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
-        ttnn::utils::ccl::EriscDataMoverTerminationMode termination_mode =
-            ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) :
+        ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
+        ccl::EriscDataMoverTerminationMode termination_mode =
+            ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
