@@ -32,8 +32,8 @@ test_sweep_args = [
     ),
 ]
 
-all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
-NUM_REPEATS = 15
+all_num_call_to_stack = [20]  # For 10 and more test  execution spills to dispatch
+NUM_REPEATS = 5
 
 
 # def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
@@ -56,7 +56,9 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
 
     start_time = time.time()
     for _ in range(num_call_to_stack):
+        # signpost(header=f"starting {op_name}")
         op_func()
+        # signpost(header=f"ending {op_name}")
 
     dispatch_end_time = time.time()
     tt_lib.device.Synchronize(device)
@@ -66,7 +68,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     avg_dispatch_time = dispatch_time / num_call_to_stack
 
     logger.info(
-        f"{num_call_to_stack} calls without Synchronize {dispatch_time:.2f}ms ({avg_dispatch_time:.2f}ms per call)"
+        f"{num_call_to_stack} calls without Synchronize {dispatch_time:.2f}ms ({avg_dispatch_time:.3f}ms per call)"
     )
     logger.info(f"Synchronize {sync_time:.2f}ms ({(sync_time/num_call_to_stack):.2f}ms per call)")
 
@@ -235,11 +237,11 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             results_overhead += overhead_ms
             results_op += op_ms
 
-    min_val = round(min(results_overhead), 2)
-    mean_val = round(statistics.mean(results_overhead), 2)
+    min_val = round(min(results_overhead), 3)
+    mean_val = round(statistics.mean(results_overhead), 3)
 
     # min_val_op = round(min(results_op), 2)
-    mean_val_op = round(statistics.mean(results_op), 2)
+    mean_val_op = round(statistics.mean(results_op), 3)
 
     logger.info(f"Measure overhead of launching {op['name']} is {min_val:.2f}ms (mean {mean_val:.2f}ms)")
     text_file.write(f"{op['name']},{op_count},{min_val},{mean_val},{mean_val_op}\n")
