@@ -146,7 +146,6 @@ void py_module(py::module& module) {
         | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
     module.def(
