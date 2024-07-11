@@ -225,6 +225,7 @@ Pointwise Unary
    ttnn/log2_bw
    ttnn/sign_bw
    ttnn/fmod_bw
+   ttnn/remainder_bw
 
 Pointwise Binary
 ================

@@ -935,6 +935,14 @@ std::vector<Tensor> _fmod_bw(
 }
 
 
+std::vector<Tensor> _unary_remainder_bw(
+    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1061,6 +1069,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _logiteps_bw;
         case UnaryBackwardOpType::FMOD_BW:
             return _fmod_bw;
+        case UnaryBackwardOpType::REMAINDER_BW:
+            return _remainder_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

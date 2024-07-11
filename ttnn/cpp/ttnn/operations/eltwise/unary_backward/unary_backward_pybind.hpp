@@ -459,6 +459,12 @@ void py_module(py::module& module) {
         module,
         ttnn::fmod_bw,
         R"doc(Performs backward operations for fmod on :attr:`input_tensor`, :attr:`eps` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::remainder_bw,
+        R"doc(Performs backward operations for remainder on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward

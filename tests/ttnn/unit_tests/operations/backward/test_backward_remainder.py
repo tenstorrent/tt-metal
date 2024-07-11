@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -31,7 +31,7 @@ def test_bw_unary_remainder(input_shapes, scalar, device):
 
     pyt_y = torch.remainder(in_data, scalar)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_remainder_bw(grad_tensor, input_tensor, scalar)
+    tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, scalar)
 
     in_data.retain_grad()
 
