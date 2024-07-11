@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_val,
     compare_pcc,
@@ -27,7 +27,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 def test_bw_logiteps(input_shapes, eps, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    tt_output_tensor_on_device = tt_lib.tensor.logiteps_bw(grad_tensor, input_tensor, eps=eps)
+    tt_output_tensor_on_device = ttnn.logiteps_bw(grad_tensor, input_tensor, eps)
     in_data.retain_grad()
 
     pyt_y = torch.logit(in_data, eps=eps)
