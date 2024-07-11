@@ -106,11 +106,11 @@ ttnn::Tensor matmul(
 
     if (activation.has_value() && !has_user_grid) {
         if (activation.value() == "relu") {
-            output_tensor = tt::tt_metal::relu(output_tensor, memory_config);
+            output_tensor = ttnn::relu(output_tensor, memory_config);
         } else if (activation.value() == "gelu") {
-            output_tensor = tt::tt_metal::gelu(output_tensor, false, memory_config);
+            output_tensor = ttnn::gelu(output_tensor, false, memory_config);
         } else if (activation.value() == "silu") {
-            output_tensor = tt::tt_metal::silu(output_tensor, memory_config);
+            output_tensor = ttnn::silu(output_tensor, memory_config);
         } else {
             TT_THROW("ttnn.matmul: Unsupported activation function");
         }

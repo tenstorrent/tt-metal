@@ -16,6 +16,6 @@ libhwloc-dev
 libhdf5-serial-dev
 ruby=1:2.7+1
 python3-dev=3.8.2-0ubuntu2
-python3.8-venv=3.8.10-0ubuntu1~20.04.9
+python3.8-venv=3.8.10-0ubuntu1~20.04.10
 cargo
 ninja-build
