@@ -221,6 +221,7 @@ Pointwise Unary
    ttnn/ceil_bw
    ttnn/softsign_bw
    ttnn/cosh_bw
+   ttnn/logiteps_bw
 
 Pointwise Binary
 ================
