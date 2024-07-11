@@ -98,9 +98,6 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
 
-std::vector<Tensor> fill_zero_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> fill_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
