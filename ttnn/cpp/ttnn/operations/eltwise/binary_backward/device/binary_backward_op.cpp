@@ -499,36 +499,36 @@ std::vector<Tensor> _div_bw(
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     if (round_mode == "None") {
-        Tensor grad_a = ttnn::multiply(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
+        Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config);
         Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
         Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
         grad_tensor.emplace_back(where(
-            eqz(other, output_mem_config),
+            ttnn::eqz(other, output_mem_config),
             where(
-                eqz(grad, output_mem_config),
+                ttnn::eqz(grad, output_mem_config),
                 t_nan,
-                ttnn::multiply(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config),
+                ttnn::multiply(t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
                 output_mem_config),
             grad_a,
             output_mem_config));
         Tensor grad_b = ttnn::multiply(
-            neg(grad, output_mem_config),
-            (ttnn::multiply(input, recip(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
+            ttnn::neg(grad, output_mem_config),
+            (ttnn::multiply(input, ttnn::reciprocal(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
         grad_tensor.emplace_back(where(
-            eqz(other, output_mem_config),
+            ttnn::eqz(other, output_mem_config),
             where(
-                eqz(grad, output_mem_config),
+                ttnn::eqz(grad, output_mem_config),
                 t_nan,
                 where(
-                    eqz(input, output_mem_config),
+                    ttnn::eqz(input, output_mem_config),
                     t_nan,
-                    ttnn::multiply(ttnn::multiply(neg(t_inf, output_mem_config),
-                            sign(input, output_mem_config),
+                    ttnn::multiply(ttnn::multiply(ttnn::neg(t_inf, output_mem_config),
+                            ttnn::sign(input, output_mem_config),
                             std::nullopt,
                             output_mem_config),
-                        sign(grad, output_mem_config),
+                        ttnn::sign(grad, output_mem_config),
                         std::nullopt,
                         output_mem_config),
                     output_mem_config),
