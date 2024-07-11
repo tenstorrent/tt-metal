@@ -358,14 +358,14 @@ std::vector<Tensor> _rpow_bw(
 
 std::vector<Tensor> _floor_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = tt::tt_metal::zeros_like(grad, output_mem_config);
+    Tensor t_zero = ttnn::operations::creation::zeros_like(grad);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
 
 std::vector<Tensor> _round_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = tt::tt_metal::zeros_like(grad, output_mem_config);
+    Tensor t_zero = ttnn::operations::creation::zeros_like(grad);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
@@ -373,8 +373,8 @@ std::vector<Tensor> _round_bw(const Tensor& grad, const Tensor& input, const Mem
 std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = tt::tt_metal::full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = tt::tt_metal::full_like(input, std::nanf(""), output_mem_config);
+    Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());
+    Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""));
     grad_tensor.emplace_back(where(
         ttnn::eqz(input, output_mem_config),
         where(
@@ -389,9 +389,9 @@ std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_tensor = tt::tt_metal::zeros_like(input, output_mem_config);
-    Tensor one_tensor = tt::tt_metal::ones_like(input, output_mem_config);
-    Tensor six_tensor = tt::tt_metal::full_like(input, 6, output_mem_config);
+    Tensor zero_tensor = ttnn::operations::creation::zeros_like(input);
+    Tensor one_tensor = ttnn::operations::creation::ones_like(input);
+    Tensor six_tensor = ttnn::operations::creation::full_like(input, 6);
     Tensor grad_result =
         where(ttnn::le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
     grad_result = where(
@@ -423,7 +423,7 @@ std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
-        ttnn::multiply(ttnn::subtract(tt::tt_metal::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(ttnn::subtract(ttnn::operations::creation::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
             input,
             std::nullopt,
             output_mem_config),

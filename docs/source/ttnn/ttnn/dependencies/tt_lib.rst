@@ -814,8 +814,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.fill_bw
 
-.. autofunction:: tt_lib.tensor.unary_sub_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
 
 .. autofunction:: tt_lib.tensor.lt_bw
@@ -877,8 +875,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.rad2deg_bw
 
 .. autofunction:: tt_lib.tensor.reciprocal_bw
-
-.. autofunction:: tt_lib.tensor.rpow_bw
 
 .. autofunction:: tt_lib.tensor.square_bw
 
