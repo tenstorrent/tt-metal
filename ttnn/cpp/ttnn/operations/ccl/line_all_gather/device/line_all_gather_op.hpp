@@ -25,10 +25,10 @@ namespace ttnn {
 namespace utils {
 
 namespace all_gather_op {
-using ttnn::utils::ccl::Topology;
+using ccl::Topology;
 }; // namespace all_gather_op
 
-using ttnn::utils::ccl::EriscDatamoverBuilder;
+using ccl::EriscDatamoverBuilder;
 
 
 struct LineAllGather {

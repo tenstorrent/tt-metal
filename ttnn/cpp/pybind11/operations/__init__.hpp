@@ -62,12 +62,10 @@ void py_module(py::module& module) {
 
     auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
     unary_backward::py_module(m_unary_backward);
-    
-    auto m_ccl_all_gather = module.def_submodule("ccl_all_gather", "collective communication operations");
-    ccl_all_gather::py_module(m_ccl_all_gather);
 
-    auto m_ccl_line_all_gather = module.def_submodule("ccl_line_all_gather", "collective communication operations ");
-    ccl_line_all_gather::py_module(m_ccl_line_all_gather);
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_module_all_gather(m_ccl);
+    ccl::py_module_line_all_gather(m_ccl);
 
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);

@@ -15,12 +15,12 @@ namespace py = pybind11;
 
 namespace ttnn {
 namespace operations {
-namespace ccl_line_all_gather {
+namespace ccl {
 
 namespace detail {
 
 template <typename ccl_operation_t>
-void bind_ccl_line_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_line_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -43,9 +43,9 @@ void bind_ccl_line_all_gather(py::module& module, const ccl_operation_t& operati
 }  // namespace detail
 
 
-void py_module(py::module& module) {
+void py_module_line_all_gather(py::module& module) {
 
-    detail::bind_ccl_line_all_gather(
+    detail::bind_line_all_gather(
         module,
         ttnn::line_all_gather,
         R"doc(line_all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
@@ -68,6 +68,6 @@ void py_module(py::module& module) {
         )doc");
 }
 
-}  // namespace ccl_line_all_gather
+}  // namespace ccl
 }  // namespace operations
 }  // namespace ttnn
