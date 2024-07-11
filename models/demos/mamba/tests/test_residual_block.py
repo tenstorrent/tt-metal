@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
+from models.utility_functions import skip_for_grayskull
 
 
 class PytorchResidualBlock(torch.nn.Module):
@@ -29,6 +30,7 @@ class PytorchResidualBlock(torch.nn.Module):
         return result
 
 
+@skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, pcc",
     (
@@ -36,7 +38,7 @@ class PytorchResidualBlock(torch.nn.Module):
             "state-spaces/mamba-2.8b",
             ModelMode.PREFILL,
             1,
-            64,
+            128,
             0.99,
         ),
         (
