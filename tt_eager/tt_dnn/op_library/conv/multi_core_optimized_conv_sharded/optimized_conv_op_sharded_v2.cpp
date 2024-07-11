@@ -228,7 +228,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool enable_act_doule_buffer) {
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -291,6 +292,33 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             }
         }
     }
+    // it is bad for compute, pad act_block_h_ntiles
+    uint32_t max_subblock_h = fp32_dest_acc_en ? 4 : 8;
+    uint32_t act_block_h_ntiles_padded = act_block_h_ntiles;
+    uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
+    if (out_subblock_w_ntiles == 1 and out_subblock_h_ntiles < max_subblock_h and (act_block_h_ntiles == out_block_h_ntiles)) {
+        uint32_t num_subblock_h = act_block_h_ntiles / out_subblock_h_ntiles;
+        uint32_t num_iter = max_subblock_h - out_subblock_h_ntiles;
+        uint32_t new_out_subblock_h = out_subblock_h_ntiles;
+        uint32_t preferred_out_subblock_h = out_subblock_h_ntiles;
+
+        for (uint32_t i=0; i < num_iter; ++i) {
+            new_out_subblock_h += 1;
+            uint32_t new_num_subblock_h = (act_block_h_ntiles + new_out_subblock_h - 1) / new_out_subblock_h;
+
+            if (new_num_subblock_h < num_subblock_h) {
+                num_subblock_h = new_num_subblock_h;
+                preferred_out_subblock_h = new_out_subblock_h;
+            }
+        }
+        out_subblock_h_ntiles_padded = preferred_out_subblock_h;
+        act_block_h_ntiles_padded = out_subblock_h_ntiles_padded * num_subblock_h;
+    }
+    bool enable_subblock_padding = false;
+    if (act_block_h_ntiles_padded != act_block_h_ntiles) {
+        enable_subblock_padding = true;
+    }
+
     // assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_ASSERT(
         out_block_h_ntiles >= act_block_h_ntiles,
@@ -525,6 +553,22 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
+    // log info for debugging
+    {
+        log_info("grid_size: {}", p_config.grid_size);
+        log_info("packer_l1: {}", packer_l1_acc);
+        log_info("split_reader: {}", split_reader);
+        log_info("enable_act_doule_buffer: {}", enable_act_doule_buffer);
+        log_info("enable block padding: {}", (per_core_out_matrix_height_ntiles % act_block_h_ntiles != 0));
+        log_info("enable subblock padding: {}", enable_subblock_padding);
+        log_info("per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
+        log_info("act_block_h_ntiles_padded: {}", act_block_h_ntiles_padded);
+        log_info("act_block_w_ntiles: {}", act_block_w_ntiles);
+        log_info("weight_block_w_ntiles: {}", weight_block_w_ntiles);
+        log_info("out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
+        log_info("out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+    }
+
     // For debug
     {
         log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
@@ -748,15 +792,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
-    num_act_cb_tiles = num_act_cb_tiles * 2;
-
-    // if (conv_act_size_c / conv_act_c_blocks < 160 &&
-    //     per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
-    //     num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
-    // }
+    if (enable_act_doule_buffer) {
+        num_act_cb_tiles = num_act_cb_tiles * 2;
+    } else if (conv_act_size_c / conv_act_c_blocks < 160 &&
+        per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
+        num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
+    }
 
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles_padded * weight_block_w_ntiles;
+    uint32_t output_block_num_tiles = enable_subblock_padding ? (act_block_h_ntiles_padded * weight_block_w_ntiles) : writer_output_block_num_tiles;
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
@@ -792,7 +837,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         num_act_cb_tiles,               // row major act cb
         num_weight_cb_tiles,            // tiled weight cb
         num_cb0_tilized_tiles,          // tiled act cb
-        writer_output_block_num_tiles,  // math output cb
+        output_block_num_tiles,  // math output cb
         weight_block_w_ntiles,          // reblock cb
         writer_output_block_num_tiles,  // writer output cb, double bufferred
         untilize_out,
@@ -1025,7 +1070,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         in0_num_blocks_w,
         num_blocks_weight_w_per_core,
 
-        out_subblock_h_ntiles,
+        out_subblock_h_ntiles_padded,
         out_subblock_w_ntiles,
         out_subblock_num_tiles,
 
@@ -1412,7 +1457,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool enable_act_doule_buffer) {
     tt_metal::Program program = tt_metal::CreateProgram();
     return multi_core_optimized_conv_sharded_v2_impl(
         program,
@@ -1432,7 +1478,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
         use_shallow_conv_variant,
         transpose_mcast,
         output,
-        compute_kernel_config);
+        compute_kernel_config,
+        enable_act_doule_buffer);
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
@@ -1451,7 +1498,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    Tensor& output) {
+    Tensor& output,
+    bool enable_act_doule_buffer) {
     tt_metal::Program program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
     ParallelConfig parallel_config;
@@ -1533,7 +1581,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
-        compute_kernel_config.value());
+        compute_kernel_config.value(),
+        enable_act_doule_buffer);
 }
 }  // namespace tt_metal
 

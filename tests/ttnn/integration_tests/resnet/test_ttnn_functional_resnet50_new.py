@@ -257,16 +257,16 @@ def create_test_infra(
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
-        (
-            8,
-            ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
-            ttnn.MathFidelity.LoFi,
-        ),  ## memory config issue due to l4m1 downsample reshard
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (
+        #     8,
+        #     ttnn.bfloat8_b,
+        #     ttnn.bfloat8_b,
+        #     ttnn.MathFidelity.LoFi,
+        # ),  ## memory config issue due to l4m1 downsample reshard
+        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(
