@@ -137,13 +137,13 @@ void py_module(py::module& m_transformers) {
         py::arg("cache_tensor").noconvert(),
         py::arg("input_tensor").noconvert(),
         py::arg("update_idxs").noconvert(),
+        py::arg("update_idxs_tensor").noconvert() = std::nullopt,
         py::arg("batch_offset") = 0,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
         )doc"
     );
-
 
 }
 

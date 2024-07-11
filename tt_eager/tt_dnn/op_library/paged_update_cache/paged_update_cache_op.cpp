@@ -14,7 +14,7 @@ namespace operations {
 namespace primary {
 
 
-void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
+void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& cache_tensor = input_tensors.at(0);
     const auto& input_tensor = input_tensors.at(1);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE and cache_tensor.storage_type() == StorageType::DEVICE, "Operands to update_cache need to be on device!");
@@ -35,7 +35,24 @@ void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors) const 
     TT_FATAL(this->op_type == PagedUpdateCacheOpType::UPDATE, "Only UPDATE operation is supported for PagedUpdateCache");
 
     if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
-        TT_FATAL(input_tensor.get_legacy_shape()[1] == this->update_idxs.size(), "Number of update_idxs should match batch size");
+        TT_FATAL(optional_input_tensors.at(0).has_value() != this->update_idxs.size() > 0, "Only an update tensor or an update vector can be provided. Not both or neither.");
+
+        uint32_t num_indices;
+        if (optional_input_tensors.at(0).has_value()) {
+            const auto& update_idxs_tensor = optional_input_tensors.at(0).value();
+            TT_FATAL(update_idxs_tensor.get_dtype() == DataType::INT32);
+            TT_FATAL(update_idxs_tensor.get_layout() == Layout::ROW_MAJOR);
+            // update_idxs_tensor: [num_indices]
+            num_indices = update_idxs_tensor.get_legacy_shape()[0];
+
+            // must be iterleaved
+            TT_FATAL(update_idxs_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+            // must be in dram
+            TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+        } else {
+            num_indices = this->update_idxs.size();
+        }
+        TT_FATAL(input_tensor.get_legacy_shape()[1] == num_indices, "Number of update_idxs should match batch size");
         TT_FATAL(input_tensor.is_sharded());
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
@@ -62,14 +79,19 @@ std::vector<Tensor> PagedUpdateCache::create_output_tensors(const std::vector<Te
     return {};
 }
 
-operation::ProgramWithCallbacks PagedUpdateCache::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks PagedUpdateCache::create_program(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& cache_tensor = input_tensors.at(0);
     const auto& input_tensor = input_tensors.at(1);
+    const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
+
 
     switch(this->get_parallelization_strategy(input_tensors)) {
         case PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE:
         default:
-            return paged_update_cache_multi_core(cache_tensor, input_tensor, this->update_idxs, this->batch_offset, this->compute_kernel_config);
+            return paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, this->update_idxs, this->batch_offset, this->compute_kernel_config);
     };
 }
 
@@ -79,7 +101,7 @@ PagedUpdateCacheOpParallelizationStrategy PagedUpdateCache::get_parallelization_
 }
 
 const operation::Hash PagedUpdateCache::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
+    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<PagedUpdateCache>(this->op_type, input_tensors);
 }
 

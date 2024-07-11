@@ -16,7 +16,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config) {
+operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
@@ -24,6 +24,24 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+
+    bool use_index_tensor = update_idxs_tensor.has_value();
+    uint32_t index_tensor_tile_size = 0;
+    uint32_t index_buffer_addr = 0;
+    uint32_t log2_page_size = 0;
+    uint32_t index_stick_size = 0;
+    tt:DataFormat index_data_format = tt::DataFormat::Int32;
+    bool index_is_dram = true;
+    if (use_index_tensor) {
+        index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
+        index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().get_dtype());
+        index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
+        index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+        index_stick_size = update_idxs_tensor.value().get_legacy_shape()[-1] * update_idxs_tensor.value().element_size();
+        log2_page_size = std::log2(index_stick_size);
+        TT_FATAL(1 << log2_page_size == index_stick_size);
+    }
+
 
     tt_metal::Device *device = input_tensor.device();
 
@@ -128,6 +146,13 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 		.set_page_size(output_cb_index, cache_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    const uint32_t cb_index_id = CB::c_in2;
+    if (use_index_tensor) {
+        tt_metal::CircularBufferConfig cb_index_inp_config = tt_metal::CircularBufferConfig(1 * index_tensor_tile_size, {{cb_index_id, index_data_format}})
+            .set_page_size(cb_index_id, index_tensor_tile_size);
+        auto cb_index_inp = tt_metal::CreateCircularBuffer(program, all_cores, cb_index_inp_config);
+    }
+
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
@@ -138,6 +163,13 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         (std::uint32_t) dst_is_dram,
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) src1_cb_index,
+        (std::uint32_t) use_index_tensor,
+        (std::uint32_t) index_is_dram,
+        cb_index_id,
+        cache_batch_num_tiles,
+        Wt,
+        log2_page_size,
+        index_stick_size
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -146,6 +178,11 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         (std::uint32_t) interm0_cb_index,
         (std::uint32_t) interm1_cb_index,
         (std::uint32_t) interm2_cb_index,
+        (std::uint32_t) use_index_tensor,
+        cb_index_id,
+        cache_batch_num_tiles,
+        Wt,
+        Wbytes
     };
 
 
@@ -182,7 +219,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; ++i) {
         const CoreCoord &core = cores.at(i);
-        const uint32_t update_idx = update_idxs.at(i);
+        const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
         // Cache tile info
         const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
         const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
@@ -195,7 +232,9 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
             core,
             {
                 dst_buffer->address(),
-                Wt, cache_start_id
+                use_index_tensor ? 0 : cache_start_id,
+                index_buffer_addr,
+                i
             }
         );
 
@@ -205,7 +244,9 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
             core,
             {
                 dst_buffer->address(),
-                Wt, cache_start_id, Wbytes, tile_update_offset_B
+                use_index_tensor ? 0 : cache_start_id,
+                use_index_tensor ? 0 : tile_update_offset_B,
+                i
             }
         );
     }
@@ -253,7 +294,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
             {
                 auto &runtime_args = reader_args_by_core.at(core.x).at(core.y);
                 runtime_args[0] = dst_buffer->address();
-                runtime_args[2] = cache_start_id;
+                runtime_args[2] = cache_start_id; // TODO: remove if use_index_tensor
+                // TODO: Update index buffer addr
             }
 
             {
