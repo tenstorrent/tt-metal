@@ -83,7 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/upload-data-via-sftp
+      - name: Ping with dummy ls batch
+        uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/dummy_ls.txt
