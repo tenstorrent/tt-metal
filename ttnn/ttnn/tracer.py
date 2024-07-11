@@ -13,7 +13,6 @@ from typing import Any
 from loguru import logger
 import networkx as nx
 from pyrsistent import PClass, field
-import ttnn._ttnn
 
 logger.disable("torchtrail")
 

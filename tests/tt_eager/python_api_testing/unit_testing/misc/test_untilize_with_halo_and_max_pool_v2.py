@@ -9,7 +9,7 @@ from loguru import logger
 
 import torch
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
+from ttnn.operations.conv.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )

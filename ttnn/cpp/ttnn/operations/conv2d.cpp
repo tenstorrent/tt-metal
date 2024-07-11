@@ -4,7 +4,7 @@
 
 #include "conv2d.hpp"
 
-#include "tt_eager/tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/downsample/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"

@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include "tensor/tensor.hpp"
+
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace ttnn::operations::ternary_backward {

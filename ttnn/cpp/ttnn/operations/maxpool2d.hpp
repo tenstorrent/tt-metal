@@ -9,9 +9,9 @@
 #include "ttnn/operations/core.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/cpp/ttnn/operations/conv2d.hpp"
-#include "tt_eager/tt_dnn/op_library/pool/max_pool.hpp"
-#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
-#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 
 namespace ttnn::operations {

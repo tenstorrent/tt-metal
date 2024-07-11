@@ -2,19 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_op import TTPyOp
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
+import ttnn
+from ttnn.operations.conv.tt_py_op import TTPyOp
+from ttnn.operations.conv.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+from ttnn.operations.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
+from ttnn.operations.conv.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+from ttnn.operations.conv.tt_py_composite_conv import (
     determine_parallel_config,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+from ttnn.operations.conv.sliding_window_op_utils import (
     SlidingWindowOpParamsWithParallelConfig,
     SlidingWindowOpParams,
     get_hash_from_sliding_window_op_params,
@@ -57,7 +58,7 @@ class TTPyMaxPool(TTPyOp):
             ), f"reader_patterns_cache should have 1 of the following keys - 'conv', 'max_pool' or 'halo'. Found key - {key}"
 
         snap_to_tile = parallel_config_override.get("snap_to_tile", False)
-        df_needs_tiled = act_dtype is not None and act_dtype == ttl.tensor.DataType.BFLOAT8_B
+        df_needs_tiled = act_dtype is not None and act_dtype == ttnn.bfloat8_b
         conv_parallel_config = determine_parallel_config(
             True,
             0,
@@ -71,7 +72,7 @@ class TTPyMaxPool(TTPyOp):
         self.ncores_nhw = conv_parallel_config.num_cores_nhw
         self.shard_grid, self.shard_layout = calculate_shard_grid(self.grid_size, self.ncores_nhw)
         assert (
-            self.shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+            self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         ), "TTPyMaxPool currently only supports height sharding"
 
         if isinstance(sliding_window_op_params, SlidingWindowOpParams):
@@ -181,22 +182,22 @@ class TTPyMaxPool(TTPyOp):
             )
 
             indices_torch_dtype = torch.int16
-            indices_tt_dtype = ttl.tensor.DataType.UINT16
+            indices_tt_dtype = ttnn.uint16
 
             # Create sharded tensor on device for conv_reader_indices
             reader_indices_torch_tensor = torch.tensor(
                 [[sliding_window_op_sharded_input_top_left_indices]], dtype=indices_torch_dtype
             )
-            reader_indices_tt_tensor = ttl.tensor.Tensor(
+            reader_indices_tt_tensor = ttnn.Tensor(
                 reader_indices_torch_tensor,
                 indices_tt_dtype,
             )
-            shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
             shard_halo = False
-            shard_spec = ttl.tensor.ShardSpec(
+            shard_spec = ttnn.ShardSpec(
                 self.shard_grid, [1, reader_indices_tt_tensor.get_legacy_shape()[-1]], shard_orientation, shard_halo
             )
-            mem_config = ttl.tensor.MemoryConfig(self.shard_layout, ttl.tensor.BufferType.L1_SMALL, shard_spec)
+            mem_config = ttnn.MemoryConfig(self.shard_layout, ttnn.BufferType.L1_SMALL, shard_spec)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(self.device, mem_config)
 
             reader_patterns_cache[sliding_window_op_params_hash] = reader_indices_sharded_tensor
@@ -242,7 +243,7 @@ class TTPyMaxPool(TTPyOp):
     def __call__(self, activation):
         return self.max_pool(activation)
 
-    def copy_input_to_device(self, input: ttl.tensor.Tensor):
+    def copy_input_to_device(self, input: ttnn.Tensor):
         in_shape = input.get_legacy_shape()
         in_c = in_shape[-1]
         in_n = self.sliding_window_op_params.batch_size
@@ -253,7 +254,7 @@ class TTPyMaxPool(TTPyOp):
         act_reshaped = input.reshape(act_shape)
         padded_nhw = self.input_sharded_memory_config.shard_spec.shape[0] * self.sliding_window_op_params.num_cores_nhw
         if padded_nhw != act_shape[-2]:
-            padded_shape = ttl.tensor.Shape(act_shape, (1, 1, padded_nhw, in_c))
+            padded_shape = ttnn.Shape(act_shape, (1, 1, padded_nhw, in_c))
             act_reshaped = ttl.tensor.format_input_tensor(
                 act_reshaped,
                 self.device,
@@ -262,9 +263,7 @@ class TTPyMaxPool(TTPyOp):
                 act_reshaped.layout,
             )
 
-        interleaved_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         mem_config = self.input_sharded_memory_config
         shard_shape = mem_config.shard_spec.shape
         shard_shape[1] = in_c
@@ -276,9 +275,7 @@ class TTPyMaxPool(TTPyOp):
             input.get_dtype(),
         )
 
-    def copy_output_from_device(self, output_d: ttl.tensor.Tensor):
-        interleaved_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        )
+    def copy_output_from_device(self, output_d: ttnn.Tensor):
+        interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         output_d = ttl.tensor.sharded_to_interleaved(output_d, interleaved_mem_config)
         return output_d.cpu()

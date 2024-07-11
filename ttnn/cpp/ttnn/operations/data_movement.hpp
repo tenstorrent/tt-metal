@@ -4,12 +4,13 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
-#include "tt_eager/tt_dnn/op_library/concat/concat_op.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_eager/tt_dnn/op_library/repeat/repeat_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/cpp/ttnn/operations/upsample/upsample_op.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/pad/pad_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/repeat/repeat_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/operations/upsample/upsample_op.hpp"
+
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 
 #include <ranges>
@@ -102,8 +103,6 @@ struct RepeatInterleave {
         return output_tensor;
     }
 };
-
-
 
 }  // namespace data_movement
 }  // namespace operations

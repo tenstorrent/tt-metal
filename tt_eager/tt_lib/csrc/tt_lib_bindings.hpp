@@ -9,3 +9,8 @@
 #include "tt_metal/host_api.hpp"
 
 namespace py = pybind11;
+
+namespace tt {
+void bind_deprecated(py::module m);
+
+}

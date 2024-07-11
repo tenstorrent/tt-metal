@@ -42,15 +42,15 @@ def test_serialize_memory_config_with_shard_spec(tmp_path):
 
 def test_serialize_memory_config_with_shard_spec_over_core_range_set(tmp_path):
     memory_config_path = str(tmp_path / "memory_config.bin")
-    shard_spec_32_cores_grid = ttnn._tt_lib.tensor.CoreRangeSet(
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
-            ttnn._tt_lib.tensor.CoreRange(
-                ttnn._tt_lib.tensor.CoreCoord(0, 0),
-                ttnn._tt_lib.tensor.CoreCoord(4, 4),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(4, 4),
             ),
-            ttnn._tt_lib.tensor.CoreRange(
-                ttnn._tt_lib.tensor.CoreCoord(5, 5),
-                ttnn._tt_lib.tensor.CoreCoord(7, 7),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(5, 5),
+                ttnn.CoreCoord(7, 7),
             ),
         }
     )
@@ -61,7 +61,7 @@ def test_serialize_memory_config_with_shard_spec_over_core_range_set(tmp_path):
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn._tt_lib.tensor.ShardSpec(
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 num_attention_heads * sequence_lengtb // 32,

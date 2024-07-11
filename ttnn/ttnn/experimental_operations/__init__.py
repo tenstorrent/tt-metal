@@ -4,16 +4,18 @@
 
 import inspect
 
-import tt_lib
+import ttnn._ttnn
 import ttnn
 import types
 
 
 def register_tt_lib_operations_as_ttnn_operations(module):
     module_name = module.__name__
-    if not module_name.startswith("tt_lib.tensor") and not module_name.startswith("tt_lib.operations"):
+    if not module_name.startswith("ttnn._ttnn.deprecated.tensor") and not module_name.startswith(
+        "ttnn._ttnn.deprecated.operations"
+    ):
         return
-    ttnn_module_name = module_name.replace("tt_lib", "ttnn.experimental")
+    ttnn_module_name = module_name.replace("ttnn._ttnn.deprecated", "ttnn.experimental")
     for attribute_name in dir(module):
         if attribute_name.startswith("__"):
             continue
@@ -22,7 +24,7 @@ def register_tt_lib_operations_as_ttnn_operations(module):
             hasattr(attribute, "profiler_wrapped_function") and inspect.isbuiltin(attribute.profiler_wrapped_function)
         )
         if probably_c_function and (
-            "tt_lib.tensor.Tensor" in attribute.__doc__ or "tt::tt_metal::Tensor" in attribute.__doc__
+            "ttnn._ttnn.deprecated.tensor.Tensor" in attribute.__doc__ or "tt::tt_metal::Tensor" in attribute.__doc__
         ):
             attribute = ttnn.decorators.register_ttl_operation_as_ttnn_operation(
                 python_fully_qualified_name=f"{ttnn_module_name}.{attribute_name}", function=attribute
@@ -40,5 +42,5 @@ def register_tt_lib_operations_as_ttnn_operations(module):
             setattr(ttnn_module, attribute_name, attribute)
 
 
-register_tt_lib_operations_as_ttnn_operations(tt_lib.tensor)
-register_tt_lib_operations_as_ttnn_operations(tt_lib.operations)
+register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.tensor)
+register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.operations)
