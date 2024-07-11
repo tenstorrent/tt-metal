@@ -59,7 +59,7 @@ enum class UnaryBackwardOpType {
     TANHSHRINK_BW,
     ATANH_BW,
     ASIN_BW,
-    ASINH_BW
+    ASINH_BW,
     SIN_BW,
     SINH_BW,
     LOG10_BW,

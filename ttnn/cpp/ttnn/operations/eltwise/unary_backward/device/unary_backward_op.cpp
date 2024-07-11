@@ -710,10 +710,10 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor grad_a = where(
-        ttnn::gt(input, tt::tt_metal::full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::gt(input, ttnn::operations::creation::full_like(input, 88.5), std::nullopt, output_mem_config),
         t_inf,
         where(
-            ttnn::lt(input, tt::tt_metal::full_like(input, -88.5, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::lt(input, ttnn::operations::creation::full_like(input, -88.5), std::nullopt, output_mem_config),
             t_inf,
             ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
@@ -743,7 +743,7 @@ std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const Mem
     Tensor grad_a = ttnn::multiply(
         grad, ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         std::nanf(" "),
         where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
         output_mem_config);
@@ -763,7 +763,7 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const Mem
     Tensor t_inp1 = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(t_inp1, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
-        ttnn::eq(input, tt::tt_metal::full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::eq(input, ttnn::operations::creation::full_like(input, -1.0), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
@@ -792,7 +792,7 @@ std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const Memo
 
 std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad);
     grad_tensor.emplace_back(zero_grad);
     return grad_tensor;
 }
