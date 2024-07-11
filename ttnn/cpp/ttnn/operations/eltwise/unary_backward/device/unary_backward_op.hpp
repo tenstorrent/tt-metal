@@ -24,6 +24,7 @@ enum class UnaryBackwardOpType {
     FILL_BW,
     HARDSIGMOID_BW,
     COS_BW,
+    ACOSH_BW,
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,
