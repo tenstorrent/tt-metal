@@ -226,11 +226,11 @@ def test_all_gather_on_t3000_post_commit_looping(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
+        (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
-        # (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
+        (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
         (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),
@@ -287,9 +287,9 @@ def test_all_gather_on_t3000_nightly_commit_looping(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (4, 2, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        (4, 2, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),           # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),           # https://github.com/tenstorrent/tt-metal/issues/9686
@@ -503,7 +503,7 @@ def test_line_all_gather_on_t3000_post_commit(
         (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
         (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
@@ -563,7 +563,7 @@ def test_line_all_gather_on_t3000_nightly(
     [
         (2, 1),
         (4, 1),
-        # (4, 2),
+        (4, 2),
         (8, 1),
     ],
 )
@@ -884,8 +884,7 @@ def run_all_gather_sharded(
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        # ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
     ],
@@ -1009,8 +1008,7 @@ def test_all_gather_sharded_post_commit(
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        # ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
     ],
