@@ -175,6 +175,7 @@ Pointwise Unary
    ttnn/add_bw
    ttnn/eq_bw
    ttnn/lgamma_bw
+   ttnn/fill_bw
    ttnn/sub_bw
    ttnn/frac_bw
    ttnn/trunc_bw

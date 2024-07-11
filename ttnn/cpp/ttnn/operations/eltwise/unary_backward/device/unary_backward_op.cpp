@@ -14,6 +14,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -235,6 +236,15 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor val = grad;
+    val = global_sum(val, output_mem_config);
+    Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
+    result = bcast(result, val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
 
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -461,6 +471,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _multigammaln_bw;
         case UnaryBackwardOpType::LGAMMA_BW:
             return _lgamma_bw;
+        case UnaryBackwardOpType::FILL_BW:
+            return _fill_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:
