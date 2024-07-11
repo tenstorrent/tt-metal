@@ -86,6 +86,7 @@ jobs:
       - name: sdf
         env:
           PYTHONPATH: ${{ github.workspace }}
+          ARCH_NAME: grayskull
         run: pip3 install loguru && python3 -c 'from infra.data_collection.github.utils import create_csv_for_github_benchmark_environment; create_csv_for_github_benchmark_environment("environment.csv")'
       - name: Show file
         run: cat environment.csv
