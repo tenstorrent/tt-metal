@@ -12,6 +12,10 @@
 
 namespace ttnn::operations::ternary_backward {
 
+constexpr uint8_t DefaultQueueId = 0;
+
+using OptionalTensor = std::optional<Tensor>;
+
 enum class TernaryBackwardOpType {
     ADDCMUL_BW,
     ADDCDIV_BW,
@@ -19,11 +23,66 @@ enum class TernaryBackwardOpType {
     LERP_BW,
 };
 
-struct TernaryBackwardFunction{
-    static std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type0(TernaryBackwardOpType OpType);
-    static std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type(TernaryBackwardOpType OpType);
-    static std::function<std::vector<std::optional<Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt(TernaryBackwardOpType OpType);
-    static std::function<std::vector<std::optional<Tensor>>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type_opt_wo_qid(TernaryBackwardOpType OpType);
+std::vector<Tensor> _lerp_overload(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&);
+std::vector<Tensor> _addcmul_bw(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&);
+std::vector<Tensor> _addcdiv_bw(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&);
+std::vector<OptionalTensor> _where_bw(uint8_t, const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, OptionalTensor, OptionalTensor);
+
+// OpHandler struct template
+template <TernaryBackwardOpType OpType>
+struct OpHandler;
+
+template <TernaryBackwardOpType OpType>
+struct OpHandler_float;
+
+template <TernaryBackwardOpType OpType>
+struct OpHandler_Where;
+
+template <>
+struct OpHandler<TernaryBackwardOpType::LERP_BW> {
+    static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
+                                        const MemoryConfig& mem_cfg) {
+        return _lerp_overload(t1, t2, t3, t4, mem_cfg);
+    }
 };
+
+template <>
+struct OpHandler_float<TernaryBackwardOpType::ADDCMUL_BW> {
+    static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
+                                        float value, const MemoryConfig& mem_cfg) {
+        return _addcmul_bw(t1, t2, t3, t4, value, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_float<TernaryBackwardOpType::ADDCDIV_BW> {
+    static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
+                                        float value, const MemoryConfig& mem_cfg) {
+        return _addcdiv_bw(t1, t2, t3, t4, value, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_Where<TernaryBackwardOpType::WHERE_BW> {
+    static std::vector<OptionalTensor> handle(uint8_t queue_id, const Tensor& t1, const Tensor& t2, const Tensor& t3,
+                                                     const Tensor& t4, const MemoryConfig& mem_cfg, const std::vector<bool>& are_required_outputs,
+                                                     OptionalTensor input_grad, OptionalTensor other_grad) {
+        return _where_bw(queue_id, t1, t2, t3, t4, mem_cfg, are_required_outputs, input_grad, other_grad);
+    }
+};
+
+// Template functions to get the function pointers
+template <TernaryBackwardOpType OpType>
+auto get_ternary_fn() {
+    return &OpHandler<OpType>::handle;
+}
+template <TernaryBackwardOpType OpType>
+auto get_ternary_fn_float() {
+    return &OpHandler_float<OpType>::handle;
+}
+template <TernaryBackwardOpType OpType>
+auto get_ternary_fn_opt_output() {
+    return &OpHandler_Where<OpType>::handle;
+}
 
 }  // namespace ttnn::operations::ternary_backward

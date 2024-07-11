@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.hpp"
+#include "ternary_backward_op.hpp"
 
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -63,7 +63,7 @@ std::vector<Tensor> _addcdiv_bw(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _where_bw(
+std::vector<OptionalTensor> _where_bw(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& condition,
@@ -71,9 +71,9 @@ std::vector<std::optional<Tensor>> _where_bw(
     const Tensor& other,
     const MemoryConfig& output_mem_config,
     const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
+    OptionalTensor input_grad,
+    OptionalTensor other_grad) {
+    std::vector<OptionalTensor> result;
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
             tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
@@ -97,18 +97,6 @@ std::vector<std::optional<Tensor>> _where_bw(
     return std::move(result);
 }
 
-std::vector<std::optional<Tensor>> _where_bw_overload(
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return _where_bw(default_queue_id, condition, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
 std::vector<Tensor> _lerp_overload(
@@ -125,46 +113,5 @@ std::vector<Tensor> _lerp_overload(
     return grad_tensor;
 }
 
-std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> TernaryBackwardFunction::get_function_type0(TernaryBackwardOpType OpType){
-    switch (OpType) {
-        case TernaryBackwardOpType::LERP_BW:
-            return _lerp_overload;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> TernaryBackwardFunction::get_function_type(TernaryBackwardOpType OpType){
-    switch (OpType) {
-        case TernaryBackwardOpType::ADDCMUL_BW:
-            return _addcmul_bw;
-        case TernaryBackwardOpType::ADDCDIV_BW:
-            return _addcdiv_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<std::optional<Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> TernaryBackwardFunction::get_function_type_opt(TernaryBackwardOpType OpType){
-    switch (OpType) {
-        case TernaryBackwardOpType::WHERE_BW:
-            return _where_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<std::optional<Tensor>>(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> TernaryBackwardFunction::get_function_type_opt_wo_qid(TernaryBackwardOpType OpType){
-    switch (OpType) {
-        case TernaryBackwardOpType::WHERE_BW:
-            return _where_bw_overload;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
 
 }  // namespace ttnn::operations::ternary
