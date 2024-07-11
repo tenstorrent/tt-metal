@@ -121,6 +121,7 @@ constexpr auto ceil_bw = ttnn::register_operation<operations::unary_backward::Ex
 constexpr auto softsign_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SOFTSIGN_BW>>("ttnn::softsign_bw");
 constexpr auto cosh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::COSH_BW>>("ttnn::cosh_bw");
 constexpr auto logiteps_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW>>("ttnn::logiteps_bw");
+constexpr auto log2_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG2_BW>>("ttnn::log2_bw");
 
 
 }  // namespace ttnn

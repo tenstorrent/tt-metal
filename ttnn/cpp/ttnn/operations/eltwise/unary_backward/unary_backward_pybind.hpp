@@ -444,6 +444,11 @@ void py_module(py::module& module) {
         module,
         ttnn::logiteps_bw,
         R"doc(Performs backward operations for logiteps on :attr:`input_tensor`, :attr:`eps` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log2_bw,
+        R"doc(Performs backward operations for log2 on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward
