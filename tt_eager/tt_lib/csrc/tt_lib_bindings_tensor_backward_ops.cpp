@@ -663,22 +663,6 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
-    m_tensor.def("rad2deg_bw", &tt::tt_metal::rad2deg_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                Performs backward operations for rad2deg for the ``input`` with given ``grad``
-
-                Input tensors must have BFLOAT16 data type.
-
-                Output tensor will have BFLOAT16 data type.
-
-                .. csv-table::
-                    :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                    "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-            )doc");
-
     m_tensor.def("reciprocal_bw", &tt::tt_metal::reciprocal_bw,
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs backward operations for reciprocal for the ``input`` with given ``grad``

@@ -181,6 +181,7 @@ Pointwise Unary
    ttnn/acosh_bw
    ttnn/acos_bw
    ttnn/atan_bw
+   ttnn/rad2deg_bw
    ttnn/sub_bw
    ttnn/frac_bw
    ttnn/trunc_bw

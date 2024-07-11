@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -22,7 +22,7 @@ def test_bw_rad2deg(input_shapes, device):
 
     pyt_y = torch.rad2deg(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.rad2deg_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.rad2deg_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 

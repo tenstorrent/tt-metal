@@ -236,6 +236,11 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
+        ttnn::rad2deg_bw,
+        R"doc(Performs backward operations for radian to degree conversion (rad2deg) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
         ttnn::sub_bw,
         R"doc(Performs backward operations for subtraction on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
