@@ -409,6 +409,12 @@ void py_module(py::module& module) {
          ttnn::sinh_bw,
          R"doc(Performs backward operations for sinh on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+         module,
+         ttnn::log10_bw,
+         R"doc(Performs backward operations for log10 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+
 }
 
 }  // namespace binary_backward

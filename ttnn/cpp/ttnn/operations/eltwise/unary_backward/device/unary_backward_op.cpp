@@ -732,6 +732,25 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+// bw(log10(in)) = grad/(in * 2.30258509299404568402)
+std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = where(
+        ttnn::ltz(grad, output_mem_config),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        output_mem_config);
+    Tensor grad_a = ttnn::multiply(
+        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        std::nanf(" "),
+        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -806,6 +825,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _sin_bw;
         case UnaryBackwardOpType::SINH_BW:
             return _sinh_bw;
+        case UnaryBackwardOpType::LOG10_BW:
+            return _log10_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

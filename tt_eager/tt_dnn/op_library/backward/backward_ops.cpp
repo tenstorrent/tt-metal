@@ -514,6 +514,7 @@ std::vector<Tensor> erfinv_bw(const Tensor& grad, const Tensor& input, const Mem
     return operation::decorate_as_composite(__func__, _erfinv_bw)(grad, input, output_mem_config);
 }
 
+<<<<<<< HEAD
 // bw(log10(in)) = grad/(in * 2.30258509299404568402)
 std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -536,6 +537,8 @@ std::vector<Tensor> log10_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _log10_bw)(grad, input, output_mem_config);
 }
 
+=======
+>>>>>>> #10079: Merge log10_bw to TTNN
 // bw(log1p(in)) = grad/(in + 1)
 // for -1 = inf
 std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
