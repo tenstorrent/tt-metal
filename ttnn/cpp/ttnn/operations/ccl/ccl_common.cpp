@@ -45,7 +45,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
             auto eth_sender_kernel =
-                ccl::generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
+                ttnn::utils::ccl::generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Clockwise EDM Core (x={},y={})",
@@ -59,7 +59,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_counter_clockwise_direction_edm_enabled) {
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
-            auto eth_receiver_kernel = ccl::generate_edm_kernel(
+            auto eth_receiver_kernel = ttnn::utils::ccl::generate_edm_kernel(
                 program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc);
             log_trace(
                 tt::LogOp,
@@ -75,7 +75,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     Device const* device,
-    ccl::EriscDatamoverBuilder const& edm_builder,
+    ttnn::utils::ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
     log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
@@ -110,29 +110,29 @@ KernelHandle generate_edm_kernel(
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
     uint32_t page_size,
-    ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
-    ccl::EriscDataMoverTerminationMode termination_mode) {
+    ttnn::utils::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
+    ttnn::utils::ccl::EriscDataMoverTerminationMode termination_mode) {
     TT_ASSERT(num_channels > 0);
     std::vector<uint32_t> edm_sem_addresses(num_channels, 0);
     std::vector<uint32_t> edm_buffer_addresses(num_channels, 0);
 
-    uint32_t edm_sem_addr = ccl::EriscDatamoverConfig::get_semaphores_base_address(num_channels);
-    uint32_t edm_buffer_addr = ccl::EriscDatamoverConfig::get_buffers_base_address(num_channels);
+    uint32_t edm_sem_addr = ttnn::utils::ccl::EriscDatamoverConfig::get_semaphores_base_address(num_channels);
+    uint32_t edm_buffer_addr = ttnn::utils::ccl::EriscDatamoverConfig::get_buffers_base_address(num_channels);
     TT_ASSERT(edm_sem_addr > 0);
     TT_ASSERT(edm_buffer_addr > 0);
-    const uint32_t buffer_size = ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, page_size);
+    const uint32_t buffer_size = ttnn::utils::ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, page_size);
     for (std::size_t c = 0; c < num_channels; ++c) {
         edm_sem_addresses.at(c) = edm_sem_addr;
-        edm_sem_addr += ccl::EriscDatamoverConfig::semaphore_size;
+        edm_sem_addr += ttnn::utils::ccl::EriscDatamoverConfig::semaphore_size;
         edm_buffer_addresses.at(c) = edm_buffer_addr;
         edm_buffer_addr += buffer_size;
         TT_ASSERT((c == 0) || (edm_buffer_addresses.back() != edm_buffer_addresses.front()));
         TT_ASSERT((c == 0) || (edm_sem_addresses.back() != edm_sem_addresses.front()));
     }
 
-    return ccl::EriscDatamoverBuilder(
+    return ttnn::utils::ccl::EriscDatamoverBuilder(
         buffer_size,
-        ccl::EriscDatamoverConfig::get_edm_handshake_address(),
+        ttnn::utils::ccl::EriscDatamoverConfig::get_edm_handshake_address(),
         edm_sem_addresses,
         edm_buffer_addresses,
         buffer_sharing_mode,

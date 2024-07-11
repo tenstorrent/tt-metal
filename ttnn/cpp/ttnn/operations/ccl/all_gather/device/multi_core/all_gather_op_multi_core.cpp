@@ -403,8 +403,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             for (uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                 uint32_t num_workers_per_eth_buffer = std::min(workers_per_link, all_gather_config.get_num_eth_buffers_per_edm() - worker_index);
 
-                std::vector<tt::tt_metal::ccl::WorkerXY> sender_worker_coords;
-                std::vector<tt::tt_metal::ccl::WorkerXY> receiver_worker_coords;
+                std::vector<ccl::WorkerXY> sender_worker_coords;
+                std::vector<ccl::WorkerXY> receiver_worker_coords;
                 for (uint32_t w = b * num_workers_per_eth_buffer; w < (b + 1) * num_workers_per_eth_buffer; ++w) {
                     sender_worker_coords.push_back(
                         ttnn::ccl::WorkerXY(
