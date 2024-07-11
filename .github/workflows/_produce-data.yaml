@@ -79,14 +79,3 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
-  ping-benchmark-server:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Ping with dummy ls batch
-        uses: ./.github/actions/upload-data-via-sftp
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/dummy_ls.txt
-          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
