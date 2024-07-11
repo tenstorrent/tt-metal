@@ -704,6 +704,34 @@ std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, cons
     return grad_tensor;
 }
 
+// name: sinh(Tensor self) -> Tensor
+// self: grad * self.cosh()
+std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor grad_a = where(
+        ttnn::gt(input, tt::tt_metal::full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
+        t_inf,
+        where(
+            ttnn::lt(input, tt::tt_metal::full_like(input, -88.5, output_mem_config), std::nullopt, output_mem_config),
+            t_inf,
+            ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
+            output_mem_config),
+        output_mem_config);
+    t_inf.deallocate();
+    grad_a = where(
+        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
+        std::numeric_limits<float>::infinity(),
+        where(
+            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
+            -std::numeric_limits<float>::infinity(),
+            grad_a,
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -776,6 +804,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _asinh_bw;
         case UnaryBackwardOpType::SIN_BW:
             return _sin_bw;
+        case UnaryBackwardOpType::SINH_BW:
+            return _sinh_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

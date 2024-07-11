@@ -214,6 +214,7 @@ Pointwise Unary
    ttnn/asin_bw
    ttnn/asinh_bw
    ttnn/sin_bw
+   ttnn/sinh_bw
 
 Pointwise Binary
 ================

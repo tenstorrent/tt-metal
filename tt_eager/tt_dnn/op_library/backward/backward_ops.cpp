@@ -474,52 +474,6 @@ std::vector<Tensor> hardtanh_bw(
     return operation::decorate_as_composite(__func__, _hardtanh_bw)(grad, input, min, max, output_mem_config);
 }
 
-<<<<<<< HEAD
-// name: sin(Tensor self) -> Tensor
-// self: grad * self.cos()
-std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_input);
-    return grad_tensor;
-}
-std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sin_bw)(grad, input, output_mem_config);
-}
-
-=======
->>>>>>> #10079: Merge sin_bw to TTNN
-// name: sinh(Tensor self) -> Tensor
-// self: grad * self.cosh()
-std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, full_like(input, -88.5, output_mem_config), std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_inf.deallocate();
-    grad_a = where(
-        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
-        std::numeric_limits<float>::infinity(),
-        where(
-            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
-            -std::numeric_limits<float>::infinity(),
-            grad_a,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sinh_bw)(grad, input, output_mem_config);
-}
-
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
