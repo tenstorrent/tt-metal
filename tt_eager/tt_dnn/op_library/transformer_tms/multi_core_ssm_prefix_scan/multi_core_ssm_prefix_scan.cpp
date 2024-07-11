@@ -148,6 +148,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
          total_tiles_per_row,
          total_tiles_per_col,
          num_chunks_per_row,
+         sharded_hidden_state_length,
          all_cores,
          cores,
          cb_a_in,
@@ -167,9 +168,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
             std::vector<std::vector<uint32_t>> reader_runtime_args = {
                 cores.size(), {0, 0}};  // (num_tiles_per_core, num_chunks_per_row)
             std::vector<std::vector<uint32_t>> writer_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, num_chunks_per_row)
+                cores.size(), {0, 0}};  // (num_tiles_per_core, hidden_state_len)
             std::vector<std::vector<uint32_t>> compute_runtime_args = {
-                cores.size(), {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
+                cores.size(),
+                {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
 
             for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
                 const CoreCoord& core = cores.at(i);
@@ -178,7 +180,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                 reader_runtime_args[i][1] = num_chunks_per_row;
 
                 writer_runtime_args[i][0] = total_tiles;
-                writer_runtime_args[i][1] = num_chunks_per_row;
+                writer_runtime_args[i][1] = sharded_hidden_state_length;
 
                 compute_runtime_args[i][0] = total_tiles;
                 compute_runtime_args[i][1] = total_tiles_per_row;
