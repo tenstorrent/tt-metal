@@ -2485,7 +2485,7 @@ def addalpha_bw(x, y, z):
 
 
 def addcmul_bw(x, y, z):
-    ttnn.addcmul_bw(x, x, y, z, value=5)
+    ttnn.addcmul_bw(x, x, y, z, alpha=5)
 
 
 def addcdiv_bw(x, y, z):
@@ -2560,20 +2560,8 @@ def primary_moreh_norm_backward(x, y, z):
     tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
 
 
-from tt_lib.fused_ops.linear import Linear as Fused_Linear
-
-
-fused_linear_op = None
-
-
 def fused_linear(x, weight, bias):
-    global fused_linear_op
-
-    if fused_linear_op is None:
-        shape = x.get_legacy_shape()
-        fused_linear_op = Fused_Linear(shape[-2], shape[-1], weight, bias, device=x.device())
-
-    fused_linear_op(x)
+    ttnn.linear(x, weight, bias=bias)
 
 
 def fused_linear_shape_func(input_shape):
@@ -2789,7 +2777,7 @@ all_ternary_ops = [
     },
     {
         "op": fused_linear,
-        "name": "tt_lib.fused_ops.linear.Linear",
+        "name": "ttnn.linear",
         "shape_func": fused_linear_shape_func,
     },
 ]

@@ -14,7 +14,45 @@ from pathlib import Path
 from loguru import logger
 
 
-def profile_host_overhead(output_directory, output_csv):
+def extract_profile_detail(df, op_begin_ind, key, final_df, index):
+    start_index = df.loc[df["OP CODE"] == f"{key}_start"].index.tolist()
+    end_index = df.loc[df["OP CODE"] == f"{key}_end"].index.tolist()
+
+    if not (start_index and end_index):
+        return -1
+
+    host_duration = 0
+    count = 0
+
+    for i in range(len(start_index)):
+        si = start_index[i]
+        ei = end_index[i]
+
+        if si < op_begin_ind[0]:
+            continue
+
+        # Sum the 'HOST DURATION [ns]' values
+        host_duration += df.loc[ei, "HOST START TS"] - df.loc[si, "HOST START TS"]
+        count += 1
+
+    host_duration = round(host_duration / (count * 1000), 2)
+    final_df.loc[index, f"C++ {key} (us)"] = host_duration
+
+
+def extract_profile_details(final_df, row, index, df):
+    op_begin_ind = df.loc[df["OP CODE"] == "start " + row["op"]].index.tolist()
+
+    if op_begin_ind:
+        extract_profile_detail(df, op_begin_ind, "execute_on_worker_thread", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "compute_hash", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "check_program_cache_hit", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "create_output_tensors", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "lookup_program_cache", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "override_runtime_arguments", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "enque_program", final_df, index)
+
+
+def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
     start_time = time.time()
@@ -33,6 +71,9 @@ def profile_host_overhead(output_directory, output_csv):
     i = 0
 
     for op_name in all_ops:
+        if op_to_profile != "" and op_to_profile != op_name:
+            continue
+
         op_id = f"{i:03d}"
         command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
         subprocess.run([command], shell=True, check=False, env=currentEnvs, timeout=3000)
@@ -98,8 +139,10 @@ def profile_host_overhead(output_directory, output_csv):
 
                 # Add the average value to the final dataframe
                 op_count = row["count"]
-                host_duration = round(host_duration / (op_count * 1000 * 1000), 2)
+                host_duration = round(host_duration / (op_count * 1000 * 1000), 3)
                 final_df.loc[index, "C++ mean dispatch time (ms)"] = host_duration
+
+            extract_profile_details(final_df, row, index, df)
 
     duration = (time.time() - start_time) / 60
     logger.info(f"{len(all_ops)} ops profiled in {duration:.2f}min")
@@ -116,8 +159,16 @@ def profile_host_overhead(output_directory, output_csv):
     "-o", "--output_directory", default="host_overhead_profile/", type=str, help="Ouput folder path for csv's"
 )
 @click.option("-c", "--output_csv", default="final.csv", type=str, help="Ouput csv filename")
-def main(output_directory, output_csv):
-    profile_host_overhead(output_directory, output_csv)
+@click.option("-n", "--op_name", default="", type=str, help="Ouput csv filename")
+def main(output_directory, output_csv, op_name):
+    """
+    Profile all ops:
+    python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py
+
+    Profile one op:
+    python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py -n ttnn.add
+    """
+    profile_host_overhead(output_directory, output_csv, op_to_profile=op_name)
 
 
 if __name__ == "__main__":
