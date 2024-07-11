@@ -224,6 +224,7 @@ Pointwise Unary
    ttnn/logiteps_bw
    ttnn/log2_bw
    ttnn/sign_bw
+   ttnn/fmod_bw
 
 Pointwise Binary
 ================
