@@ -751,6 +751,31 @@ std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// bw(log1p(in)) = grad/(in + 1)
+// for -1 = inf
+std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = where(
+        ttnn::ltz(grad, output_mem_config),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        output_mem_config);
+    Tensor t_inp1 = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(t_inp1, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::eq(input, tt::tt_metal::full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
+        t_inf,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(t_inp1, output_mem_config), eqz(grad, output_mem_config)),
+        std::nanf(" "),
+        grad_a,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -827,6 +852,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _sinh_bw;
         case UnaryBackwardOpType::LOG10_BW:
             return _log10_bw;
+        case UnaryBackwardOpType::LOG1P_BW:
+            return _log1p_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

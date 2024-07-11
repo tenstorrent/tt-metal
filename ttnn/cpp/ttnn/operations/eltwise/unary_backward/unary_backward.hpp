@@ -115,5 +115,6 @@ constexpr auto asinh_bw = ttnn::register_operation<operations::unary_backward::E
 constexpr auto sin_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SIN_BW>>("ttnn::sin_bw");
 constexpr auto sinh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SINH_BW>>("ttnn::sinh_bw");
 constexpr auto log10_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG10_BW>>("ttnn::log10_bw");
+constexpr auto log1p_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG1P_BW>>("ttnn::log1p_bw");
 
 }  // namespace ttnn

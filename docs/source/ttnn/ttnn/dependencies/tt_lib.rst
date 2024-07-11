@@ -846,8 +846,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
-.. autofunction:: tt_lib.tensor.log1p_bw
-
 .. autofunction:: tt_lib.tensor.erf_bw
 
 .. autofunction:: tt_lib.tensor.erfc_bw

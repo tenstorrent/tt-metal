@@ -414,6 +414,12 @@ void py_module(py::module& module) {
          ttnn::log10_bw,
          R"doc(Performs backward operations for log10 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+         module,
+         ttnn::log1p_bw,
+         R"doc(Performs backward operations for log1p on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+
 
 }
 

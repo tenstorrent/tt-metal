@@ -63,6 +63,7 @@ enum class UnaryBackwardOpType {
     SIN_BW,
     SINH_BW,
     LOG10_BW,
+    LOG1P_BW,
 };
 
 struct UnaryBackwardFunction{
