@@ -16,7 +16,7 @@ constexpr uint32_t get_barrier_read_threshold() {
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);  // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
-    constexpr uint32_t PSt = get_compile_time_arg_val(2);  // padded layer length in tiles
+    constexpr uint32_t PSt_max = get_compile_time_arg_val(2);  // max padded layer length in tiles
     constexpr uint32_t St = get_compile_time_arg_val(3);  // full sequence length of kv cache in tiles
     constexpr uint32_t DHt = get_compile_time_arg_val(4);  // head dim
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
@@ -28,10 +28,11 @@ void kernel_main() {
     constexpr uint32_t reduce_core_noc_y          = get_compile_time_arg_val(11);
     constexpr uint32_t cur_batch = get_compile_time_arg_val(12);
     constexpr uint32_t worker_id = get_compile_time_arg_val(13);  // worker id among num_cores_per_batch-1 workers
-    constexpr uint32_t k_chunk_start = get_compile_time_arg_val(14);
-    constexpr uint32_t k_chunk_end = get_compile_time_arg_val(15);
 
-    if constexpr(k_chunk_start == k_chunk_end) {
+    const uint32_t k_chunk_start = get_arg_val<uint32_t>(0);
+    const uint32_t k_chunk_end = get_arg_val<uint32_t>(1);
+
+    if (k_chunk_start == k_chunk_end) {
         // DPRINT << "[Writer Worker] No computes to be done for this worker" << ENDL();
         return; // early exit because no computes needs to be done for this worker
     }

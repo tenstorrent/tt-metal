@@ -43,6 +43,41 @@ uint32_t nearest_n(uint32_t x, uint32_t n) {
     return ((x + n - 1) / n) * n;
 }
 
+std::tuple<std::vector<uint32_t>, std::vector<uint32_t>, std::vector<std::vector<std::vector<int>>>>
+get_runtime_args(const std::vector<uint32_t>& cur_pos, int B, int num_cores_per_batch, uint32_t k_chunk_size) {
+    std::vector<uint32_t> all_PSt;
+    std::vector<uint32_t> all_num_chunks;
+    all_PSt.reserve(cur_pos.size());
+    all_num_chunks.reserve(cur_pos.size());
+    std::vector<std::vector<std::vector<int>>> all_chunk_assignments(B, std::vector<std::vector<int>>(num_cores_per_batch, std::vector<int>(2)));
+
+    for (const auto& pos : cur_pos) {
+        uint32_t valid_seq_len = nearest_n(pos + 1, k_chunk_size);
+        uint32_t pst_value = valid_seq_len / TILE_HEIGHT;
+        uint32_t num_chunks_value = valid_seq_len / k_chunk_size;
+        all_PSt.push_back(pst_value);
+        all_num_chunks.push_back(num_chunks_value);
+    }
+
+
+    for (int b = 0; b < B; ++b) {
+        int chunks_per_core = all_num_chunks[b] / num_cores_per_batch;
+
+        for (int i = 0; i < num_cores_per_batch; ++i) {
+            all_chunk_assignments[b][i][0] = i * chunks_per_core;
+            all_chunk_assignments[b][i][1] = (i + 1) * chunks_per_core;
+        }
+        all_chunk_assignments[b].back()[1] += (all_num_chunks[b] % num_cores_per_batch);
+
+        // chunk_assignment = chunk_assignment[::-1]
+        // reduction core is the first core, and we always want the reduction core to deal with the residual chunks
+        // residual chunks exists when other chunks are 0, and has less chunks than the other cores when other chunks are not 0
+        std::reverse(all_chunk_assignments[b].begin(), all_chunk_assignments[b].end());
+    }
+
+    return {all_PSt, all_num_chunks, all_chunk_assignments};
+}
+
 // implementation of softmax with optional scale (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const Tensor &input_tensor_q,
@@ -63,6 +98,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = get_chunk_size(max_cur_pos+1);
     uint32_t max_valid_seq_len = nearest_n(max_cur_pos+1, k_chunk_size);
+    assert(max_valid_seq_len % k_chunk_size == 0);
 
     /*
     Initially during compile time, we compile the kernel based on the longest sequence length in the batch.
@@ -73,12 +109,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const auto k_shape = input_tensor_k.get_legacy_shape();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
-    uint32_t PSt = max_valid_seq_len/TILE_HEIGHT;
+    uint32_t PSt_max = max_valid_seq_len/TILE_HEIGHT;
     uint32_t St = S/TILE_HEIGHT;
     uint32_t DHt = DH/TILE_WIDTH;
     uint32_t PNHt = PNH/TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    uint32_t num_chunks = max_valid_seq_len / k_chunk_size;
+    uint32_t max_num_chunks = max_valid_seq_len / k_chunk_size;
     bool is_q_sharded = input_tensor_q.is_sharded();
     bool is_output_sharded = output_tensor.is_sharded();
 
@@ -91,7 +127,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("PNHt: {}", PNHt);
     log_debug("Sk_chunk_t: {}", Sk_chunk_t);
     log_debug("k_chunk_size: {}", k_chunk_size);
-    log_debug("num_chunks: {}", num_chunks);
+    log_debug("max_num_chunks: {}", max_num_chunks);
 
     Program program = CreateProgram();
 
@@ -147,34 +183,18 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // balance the number of cores to use based on batch and num_chunks
+    // balance the number of cores to use based on batch and max_num_chunks
     // only do this when num_cores_available_per_batch is greater than 6 cores because that's when diminishing return happens
     uint32_t num_cores_available_per_batch = num_cores_available / B;
     uint32_t num_cores_per_batch = num_cores_available_per_batch;
-    uint32_t chunks_per_core_ceil = ceil((double) num_chunks / (double) num_cores_available_per_batch);
+    uint32_t chunks_per_core_ceil = ceil((double) max_num_chunks / (double) num_cores_available_per_batch);
     if (num_cores_available_per_batch > 6) {
-        num_cores_per_batch = num_chunks / chunks_per_core_ceil;
+        num_cores_per_batch = max_num_chunks / chunks_per_core_ceil;
         while (num_cores_per_batch > num_cores_available_per_batch) {
             num_cores_per_batch /= 2;
         }
     }
     uint32_t num_active_cores = num_cores_per_batch * B;
-
-    // Sequence length assignment
-    assert(max_valid_seq_len % k_chunk_size == 0);
-    int chunks_per_core = num_chunks / num_cores_per_batch;
-
-    std::vector<std::vector<int>> chunk_assignment(num_cores_per_batch, std::vector<int>(2));
-    for (int i = 0; i < num_cores_per_batch; ++i) {
-        chunk_assignment[i][0] = i * chunks_per_core;
-        chunk_assignment[i][1] = (i + 1) * chunks_per_core;
-    }
-    chunk_assignment.back()[1] += (num_chunks % num_cores_per_batch);
-
-    // chunk_assignment = chunk_assignment[::-1]
-    // reduction core is the first core, and we always want the reduction core to deal with the residual chunks
-    // residual chunks exists when other chunks are 0, and has less chunks than the other cores when other chunks are not 0
-    std::reverse(chunk_assignment.begin(), chunk_assignment.end());
 
     // create core group, which is a 1D list of cores sorted by reducer1, worker, ..., reducer2, worker, ..., reducer n, worker, ...
     std::vector<CoreCoord> core_group;
@@ -208,9 +228,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("chunks_per_core_ceil: {}", chunks_per_core_ceil);
     log_debug("num_cores_per_batch: {}", num_cores_per_batch);
     log_debug("num_active_cores: {}", num_active_cores);
-    log_debug("num_chunks: {}", num_chunks);
-    log_debug("chunks_per_core: {}", chunks_per_core);
-    log_debug("chunk_assignment: {}", chunk_assignment);
+    log_debug("max_num_chunks: {}", max_num_chunks);
     log_debug("core_group: {}", core_group);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -436,12 +454,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         // interleaved accessor args
-        B, PNHt, PSt, St, DHt, Sk_chunk_t, num_chunks, num_active_cores
+        B, PNHt, St, DHt, Sk_chunk_t, num_active_cores
     };
 
     std::vector<uint32_t> writer_reducer_compile_time_args_common = {
         // interleaved accessor args
-        B, PNHt, PSt, St, DHt,
+        B, PNHt, St, DHt,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,
@@ -450,7 +468,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> writer_worker_compile_time_args_common = {
         // interleaved accessor args
-        B, PNHt, PSt, St, DHt,
+        B, PNHt, PSt_max, St, DHt,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,
@@ -459,7 +477,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         // matmul args
-        St, DHt, PNHt, Sk_chunk_t, num_chunks,
+        St, DHt, PNHt, Sk_chunk_t,
         qk_in0_block_w, qk_out_subblock_w, qk_out_subblock_h, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_num_blocks,
         out_in0_block_w, out_out_subblock_w, out_out_subblock_h, out_in0_num_subblocks, out_in1_num_subblocks, out_num_blocks,
         num_cores_per_batch
@@ -486,8 +504,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t worker_id = i % num_cores_per_batch - 1;
         bool do_reduce = (worker_id == -1);
         uint32_t cur_batch = i / num_cores_per_batch;
-        uint32_t k_chunk_start = chunk_assignment[worker_id+1][0];
-        uint32_t k_chunk_end = chunk_assignment[worker_id+1][1];
         if (do_reduce) {
             reduce_core_noc_x = core.x;
             reduce_core_noc_y = core.y;
@@ -502,14 +518,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         log_debug("worker_id: {}", worker_id);
         log_debug("is reducer: {}", do_reduce);
         log_debug("cur_batch: {}", cur_batch);
-        log_debug("k_chunk_start: {}", k_chunk_start);
-        log_debug("k_chunk_end: {}", k_chunk_end);
         log_debug("reduce_core_noc_x: {}", reduce_core_noc_x);
         log_debug("reduce_core_noc_y: {}", reduce_core_noc_y);
 
         // Reader
         std::vector<uint32_t> reader_compile_time_args = reader_compile_time_args_common;
-        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end, is_q_sharded, !do_reduce, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y});
+        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, is_q_sharded, !do_reduce, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y});
         auto reader_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_all.cpp",
@@ -523,7 +537,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uintptr_t writer_kernels_id;
         std::vector<uint32_t> writer_compile_time_args = do_reduce ? writer_reducer_compile_time_args_common : writer_worker_compile_time_args_common;
         if (do_reduce) {
-            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, num_chunks, k_chunk_start, k_chunk_end, is_output_sharded});
+            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, is_output_sharded});
             writer_kernels_id = CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer.cpp",
@@ -533,7 +547,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                     defines
             ));
         } else {
-            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y, cur_batch, worker_id, k_chunk_start, k_chunk_end});
+            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y, cur_batch, worker_id});
             writer_kernels_id = CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_worker.cpp",
@@ -546,7 +560,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // Compute
         std::vector<uint32_t> compute_compile_time_args = compute_compile_time_args_common;
-        compute_compile_time_args.insert(compute_compile_time_args.end(), {do_reduce, k_chunk_start, k_chunk_end});
+        compute_compile_time_args.insert(compute_compile_time_args.end(), {do_reduce});
         auto compute_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/sdpa/kernels/compute/sdpa_flash_decode.cpp",
@@ -567,7 +581,21 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t v_addr = v_buffer->address();
     uint32_t out_addr = out0_buffer->address();
 
+    uint32_t PSt_i;
+    uint32_t k_num_chunks_i;
+    uint32_t k_chunk_start_i;
+    uint32_t k_chunk_end_i;
 
+    // Sequence length assignment
+    auto [all_PSt, all_num_chunks, all_chunk_assignments] = get_runtime_args(cur_pos, B, num_cores_per_batch, k_chunk_size);
+
+    log_debug("num_cores_per_batch: {}", num_cores_per_batch);
+    log_debug("cur_pos: {}", cur_pos);
+    log_debug("all_PSt: {}", all_PSt);
+    log_debug("all_num_chunks: {}", all_num_chunks);
+    log_debug("all_chunk_assignments: {}", all_chunk_assignments);
+
+    int batch_id = -1;
     // Set reader rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
@@ -579,10 +607,23 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uintptr_t writer_kernels_id = all_writer_kernels_id[i];
         uintptr_t compute_kernels_id = all_compute_kernels_id[i];
 
-        SetRuntimeArgs(program, reader_kernels_id, core, { q_addr, k_addr, v_addr});
         if (do_reduce) {
-            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, cur_pos_i});
+            batch_id++;
+            // reduce core and its workers share the same runtime args
+            PSt_i = all_PSt[batch_id];
+            k_num_chunks_i = all_num_chunks[batch_id];
         }
+        k_chunk_start_i = all_chunk_assignments[batch_id][worker_id+1][0];
+        k_chunk_end_i = all_chunk_assignments[batch_id][worker_id+1][1];
+
+        SetRuntimeArgs(program, reader_kernels_id, core, { q_addr, k_addr, v_addr, PSt_i, k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
+        if (do_reduce) {
+            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, cur_pos_i, PSt_i, k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
+        } else
+        {
+            SetRuntimeArgs(program, writer_kernels_id, core, { k_chunk_start_i, k_chunk_end_i});
+        }
+        SetRuntimeArgs(program, compute_kernels_id, core, { k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
     }
 
     auto override_runtime_arguments_callback = [
@@ -593,7 +634,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         all_compute_kernels_id,
         num_cores_per_batch,
         is_output_sharded,
-        cb_out4_id
+        cb_out4_id,
+        PSt_max,
+        max_num_chunks,
+        B,
+        max_valid_seq_len,
+        k_chunk_size
         ]
     (
         const void* operation,
@@ -614,7 +660,23 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t v_addr = v_buffer->address();
         uint32_t out_addr = out0_buffer->address();
 
-        // Set reader rt args
+        uint32_t PSt_i;
+        uint32_t k_num_chunks_i;
+        uint32_t k_chunk_start_i;
+        uint32_t k_chunk_end_i;
+
+        // Sequence length assignment
+        auto [all_PSt, all_num_chunks, all_chunk_assignments] = get_runtime_args(cur_pos, B, num_cores_per_batch, k_chunk_size);
+
+        log_debug("num_cores_per_batch: {}", num_cores_per_batch);
+        log_debug("cur_pos: {}", cur_pos);
+        log_debug("all_PSt: {}", all_PSt);
+        log_debug("all_num_chunks: {}", all_num_chunks);
+        log_debug("all_chunk_assignments: {}", all_chunk_assignments);
+
+        int batch_id = -1;
+
+        // Set rt args
         for (uint32_t i = 0; i < num_active_cores; ++i) {
             CoreCoord core = core_group[i];
             uint32_t cur_pos_i = cur_pos[i/num_cores_per_batch];
@@ -625,10 +687,23 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             uintptr_t writer_kernels_id = all_writer_kernels_id[i];
             uintptr_t compute_kernels_id = all_compute_kernels_id[i];
 
-            SetRuntimeArgs(program, reader_kernels_id, core, { q_addr, k_addr, v_addr});
             if (do_reduce) {
-                SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, cur_pos_i});
+                batch_id++;
+                // reduce core and its workers share the same runtime args
+                PSt_i = all_PSt[batch_id];
+                k_num_chunks_i = all_num_chunks[batch_id];
             }
+            k_chunk_start_i = all_chunk_assignments[batch_id][worker_id+1][0];
+            k_chunk_end_i = all_chunk_assignments[batch_id][worker_id+1][1];
+
+            SetRuntimeArgs(program, reader_kernels_id, core, { q_addr, k_addr, v_addr, PSt_i, k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
+            if (do_reduce) {
+                SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, cur_pos_i, PSt_i, k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
+            } else
+            {
+                SetRuntimeArgs(program, writer_kernels_id, core, { k_chunk_start_i, k_chunk_end_i});
+            }
+            SetRuntimeArgs(program, compute_kernels_id, core, { k_num_chunks_i, k_chunk_start_i, k_chunk_end_i});
         }
 
         if (is_output_sharded) {
