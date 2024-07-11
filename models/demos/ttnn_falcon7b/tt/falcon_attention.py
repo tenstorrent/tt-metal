@@ -96,7 +96,6 @@ class TtFalconAttention:
             input_tensor_b=self.query_key_value_weights,
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-            use_1d_systolic_array=True,
             core_grid=self.core_grid,
         )
         batch_size, _, sequence_size, fused_query_key_value_width = fused_query_key_value.shape
@@ -260,7 +259,6 @@ class TtFalconAttention:
             attn_output,
             self.dense_weights,
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-            use_1d_systolic_array=True,
             core_grid=self.core_grid,
         )
 

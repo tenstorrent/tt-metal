@@ -27,7 +27,6 @@ class TtFalconMLP:
             self.dense_h_to_4h_weights,
             memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-            use_1d_systolic_array=True,
             activation="gelu",
             compute_kernel_config=self.compute_kernel_config,
             core_grid=self.core_grid,
@@ -37,7 +36,6 @@ class TtFalconMLP:
             self.dense_4h_to_h_weights,
             memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-            use_1d_systolic_array=True,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=self.core_grid,
         )
