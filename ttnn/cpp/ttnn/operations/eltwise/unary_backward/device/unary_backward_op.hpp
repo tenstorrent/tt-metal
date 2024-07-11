@@ -71,6 +71,7 @@ enum class UnaryBackwardOpType {
     LOGITEPS_BW,
     LOG2_BW,
     SIGN_BW,
+    FMOD_BW,
 };
 
 struct UnaryBackwardFunction{
