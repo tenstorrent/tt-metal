@@ -392,8 +392,8 @@ class Operation:
                 output = function(*function_args, **function_kwargs)
                 if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
                     ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
-                if original_operation_history_csv is not None:
-                    os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
+                if original_operation_history_json is not None:
+                    os.environ["OPERATION_HISTORY_JSON"] = original_operation_history_json
                 else:
                     del os.environ["OPERATION_HISTORY_JSON"]
                 return output
