@@ -64,9 +64,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     expected_num_workers_completed(expected_num_workers_completed),
     src_page_index(src_page_index),
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
-    TT_ASSERT(
-        buffer.is_dram() or buffer.is_l1(),
-        "Trying to read an invalid buffer");
+    TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
 
     this->device = device;
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
@@ -282,7 +280,7 @@ void EnqueueWriteBufferCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-inline uint32_t get_packed_write_max_unicast_sub_cmds(Device *device) {
+inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
     return uint32_t(device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 }
 
@@ -339,7 +337,8 @@ void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
 }
 
 template <typename PackedSubCmd>
-uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch_cmd_size, uint32_t packed_write_max_unicast_sub_cmds, bool no_stride) {
+uint32_t get_max_write_packed_sub_cmds(
+    uint32_t data_size, uint32_t max_prefetch_cmd_size, uint32_t packed_write_max_unicast_sub_cmds, bool no_stride) {
     static_assert(
         std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
         std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -353,7 +352,8 @@ uint32_t get_max_write_packed_sub_cmds(uint32_t data_size, uint32_t max_prefetch
         no_stride ? (max_prefetch_size - align(data_size * sizeof(uint32_t), L1_ALIGNMENT)) / sub_cmd_sizeB
                   : max_prefetch_size / (align(data_size * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
 
-    uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+    uint32_t packed_write_max_multicast_sub_cmds =
+        get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
     return min(
         max_prefetch_num_packed_cmds,
         is_unicast ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds);
@@ -367,8 +367,8 @@ uint32_t insert_write_packed_payloads(
     const uint32_t packed_write_max_unicast_sub_cmds,
     std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
     const uint32_t aligned_sub_cmd_sizeB = align(sub_cmd_sizeB, L1_ALIGNMENT);
-    const uint32_t max_packed_sub_cmds_per_cmd =
-        get_max_write_packed_sub_cmds<PackedSubCmd>(aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
+    const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
+        aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
     uint32_t rem_num_sub_cmds = num_sub_cmds;
     uint32_t cmd_payload_sizeB = 0;
     while (rem_num_sub_cmds != 0) {
@@ -418,8 +418,8 @@ void generate_runtime_args_cmds(
     constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
-    uint32_t max_packed_cmds =
-        get_max_write_packed_sub_cmds<PackedSubCmd>(max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
+    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<PackedSubCmd>(
+        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
         TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
@@ -463,9 +463,8 @@ void generate_runtime_args_cmds(
 
 // Generate command sequence for unique (unicast) and common (multicast) runtime args
 void EnqueueProgramCommand::assemble_runtime_args_commands() {
-
     // TODO: provide this at a lower level
-    static vector<CoreType>core_types = {CoreType::WORKER, CoreType::ETH };
+    static vector<CoreType> core_types = {CoreType::WORKER, CoreType::ETH};
 
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
@@ -477,8 +476,8 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> unique_rt_data_and_sizes;
     std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> unique_rt_args_data;
 
-    std::variant<std::vector<CQDispatchWritePackedMulticastSubCmd>,
-                 std::vector<CQDispatchWritePackedUnicastSubCmd>> common_sub_cmds;
+    std::variant<std::vector<CQDispatchWritePackedMulticastSubCmd>, std::vector<CQDispatchWritePackedUnicastSubCmd>>
+        common_sub_cmds;
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> common_rt_data_and_sizes;
     std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> common_rt_args_data;
 
@@ -506,7 +505,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
             if (kg.total_rta_size != 0) {
-                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
                     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                             CoreCoord core_coord(x, y);
@@ -520,7 +519,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                                     if (!kernel->cores_with_runtime_args().empty()) {
                                         const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                         unique_rt_args_data.back().emplace_back(kernel->runtime_args_data(core_coord));
-                                        TT_ASSERT(runtime_args_data.size() * sizeof(uint32_t) <= kg.rta_sizes[dispatch_class]);
+                                        TT_ASSERT(
+                                            runtime_args_data.size() * sizeof(uint32_t) <=
+                                            kg.rta_sizes[dispatch_class]);
                                         unique_rt_data_and_sizes.back().emplace_back(
                                             runtime_args_data.data(),
                                             runtime_args_data.size() * sizeof(uint32_t),
@@ -529,10 +530,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                                 }
                             }
 
-                            CoreCoord physical_core =
-                                device->physical_core_from_logical_core(core_coord, core_type);
+                            CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, core_type);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                    .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                         }
                     }
                 }
@@ -566,8 +566,10 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             uint32_t common_size = program.crta_sizes[core_type == CoreType::WORKER][dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);
-                if (kernel->get_kernel_core_type() != core_type) continue; // TODO: fixme, need list of kernels by core_typexdispatch_class
-                if (kernel->dispatch_class() != dispatch_class) continue; // TODO: fixme, need list of kernels by core_typexdispatch_class
+                if (kernel->get_kernel_core_type() != core_type)
+                    continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
+                if (kernel->dispatch_class() != dispatch_class)
+                    continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
 
                 const auto& common_rt_args = kernel->common_runtime_args();
                 if (common_rt_args.size() > 0) {
@@ -590,7 +592,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                             // can make a vector of unicast encodings here
                             CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                    .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                         }
                     } else {
                         vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
@@ -614,9 +616,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             if (common_size != 0) {
                 uint32_t common_offset = program.crta_offsets[core_type == CoreType::WORKER][dispatch_class];
 
-                uint32_t common_args_addr = (core_type == CoreType::ETH) ?
-                    eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE + common_offset :
-                    L1_KERNEL_CONFIG_BASE + common_offset;
+                uint32_t common_args_addr = (core_type == CoreType::ETH)
+                                                ? eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE + common_offset
+                                                : L1_KERNEL_CONFIG_BASE + common_offset;
 
                 // Common rtas are always expected to fit in one prefetch cmd
                 // TODO: use a linear write instead of a packed-write
@@ -659,46 +661,77 @@ void EnqueueProgramCommand::assemble_device_commands() {
         const uint32_t max_prefetch_command_size =
             dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
-        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
-            uint32_t num_packed_cmds = 0;
-            uint32_t write_packed_len = transfer_info_vec[0].data.size();
+        // Multicast Semaphore Cmd
+        uint32_t num_multicast_semaphores = program.program_transfer_info.multicast_semaphores.size();
+        std::vector<std::vector<CQDispatchWritePackedMulticastSubCmd>> multicast_sem_sub_cmds(num_multicast_semaphores);
+        std::vector<std::vector<std::pair<const void*, uint32_t>>> multicast_sem_data(num_multicast_semaphores);
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> multicast_sem_payload(num_multicast_semaphores);
+        std::vector<std::pair<uint32_t, uint32_t>> multicast_sem_dst_size;
+        multicast_sem_dst_size.reserve(num_multicast_semaphores);
+        if (num_multicast_semaphores > 0) {
+            uint32_t i = 0;
+            for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
+                // TODO: loop over things inside transfer_info[i]
+                uint32_t write_packed_len = transfer_info_vec[0].data.size();
+                multicast_sem_dst_size.emplace_back(std::make_pair(dst, write_packed_len * sizeof(uint32_t)));
 
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    TT_ASSERT(
-                        transfer_info.data.size() == write_packed_len,
-                        "Not all data vectors in write packed semaphore cmd equal in len");
-                    num_packed_cmds += 1;
+                for (const auto& transfer_info : transfer_info_vec) {
+                    for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                        TT_ASSERT(
+                            transfer_info.data.size() == write_packed_len,
+                            "Not all data vectors in write packed semaphore cmd equal in len");
+                        multicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                            .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                                this->noc_index, std::get<CoreRange>(dst_noc_info.first)),
+                            .num_mcast_dests = dst_noc_info.second});
+                        multicast_sem_data[i].emplace_back(
+                            transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
+                    }
                 }
+                cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+                    multicast_sem_sub_cmds[i].size(),
+                    multicast_sem_dst_size.back().second,
+                    max_prefetch_command_size,
+                    this->packed_write_max_unicast_sub_cmds,
+                    multicast_sem_payload[i]);
+                i++;
             }
-
-            uint32_t aligned_semaphore_data_sizeB =
-                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
-            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
         }
 
-        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
-            uint32_t num_packed_cmds = 0;
-            uint32_t write_packed_len = transfer_info_vec[0].data.size();
+        // Unicast Semaphore Cmd
+        uint32_t num_unicast_semaphores = program.program_transfer_info.unicast_semaphores.size();
+        std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unicast_sem_sub_cmds(num_unicast_semaphores);
+        std::vector<std::vector<std::pair<const void*, uint32_t>>> unicast_sem_data(num_unicast_semaphores);
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> unicast_sem_payload(num_unicast_semaphores);
+        std::vector<std::pair<uint32_t, uint32_t>> unicast_sem_dst_size;
+        unicast_sem_dst_size.reserve(num_unicast_semaphores);
+        if (num_unicast_semaphores > 0) {
+            uint32_t i = 0;
+            for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
+                // TODO: loop over things inside transfer_info[i]
+                uint32_t write_packed_len = transfer_info_vec[0].data.size();
+                unicast_sem_dst_size.emplace_back(std::make_pair(dst, write_packed_len * sizeof(uint32_t)));
 
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    TT_ASSERT(
-                        transfer_info.data.size() == write_packed_len,
-                        "Not all data vectors in write packed semaphore cmd equal in len");
-                    num_packed_cmds += 1;
+                for (const auto& transfer_info : transfer_info_vec) {
+                    for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                        TT_ASSERT(
+                            transfer_info.data.size() == write_packed_len,
+                            "Not all data vectors in write packed semaphore cmd equal in len");
+                        unicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                            .noc_xy_addr = this->device->get_noc_unicast_encoding(
+                                this->noc_index, std::get<CoreCoord>(dst_noc_info.first))});
+                        unicast_sem_data[i].emplace_back(
+                            transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
+                    }
                 }
+                cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+                    unicast_sem_sub_cmds[i].size(),
+                    unicast_sem_dst_size.back().second,
+                    max_prefetch_command_size,
+                    this->packed_write_max_unicast_sub_cmds,
+                    unicast_sem_payload[i]);
+                i++;
             }
-
-            uint32_t aligned_semaphore_data_sizeB =
-                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + ucast_payload_sizeB, PCIE_ALIGNMENT);
         }
 
         const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
@@ -757,7 +790,11 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
             aligned_cb_config_size_bytes = align(cb_config_size_bytes, L1_ALIGNMENT);
             cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
-                num_multicast_cb_sub_cmds, cb_config_size_bytes, max_prefetch_command_size, this->packed_write_max_unicast_sub_cmds, mcast_cb_payload);
+                num_multicast_cb_sub_cmds,
+                cb_config_size_bytes,
+                max_prefetch_command_size,
+                this->packed_write_max_unicast_sub_cmds,
+                mcast_cb_payload);
         }
 
         // Program Binaries and Go Signals
@@ -950,61 +987,37 @@ void EnqueueProgramCommand::assemble_device_commands() {
 
         // Semaphores
         // Multicast Semaphore Cmd
-        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
-            uint32_t num_packed_cmds = 0;
-            uint32_t write_packed_len = transfer_info_vec[0].data.size();
-
-            std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
-            std::vector<std::pair<const void*, uint32_t>> sem_data;
-
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    num_packed_cmds += 1;
-                    multicast_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                        .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                            this->noc_index, std::get<CoreRange>(dst_noc_info.first)),
-                        .num_mcast_dests = dst_noc_info.second});
-                    sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
-                }
+        for (uint32_t i = 0; i < num_multicast_semaphores; ++i) {
+            uint32_t curr_sub_cmd_idx = 0;
+            for (const auto& [num_sub_cmds_in_cmd, multicast_sem_payload_sizeB] : multicast_sem_payload[i]) {
+                program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                    num_sub_cmds_in_cmd,
+                    multicast_sem_dst_size[i].first,
+                    multicast_sem_dst_size[i].second,
+                    multicast_sem_payload_sizeB,
+                    multicast_sem_sub_cmds[i],
+                    multicast_sem_data[i],
+                    this->packed_write_max_unicast_sub_cmds,
+                    curr_sub_cmd_idx);
+                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
             }
-
-            uint32_t aligned_semaphore_data_sizeB =
-                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
-            uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-
-            program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, multicast_sub_cmds, sem_data, this->packed_write_max_unicast_sub_cmds);
         }
 
         // Unicast Semaphore Cmd
-        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
-            // TODO: loop over things inside transfer_info[i]
-            uint32_t num_packed_cmds = 0;
-            uint32_t write_packed_len = transfer_info_vec[0].data.size();
-
-            std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-            std::vector<std::pair<const void*, uint32_t>> sem_data;
-
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    num_packed_cmds += 1;
-                    unicast_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                        .noc_xy_addr = this->device->get_noc_unicast_encoding(
-                            this->noc_index, std::get<CoreCoord>(dst_noc_info.first))});
-                    sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
-                }
+        for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
+            uint32_t curr_sub_cmd_idx = 0;
+            for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
+                program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                    num_sub_cmds_in_cmd,
+                    unicast_sem_dst_size[i].first,
+                    unicast_sem_dst_size[i].second,
+                    unicast_sem_payload_sizeB,
+                    unicast_sem_sub_cmds[i],
+                    unicast_sem_data[i],
+                    this->packed_write_max_unicast_sub_cmds,
+                    curr_sub_cmd_idx);
+                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
             }
-
-            uint32_t aligned_semaphore_data_sizeB =
-                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-            uint32_t dispatch_cmd_sizeB = align(
-                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-            uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-
-            program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, unicast_sub_cmds, sem_data, this->packed_write_max_unicast_sub_cmds);
         }
 
         // CB Configs commands
@@ -1271,7 +1284,9 @@ void EnqueueRecordEventCommand::process() {
             PCIE_ALIGNMENT);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     if (not device->is_mmio_capable()) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_hw_cqs; // CQ_DISPATCH_REMOTE_WRITE (number of writes = number of prefetch_h cores on this CQ)
+        cmd_sequence_sizeB +=
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE *
+            num_hw_cqs;  // CQ_DISPATCH_REMOTE_WRITE (number of writes = number of prefetch_h cores on this CQ)
     }
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -1315,9 +1330,13 @@ void EnqueueRecordEventCommand::process() {
 
     if (not device->is_mmio_capable()) {
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair prefetch_location = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(this->device->id(), channel, cq_id);
+            tt_cxy_pair prefetch_location =
+                dispatch_core_manager::get(num_hw_cqs).prefetcher_core(this->device->id(), channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_location, core_type);
-            command_sequence.add_dispatch_write_remote(this->event_id, this->device->get_noc_unicast_encoding(this->noc_index, prefetch_physical_core), address);
+            command_sequence.add_dispatch_write_remote(
+                this->event_id,
+                this->device->get_noc_unicast_encoding(this->noc_index, prefetch_physical_core),
+                address);
         }
     }
 
@@ -1350,17 +1369,17 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
 }
 
 void EnqueueWaitForEventCommand::process() {
-    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT or CQ_PREFETCH_CMD_WAIT_FOR_EVENT
+    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+                                                                  // or CQ_PREFETCH_CMD_WAIT_FOR_EVENT
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     uint32_t last_completed_event_address =
-            sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+        sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
     if (this->device->is_mmio_capable()) {
         command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
-    }
-    else {
+    } else {
         command_sequence.add_prefetch_wait_for_event(sync_event.event_id, last_completed_event_address);
     }
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
