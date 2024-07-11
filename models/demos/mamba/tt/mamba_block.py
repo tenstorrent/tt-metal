@@ -131,48 +131,37 @@ class TtMambaBlock(torch.nn.Module):
             ttnn.deallocate(x_ssm)
 
             # do the convolution
-            conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[0], memory_config=self.configs["sharded_d"])
-            conv_state = ttnn.to_memory_config(self.conv_states[0], memory_config=self.configs["sharded_d"])
-            conv_accumulator = ttnn.mul(
-                conv_state,
-                conv1d_wt,
-                memory_config=self.configs["sharded_d"],
+            conv_accumulator = ttnn.multiply(
+                self.conv_states[0],
+                self.conv1d_weights[0],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=self.configs["dtype"]["activations"],
             )
-            ttnn.deallocate(conv1d_wt)
-            ttnn.deallocate(conv_state)
 
             for i in range(1, 4):
-                conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[i], memory_config=self.configs["sharded_d"])
-                conv_state = ttnn.to_memory_config(self.conv_states[i], memory_config=self.configs["sharded_d"])
                 prod = ttnn.mul(
-                    conv_state,
-                    conv1d_wt,
-                    memory_config=self.configs["sharded_d"],
+                    self.conv_states[i],
+                    self.conv1d_weights[i],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                     dtype=self.configs["dtype"]["activations"],
                 )
-                ttnn.deallocate(conv1d_wt)
-                ttnn.deallocate(conv_state)
 
-                conv_out = ttnn.add(
+                conv_accumulator = ttnn.add(
                     conv_accumulator,
                     prod,
-                    memory_config=self.configs["sharded_d"],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                     dtype=self.configs["dtype"]["activations"],
+                    output_tensor=conv_accumulator,
                 )
-                ttnn.deallocate(conv_accumulator)
                 ttnn.deallocate(prod)
-                conv_accumulator = conv_out
 
-            conv1d_bias = ttnn.to_memory_config(self.conv1d_bias, memory_config=self.configs["sharded_d"])
             conv_out_with_bias = ttnn.add(
-                conv_out,
-                conv1d_bias,
-                memory_config=self.configs["sharded_d"],
+                conv_accumulator,
+                self.conv1d_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=self.configs["dtype"]["activations"],
             )
-            ttnn.deallocate(conv_out)
-            ttnn.deallocate(conv1d_bias)
+            ttnn.deallocate(conv_accumulator)
 
         elif self.configs["mode"] == ModelMode.PREFILL:
             if self.use_torch_conv:
@@ -192,9 +181,8 @@ class TtMambaBlock(torch.nn.Module):
                     dtype=self.configs["dtype"]["activations"],
                 )
 
-        conv_out_with_bias_l1 = ttnn.to_memory_config(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(conv_out_with_bias_l1)
+        conv_out_after_silu = ttnn.silu(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(conv_out_with_bias)
 
         out = self.tt_ssm(conv_out_after_silu)
 
