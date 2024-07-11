@@ -328,6 +328,19 @@ std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+std::vector<Tensor> _atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::SQUARE},
+    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam{UnaryOpType::RECIP}};
+    Tensor grad_a = ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result =
@@ -563,6 +576,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _acosh_bw;
         case UnaryBackwardOpType::ACOS_BW:
             return _acos_bw;
+        case UnaryBackwardOpType::ATAN_BW:
+            return _atan_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:

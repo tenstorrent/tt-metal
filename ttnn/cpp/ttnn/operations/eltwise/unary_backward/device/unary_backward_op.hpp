@@ -26,6 +26,7 @@ enum class UnaryBackwardOpType {
     COS_BW,
     ACOSH_BW,
     ACOS_BW,
+    ATAN_BW,
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,
