@@ -125,5 +125,7 @@ constexpr auto log2_bw = ttnn::register_operation<operations::unary_backward::Ex
 constexpr auto sign_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SIGN_BW>>("ttnn::sign_bw");
 constexpr auto fmod_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FMOD_BW>>("ttnn::fmod_bw");
 constexpr auto remainder_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::REMAINDER_BW>>("ttnn::remainder_bw");
+constexpr auto div_no_nan_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::DIV_NO_NAN_BW>>("ttnn::div_no_nan_bw");
+
 
 }  // namespace ttnn
