@@ -261,6 +261,16 @@ std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
+// name: cos(Tensor self) -> Tensor
+// self: grad * -self.sin()
+std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result =
+        ttnn::multiply(grad, (ttnn::neg(ttnn::sin(input_tensor, output_mem_config), output_mem_config)), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result =
@@ -490,6 +500,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _fill_bw;
         case UnaryBackwardOpType::HARDSIGMOID_BW:
             return _hardsigmoid_bw;
+        case UnaryBackwardOpType::COS_BW:
+            return _cos_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:
