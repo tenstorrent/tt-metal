@@ -524,9 +524,23 @@ struct to_json_t<CoreCoord> {
 };
 
 template <>
+struct from_json_t<CoreCoord> {
+    CoreCoord operator()(const nlohmann::json &json) noexcept {
+        return {from_json<uint32_t>(json.at("x")), from_json<uint32_t>(json.at("y"))};
+    }
+};
+
+template <>
 struct to_json_t<RelativeCoreCoord> {
     nlohmann::json operator()(const RelativeCoreCoord &relative_core_coord) noexcept {
         return {{"x", to_json(relative_core_coord.x)}, {"y", to_json(relative_core_coord.y)}};
+    }
+};
+
+template <>
+struct from_json_t<RelativeCoreCoord> {
+    RelativeCoreCoord operator()(const nlohmann::json &json) noexcept {
+        return {from_json<int32_t>(json.at("x")), from_json<int32_t>(json.at("y"))};
     }
 };
 
@@ -538,13 +552,24 @@ struct to_json_t<CoreRange> {
 };
 
 template <>
+struct from_json_t<CoreRange> {
+    CoreRange operator()(const nlohmann::json &json) noexcept {
+        return {from_json<CoreCoord>(json.at("start")), from_json<CoreCoord>(json.at("end"))};
+    }
+};
+
+template <>
 struct to_json_t<CoreRangeSet> {
     nlohmann::json operator()(const CoreRangeSet &core_range_set) noexcept {
         nlohmann::json core_range_set_json = nlohmann::json::array();
-        for (const auto &core_range : core_range_set.ranges()) {
-            core_range_set_json.push_back(to_json(core_range));
-        }
-        return core_range_set_json;
+        return to_json(core_range_set.ranges());
+    }
+};
+
+template <>
+struct from_json_t<CoreRangeSet> {
+    CoreRangeSet operator()(const nlohmann::json &json) noexcept {
+        return CoreRangeSet(from_json<std::set<CoreRange>>(json));
     }
 };
 
