@@ -408,9 +408,9 @@ std::vector<Tensor> _concat_bw(
 
 std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = tt::tt_metal::zeros_like(input, output_mem_config);
+    Tensor zero_input = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_input);
     return grad_tensor;
 }
