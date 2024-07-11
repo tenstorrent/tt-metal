@@ -219,6 +219,7 @@ Pointwise Unary
    ttnn/log1p_bw
    ttnn/erfc_bw
    ttnn/ceil_bw
+   ttnn/softsign_bw
 
 Pointwise Binary
 ================

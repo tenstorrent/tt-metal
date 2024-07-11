@@ -216,11 +216,6 @@ std::vector<Tensor> logiteps_bw(
     float eps = 0.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> softsign_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> sign_bw(
     const Tensor& grad,
     const Tensor& input,

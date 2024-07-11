@@ -797,6 +797,22 @@ std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+// softsign
+// result = grad_data / torch.square(1 + torch.abs(input))
+std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam {UnaryOpType::ABS},
+    UnaryWithParam {UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam {UnaryOpType::SQUARE},
+    UnaryWithParam {UnaryOpType::RECIP}};
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -879,6 +895,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _erfc_bw;
         case UnaryBackwardOpType::CEIL_BW:
             return _ceil_bw;
+        case UnaryBackwardOpType::SOFTSIGN_BW:
+            return _softsign_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
