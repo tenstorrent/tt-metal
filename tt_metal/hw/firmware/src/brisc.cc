@@ -64,7 +64,8 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -307,14 +308,14 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 #endif
 }
 
-inline void run_triscs() {
-    if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_COMPUTE]) {
+inline void run_triscs(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
 }
 
-inline void finish_ncrisc_copy_and_run() {
-    if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_DM1]) {
+inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
         l1_to_ncrisc_iram_copy_wait();
@@ -373,18 +374,21 @@ int main() {
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-            run_triscs();
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)mailboxes->launch.enables;
+            run_triscs(enables);
 
             noc_index = mailboxes->launch.brisc_noc_id;
 
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-            finish_ncrisc_copy_and_run();
+            finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_DM0]);
-            if (mailboxes->launch.enables[DISPATCH_CLASS_TENSIX_DM0]) {
+            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
+            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
+
+            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();
             } else {

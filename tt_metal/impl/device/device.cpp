@@ -1207,7 +1207,7 @@ void Device::setup_tunnel_for_remote_devices() {
             tt_cxy_pair mux_d_location = dispatch_core_manager::get(num_hw_cqs).mux_d_core(device_id, channel, cq_id);
             settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, get_physical_core_coordinate(mux_d_location, dispatch_core_type));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_mux.cpp";
-            settings.semaphores = std::vector<uint32_t>((tunnel.size() - 1) * num_hw_cqs);
+            settings.semaphores = std::vector<uint32_t>(num_hw_cqs);
             settings.consumer_semaphore_id = 0;
             settings.cb_start_address = dispatch_constants::DISPATCH_BUFFER_BASE;
             settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -1805,16 +1805,17 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
     // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in the
     // core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
     // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-    if (dispatch_core_manager::get(this->num_hw_cqs()).get_dispatch_core_type(this->id()) == CoreType::ETH) {
-        auto& dispatch_core_manager = dispatch_core_manager::get(this->num_hw_cqs());
-        for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
-            dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
+    for (uint8_t num_hw_cqs = 1; num_hw_cqs <= Device::max_num_hw_cqs; ++num_hw_cqs) {
+        if (dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->id()) == CoreType::ETH) {
+            auto& dispatch_core_manager = dispatch_core_manager::get(num_hw_cqs);
+            for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
+                dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
+            }
         }
     }
 }
 
 void Device::init_command_queue_host() {
-    TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
