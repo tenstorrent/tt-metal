@@ -424,6 +424,10 @@ void py_module(py::module& module) {
          ttnn::erfc_bw,
          R"doc(Performs backward operations for erfc on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+         module,
+         ttnn::ceil_bw,
+         R"doc(Performs backward operations for ceil on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 
 }
