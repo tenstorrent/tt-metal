@@ -14,6 +14,7 @@ from loguru import logger
 import pytest
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 import math
+import numpy as np
 
 
 def is_watcher_enabled():
@@ -164,7 +165,6 @@ def run_test_sdpa_decode(
     dtype,
     grid_size,
     q_dtype=ttnn.bfloat16,
-    mask_dtype=ttnn.bfloat16,
     sharded_in=False,
     sharded_out=False,
 ):
@@ -275,6 +275,129 @@ def run_test_sdpa_decode(
         start_idx += 601 if start_idx < 4096 else 3001
 
 
+def run_test_sdpa_decode_multi_pos(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype=ttnn.bfloat16,
+    sharded_in=False,
+    sharded_out=False,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    torch.manual_seed(1234)
+
+    num_parallel_cores = grid_size[0] * grid_size[1] // b
+    if num_parallel_cores == 1:
+        min_pcc = 0.90
+    else:
+        min_pcc = 0.99
+        if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+            min_pcc = 0.98
+        min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
+
+    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+    )
+
+    height_sharded_memcfg = ttnn.types.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    K = torch.randn(nkv, b, s, d)
+    V = torch.randn(nkv, b, s, d)
+
+    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+
+    max_start_idx = 31
+
+    while max_start_idx < s:
+        scale = d**-0.5
+        start_indices = np.linspace(0, max_start_idx, b, dtype=np.int32).tolist()
+
+        k_chunk_size = get_chunk_size(max_start_idx + 1)
+        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
+            q_chunk_size=padded_num_heads,
+            k_chunk_size=k_chunk_size,
+        )
+
+        padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
+
+        # Test various sequence lengths
+        logger.info(f"Testing with sequence length: {max_start_idx}")
+        logger.info(f"Using chunk size: {k_chunk_size}")
+        logger.info(f"Using padded layer length: {padded_layer_len}")
+        logger.info(f"Using padded num heads: {padded_num_heads}")
+
+        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+        # Assume all users are at same position
+        for i in range(b):
+            start_idx = start_indices[i]
+            attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
+        Q = torch.randn(1, b, padded_num_heads, d)
+
+        tt_Q = ttnn.as_tensor(
+            Q,
+            device=device,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+        )
+
+        tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
+            tt_Q,
+            tt_K,
+            tt_V,
+            start_indices,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+        )
+
+        tt_back = ttnn.to_torch(tt_back)
+
+        tt_back = tt_back[:, :, :nh, :]
+
+        Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+
+        expect = torch.nn.functional.scaled_dot_product_attention(
+            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        )  # b, nh, 1, d
+        expect = expect.squeeze().unsqueeze(0)
+
+        out_pass, out_pcc = comp_pcc(expect, tt_back, min_pcc)
+
+        logger.debug(f"python vs pytorch: {out_pcc}")
+
+        assert out_pass
+
+        max_start_idx += 601 if max_start_idx < 4096 else 3001
+
+
 def run_test_sdpa_decode_single_iter(
     device,
     b,
@@ -285,9 +408,9 @@ def run_test_sdpa_decode_single_iter(
     dtype,
     grid_size,
     q_dtype=ttnn.bfloat16,
-    mask_dtype=ttnn.bfloat16,
     sharded_in=False,
     sharded_out=False,
+    start_indices=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -391,12 +514,12 @@ def run_test_sdpa_decode_single_iter(
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
-    "dtype, q_dtype, mask_dtype",
+    "dtype, q_dtype",
     [
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
-        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
+        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT16],
     ],
     ids=[
         "all_bfp8",
@@ -414,24 +537,24 @@ def run_test_sdpa_decode_single_iter(
         [4, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
     ),
 )
-def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, single_iter):
+def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter):
     tt_lib.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
-            device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=False, sharded_out=False
+            device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False
         )
     else:
-        run_test_sdpa_decode(
-            device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=False, sharded_out=False
+        run_test_sdpa_decode_multi_pos(
+            device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False
         )
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
-    "dtype, q_dtype, mask_dtype",
+    "dtype, q_dtype",
     [
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
     ],
     ids=[
         "all_bfp8",
@@ -442,16 +565,16 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_d
     "b, nh, nkv, s, d, grid_size",
     ([16, 8, 1, 32768, 128, (8, 8)],),  # Llama2-70B
 )
-def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
+def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     tt_lib.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(
-        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=True, sharded_out=False
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=True, sharded_out=False
     )
     run_test_sdpa_decode_single_iter(
-        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=True, sharded_out=True
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=True, sharded_out=True
     )
     run_test_sdpa_decode_single_iter(
-        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=False, sharded_out=True
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=True
     )
 
 
@@ -515,9 +638,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
     assert device.num_program_cache_entries() == 4
 
 
-def run_test_sdpa_decode_ndpcc(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16, mask_dtype=ttnn.bfloat16
-):
+def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
@@ -625,11 +746,11 @@ def run_test_sdpa_decode_ndpcc(
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
-    "dtype, q_dtype, mask_dtype",
+    "dtype, q_dtype",
     [
-        # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        # [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        # [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B],
     ],
     ids=[
         # "bfp16_bfp16_bfp8",
@@ -645,6 +766,6 @@ def run_test_sdpa_decode_ndpcc(
         [32, 8, 1, 32768, 128, (8, 8)],
     ),
 )
-def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
+def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     tt_lib.device.DisablePersistentKernelCache()
-    run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype)
+    run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)

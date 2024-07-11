@@ -391,24 +391,21 @@ void MAIN {
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(4); // num chunks in valid_seq_len
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(6);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(8);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(13);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(17);
-    constexpr uint32_t do_reduce = get_compile_time_arg_val(18);
-    constexpr uint32_t k_chunk_start = get_compile_time_arg_val(19);
-    constexpr uint32_t k_chunk_end = get_compile_time_arg_val(20);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(4);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(6);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
+    constexpr uint32_t do_reduce = get_compile_time_arg_val(17);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -440,6 +437,10 @@ void MAIN {
     constexpr uint32_t cb_out_m = tt::CB::c_out1;
     constexpr uint32_t cb_out_l = tt::CB::c_out2;
     constexpr uint32_t cb_out_final = tt::CB::c_out4;
+
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(0);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
+    const uint32_t k_chunk_start = get_arg_val<uint32_t>(1);
+    const uint32_t k_chunk_end = get_arg_val<uint32_t>(2);
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
