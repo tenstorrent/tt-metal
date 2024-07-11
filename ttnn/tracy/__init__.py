@@ -33,13 +33,13 @@ DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 
 
 def signpost(header, message=None):
-    from tracy.tracy_ttnn import tracy_message
+    from tt_lib import profiler
 
     if message:
-        tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
+        profiler.tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
         logger.info(f"{header} : {message} ")
     else:
-        tracy_message(f"`TT_SIGNPOST: {header}`")
+        profiler.tracy_message(f"`TT_SIGNPOST: {header}`")
         logger.info(f"{header}")
 
 
