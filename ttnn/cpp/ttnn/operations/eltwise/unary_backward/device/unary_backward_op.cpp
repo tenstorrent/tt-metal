@@ -246,6 +246,21 @@ std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = where(
+        ttnn::logical_or(
+            ttnn::le(input, -3, std::nullopt, output_mem_config),
+            ttnn::ge(input, 3, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        tt::tt_metal::zeros_like(input, output_mem_config),
+        ttnn::multiply(grad, 1.0 / 6),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result =
@@ -473,6 +488,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _lgamma_bw;
         case UnaryBackwardOpType::FILL_BW:
             return _fill_bw;
+        case UnaryBackwardOpType::HARDSIGMOID_BW:
+            return _hardsigmoid_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:
