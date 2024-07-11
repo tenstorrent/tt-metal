@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Parameters provided to the test vector generator are defined here.
@@ -87,7 +87,7 @@ def run(
     output_memory_config,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
+) -> list:
     input_shape_a = (*batch_sizes, height, width)
     input_shape_b = (*batch_sizes, height, width)
     if broadcast == "hw":
@@ -115,8 +115,9 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-
+    start_time = start_measuring_time()
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

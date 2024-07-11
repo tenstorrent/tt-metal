@@ -4,6 +4,7 @@
 
 import os
 import json
+import time
 
 from loguru import logger
 from models.utility_functions import comp_pcc, divup, roundup
@@ -90,3 +91,11 @@ def get_per_core_size_and_num_cores(
             # Actual num_cores might be less after we round up to nearest 32
             num_cores_actual = divup(size, per_core_size)  # Divide and round up
             yield per_core_size, num_cores_actual
+
+
+def start_measuring_time() -> int:
+    return time.time_ns()
+
+
+def stop_measuring_time(start_time) -> int:
+    return time.time_ns() - start_time

@@ -7,7 +7,6 @@ import sys
 import pathlib
 import importlib
 import datetime
-import time
 import os
 from multiprocessing import Process, Queue
 from queue import Empty
@@ -33,10 +32,13 @@ def run(test_module, input_queue, output_queue):
             test_vector = input_queue.get(block=True, timeout=1)
             test_vector = deserialize_vector(test_vector)
             try:
-                start_time = time.time_ns()
-                status, message = test_module.run(**test_vector, device=device)
-                end_time = time.time_ns()
-                e2e_perf = end_time - start_time
+                results = test_module.run(**test_vector, device=device)
+                if type(results) == list:
+                    status, message = results[0]
+                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
+                else:
+                    status, message = results
+                    e2e_perf = None
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
@@ -65,6 +67,10 @@ def execute_batch(test_module, test_vectors):
             p = Process(target=run, args=(test_module, input_queue, output_queue))
             p.start()
         try:
+            if MEASURE_PERF:
+                # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                input_queue.put(test_vector)
+                output_queue.get(block=True, timeout=30)
             input_queue.put(test_vector)
             response = output_queue.get(block=True, timeout=30)
             status, message, e2e_perf = response[0], response[1], response[2]
@@ -79,7 +85,8 @@ def execute_batch(test_module, test_vectors):
                 else:
                     result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                 result["exception"] = message
-            result["e2e_perf"] = e2e_perf
+            if e2e_perf and MEASURE_PERF:
+                result["e2e_perf"] = e2e_perf
         except Empty as e:
             print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
             p.terminate()
@@ -199,8 +206,9 @@ def export_test_results(header_info, results):
     sweep_name = header_info[0]["sweep_name"]
     results_index = sweep_name + "_test_results"
 
+    curr_git_hash = git_hash()
     for result in results:
-        result["git_hash"] = git_hash()
+        result["git_hash"] = curr_git_hash
 
     for i in range(len(results)):
         result = header_info[i]
@@ -243,6 +251,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
+    parser.add_argument(
+        "--perf",
+        action="store_true",
+        required=False,
+        help="Add this flag to measure e2e perf, for op tests with performance markers.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -256,6 +270,9 @@ if __name__ == "__main__":
 
     global ARCH
     ARCH = architecture.str_to_arch(args.arch)
+
+    global MEASURE_PERF
+    MEASURE_PERF = args.perf
 
     if args.watcher:
         enable_watcher()

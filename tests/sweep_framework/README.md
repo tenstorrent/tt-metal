@@ -77,11 +77,20 @@ Vectors marked invalid will not be run by the test runner by default.
 
 The run function will be called by the test runner with all defined parameters passed in, along with the device.
 
-This is where to define the test case itself including setup and teardown and golden comparison. The runner expects that the rest will return a tuple of `(True, INFO)` if the test passes, or `(False, REASON)` if the test fails.
-Example: `(True, PCC)` or `(False, PCC)` if the PCC is lower than acceptable.
+This is where to define the test case itself including setup and teardown and golden comparison.
+
+The runner expects one of two returns from the run function:
+
+- Tuple[bool, Optional[str]] where the bool is the test pass/fail (True or False), and the string is the PCC. (e.g. (True, 0.999))
+
+- List[Tuple[bool, Optional[str]], Integer] where the tuple is the same as above, and the Integer is the e2e perf in nanoseconds.
+
+See below example for how to measure the e2e perf and return it properly.
 
 #### Example
 ```
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+
 def run(
     batch_sizes,
     height,
@@ -125,10 +134,13 @@ def run(
         memory_config=input_a_memory_config,
     )
 
+    start_time = start_measuring_time()
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    e2e_perf = stop_measuring_time(start_time)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
 ```
 
 ## Test Vector Generation
@@ -162,9 +174,11 @@ The test runner reads in test vectors from the test vector database and executes
     3. FAIL: CRASH / HANG: The test timed out and is assumed to be in a hung state.
     4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
     5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
+    6. FAIL_WATCHER: The test failed due to a Watcher raised exception. This only occurs if `--watcher` is passed in the run command.
 - Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual batch to allow for faster/slower test runs, spanning larger/smaller suites of tests.
 - Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
 - Data Aggreation: Results are accumulated in a database that can be queried to see desired details of test runs.
+
 
 ### Usage
 
@@ -182,6 +196,10 @@ Options:
 `--elastic <elastic_url>` OPTIONAL: Default is `http://localhost:9200`, which in almost all cases should be overridden unless running with a local instance of Elastic Search.
 
 `--arch <architecture>` REQUIRED: This will determine which tt-smi binaries to run on hangs. OPTIONS: `["grayskull", "wormhole", "wormhole_b0", "blackhole"]`
+
+`--watcher` OPTIONAL: This will run the tests with Watcher enabled. Watcher logs will be written to `generated/watcher/` and any Watcher exceptions raised will be caught.
+
+`--perf` OPTIONAL: This will enable e2e perf testing on the op tests that are written to support it. Each test will be run twice and the second result will be kept to avoid measuring compile time.
 
 ## Query Tool
 
