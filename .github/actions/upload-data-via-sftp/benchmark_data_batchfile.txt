@@ -1,2 +1,2 @@
-put -r generated/benchmark_data/*
+put -r generated/benchmark_data/*.csv
 ls -hal

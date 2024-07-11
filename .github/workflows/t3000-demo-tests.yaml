@@ -55,12 +55,13 @@ jobs:
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        if: ${{ matrix.test-group.name == "t3k_falcon7b_tests" && success() }}
+        uses: ./.github/actions/upload-data-via-sftp
         with:
-          name: benchmark_data_${{ matrix.test-group.name }}
-          path: generated/benchmark_data/
-          if-no-files-found: warn
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
