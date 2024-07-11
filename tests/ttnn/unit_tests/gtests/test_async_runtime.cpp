@@ -5,6 +5,7 @@
 #include "tensor/tensor.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/cpp/ttnn/async_runtime.hpp"
@@ -122,8 +123,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::record_event(device->command_queue(io_cq), write_event); // Record write on cq 1
             // Wait until cq 1 write is complete
             ttnn::wait_for_event(device->command_queue(workload_dispatch_cq), write_event);
-            auto op0 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT}}};
-            auto op1 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::NEG}}};
+            using ttnn::operations::unary::UnaryWithParam;
+            using ttnn::operations::unary::UnaryOpType;
+            auto op0 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::SQRT}}};
+            auto op1 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::NEG}}};
             // Run operation on cq 0
             Tensor output_tensor = ttnn::run_operation(workload_dispatch_cq, op0, {input_tensor}).at(0);
             auto dummy_buffer_0 = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
