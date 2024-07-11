@@ -22,7 +22,8 @@ def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=
     elif mode == ModelMode.PREFILL:
         outer_dim = seq_len
         assert batch_size == 1, "Batch size must be 1 for prefill model"
-        assert seq_len % 32 == 0 and seq_len < 128, "Sequence length must be a multiple of 32 for prefill model"
+        assert seq_len % 32 == 0, "Sequence length must be a multiple of 32 for prefill model"
+        assert seq_len <= 128, "Sequence length must be less than 128 for prefill model"
     else:
         raise ValueError(f"Invalid model mode: {mode}")
 
@@ -45,13 +46,13 @@ def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=
     )
     configs["sharded_scan"] = ttnn.create_sharded_memory_config(
         shape=(1, 1, outer_dim, hidden_size * 2 * latent),
-        core_grid=ttnn.CoreGrid(y=configs["core_grid_row"], x=configs["core_grid_col"]),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
     configs["sharded_prev_hidden"] = ttnn.create_sharded_memory_config(
         shape=(1, 1, 1, hidden_size * 2 * latent),
-        core_grid=ttnn.CoreGrid(y=configs["core_grid_row"], x=configs["core_grid_col"]),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
