@@ -66,6 +66,9 @@ Example:
                 }else if(operation.base_name()=="eq_bw"){
                     using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::EQ_BW>;
                     return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+                }else if(operation.base_name()=="sub_bw"){
+                    using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::SUB_BW>;
+                    return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
                 }
                 return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
 
@@ -194,6 +197,141 @@ void py_module(py::module& module) {
         ttnn::eq_bw,
         R"doc(Performs backward operations for equal to comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.
         Returns an tensor of zeros like input tensors.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::lgamma_bw,
+        R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::sub_bw,
+        R"doc(Performs backward operations for subtraction on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::frac_bw,
+        R"doc(Performs backward operations for frac on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::trunc_bw,
+        R"doc(Performs backward operations for truncation on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log_sigmoid_bw,
+        R"doc(Performs backward operations for log sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::fill_zero_bw,
+        R"doc(Performs backward operations of fill zero on :attr:`input_tensor` with given :attr:`grad_tensor`. Returns an tensor of zeros like :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::i0_bw,
+        R"doc(Performs backward operations for i0 on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::tan_bw,
+        R"doc(Performs backward operations for tan on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::sigmoid_bw,
+        R"doc(Performs backward operations for sigmoid on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::rsqrt_bw,
+        R"doc(Performs backward operations for rsqrt on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::neg_bw,
+        R"doc(Performs backward operations for neg on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::relu_bw,
+        R"doc(Performs backward operations for relu on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::logit_bw,
+        R"doc(Performs backward operations for logit on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+    
+    detail::bind_unary_backward(
+        module,
+        ttnn::floor_bw,
+        R"doc(Performs backward operations for floor on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::clamp_max_bw,
+        R"doc(Performs backward operations for clamp max value on :attr:`input_tensor`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+    
+    detail::bind_unary_backward(
+        module,
+        ttnn::hardshrink_bw,
+        R"doc(Performs backward operations for hardshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::softshrink_bw,
+        R"doc(Performs backward operations for softshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::leaky_relu_bw,
+        R"doc(Performs backward operations for leaky relu on :attr:`input_tensor`, :attr:`negative_slope` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::elu_bw,
+        R"doc(Performs backward operations for elu on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::celu_bw,
+        R"doc(Performs backward operations for celu on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::rpow_bw,
+        R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
+        
+    detail::bind_unary_backward(
+        module,
+        ttnn::round_bw,
+        R"doc(Performs backward operations for round on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log_bw,
+        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::relu6_bw,
+        R"doc(Performs backward operations for relu6 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::abs_bw,
+        R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::silu_bw,
+        R"doc(Performs backward operations for silu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::selu_bw,
+        R"doc(Performs backward operations for selu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 

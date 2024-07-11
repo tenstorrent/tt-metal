@@ -385,15 +385,17 @@ class Operation:
         def operation_history_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
-                os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_CSV)
+                original_operation_history_json = os.environ.get("OPERATION_HISTORY_JSON", None)
+                os.environ["OPERATION_HISTORY_JSON"] = str(
+                    ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_JSON
+                )
                 output = function(*function_args, **function_kwargs)
                 if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
                     ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
                 if original_operation_history_csv is not None:
                     os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
                 else:
-                    del os.environ["OPERATION_HISTORY_CSV"]
+                    del os.environ["OPERATION_HISTORY_JSON"]
                 return output
 
             return call_wrapper

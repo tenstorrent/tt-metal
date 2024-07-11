@@ -802,8 +802,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.sqrt_bw
 
-.. autofunction:: tt_lib.tensor.tan_bw
-
 .. autofunction:: tt_lib.tensor.exp_bw
 
 .. autofunction:: tt_lib.tensor.exp2_bw
@@ -814,43 +812,21 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.tanh_bw
 
-.. autofunction:: tt_lib.tensor.fill_zero_bw
-
 .. autofunction:: tt_lib.tensor.fill_bw
 
-.. autofunction:: tt_lib.tensor.unary_sub_bw
-
-.. autofunction:: tt_lib.tensor.log_bw
-
-.. autofunction:: tt_lib.tensor.abs_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
-
-.. autofunction:: tt_lib.tensor.rsqrt_bw
-
-.. autofunction:: tt_lib.tensor.neg_bw
 
 .. autofunction:: tt_lib.tensor.lt_bw
 
 .. autofunction:: tt_lib.tensor.gt_bw
 
-.. autofunction:: tt_lib.tensor.relu_bw
-
 .. autofunction:: tt_lib.tensor.ne_bw
-
-.. autofunction:: tt_lib.tensor.clamp_max_bw
 
 .. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
 .. autofunction:: tt_lib.tensor.hardsigmoid_bw
-
-.. autofunction:: tt_lib.tensor.i0_bw
-
-.. autofunction:: tt_lib.tensor.hardshrink_bw
-
-.. autofunction:: tt_lib.tensor.softshrink_bw
 
 .. autofunction:: tt_lib.tensor.hardswish_bw
 
@@ -876,10 +852,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.erfinv_bw
 
-.. autofunction:: tt_lib.tensor.leaky_relu_bw
-
-.. autofunction:: tt_lib.tensor.elu_bw
-
 .. autofunction:: tt_lib.tensor.hardtanh_bw
 
 .. autofunction:: tt_lib.tensor.angle_bw
@@ -887,8 +859,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.sin_bw
 
 .. autofunction:: tt_lib.tensor.sinh_bw
-
-.. autofunction:: tt_lib.tensor.celu_bw
 
 .. autofunction:: tt_lib.tensor.log10_bw
 
@@ -906,29 +876,11 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.reciprocal_bw
 
-.. autofunction:: tt_lib.tensor.relu6_bw
-
-.. autofunction:: tt_lib.tensor.rpow_bw
-
-.. autofunction:: tt_lib.tensor.silu_bw
-
-.. autofunction:: tt_lib.tensor.selu_bw
-
 .. autofunction:: tt_lib.tensor.square_bw
-
-.. autofunction:: tt_lib.tensor.lgamma_bw
-
-.. autofunction:: tt_lib.tensor.trunc_bw
-
-.. autofunction:: tt_lib.tensor.frac_bw
-
-.. autofunction:: tt_lib.tensor.log_sigmoid_bw
 
 .. autofunction:: tt_lib.tensor.tanhshrink_bw
 
 .. autofunction:: tt_lib.tensor.threshold_bw
-
-.. autofunction:: tt_lib.tensor.logit_bw
 
 .. autofunction:: tt_lib.tensor.logiteps_bw
 
@@ -965,10 +917,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.complex_sub_bw
 
 .. autofunction:: tt_lib.tensor.repeat_bw
-
-.. autofunction:: tt_lib.tensor.floor_bw
-
-.. autofunction:: tt_lib.tensor.round_bw
 
 .. autofunction:: tt_lib.tensor.unary_div_no_nan_bw
 

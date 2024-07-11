@@ -98,59 +98,16 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
 
-// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
-std::vector<Tensor> sigmoid_bw(
-    const Tensor& grad,
-    const Tensor& esinput,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> tan_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> fill_zero_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> fill_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_sub_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> log_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> binary_le_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> abs_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> complex_abs_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> rsqrt_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> neg_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> relu_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -163,12 +120,6 @@ std::vector<Tensor> gt_bw(
 
 std::vector<Tensor> ne_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> clamp_max_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float max,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> exp2_bw(
     const Tensor& grad,
@@ -196,23 +147,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
 std::vector<Tensor> hardsigmoid_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> i0_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> hardshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float lambd,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> softshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float lambd,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> hardswish_bw(
@@ -278,18 +212,6 @@ std::vector<Tensor> erfinv_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> leaky_relu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float negative_slope,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> elu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> hardtanh_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -311,12 +233,6 @@ std::vector<Tensor> sin_bw(
 std::vector<Tensor> sinh_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> celu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float alpha,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> log10_bw(
@@ -359,43 +275,7 @@ std::vector<Tensor> reciprocal_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> relu6_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> rpow_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> silu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> selu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> square_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> lgamma_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> frac_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> trunc_bw(
     const Tensor& grad,
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -405,11 +285,6 @@ std::vector<Tensor> prod_bw(
     const Tensor& input,
     bool all_dimensions,
     int64_t dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> log_sigmoid_bw(
-    const Tensor& grad,
-    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> tanhshrink_bw(
@@ -422,11 +297,6 @@ std::vector<Tensor> threshold_bw(
     const Tensor& input,
     float threshold,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> logit_bw(
-    const Tensor& grad,
-    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> logiteps_bw(
@@ -528,25 +398,13 @@ std::vector<Tensor> complex_sub_bw(
 std::vector<Tensor> repeat_bw(
     const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config);
 
-std::vector<Tensor> floor_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> round_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> unary_div_no_nan_bw(
     const Tensor& grad,
     const Tensor& input,
     float scalar = 1.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> _lerp_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config);
-
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 }  // namespace tt_metal
 
 }  // namespace tt

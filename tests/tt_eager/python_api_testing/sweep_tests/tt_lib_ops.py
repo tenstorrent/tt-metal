@@ -2363,32 +2363,6 @@ def untilize_with_unpadding(
 
 
 @setup_host_and_device
-def pad(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    output_tensor_shape,
-    input_tensor_start,
-    pad_value,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.pad(
-        t0,
-        ttnn.Shape(output_tensor_shape),
-        ttnn.Shape(input_tensor_start),
-        pad_value,
-        memory_config=output_mem_config,
-    )
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def unpad(
     x,
     *args,

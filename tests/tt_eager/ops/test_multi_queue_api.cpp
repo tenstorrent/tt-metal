@@ -9,7 +9,7 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
@@ -87,10 +87,10 @@ void test_multi_queue_api() {
 
     // OP API
     auto input_tensor = host_input_tensor.to(device);
-    auto cq0_output_tensor = tt::tt_metal::sqrt(input_tensor);  // Default CQ (CQ0)
+    auto cq0_output_tensor = ttnn::sqrt(input_tensor);  // Default CQ (CQ0)
 
     // Can't use command_queue_1 for now. So, use command_queue_0 for both
-    auto cq1_output_tensor = tt::tt_metal::sqrt(cq_id_0, input_tensor);  // CQ1
+    auto cq1_output_tensor = ttnn::sqrt(cq_id_0, input_tensor);  // CQ1
     // OP API END
 
     auto blocking = true;

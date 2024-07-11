@@ -168,11 +168,38 @@ Pointwise Unary
    ttnn/threshold
    ttnn/mul_bw
    ttnn/clamp_min_bw
+   ttnn/clamp_max_bw
    ttnn/clamp_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
    ttnn/eq_bw
+   ttnn/lgamma_bw
+   ttnn/sub_bw
+   ttnn/frac_bw
+   ttnn/trunc_bw
+   ttnn/log_sigmoid_bw
+   ttnn/fill_zero_bw
+   ttnn/i0_bw
+   ttnn/tan_bw
+   ttnn/sigmoid_bw
+   ttnn/rsqrt_bw
+   ttnn/neg_bw
+   ttnn/relu_bw
+   ttnn/logit_bw
+   ttnn/hardshrink_bw
+   ttnn/softshrink_bw
+   ttnn/leaky_relu_bw
+   ttnn/elu_bw
+   ttnn/celu_bw
+   ttnn/rpow_bw
+   ttnn/floor_bw
+   ttnn/round_bw
+   ttnn/log_bw
+   ttnn/relu6_bw
+   ttnn/abs_bw
+   ttnn/silu_bw
+   ttnn/selu_bw
 
 Pointwise Binary
 ================
@@ -213,7 +240,6 @@ Pointwise Binary
    ttnn/embedding_bw
    ttnn/addalpha_bw
    ttnn/subalpha_bw
-   ttnn/sub_bw
    ttnn/xlogy_bw
    ttnn/hypot_bw
    ttnn/ldexp_bw
