@@ -9,8 +9,8 @@
 #include "tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
 #include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
@@ -88,7 +88,7 @@ Tensor AutoFormat::format_input_tensor(
     if (formatted_input.storage_type() == StorageType::DEVICE) {
         if (convert_layout && !pad_input) {
             if (target_layout == Layout::TILE && formatted_input.get_layout() == Layout::ROW_MAJOR) {
-                return tilize(formatted_input, mem_config);
+                return ttnn::tilize(formatted_input, mem_config);
             } else if (target_layout == Layout::ROW_MAJOR && formatted_input.get_layout() == Layout::TILE) {
                 return untilize(formatted_input, mem_config);
             }
@@ -98,7 +98,7 @@ Tensor AutoFormat::format_input_tensor(
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-                return tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
+                return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = untilize(formatted_input, mem_config);
                 return ttnn::pad(0, (const ttnn::Tensor) formatted_input, ttnn::Shape(padded_shape), ttnn::Shape({0, 0, 0, 0}), pad_value, false, mem_config);
@@ -150,7 +150,7 @@ Tensor AutoFormat::format_output_tensor(
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE && formatted_output.get_layout() == Layout::ROW_MAJOR) {
                 if (AutoFormat::legal_tile_shape(formatted_output.get_legacy_shape())) {
-                    formatted_output = tilize(formatted_output, mem_config);
+                    formatted_output = ttnn::tilize(formatted_output, mem_config);
                 }
                 return formatted_output;
             } else if (target_layout == Layout::ROW_MAJOR && formatted_output.get_layout() == Layout::TILE) {
@@ -192,7 +192,7 @@ Tensor AutoFormat::format_output_tensor(
                     {0, 0, 0, 0},
                     {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
                     mem_config);
-                formatted_output = tilize(formatted_output, mem_config);
+                formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
             }
         }

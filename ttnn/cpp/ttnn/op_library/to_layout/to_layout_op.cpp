@@ -4,7 +4,10 @@
 
 #include "ttnn/op_library/to_layout/to_layout_op.hpp"
 
-#include "tt_eager/tt_dnn/op_library/tilize/tilize_op.hpp"
+
+
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
 #include "tt_eager/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/operations/core.hpp"
 
@@ -120,7 +123,7 @@ Tensor execute_on_worker_thread(
                             "TILE_SIZE!");
                     }
                 }
-                return tt::tt_metal::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 throw runtime_error("ttnn::to_layout: Unsupported layout!");
             }
@@ -150,8 +153,9 @@ Tensor execute_on_worker_thread(
             padded_4D_output_shape.push_back(tensor.get_shape()[-3]);
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
-            tensor = tt::tt_metal::tilize_with_val_padding(
+            tensor = ttnn::tilize_with_val_padding(
                 tensor, padded_4D_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
+
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
         } else {
@@ -165,8 +169,8 @@ Tensor execute_on_worker_thread(
             tensor = unsqueeze_to_4D(tensor);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             tensor = tensor.unpad_from_tile(tensor.get_shape().value().without_padding());
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
 
+            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
         } else if (layout == ttnn::TILE_LAYOUT) {
             tensor = unsqueeze_to_4D(tensor);
             std::vector<uint32_t> padded_4D_output_shape;
