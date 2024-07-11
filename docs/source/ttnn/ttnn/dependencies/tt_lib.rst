@@ -854,8 +854,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.threshold_bw
 
-.. autofunction:: tt_lib.tensor.sign_bw
-
 .. autofunction:: tt_lib.tensor.ge_bw
 
 .. autofunction:: tt_lib.tensor.le_bw

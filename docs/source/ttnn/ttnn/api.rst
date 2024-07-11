@@ -223,6 +223,7 @@ Pointwise Unary
    ttnn/cosh_bw
    ttnn/logiteps_bw
    ttnn/log2_bw
+   ttnn/sign_bw
 
 Pointwise Binary
 ================

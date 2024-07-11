@@ -205,23 +205,6 @@ std::vector<Tensor> threshold_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-<<<<<<< HEAD
-std::vector<Tensor> logiteps_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float eps = 0.0f,
-=======
-std::vector<Tensor> softsign_bw(
-    const Tensor& grad,
-    const Tensor& input,
->>>>>>> #10070: Move logit eps bw to TTNN
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> sign_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> ge_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
