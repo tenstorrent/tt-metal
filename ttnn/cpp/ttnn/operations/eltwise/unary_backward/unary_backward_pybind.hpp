@@ -262,6 +262,11 @@ void py_module(py::module& module) {
         module,
         ttnn::logit_bw,
         R"doc(Performs backward operations for logit on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
+    
+    detail::bind_unary_backward(
+        module,
+        ttnn::floor_bw,
+        R"doc(Performs backward operations for floor on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
     detail::bind_unary_backward(
         module,
@@ -297,6 +302,37 @@ void py_module(py::module& module) {
         module,
         ttnn::rpow_bw,
         R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
+        
+    detail::bind_unary_backward(
+        module,
+        ttnn::round_bw,
+        R"doc(Performs backward operations for round on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log_bw,
+        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::relu6_bw,
+        R"doc(Performs backward operations for relu6 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::abs_bw,
+        R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::silu_bw,
+        R"doc(Performs backward operations for silu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::selu_bw,
+        R"doc(Performs backward operations for selu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
 }
 
 }  // namespace binary_backward

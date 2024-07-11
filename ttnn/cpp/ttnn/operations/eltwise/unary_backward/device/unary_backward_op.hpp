@@ -40,6 +40,13 @@ enum class UnaryBackwardOpType {
     ELU_BW,
     CELU_BW,
     RPOW_BW,
+    FLOOR_BW,
+    ROUND_BW,
+    LOG_BW,
+    RELU6_BW,
+    ABS_BW,
+    SILU_BW,
+    SELU_BW,
 };
 
 struct UnaryBackwardFunction{

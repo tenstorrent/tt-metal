@@ -814,10 +814,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.fill_bw
 
-.. autofunction:: tt_lib.tensor.log_bw
-
-.. autofunction:: tt_lib.tensor.abs_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
 
 .. autofunction:: tt_lib.tensor.lt_bw
@@ -880,12 +876,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.reciprocal_bw
 
-.. autofunction:: tt_lib.tensor.relu6_bw
-
-.. autofunction:: tt_lib.tensor.silu_bw
-
-.. autofunction:: tt_lib.tensor.selu_bw
-
 .. autofunction:: tt_lib.tensor.square_bw
 
 .. autofunction:: tt_lib.tensor.tanhshrink_bw
@@ -927,10 +917,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.complex_sub_bw
 
 .. autofunction:: tt_lib.tensor.repeat_bw
-
-.. autofunction:: tt_lib.tensor.floor_bw
-
-.. autofunction:: tt_lib.tensor.round_bw
 
 .. autofunction:: tt_lib.tensor.unary_div_no_nan_bw
 
