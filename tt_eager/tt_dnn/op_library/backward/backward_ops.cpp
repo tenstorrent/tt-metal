@@ -479,22 +479,6 @@ std::vector<Tensor> polygamma_bw(
     return operation::decorate_as_composite(__func__, _polygamma_bw)(grad, input, n, output_mem_config);
 }
 
-std::vector<Tensor> _atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    using ttnn::operations::unary::UnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    std::vector<UnaryWithParam> ops_chain = {
-    UnaryWithParam{UnaryOpType::SQUARE},
-    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-    UnaryWithParam{UnaryOpType::RECIP}};
-    Tensor grad_a = ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _atan_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
