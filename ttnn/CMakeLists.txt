@@ -69,7 +69,7 @@ target_precompile_headers(ttnn_lib PRIVATE
 )
 
 ### Setup TTNN as a shared library with optional Python bindings
-set(TTNN_FINAL_SRC $<TARGET_OBJECTS:ttnn_lib> ${QUEUE_SRCS} ${TENSOR_SRCS} ${TT_DNN_SRCS})# $<TARGET_OBJECTS:tt_dnn> $<TARGET_OBJECTS:tensor> $<TARGET_OBJECTS:queue>)
+set(TTNN_FINAL_SRC $<TARGET_OBJECTS:ttnn_lib> ${QUEUE_SRCS} ${TENSOR_SRCS} ${TT_DNN_SRCS})
 set(TTNN_PUBLIC_INCLUDE_DIRS ${ttnn_lib_include_dirs})
 set(TTNN_PUBLIC_LINK_LIBRARIES ${ttnn_link_libraries} linker_flags) # linker_flags = -rdynamic if tracy enabled
 set(TTNN_PUBLIC_LINK_DIRS "")
