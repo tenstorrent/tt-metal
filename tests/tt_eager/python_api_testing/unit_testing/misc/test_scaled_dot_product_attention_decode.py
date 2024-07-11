@@ -349,7 +349,6 @@ def run_test_sdpa_decode_multi_pos(
         logger.info(f"Using padded num heads: {padded_num_heads}")
 
         attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
-        # Assume all users are at same position
         for i in range(b):
             start_idx = start_indices[i]
             attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
@@ -451,27 +450,29 @@ def run_test_sdpa_decode_single_iter(
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
-    start_idx = s // 2
+    start_indices = [s // 2 for _ in range(b)] if start_indices is None else start_indices
+    max_start_idx = max(start_indices)
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(start_idx + 1)
+    k_chunk_size = get_chunk_size(max_start_idx + 1)
     program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
     )
 
-    padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
+    padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
 
     # Test various sequence lengths
-    logger.debug(f"Testing with sequence length: {start_idx}")
+    logger.debug(f"Testing with sequence length: {max_start_idx}")
     logger.debug(f"Using chunk size: {k_chunk_size}")
     logger.debug(f"Using padded layer length: {padded_layer_len}")
     logger.debug(f"Using padded num heads: {padded_num_heads}")
 
     attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
-    # Assume all users are at same position
-    attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = torch.randn(1, b, padded_num_heads, d)
 
@@ -487,7 +488,7 @@ def run_test_sdpa_decode_single_iter(
         tt_Q,
         tt_K,
         tt_V,
-        [start_idx for _ in range(b)],
+        start_indices,
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
@@ -524,8 +525,8 @@ def run_test_sdpa_decode_single_iter(
     ids=[
         "all_bfp8",
         "all_bfp16",
-        "kv_bfp8_mask_bfp4",
-        "kvmask_bfp4",
+        "kv_bfp8",
+        "kv_bfp4",
     ],
 )
 @pytest.mark.parametrize(
@@ -592,7 +593,11 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
     tt_lib.device.DisablePersistentKernelCache()
 
     dummy_tensors = []
-    for _ in range(2):
+    for i in range(2):
+        # generate random start indices from 0 to s-1
+        start_indices = np.random.randint(0, s - 1, b).tolist()
+        start_indices[0] = s - 1
+
         dummy_tensors.append(
             ttnn.as_tensor(
                 torch.zeros(32, 32),
@@ -623,16 +628,60 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             )
         )
         run_test_sdpa_decode_single_iter(
-            device, b, nh, nkv, s, d, dtype, (8, 6), dtype, dtype, sharded_in=False, sharded_out=False
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            (8, 6),
+            dtype,
+            sharded_in=False,
+            sharded_out=False,
+            start_indices=start_indices,
         )
         run_test_sdpa_decode_single_iter(
-            device, b, nh, nkv, s, d, dtype, (8, 6), dtype, dtype, sharded_in=True, sharded_out=False
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            (8, 6),
+            dtype,
+            sharded_in=True,
+            sharded_out=False,
+            start_indices=start_indices,
         )
         run_test_sdpa_decode_single_iter(
-            device, b, nh, nkv, s, d, dtype, (8, 6), dtype, dtype, sharded_in=True, sharded_out=True
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            (8, 6),
+            dtype,
+            sharded_in=True,
+            sharded_out=True,
+            start_indices=start_indices,
         )
         run_test_sdpa_decode_single_iter(
-            device, b, nh, nkv, s, d, dtype, (8, 6), dtype, dtype, sharded_in=False, sharded_out=True
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            (8, 6),
+            dtype,
+            sharded_in=False,
+            sharded_out=True,
+            start_indices=start_indices,
         )
 
     assert device.num_program_cache_entries() == 4

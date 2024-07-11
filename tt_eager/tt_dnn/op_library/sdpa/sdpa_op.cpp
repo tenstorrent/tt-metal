@@ -342,7 +342,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->cur_pos,
         scale,
         this->compute_kernel_config,
-        this->program_config);
+        this->program_config,
+        this->k_chunk_size);
 }
 
 namespace transformers {
@@ -390,6 +391,16 @@ Tensor scaled_dot_product_attention(
     return output_tensors.at(0);
 }
 
+uint32_t get_chunk_size(uint32_t s) {
+    if (s <= 128) {
+        return 32;
+    }
+    if (s <= 256) {
+        return 256;
+    }
+    return 512;
+}
+
 Tensor scaled_dot_product_attention_decode(
     Tensor& input_tensor_q,
     Tensor& input_tensor_k,
@@ -411,7 +422,8 @@ Tensor scaled_dot_product_attention_decode(
             const auto& input_tensor_v = input_tensors.at(2);
             auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                              : AutoFormat::GetDefaultDevice()->arch();
-            auto max_seq_len = *std::max_element(cur_pos.begin(), cur_pos.end());
+            uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
+            uint32_t k_chunk_size = get_chunk_size(max_cur_pos+1);
             // get chunk size and then pass to sdpa decode as an attribute for prgm cache
             auto kernel_config_val = init_device_compute_kernel_config(
                 input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
@@ -421,7 +433,8 @@ Tensor scaled_dot_product_attention_decode(
                     .scale = scale,
                     .output_mem_config = output_mem_config,
                     .program_config = program_config,
-                    .compute_kernel_config = kernel_config_val},
+                    .compute_kernel_config = kernel_config_val,
+                    .k_chunk_size = k_chunk_size},
                 {input_tensor_q, input_tensor_k, input_tensor_v}
             );
         },
