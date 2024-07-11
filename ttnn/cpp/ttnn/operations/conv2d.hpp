@@ -14,7 +14,7 @@
 #include "ttnn/experimental/tensor/tensor_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/math.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pad/pad_op.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
