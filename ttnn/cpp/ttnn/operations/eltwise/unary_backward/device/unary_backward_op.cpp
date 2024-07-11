@@ -372,7 +372,10 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
         ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
         grad_result,
         output_mem_config);
-        
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
 // square
 // result:  2 * input * grad_data
 std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -525,6 +528,10 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
     grad_result =
         where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
 
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
@@ -573,10 +580,10 @@ std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const Memo
 std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
-        ttnn::lt(input, tt::tt_metal::full_like(input, -3.0f), std::nullopt, output_mem_config),
+        ttnn::lt(input, ttnn::operations::creation::full_like(input, -3.0f), std::nullopt, output_mem_config),
         0.0,
         where(
-            ttnn::le(input, tt::tt_metal::full_like(input, 3.0f), std::nullopt, output_mem_config),
+            ttnn::le(input, ttnn::operations::creation::full_like(input, 3.0f), std::nullopt, output_mem_config),
             ttnn::multiply(grad,
                 ttnn::add(ttnn::multiply(input, 0.3333f, std::nullopt, output_mem_config), 0.5f, std::nullopt, output_mem_config),
                 std::nullopt,
@@ -647,8 +654,8 @@ std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const Memo
 
     Tensor grad_result =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = tt::tt_metal::full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = tt::tt_metal::full_like(input, std::nanf(""), output_mem_config);
+    Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());
+    Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""));
     Tensor sub_one = ttnn::add(input, -1, std::nullopt, output_mem_config);
     Tensor sub_minus_one = ttnn::add(input, 1, std::nullopt, output_mem_config);
     Tensor result = where(
