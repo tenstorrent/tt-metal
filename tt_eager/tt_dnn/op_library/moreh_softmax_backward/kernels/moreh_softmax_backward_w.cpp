@@ -36,16 +36,16 @@ void MAIN {
                 // apply mask
                 mask_tile_to_cb(cb_dy, cb_mask, cb_inter2, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
-                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_inter2, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop=1*/0);
+                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_inter2, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop=1*/0);
             } else {
                 constexpr auto cb_inter0 = tt::CB::c_intermed0;
-                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_dy, cb_bcast_scaler, cb_inter0, Wt - 1, /*pop0=*/0, /*pop=1*/0);
+                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_dy, cb_bcast_scaler, cb_inter0, Wt - 1, /*pop0=*/0, /*pop=1*/0);
 
                 constexpr auto cb_inter1 = tt::CB::c_intermed1;
                 mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
                 constexpr auto cb_inter2 = tt::CB::c_intermed2;
-                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_inter1, cb_bcast_scaler, cb_inter2, 1, /*pop0=*/1, /*pop=1*/0);
+                reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_inter1, cb_bcast_scaler, cb_inter2, 1, /*pop0=*/1, /*pop=1*/0);
 
                 add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
             }
@@ -79,7 +79,7 @@ void MAIN {
             }
 
             // step 2, compute sum(y * dy)
-            reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, cb_sum, Wt, /*pop0=*/Wt, /*pop=1*/0);
+            reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_ydy, cb_bcast_scaler, cb_sum, Wt, /*pop0=*/Wt, /*pop=1*/0);
 
             // step 3, compute final result
             for (uint32_t w = 0; w < Wt; w += onetile) {
