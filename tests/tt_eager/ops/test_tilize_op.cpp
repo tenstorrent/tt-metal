@@ -11,7 +11,7 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt;
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
         Shape shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(device);
-        Tensor b = tilize(a);
+        Tensor b = ttnn::tilize(a);
 
         Tensor c = b.cpu();
         ////////////////////////////////////////////////////////////////////////////
