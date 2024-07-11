@@ -79,14 +79,13 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
-  upload-benchmark-data:
+  ping-benchmark-server:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Create key file
-        shell: bash
-        run: |
-          echo "${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}" > id_benchmark_writer
-          chmod go-rwx id_benchmark_writer
-      - name: Upload files
-        run: sftp  -oStrictHostKeyChecking=no -i id_benchmark_writer -b .github/scripts/data_analysis/benchmark_data_batchfile.txt ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}@${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - uses: ./.github/actions/upload-data-via-sftp/action.yaml
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/scripts/data_analysis/dummy_ls.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
