@@ -145,10 +145,11 @@ inline std::ostream &operator<<(std::ostream &os, const Padding &padding) {
 
 bool operator==(const Padding &, const Padding &);
 bool operator!=(const Padding &, const Padding &);
+typedef std::array<uint32_t, 4> ShapeArray;
 
 class Shape {
     std::size_t rank_;
-    std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
+    ShapeArray dimensions_;
     Padding padding_;
 
    public:
@@ -168,6 +169,12 @@ class Shape {
     template <std::size_t Rank>
     Shape(const std::array<uint32_t, Rank> &shape) : rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
+            this->dimensions_[index] = shape[index];
+        }
+    }
+
+    Shape(const std::array<uint32_t, MAX_NUM_DIMENSIONS> &shape, uint32_t _rank) : rank_(_rank), dimensions_{}, padding_{_rank} {
+        for (auto index = 0; index < _rank; index++) {
             this->dimensions_[index] = shape[index];
         }
     }
@@ -212,6 +219,15 @@ class Shape {
         return std::forward_as_tuple(this->rank_, this->dimensions_, this->padding_);
     }
     friend std::ostream &operator<<(std::ostream &os, const Shape &shape);
+
+    ShapeArray to_array() const {
+        ShapeArray ret_array;
+        for(int i=0; i<rank(); i++) {
+            ret_array[i] = this->operator[](i);
+        }
+        return ret_array;
+    }
+
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {

@@ -3293,8 +3293,8 @@ def pad(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.pad(
         t0,
-        ttnn.Shape(output_tensor_shape),
-        ttnn.Shape(input_tensor_start),
+        output_tensor_shape,
+        input_tensor_start,
         pad_value,
         memory_config=output_mem_config,
     )

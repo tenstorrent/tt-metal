@@ -727,8 +727,8 @@ class TtFalconAttentionDecode(nn.Module):
             for i in range(self.num_devices):
                 query_layer[i] = ttnn.pad(
                     query_layer[i],
-                    ttnn.Shape([1, self.padded_local_heads, batch, self.head_dim]),
-                    ttnn.Shape([0, 0, 0, 0]),
+                    [1, self.padded_local_heads, batch, self.head_dim],
+                    [0, 0, 0, 0],
                     0.0,
                 )
 

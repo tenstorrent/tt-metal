@@ -31,7 +31,7 @@ void bind_pad(py::module& module) {
             Args:
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
-                * :attr:`output_tensor_shape`: Final shape of padded tensor. This along with input_tensor_start is mutually exclusive from padding. 
+                * :attr:`output_tensor_shape`: Final shape of padded tensor. This along with input_tensor_start is mutually exclusive from padding.
                 * :attr:`input_tensor_start`: Shape describing where to start padding. This along with output_tensor_shape is mutually exclusive from padding.
                 * :attr:`value`: value to pad with
 
@@ -66,8 +66,8 @@ void bind_pad(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                const Shape output_padded_shape,
-                const Shape input_tensor_start,
+                const std::array<uint32_t, ttnn::operations::data_movement::NUM_DIMENSIONS> & output_padded_shape,
+                const std::array<uint32_t, ttnn::operations::data_movement::NUM_DIMENSIONS> & input_tensor_start,
                 const float value,
                 const bool use_multicore,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
