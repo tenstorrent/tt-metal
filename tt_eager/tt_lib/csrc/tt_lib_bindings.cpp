@@ -340,13 +340,9 @@ void ProfilerModule(py::module &m_profiler) {
 
 } // end namespace tt_metal
 
-} // end namespace tt
-
-
-PYBIND11_MODULE(_C, m) {
-
-    m.attr("__name__") = "tt_lib";
-    m.doc() = "Python bindings for TT-Metal";
+void bind_deprecated(py::module m) {
+    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
+    tt::tt_metal::TensorModule(m_tensor);
 
     py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
     tt::tt_metal::DeviceModule(m_device);
@@ -354,18 +350,16 @@ PYBIND11_MODULE(_C, m) {
     py::module_ m_profiler = m.def_submodule("profiler", "Submodule defining the profiler");
     tt::tt_metal::ProfilerModule(m_profiler);
 
-    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
-    tt::tt_metal::TensorModule(m_tensor);
-
-    py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
+    py::module_ m_operations = m.def_submodule("operations", "Submodule for experimental operations");
     tt::operations::py_module(m_operations);
 
-
 #if defined(TRACY_ENABLE)
-    py::function tracy_decorator = py::module::import("tt_eager.tt_lib_profiler_wrapper").attr("callable_decorator");
+    py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
 
     tracy_decorator(m_device);
     tracy_decorator(m_tensor);
     tracy_decorator(m_operations);
 #endif
 }
+
+} // end namespace tt

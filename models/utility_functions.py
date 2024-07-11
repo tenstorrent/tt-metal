@@ -14,7 +14,7 @@ import struct
 import pytest
 
 from tt_lib.fused_ops.conv import conv as TtConv
-from tt_lib.device import Arch
+from ttnn.device import Arch
 
 
 ### Math operations ###

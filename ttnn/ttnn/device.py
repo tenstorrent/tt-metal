@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-
-import tt_lib as ttl
-import ttnn
 import os
 
-from tt_lib.device import Arch
+import ttnn
+from ttnn._ttnn.deprecated.device import Arch
 
 
 def get_device_core_grid(device):
@@ -17,14 +15,14 @@ def get_device_core_grid(device):
 
 
 # TODO: Device = ttnn._ttnn.Device
-Device = ttl.device.Device
+Device = ttnn._ttnn.deprecated.device.Device
 Device.core_grid = property(get_device_core_grid)
 
 
 def open_device(
     device_id: int,
-    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
 ):
     """
     open_device(device_id: int) -> ttnn.Device:
@@ -60,7 +58,7 @@ def synchronize_device(device):
 
     Synchronize the device with host by waiting for all operations to complete.
     """
-    ttl.device.Synchronize(device)
+    ttnn._ttnn.deprecated.device.Synchronize(device)
 
 
 @contextlib.contextmanager
@@ -78,7 +76,7 @@ def manage_device(device_id: int):
 
 
 def dump_device_memory_state(device, prefix=""):
-    ttl.device.DumpDeviceMemoryState(device, prefix)
+    ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
 def is_wormhole_b0(device):

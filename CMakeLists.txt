@@ -200,11 +200,6 @@ install(TARGETS tt_metal
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
-install(TARGETS tt_eager
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-)
 install(TARGETS ttnn_lib
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -215,18 +210,9 @@ install(TARGETS ttnn
     COMPONENT tt_build_artifacts
 )
 if(WITH_PYTHON_BINDINGS)
-    install(TARGETS tt_lib
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tt_build_artifacts
-    )
-
     # Install .so into src files for pybinds implementation
     install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
     DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
-    COMPONENT tt_pybinds
-    )
-    install(FILES ${PROJECT_BINARY_DIR}/lib/_C.so
-    DESTINATION ${PROJECT_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
     )
 endif()

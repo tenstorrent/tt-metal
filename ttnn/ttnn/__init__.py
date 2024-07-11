@@ -11,15 +11,22 @@ import pprint
 from typing import Optional
 from types import ModuleType
 
+import sys
+from pathlib import Path
 from loguru import logger
 
-import tt_lib as _tt_lib
+# Sets env and updates shared libs rpath
+# This is a tweak required for a proper wheel functioning
+import ttnn.library_tweaks
+
+library_tweaks.setup_ttnn_so()
+
 import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-UnaryWithParam = _tt_lib.tensor.FusibleActivationWithParam
-UnaryOpType = _tt_lib.tensor.FusibleActivation
+UnaryWithParam = ttnn._ttnn.deprecated.tensor.FusibleActivationWithParam
+UnaryOpType = ttnn._ttnn.deprecated.tensor.FusibleActivation
 
 
 @dataclasses.dataclass

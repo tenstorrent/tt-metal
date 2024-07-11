@@ -209,43 +209,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
-)
 
-add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
-
-target_link_libraries(tt_dnn PUBLIC metal_header_directories compiler_flags umd_device)
-target_include_directories(tt_dnn PUBLIC
-    ${UMD_HOME}
-    ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_eager
-    ${PROJECT_SOURCE_DIR}/ttnn/cpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
-)
-
-target_precompile_headers(tt_dnn PRIVATE
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/format.h
-    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/tensor.hpp
-    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/types.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/device/device.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/jit_build/build.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/program/program.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/host_api.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/buffers/buffer.hpp
-    ${PROJECT_SOURCE_DIR}/tt_eager/tt_dnn/op_library/operation.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/common/core_coord.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/tt_device.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
-    <functional>
-    <map>
-    <memory>
-    <unordered_map>
-    <variant>
-    <vector>
+    CACHE INTERNAL "tt_dnn sources to reuse in ttnn build"
 )

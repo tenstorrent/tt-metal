@@ -8,6 +8,7 @@
 #include "device/ternary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/device/ternary_backward_op.hpp"
 
 namespace ttnn {
 

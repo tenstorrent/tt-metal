@@ -1,6 +1,6 @@
 
 add_library(test_eager_common_libs INTERFACE)
-target_link_libraries(test_eager_common_libs INTERFACE tt_eager test_common_libs)
+target_link_libraries(test_eager_common_libs INTERFACE ttnn test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
     ops/ccl/test_all_gather_utils

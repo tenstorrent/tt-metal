@@ -19,7 +19,7 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
 )
 from models.utility_functions import skip_for_grayskull
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+from ttnn.operations.conv.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParamsWithParallelConfig,
 )

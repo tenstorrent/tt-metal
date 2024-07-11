@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 
 import ttnn
 
+
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
 MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
 MatmulMultiCoreReuseMultiCastProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastProgramConfig

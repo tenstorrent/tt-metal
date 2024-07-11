@@ -390,8 +390,8 @@ class Operation:
                     ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_JSON
                 )
                 output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._tt_lib.operations, "dump_operation_history_to_json"):
-                    ttnn._tt_lib.operations.dump_operation_history_to_json()
+                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
+                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
                 if original_operation_history_json is not None:
                     os.environ["OPERATION_HISTORY_JSON"] = original_operation_history_json
                 else:

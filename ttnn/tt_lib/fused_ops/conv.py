@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union
-from .. import tensor, operations
-from ..utils import _nearest_32, _nearest_y
+from tt_lib import tensor, operations
+from tt_lib.utils import _nearest_32, _nearest_y
 import torch
 import ttnn
 from loguru import logger

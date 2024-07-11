@@ -8,6 +8,7 @@
 #include <optional>
 #include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::binary_backward {
 
@@ -49,7 +50,5 @@ static std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Te
 static std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType);
 static std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3(BinaryBackwardOpType OpType);
 static std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType);
-
 };
-
 }  // namespace ttnn::operations::binary_backward

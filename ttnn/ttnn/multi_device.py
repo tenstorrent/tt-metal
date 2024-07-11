@@ -6,7 +6,6 @@ import contextlib
 from collections import abc
 
 from typing import List, Dict
-import tt_lib as ttl
 
 import ttnn
 import torch
@@ -16,11 +15,11 @@ DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 
 
 def get_num_devices() -> List[int]:
-    return ttl.device.GetNumAvailableDevices()
+    return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:
-    return ttl.device.GetNumPCIeDevices()
+    return ttnn._ttnn.deprecated.device.GetNumPCIeDevices()
 
 
 def get_pcie_device_ids() -> List[int]:
@@ -36,8 +35,8 @@ def get_device_ids() -> List[int]:
 def open_device_mesh(
     device_grid: ttnn.DeviceGrid,
     device_ids: List[int],
-    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
 ):
     """
@@ -69,8 +68,8 @@ def close_device_mesh(device_mesh):
 def create_device_mesh(
     device_grid: ttnn.DeviceGrid,
     device_ids: List[int],
-    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
 ):
     """

@@ -36,7 +36,7 @@ jobs:
           cmake --build build --target tests
           cmake --build build --target install
       - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
+        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:

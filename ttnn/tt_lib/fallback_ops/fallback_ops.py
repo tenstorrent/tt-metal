@@ -5,7 +5,7 @@
 import torch
 from typing import List, Tuple, Union, Optional
 from .conversion_wrapper import convert_tt_tensors_wrapper
-from .. import tensor as ttl_tensor
+from tt_lib import tensor as ttl_tensor
 
 # python 3.10 has types.EllipsisType
 EllipsisType = type(Ellipsis)

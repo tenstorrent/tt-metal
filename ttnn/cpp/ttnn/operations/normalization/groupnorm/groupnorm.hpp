@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 
 namespace ttnn {
 namespace operations {

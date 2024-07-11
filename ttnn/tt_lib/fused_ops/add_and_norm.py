@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .. import tensor
+from tt_lib import tensor
 from .layernorm import Layernorm
 
 

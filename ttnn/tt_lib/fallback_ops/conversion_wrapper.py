@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .. import tensor as ttl_tensor, device as ttl_device
+from tt_lib import tensor as ttl_tensor, device as ttl_device
 import torch
 from functools import wraps
 from loguru import logger

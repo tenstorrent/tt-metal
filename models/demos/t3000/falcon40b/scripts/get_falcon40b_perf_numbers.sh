@@ -12,7 +12,7 @@ dtype="BFLOAT8_B" #BFLOAT16
 for seq_len in ${seq_lens[@]}; do
     echo "Running seq_len: $seq_len"
     output_folder="generated/profiler/reports/"
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 tt_eager/tracy.py -r -m "pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py::test_perf_bare_metal[${dtype}-DRAM-falcon_40b-layers_1-prefill_seq${seq_len}-8chips]"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 -m tracy -r -m "pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py::test_perf_bare_metal[${dtype}-DRAM-falcon_40b-layers_1-prefill_seq${seq_len}-8chips]"
     # get latest folder in output folder
     latest_created_folder=$(ls -td $output_folder/* | head -n 1)
     # find csv file that starts with "ops_perf_results"

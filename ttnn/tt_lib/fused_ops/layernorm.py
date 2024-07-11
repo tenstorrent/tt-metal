@@ -4,8 +4,8 @@
 
 import torch
 
-from .. import tensor, device
-from ..utils import (
+from tt_lib import tensor, device
+from tt_lib.utils import (
     pad_activation,
     pad_weight,
     tilize,
