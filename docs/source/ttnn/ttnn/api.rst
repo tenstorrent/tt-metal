@@ -220,6 +220,7 @@ Pointwise Unary
    ttnn/erfc_bw
    ttnn/ceil_bw
    ttnn/softsign_bw
+   ttnn/cosh_bw
 
 Pointwise Binary
 ================

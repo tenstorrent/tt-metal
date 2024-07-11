@@ -67,6 +67,7 @@ enum class UnaryBackwardOpType {
     ERFC_BW,
     CEIL_BW,
     SOFTSIGN_BW,
+    COSH_BW,
 };
 
 struct UnaryBackwardFunction{
