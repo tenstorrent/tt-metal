@@ -298,6 +298,36 @@ std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// # - name: acos(Tensor self) -> Tensor
+// #   self: grad * -((-self * self + 1).rsqrt())
+std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor neg_in = ttnn::neg(input, output_mem_config);
+    Tensor in_rsqrt =
+        ttnn::rsqrt(ttnn::add(ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config), true, output_mem_config);
+    in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
+    Tensor neg_one = ttnn::operations::creation::full_like(input, -1.0);
+    Tensor pos_one = ttnn::operations::creation::full_like(input, 1.0);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_or(
+            ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
+            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        std::nanf(" "),
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::eq(input, neg_one, std::nullopt, output_mem_config),
+        t_inf,
+        where(ttnn::eq(input, pos_one, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result =
@@ -531,6 +561,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _cos_bw;
         case UnaryBackwardOpType::ACOSH_BW:
             return _acosh_bw;
+        case UnaryBackwardOpType::ACOS_BW:
+            return _acos_bw;
         case UnaryBackwardOpType::FRAC_BW:
             return _frac_bw;
         case UnaryBackwardOpType::TRUNC_BW:

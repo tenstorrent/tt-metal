@@ -179,6 +179,7 @@ Pointwise Unary
    ttnn/hardsigmoid_bw
    ttnn/cos_bw
    ttnn/acosh_bw
+   ttnn/acos_bw
    ttnn/sub_bw
    ttnn/frac_bw
    ttnn/trunc_bw

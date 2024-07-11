@@ -25,6 +25,7 @@ enum class UnaryBackwardOpType {
     HARDSIGMOID_BW,
     COS_BW,
     ACOSH_BW,
+    ACOS_BW,
     SUB_BW,
     FRAC_BW,
     TRUNC_BW,
