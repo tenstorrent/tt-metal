@@ -41,7 +41,7 @@ def run_backward_unary_test(device, h, w, in_val, grad_val, ttnn_function, torch
 @pytest.mark.parametrize("in_val", [-1, 0, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 def test_atan(device, h, w, in_val, grad_val):
-    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.experimental.tensor.atan_bw, torch.atan)
+    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.atan_bw, torch.atan)
 
 
 @pytest.mark.parametrize("h", [64])
