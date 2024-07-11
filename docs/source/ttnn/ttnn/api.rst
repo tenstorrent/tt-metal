@@ -193,6 +193,13 @@ Pointwise Unary
    ttnn/elu_bw
    ttnn/celu_bw
    ttnn/rpow_bw
+   ttnn/floor_bw
+   ttnn/round_bw
+   ttnn/log_bw
+   ttnn/relu6_bw
+   ttnn/abs_bw
+   ttnn/silu_bw
+   ttnn/selu_bw
 
 Pointwise Binary
 ================

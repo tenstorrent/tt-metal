@@ -144,7 +144,6 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
-
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
@@ -264,7 +263,6 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
-
 std::vector<Tensor> _hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -358,6 +356,103 @@ std::vector<Tensor> _rpow_bw(
 }
 
 
+std::vector<Tensor> _floor_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = ttnn::operations::creation::zeros_like(grad);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _round_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = ttnn::operations::creation::zeros_like(grad);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());
+    Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""));
+    grad_tensor.emplace_back(where(
+        ttnn::eqz(input, output_mem_config),
+        where(
+            ttnn::eqz(grad, output_mem_config),
+            t_nan,
+            ttnn::multiply(t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
+            output_mem_config),
+        grad_a,
+        output_mem_config));
+    return grad_tensor;
+}
+
+std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_tensor = ttnn::operations::creation::zeros_like(input);
+    Tensor one_tensor = ttnn::operations::creation::ones_like(input);
+    Tensor six_tensor = ttnn::operations::creation::full_like(input, 6);
+    Tensor grad_result =
+        where(ttnn::le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
+    grad_result = where(
+        ttnn::logical_and(
+            ttnn::gtz(input, output_mem_config),
+            ttnn::lt(input, six_tensor, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        grad_result,
+        output_mem_config);
+    grad_result =
+        where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+// Silu
+// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
+std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = ttnn::add(
+        ttnn::multiply(ttnn::subtract(ttnn::operations::creation::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
+            input,
+            std::nullopt,
+            output_mem_config),
+        1.0f,
+        std::nullopt,
+        output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+// Selu
+// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
+std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_lambd = ttnn::multiply(grad, 1.0507f, std::nullopt, output_mem_config);
+    Tensor grad_result = where(
+        ttnn::gtz(input, output_mem_config),
+        grad_lambd,
+        ttnn::multiply(ttnn::multiply(grad_lambd, 1.673260f, std::nullopt, output_mem_config),
+            ttnn::exp(input, false, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -388,6 +483,20 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _relu_bw;
         case UnaryBackwardOpType::LOGIT_BW:
             return _logit_bw;
+        case UnaryBackwardOpType::FLOOR_BW:
+            return _floor_bw;
+        case UnaryBackwardOpType::ROUND_BW:
+            return _round_bw;
+        case UnaryBackwardOpType::LOG_BW:
+            return _log_bw;
+        case UnaryBackwardOpType::RELU6_BW:
+            return _relu6_bw;
+        case UnaryBackwardOpType::ABS_BW:
+            return _abs_bw;
+        case UnaryBackwardOpType::SILU_BW:
+            return _silu_bw;
+        case UnaryBackwardOpType::SELU_BW:
+            return _selu_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
