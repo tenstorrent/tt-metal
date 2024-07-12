@@ -29,7 +29,7 @@ jobs:
     strategy:
       matrix:
         arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
-        profiler-build: ${{ fromJson(inputs.profiler-build) || false }}
+        profiler-build: ${{ fromJson([inputs.profiler-build]) || [false] }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
