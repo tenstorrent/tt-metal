@@ -785,8 +785,6 @@ class TTPyCompositeConv(TTPyOp):
 
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
-                # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
-                import ttnn
 
                 bias_untiled = bias_untiled.to_torch()
                 bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
