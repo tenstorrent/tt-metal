@@ -176,6 +176,7 @@ Pointwise Unary
    ttnn/eq_bw
    ttnn/gt_bw
    ttnn/lt_bw
+   ttnn/le_bw
    ttnn/lgamma_bw
    ttnn/fill_bw
    ttnn/hardsigmoid_bw

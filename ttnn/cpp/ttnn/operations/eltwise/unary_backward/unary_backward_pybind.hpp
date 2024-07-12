@@ -218,6 +218,12 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
+        ttnn::le_bw,
+        R"doc(Performs backward operations for less equal comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
+
+    detail::bind_unary_backward(
+        module,
         ttnn::lgamma_bw,
         R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
