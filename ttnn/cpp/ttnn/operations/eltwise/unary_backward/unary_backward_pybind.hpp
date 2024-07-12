@@ -525,6 +525,11 @@ void py_module(py::module& module) {
         ttnn::expm1_bw,
         R"doc(Performs backward operations for exp2 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::reciprocal_bw,
+        R"doc(Performs backward operations for exp2 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
 }
 
 }  // namespace binary_backward
