@@ -441,33 +441,6 @@ std::vector<Tensor> erf_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _erf_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_inf = std::numeric_limits<float>::infinity();
-    float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
-        t_nan,
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-        -t_inf,
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _digamma_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float M_PI_180 = M_PI / 180;
