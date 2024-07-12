@@ -63,11 +63,20 @@ nebula_x1:
       start: [0, 0]
       end: [7, 7]
 
+    tg_compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 3]
+
     storage_cores:
       []
 
     dispatch_cores:
       [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+    tg_dispatch_cores:
+      [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1],
+       [0, -2], [1, -2], [2, -2], [3, -2], [4, -2], [5, -2], [6, -2], [7, -2],
+       [0, -3], [1, -3], [2, -3], [3, -3], [4, -3], [5, -3], [6, -3], [7, -3]]
 
     dispatch_core_type:
       "tensix"
