@@ -447,7 +447,7 @@ std::vector<Tensor> _celu_bw(
     const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor div_result = ttnn::multiply(
-        input, recip(ttnn::operations::creation::full_like(input, alpha, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        input, ttnn::reciprocal(ttnn::operations::creation::full_like(input, alpha, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     Tensor exp_result = ttnn::exp(div_result, false, output_mem_config);
     Tensor grad_result = where(
         ttnn::gt(input, ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
