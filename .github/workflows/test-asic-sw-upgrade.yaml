@@ -13,6 +13,7 @@ jobs:
       arch: '["wormhole_b0"]'
     secrets: inherit
   single-chip:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
