@@ -196,34 +196,6 @@ std::vector<Tensor> threshold_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> logiteps_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float eps = 0.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> sign_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> log2_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> unary_fmod_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float eps = 0.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> unary_remainder_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float eps = 0.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> conj_bw(
     const Tensor& grad,
     const Tensor& input,
