@@ -192,6 +192,11 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
+        ttnn::hardtanh_bw,
+        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward(
+        module,
         ttnn::assign_bw,
         R"doc(Performs backward operations for assign on :attr:`input_tensor` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 

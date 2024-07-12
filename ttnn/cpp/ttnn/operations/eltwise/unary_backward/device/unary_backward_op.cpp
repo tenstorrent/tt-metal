@@ -55,6 +55,20 @@ std::vector<Tensor> _clamp_bw(
     return grad_tensor;
 }
 
+// Hardtanh
+// result: torch.where((input <= min) | (input >= max), 0.0, grad)
+std::vector<Tensor> _hardtanh_bw(
+    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(
+        ttnn::le(input, ttnn::operations::creation::full_like(input, min), std::nullopt, output_mem_config),
+        0.0,
+        where(ttnn::ge(input, ttnn::operations::creation::full_like(input, max), std::nullopt, output_mem_config), 0.0, grad),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -1266,6 +1280,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, flo
     switch (OpType) {
         case UnaryBackwardOpType::CLAMP_BW:
             return _clamp_bw;
+        case UnaryBackwardOpType::HARDTANH_BW:
+            return _hardtanh_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

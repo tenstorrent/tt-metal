@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ def test_bw_hardtanh(input_shapes, device):
     max_val = 1
     pyt_y = torch.nn.functional.hardtanh(in_data, min_val, max_val)
 
-    tt_output_tensor_on_device = tt_lib.tensor.hardtanh_bw(grad_tensor, input_tensor, min_val, max_val)
+    tt_output_tensor_on_device = ttnn.hardtanh_bw(grad_tensor, input_tensor, min_val, max_val)
 
     in_data.retain_grad()
 
