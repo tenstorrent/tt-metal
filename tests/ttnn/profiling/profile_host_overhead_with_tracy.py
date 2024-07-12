@@ -9,7 +9,7 @@ import csv
 import click
 import time
 import subprocess
-from tests.tt_eager.profiling import ops_for_profiling
+from tests.ttnn.profiling import ops_for_profiling
 from pathlib import Path
 from loguru import logger
 
@@ -75,7 +75,7 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
             continue
 
         op_id = f"{i:03d}"
-        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
+        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
         subprocess.run([command], shell=True, check=False, env=currentEnvs, timeout=3000)
         i += 1
 
@@ -163,10 +163,10 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
 def main(output_directory, output_csv, op_name):
     """
     Profile all ops:
-    python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py
+    python tests/ttnn/profiling/profile_host_overhead_with_tracy.py
 
     Profile one op:
-    python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py -n ttnn.add
+    python tests/ttnn/profiling/profile_host_overhead_with_tracy.py -n ttnn.add
     """
     profile_host_overhead(output_directory, output_csv, op_to_profile=op_name)
 

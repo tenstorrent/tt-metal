@@ -77,5 +77,5 @@ Added column is `C++ mean dispatch time (ms)` which is host time parsed from `Tr
 `test_host_overhead_ci.py` is a unit test which can be run in CI to check if there were no regressions in host dispatch times. It compares measured time with reference times for each op. It can be run with:
 
 ```
-pytest tests/tt_eager/profiling/test_host_overhead_ci.py
+pytest tests/ttnn/profiling/test_host_overhead_ci.py
 ```
