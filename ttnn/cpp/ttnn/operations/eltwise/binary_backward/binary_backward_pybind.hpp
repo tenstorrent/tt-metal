@@ -275,11 +275,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
-        ttnn::binary_le_bw,
-        R"doc(Performs backward operations for binary le on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
-
-    detail::bind_binary_backward(
-        module,
         ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given attr:`grad_tensor` (reversed order of subtraction operator).)doc");
 

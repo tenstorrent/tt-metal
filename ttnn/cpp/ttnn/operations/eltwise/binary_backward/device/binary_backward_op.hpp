@@ -29,7 +29,7 @@ enum class BinaryBackwardOpType {
     EQ_BW,
     ASSIGN_BW,
     CONCAT_BW,
-    BINARY_LE_BW,
+    LE_BW,
     RSUB_BW,
     BIAS_GELU_BW,
     GT_BW,
