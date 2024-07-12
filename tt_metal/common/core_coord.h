@@ -198,7 +198,8 @@ struct CoreRange {
 
     CoreIterator end() const
     {
-        return CoreIterator(this->end_, *this);
+        const CoreCoord iterator_end(this->start_.x, this->end_.y + 1);
+        return CoreIterator(iterator_end, *this);
     }
 };
 
