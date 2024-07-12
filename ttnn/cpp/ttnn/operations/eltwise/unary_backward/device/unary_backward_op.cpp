@@ -1339,6 +1339,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _remainder_bw;
         case UnaryBackwardOpType::DIV_NO_NAN_BW:
             return _div_no_nan_bw;
+        case UnaryBackwardOpType::POLYGAMMA_BW:
+            return _polygamma_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

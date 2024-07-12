@@ -267,6 +267,13 @@ def test_floor(device, h, w):
     run_unary_test_range(device, h, w, ttnn.floor, torch.floor, pcc=0.99)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
+def test_ceil(device, h, w):
+    run_unary_test_range(device, h, w, ttnn.ceil, torch.ceil, pcc=0.99)
+
+
 def torch_relu_max(x, upper_limit, *args, **kwargs):
     return torch.relu(torch.min(x, torch.tensor(upper_limit)))
 

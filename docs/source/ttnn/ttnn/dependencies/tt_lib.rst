@@ -458,8 +458,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.floor
 
-.. autofunction:: tt_lib.tensor.ceil
-
 .. autofunction:: tt_lib.tensor.trunc
 
 .. autofunction:: tt_lib.tensor.frac
