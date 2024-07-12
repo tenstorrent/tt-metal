@@ -123,6 +123,9 @@ def main(args):
         if not match:
             incorrect_indices = [i for i, score in enumerate(scores) if score < 1]
             logger.info(f"Output does not match ground truth at indices {incorrect_indices}")
+            for idx in incorrect_indices:
+                print(f"User {idx}: \n\tBad Output: {all_text[idx]}")
+
             assert match, "Output must match ground truth!"
 
         logger.info("Output matches ground truth!")
