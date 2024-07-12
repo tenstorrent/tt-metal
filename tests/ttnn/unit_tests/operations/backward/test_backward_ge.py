@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -16,9 +16,11 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_unary_ge(input_shapes, device):
+@pytest.mark.parametrize("other", [1.0])
+def test_bw_unary_ge(input_shapes, other, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    tt_output_tensor_on_device = tt_lib.tensor.ge_bw(grad_tensor)
+    tt_output_tensor_on_device = ttnn.ge_bw(grad_tensor, input_tensor, other)
 
     pyt_y = torch.zeros_like(grad_data)
 
