@@ -1019,6 +1019,30 @@ std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, cons
     return grad_tensor;
 }
 
+std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan = std::nanf("");
+    Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_nan,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        -t_inf,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_inf,
+        grad_a,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1115,6 +1139,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _expm1_bw;
         case UnaryBackwardOpType::RECIPROCAL_BW:
             return _reciprocal_bw;
+        case UnaryBackwardOpType::DIGAMMA_BW:
+            return _digamma_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
