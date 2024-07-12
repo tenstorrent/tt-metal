@@ -21,13 +21,13 @@ jobs:
           {
             name: "N150",
             arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"],
+            runs-on: ["issue-miw-256", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
           },
           {
             name: "N300",
             arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"],
+            runs-on: ["issue-miw-256", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300 --dispatch-mode ""'
           }
         ]
