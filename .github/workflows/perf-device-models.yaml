@@ -7,7 +7,13 @@ on:
   workflow_call:
 
 jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      profiler-build: true
+    secrets: inherit
   device-perf:
+    needs: build-artifact-profiler
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -21,7 +27,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-info.arch }}
-      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": true}'
       LOGURU_LEVEL: INFO
     environment: dev
     runs-on: ${{ matrix.test-info.runs-on }}
@@ -35,10 +40,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
-          ./create_venv.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}_profiler
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run device performance regressions
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
