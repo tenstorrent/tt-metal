@@ -79,7 +79,7 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
-  produce-benchmark-environment:
+  test-produce-benchmark-environment:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
