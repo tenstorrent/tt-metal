@@ -23,6 +23,7 @@ enum class UnaryBackwardOpType {
     GT_BW,
     LT_BW,
     LE_BW,
+    GE_BW,
     LGAMMA_BW,
     FILL_BW,
     HARDSIGMOID_BW,
