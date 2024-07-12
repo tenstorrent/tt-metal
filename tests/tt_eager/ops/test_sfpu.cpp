@@ -14,7 +14,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 
 
@@ -23,6 +23,9 @@ std::map<std::string,std::map<std::string, std::string>> sfpu_op_to_hlk_op_name=
 
 void update_sfpu_op_to_hlk_op()
 {
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
     for(const std::string& sfpu_op_name : sfpu_op) {
         std::string unary_op_name{sfpu_op_name};
         for(auto& c: unary_op_name) {
@@ -34,15 +37,15 @@ void update_sfpu_op_to_hlk_op()
         else if (unary_op_name == "RECIPROCAL") {
             unary_op_name = "RECIP";
         }
-        auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType>(unary_op_name).value();
-        if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
-            if (unary_op_type == tt::tt_metal::UnaryOpType::EXP) {
-                sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 1.0}});
+        auto unary_op_type = magic_enum::enum_cast<UnaryOpType>(unary_op_name).value();
+        if ( ttnn::operations::unary::is_parametrized_type(unary_op_type) ) {
+            if (unary_op_type == UnaryOpType::EXP) {
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 1.0}});
             } else {
-                sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 0.5}});
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 0.5}});
             }
         } else {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type}});
+            sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type}});
         }
     }
 }

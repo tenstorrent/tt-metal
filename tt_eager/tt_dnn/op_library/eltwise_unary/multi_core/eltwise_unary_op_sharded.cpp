@@ -39,8 +39,8 @@ operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tenso
     uint32_t num_tile_per_core = 0;
 
     if (input.get_dtype() == DataType::BFLOAT8_B) {
-        uint32_t ntiles_along_width = ceil(shard_spec.shape[1] / (float) constants::TILE_WIDTH);
-        uint32_t ntiles_along_height = ceil(shard_spec.shape[0] / (float) constants::TILE_HEIGHT);
+        uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float) constants::TILE_WIDTH);
+        uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float) constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL((shard_spec.shape[1] * datum_size(act_df)) % L1_ALIGNMENT == 0, "Shard width should be multiple of L1_ADRESS_ALIGNMENT");

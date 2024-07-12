@@ -8,7 +8,7 @@ import sys
 
 import ttnn
 
-import tt_lib as ttl
+import ttnn._ttnn.deprecated as ttl
 
 __all__ = []
 

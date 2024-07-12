@@ -241,11 +241,7 @@ inline json get_base_json(
         ZoneScopedN("get_attributes_json");
         for (auto&& [name, value] : attributes) {
             std::string nameStr = "";
-            if (std::holds_alternative<std::string>(name)) {
-                nameStr = fmt::format("{}", std::get<std::string>(name));
-            } else if (std::holds_alternative<const char*>(name)) {
-                nameStr = fmt::format("{}", std::get<const char*>(name));
-            }
+            nameStr = fmt::format("{}", name);
             attributesObj[nameStr] = fmt::format("{}", value);
         }
     }

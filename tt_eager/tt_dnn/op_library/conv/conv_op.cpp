@@ -34,10 +34,10 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Sha
     // pad height
     uint32_t num_rows = (uint32_t) conv_output_h*conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
-    uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
+    uint32_t num_rows_padded = (uint32_t) (std::ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
     uint32_t act_block_w_datums = act_block_w_ntiles * TILE_WIDTH;
-    uint32_t num_cols_padded = (uint32_t) (ceil((double) num_cols / (double) act_block_w_datums ) * act_block_w_datums);
+    uint32_t num_cols_padded = (uint32_t) (std::ceil((double) num_cols / (double) act_block_w_datums ) * act_block_w_datums);
     if(use_fast_reader) {
         assert(act_block_w_datums >= conv_activation_shape[3] * filter_w);
         num_cols_padded = act_block_w_datums * filter_h;
@@ -218,7 +218,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= weight_matrix_width);
     uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
-    uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
+    uint32_t num_blocks_output_w = (uint32_t) std::ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
     uint32_t output_row_size_bytes = output_channels_padded_to_tile_width * num_bytes_of_df;
@@ -726,7 +726,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_weight_address_map(
         address_map_metadata.push_back(address_map_current_group_dram_address_offset);
         address_map_metadata.push_back(address_map_current_group_size);
         // Pad 0s in address map buffer to ensure each read address is 32B aligned (32/sizeof(uint32_t) == 8 elements)
-        uint32_t address_map_current_group_size_padded = (uint32_t) (ceil((double) address_map_current_group_size / (double) 8) * 8);
+        uint32_t address_map_current_group_size_padded = (uint32_t) (std::ceil((double) address_map_current_group_size / (double) 8) * 8);
         if(address_map_current_group_size_padded != address_map_current_group_size) {
             assert(address_map_current_group_size_padded > address_map_current_group_size);
             address_map.insert(address_map.end(), address_map_current_group_size_padded - address_map_current_group_size, 0);
@@ -764,8 +764,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
     int conv_output_w = ((conv_input_y - S + (2 * Pad_W)) / V) + 1;
     uint32_t matrix_height_unpadded = conv_output_h * conv_output_w;
     uint32_t matrix_width_unpadded = conv_input_z * R * S;
-    uint32_t matrix_height = (uint32_t) (ceil((double) matrix_height_unpadded / (double) act_block_h_datums ) * act_block_h_datums);
-    uint32_t matrix_width = (uint32_t) (ceil((double) matrix_width_unpadded / (double) act_block_w_datums ) * act_block_w_datums);
+    uint32_t matrix_height = (uint32_t) (std::ceil((double) matrix_height_unpadded / (double) act_block_h_datums ) * act_block_h_datums);
+    uint32_t matrix_width = (uint32_t) (std::ceil((double) matrix_width_unpadded / (double) act_block_w_datums ) * act_block_w_datums);
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     uint32_t channel_stick_size = conv_input_z;
@@ -854,7 +854,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
         address_map_metadata.push_back(address_map_current_group_dram_address_offset);
         address_map_metadata.push_back(address_map_current_group_size);
         // Pad 0s in address map buffer to ensure each read address is 32B aligned (32/sizeof(uint32_t) == 8 elements)
-        uint32_t address_map_current_group_size_padded = (uint32_t) (ceil((double) address_map_current_group_size / (double) 8) * 8);
+        uint32_t address_map_current_group_size_padded = (uint32_t) (std::ceil((double) address_map_current_group_size / (double) 8) * 8);
         if(address_map_current_group_size_padded != address_map_current_group_size) {
             assert(address_map_current_group_size_padded > address_map_current_group_size);
             address_map.insert(address_map.end(), address_map_current_group_size_padded - address_map_current_group_size, 0);
@@ -903,7 +903,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_r
                                 address_map_raw_current_group_start + current_group_size);
         address_map_raw_index += current_group_size;
         // Pad 0s in address map buffer to ensure each read address is 32B aligned (32/sizeof(uint32_t) == 8 elements)
-        uint32_t current_group_size_padded = (uint32_t) (ceil((double) current_group_size / (double) 8) * 8);
+        uint32_t current_group_size_padded = (uint32_t) (std::ceil((double) current_group_size / (double) 8) * 8);
         if(current_group_size_padded != current_group_size) {
             assert(current_group_size_padded > current_group_size);
             address_map.insert(address_map.end(), current_group_size_padded - current_group_size, 0);
@@ -988,7 +988,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= Wb);
-    uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
+    uint32_t num_blocks_output_w = (uint32_t) std::ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
     uint32_t output_row_size_bytes = output_channels_padded_to_tile_width * num_bytes_of_df;

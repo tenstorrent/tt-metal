@@ -4,6 +4,8 @@
 
 #include "tt_dnn/op_library/operation_history.hpp"
 
+#include "tt_metal/common/core_coord.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -14,7 +16,10 @@ namespace operation_history {
 
 namespace detail {
 
-OperationHistory::~OperationHistory() { this->dump_to_csv(); }
+OperationHistory::~OperationHistory() {
+    this->dump_to_csv(csv_file_name());
+    this->dump_to_json(json_file_name());
+}
 
 void OperationHistory::append(OperationRecord&& record) {
     std::scoped_lock<std::mutex> lock(op_history_mutex);
@@ -102,11 +107,11 @@ void write_record(
     write_row(output_file_stream, num_columns, row);
 }
 
-void OperationHistory::dump_to_csv() {
+void OperationHistory::dump_to_csv(const char* file_name) {
     if (not enabled())
         return;
 
-    std::ofstream output_file_stream(csv_file_name());
+    std::ofstream output_file_stream(file_name);
 
     std::size_t num_attributes = 0;
     for (const auto& record : this->records) {
@@ -124,6 +129,42 @@ void OperationHistory::dump_to_csv() {
     }
 }
 
+void OperationHistory::dump_to_json(const char* file_name) {
+    if (not enabled())
+        return;
+
+    nlohmann::json json;
+    for (const auto& record : this->records) {
+        nlohmann::json record_json;
+        record_json["ttnn_operation_id"] = tt::stl::json::to_json(record.ttnn_operation_id);
+        record_json["operation_type"] = tt::stl::json::to_json(record.operation_type);
+        record_json["operation_name"] = tt::stl::json::to_json(record.operation_name);
+        record_json["composite_parent_names"] = tt::stl::json::to_json(record.composite_parent_names);
+        record_json["program_cache_hit"] = tt::stl::json::to_json(record.program_cache_hit);
+        record_json["program_hash"] = tt::stl::json::to_json(record.program_hash);
+
+        nlohmann::json attributes_json;
+        for (const auto& [name, value] : record.attributes) {
+            attributes_json[fmt::format("{}", name)] = tt::stl::json::to_json(value);
+        }
+        // record_json["attributes"] = attributes_json;
+        nlohmann::json input_tensor_records_json;
+        for (const auto& tensor_record : record.input_tensor_records) {
+            nlohmann::json tensor_record_json;
+            tensor_record_json["storage_type"] = tt::stl::json::to_json(tensor_record.storage_type);
+            tensor_record_json["shape"] = tt::stl::json::to_json(tensor_record.shape);
+            tensor_record_json["dtype"] = tt::stl::json::to_json(tensor_record.data_type);
+            tensor_record_json["layout"] = tt::stl::json::to_json(tensor_record.layout);
+            tensor_record_json["memory_config"] = tt::stl::json::to_json(tensor_record.memory_config);
+            input_tensor_records_json.push_back(tensor_record_json);
+        }
+        record_json["input_tensor_records"] = input_tensor_records_json;
+        json.push_back(record_json);
+    }
+    std::ofstream output_file_stream(file_name);
+    output_file_stream << json << std::endl;
+}
+
 void OperationHistory::clear() {
     std::scoped_lock<std::mutex> lock(op_history_mutex);
     this->records.clear();
@@ -134,10 +175,13 @@ OperationHistory OPERATION_HISTORY{};
 }  // namespace detail
 
 const char* csv_file_name() { return std::getenv("OPERATION_HISTORY_CSV"); }
+const char* json_file_name() { return std::getenv("OPERATION_HISTORY_JSON"); }
 
-bool enabled() { return csv_file_name() != nullptr; }
+bool enabled() { return csv_file_name() != nullptr or json_file_name() != nullptr; }
 
-void dump_to_csv() { detail::OPERATION_HISTORY.dump_to_csv(); }
+void dump_to_csv() { detail::OPERATION_HISTORY.dump_to_csv(csv_file_name()); }
+void dump_to_json() { detail::OPERATION_HISTORY.dump_to_json(json_file_name()); }
+
 void clear() { detail::OPERATION_HISTORY.clear(); }
 
 }  // namespace operation_history

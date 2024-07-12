@@ -7,12 +7,12 @@ import torch
 import warnings
 import math
 import ttnn
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+from ttnn.operations.conv.sliding_window_op_utils import (
     calculate_shard_grid,
     roundup,
     get_output_dim as get_conv_output_dim,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+from ttnn.operations.conv.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParams,
     find_closest_common_largest_divisor,
@@ -30,6 +30,8 @@ def _nearest_32(x):
 
 
 Conv2dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
+
+get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv2d.get_conv_padded_input_shape_and_mem_config
 
 
 class Conv2d:

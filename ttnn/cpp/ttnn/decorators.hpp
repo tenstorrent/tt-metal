@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/operation.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace ttnn {

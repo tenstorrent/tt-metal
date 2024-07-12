@@ -4,15 +4,15 @@
 
 from typing import Tuple, Union, Dict
 
-import tt_lib as ttl
-
 import sys
 import ttnn
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
+from ttnn.operations.conv.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParams,
 )
+
+import tt_lib as ttl
 
 __all__ = []
 

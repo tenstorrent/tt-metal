@@ -230,11 +230,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
-        ttnn::sub_bw,
-        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_binary_backward(
-        module,
         ttnn::addalpha_bw,
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , attr:`input_tensor_a`, attr:`alpha` with given attr:`grad_tensor`.)doc");
 

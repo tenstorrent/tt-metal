@@ -43,7 +43,7 @@ std::vector<std::optional<Tensor>> _unary_pow_bw(uint8_t queue_id, const Tensor&
         return grad_tensor;
     }
 
-    Tensor power_input = power(queue_id,input, fabs(exponent - 1.0f), output_mem_config);
+    Tensor power_input = ttnn::power(queue_id,input, fabs(exponent - 1.0f), output_mem_config);
     if (exponent < 1.0f) {
         power_input = ttnn::reciprocal(queue_id, power_input, output_mem_config);
     }
@@ -52,11 +52,11 @@ std::vector<std::optional<Tensor>> _unary_pow_bw(uint8_t queue_id, const Tensor&
     power_input.deallocate();
     Tensor final_result = ttnn::multiply(queue_id, result, grad, std::nullopt, output_mem_config);
     result.deallocate();
-    Tensor temp = where(queue_id, lte_unary(queue_id, final_result, -3.4e+38, output_mem_config), -std::numeric_limits<float>::infinity(), final_result, output_mem_config);
+    Tensor temp = where(queue_id, ttnn::le(queue_id, final_result, -3.4e+38, std::nullopt, output_mem_config), -std::numeric_limits<float>::infinity(), final_result, output_mem_config);
     if(input_grad.has_value()){
-        where(queue_id, gte_unary(queue_id, final_result, 3.4e+38, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config, input_grad);
+        where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config, input_grad);
     } else {
-        input_grad = where(queue_id, gte_unary(queue_id, final_result, 3.4e+38, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config);
+        input_grad = where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config);
     }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
@@ -74,20 +74,20 @@ std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad,
     TT_FATAL(are_required_outputs.at(0), "input_grad derivative is a required output");
 
     float t_inf = std::numeric_limits<float>::infinity();
-    Tensor exp_result = exp(queue_id, input, output_mem_config);
+    Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
     Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
-    result = where(queue_id, gte_unary(queue_id, result, 1e+38, output_mem_config), t_inf, result, output_mem_config);
-    result = where(queue_id, lte_unary(queue_id, result, -1e+38, output_mem_config), -t_inf, result, output_mem_config);
+    result = where(queue_id, ttnn::ge(queue_id, result, 1e+38, std::nullopt, output_mem_config), t_inf, result, output_mem_config);
+    result = where(queue_id, ttnn::ge(queue_id, result, -1e+38, std::nullopt,  output_mem_config), -t_inf, result, output_mem_config);
     if(input_grad.has_value()){
         where(queue_id,
         ttnn::logical_and(
-            gte_unary(queue_id, abs(queue_id, exp_result, output_mem_config), 1e+38, output_mem_config),
-            ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
+            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
+            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
     } else {
     input_grad = where(queue_id,
         ttnn::logical_and(
-            gte_unary(queue_id, abs(queue_id, exp_result, output_mem_config), 1e+38, output_mem_config),
-            ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
+            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
+            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
     }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
@@ -109,18 +109,18 @@ std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad
     float t_inf = std::numeric_limits<float>::infinity();
 
     if(input_grad.has_value()){
-        sqrt(queue_id, input, output_mem_config, input_grad);
-        ttnn::multiply(queue_id, grad, recip(queue_id, mul_unary(queue_id, input_grad.value(), 2.0, output_mem_config), output_mem_config),std::nullopt,output_mem_config, input_grad);
-        where(queue_id, lez(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
-        where(queue_id,ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf,input_grad.value(),output_mem_config,input_grad);
-        where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), t_inf,input_grad.value(),output_mem_config,input_grad);
+        ttnn::sqrt(queue_id, input, output_mem_config, input_grad);
+        ttnn::multiply(queue_id, grad, ttnn::reciprocal(queue_id, ttnn::multiply(queue_id, input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),std::nullopt,output_mem_config, input_grad);
+        where(queue_id, ttnn::lez(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
+        where(queue_id,ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf,input_grad.value(),output_mem_config,input_grad);
+        where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), t_inf,input_grad.value(),output_mem_config,input_grad);
     } else {
-    Tensor sqrt_result = sqrt(queue_id, input, output_mem_config);
+    Tensor sqrt_result = ttnn::sqrt(queue_id, input, output_mem_config);
     Tensor result = ttnn::multiply(queue_id, grad, recip(queue_id, ttnn::multiply(queue_id, sqrt_result, 2.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     sqrt_result.deallocate();
-    input_grad = where(queue_id, lez(queue_id, input, output_mem_config), t_nan, result, output_mem_config);
-    input_grad = where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),-t_inf, input_grad.value(),output_mem_config);
-    input_grad = where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),t_inf, input_grad.value(), output_mem_config);
+    input_grad = where(queue_id, ttnn::lez(queue_id, input, output_mem_config), t_nan, result, output_mem_config);
+    input_grad = where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),-t_inf, input_grad.value(),output_mem_config);
+    input_grad = where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),t_inf, input_grad.value(), output_mem_config);
     }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
@@ -142,12 +142,12 @@ std::vector<Tensor> _unary_div_bw(
         if (scalar == 0.0) {
             float t_nan = std::nanf("");
             grad_tensor.emplace_back(where(
-                eqz(grad, output_mem_config),
+                ttnn::eqz(grad, output_mem_config),
                 t_nan,
-                ttnn::multiply(sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
                 output_mem_config));
         } else {
-            grad_tensor.emplace_back(mul_unary(grad, inv_scalar, output_mem_config));
+            grad_tensor.emplace_back(ttnn::multiply(grad, inv_scalar, std::nullopt, output_mem_config));
         }
     } else {
         Tensor result = zeros_like(grad, output_mem_config);
@@ -161,7 +161,6 @@ std::vector<Tensor> unary_div_bw(
         grad, input, scalar, round_mode, output_mem_config);
 }
 
-
 std::vector<Tensor> _rdiv_bw(
     const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -169,9 +168,9 @@ std::vector<Tensor> _rdiv_bw(
     float t_inf = std::numeric_limits<float>::infinity();
     if (round_mode == "None") {
         Tensor result = where(
-            nez(input),
-            ttnn::multiply(neg(grad, output_mem_config),
-                (mul_unary(recip(ttnn::square(input, output_mem_config)), scalar, output_mem_config)),
+            ttnn::nez(input),
+            ttnn::multiply(ttnn::neg(grad, output_mem_config),
+                (ttnn::multiply(ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
@@ -179,26 +178,26 @@ std::vector<Tensor> _rdiv_bw(
         if (scalar > 0) {
             result = where(
                 ttnn::logical_and(
-                    eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+                    ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
                 t_inf,
                 result,
                 output_mem_config);
             result = where(
                 ttnn::logical_and(
-                    eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+                    ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
                 -t_inf,
                 result,
                 output_mem_config);
         } else if (scalar < 0) {
             result = where(
                 ttnn::logical_and(
-                    eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+                    ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
                 -t_inf,
                 result,
                 output_mem_config);
             result = where(
                 ttnn::logical_and(
-                    eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+                    ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
                 t_inf,
                 result,
                 output_mem_config);
@@ -221,7 +220,7 @@ std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad
 
     Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
     tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
-    tanh_res = rsub(queue_id, tanh_res, 1.0f, output_mem_config);
+    tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
     if(input_grad.has_value()){
         ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     } else {
@@ -236,81 +235,6 @@ std::vector<std::optional<Tensor>> tanh_bw(uint8_t queue_id,  const Tensor& grad
 std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     uint8_t default_queue_id = 0;
     return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
-}
-
-// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
-std::vector<Tensor> _sigmoid_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    std::vector<Tensor> grad_tensor;
-    Tensor sig_result = sigmoid(input, output_mem_config);
-    Tensor rsub_term = rsub(sig_result, 1.0f, output_mem_config);
-    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-    Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(prod_term_2);
-    return grad_tensor;
-}
-
-std::vector<Tensor> sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sigmoid_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor tan_result = tan(input, output_mem_config);
-    Tensor result =
-        ttnn::multiply(grad, add1(ttnn::square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _tan_bw)(grad, input, output_mem_config);
-}
-
-
-std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
-}
-
-std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor val = grad;
-    val = global_sum(val, output_mem_config);
-    Tensor result = zeros_like(grad, output_mem_config);
-    result = bcast(result, val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fill_bw)(grad, output_mem_config);
-}
-
-// - name: sub.Scalar(Tensor self, Scalar other, Scalar alpha=1) -> Tensor
-//   self: grad
-std::vector<Tensor> _unary_sub_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-std::vector<Tensor> unary_sub_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_sub_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _neg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = neg(grad, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> neg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _neg_bw)(grad, input, output_mem_config);
 }
 
 std::vector<Tensor> _lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
@@ -343,83 +267,11 @@ std::vector<Tensor> ne_bw(const Tensor& grad, const MemoryConfig& output_mem_con
     return operation::decorate_as_composite(__func__, _ne_bw)(grad, output_mem_config);
 }
 
-std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = ttnn::multiply(grad, recip(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-    grad_tensor.emplace_back(where(
-        eqz(input, output_mem_config),
-        where(
-            eqz(grad, output_mem_config),
-            t_nan,
-            ttnn::multiply(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        grad_a,
-        output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(grad, sign(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _abs_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
-    Tensor result = mul_unary(ttnn::multiply(grad, rsqrt_result, std::nullopt, output_mem_config), -0.5, output_mem_config);
-    float t_inf = std::numeric_limits<float>::infinity();
-    result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
-    float t_nan = std::nanf("");
-    result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
-    result = where(
-        ttnn::logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
-        t_nan,
-        result,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _rsqrt_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _clamp_max_bw(
-    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor maxT = lte_unary(input, max, output_mem_config);
-    Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> clamp_max_bw(
-    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _clamp_max_bw)(grad, input, max, output_mem_config);
-}
-std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> relu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _relu_bw)(grad, input, output_mem_config);
-}
-
 // bw(expm1) = grad * expm1(input) + 1
 std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor eresult = expm1(input, output_mem_config);
-    Tensor rp1 = add1(eresult, output_mem_config);
+    Tensor eresult = ttnn::expm1(input, output_mem_config);
+    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -432,8 +284,8 @@ std::vector<Tensor> expm1_bw(const Tensor& grad, const Tensor& input, const Memo
 // # M_LN2 = 0.693147180559945309417
 std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor exp_result = exp2(input, output_mem_config);
-    exp_result = mul_unary(exp_result, M_LN2, output_mem_config);
+    Tensor exp_result = ttnn::exp2(input, output_mem_config);
+    exp_result = ttnn::multiply(exp_result, M_LN2, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -451,23 +303,22 @@ std::vector<Tensor> _gelu_bw(
         float kKappa = 0.044715;
         Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_mem_config);
         Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_mem_config);
-        Tensor inner = mul_unary(kBeta, ttnn::add(input, mul_unary(kKappa, x_cube, output_mem_config)), output_mem_config);
-        Tensor tanh_inner = tanh(inner, output_mem_config);
+        Tensor inner = ttnn::multiply(ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_mem_config)), kBeta, std::nullopt, output_mem_config);
+        Tensor tanh_inner = ttnn::tanh(inner, output_mem_config);
 
-        Tensor left = mul_unary(0.5, input, output_mem_config);
-        Tensor right = add_unary(1, tanh_inner, output_mem_config);
+        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_mem_config);
+        Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_mem_config);
 
-        Tensor left_derivative = mul_unary(0.5, right, output_mem_config);
+        Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_mem_config);
 
         Tensor tanh_derivative =
-            neg(sub_unary(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_mem_config), 1, output_mem_config),
+            ttnn::neg(ttnn::subtract(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_mem_config), 1, std::nullopt, output_mem_config),
                 output_mem_config);
-        Tensor inner_derivative = mul_unary(
-            kBeta,
-            (add_unary(
-                1, mul_unary(3, mul_unary(kKappa, x_sq, output_mem_config), output_mem_config), output_mem_config)));
+        Tensor inner_derivative = ttnn::multiply(
+            (ttnn::add(
+                ttnn::multiply(ttnn::multiply(x_sq, kKappa, std::nullopt, output_mem_config), 3, std::nullopt, output_mem_config), 1, std::nullopt, output_mem_config)), kBeta);
         Tensor right_derivative =
-            ttnn::multiply(ttnn::multiply(left, tanh_derivative, std::nullopt, output_mem_config),
+            ttnn::multiply(ttnn::multiply(tanh_derivative, left, std::nullopt, output_mem_config),
                 inner_derivative,
                 std::nullopt,
                 output_mem_config);
@@ -478,8 +329,8 @@ std::vector<Tensor> _gelu_bw(
         float kAlpha = M_SQRT1_2;
         float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
         Tensor cdf =
-            mul_unary(0.5, (add_unary(1, erf(mul_unary(input, kAlpha, output_mem_config)), output_mem_config)));
-        Tensor pdf = mul_unary(kBeta, exp(mul_unary(ttnn::multiply(input, input), -0.5), output_mem_config), output_mem_config);
+            ttnn::multiply((ttnn::add(ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_mem_config)), 1, std::nullopt, output_mem_config)), 0.5);
+        Tensor pdf = ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_mem_config), kBeta, std::nullopt, output_mem_config);
         Tensor grad_a = ttnn::multiply(grad, (ttnn::add(cdf, ttnn::multiply(input, pdf))));
         grad_tensor.emplace_back(grad_a);
     }
@@ -498,7 +349,7 @@ std::vector<Tensor> _bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor input = add_unary(input_tensor, bias);
+    Tensor input = ttnn::add(input_tensor, bias);
 
     grad_tensor = gelu_bw(grad, input, approximate = approximate);
 
@@ -510,127 +361,19 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = where(
-        ttnn::logical_or(
-            lte_unary(input, -3, output_mem_config),
-            gte_unary(input, 3, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        zeros_like(input, output_mem_config),
-        mul_unary(grad, 1.0 / 6),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor value = mul_unary(
-        0.5,
-        ttnn::multiply(i0(input, output_mem_config), recip(input, output_mem_config), std::nullopt, output_mem_config),
-        output_mem_config);
-    Tensor result = where(
-        ltz(input, output_mem_config),
-        ttnn::multiply(grad,
-            ttnn::subtract(neg(i0(input, output_mem_config), output_mem_config), value, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        ttnn::multiply(grad,
-            ttnn::subtract(i0(input, output_mem_config), value, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    result = where(
-        gte_unary(abs(i0(input, output_mem_config), output_mem_config), 3.4e+38, output_mem_config),
-        t_inf,
-        result,
-        output_mem_config);
-    result =
-        where(gte_unary(abs(result, output_mem_config), 3.4e+38, output_mem_config), t_inf, result, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _i0_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _hardshrink_bw(
-    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor hardshrink_result = hardshrink(input_tensor, lambd, output_mem_config);
-    Tensor result = where(eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> hardshrink_bw(
-    const Tensor& grad, const Tensor& input, float lambd, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardshrink_bw)(grad, input, lambd, output_mem_config);
-}
-
-// softshrink
-//  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
-std::vector<Tensor> _softshrink_bw(
-    const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = where(
-        ttnn::logical_or(
-            ttnn::lt(input_tensor, full_like(input_tensor, -lambd, output_mem_config), std::nullopt, output_mem_config),
-            ttnn::gt(input_tensor, full_like(input_tensor, lambd, output_mem_config), std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        grad,
-        zeros_like(grad, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> softshrink_bw(
-    const Tensor& grad, const Tensor& input, float lambd, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _softshrink_bw)(grad, input, lambd, output_mem_config);
-}
-
-// Hardswish
-// result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
-std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(
-        ttnn::lt(input, full_like(input, -3.0f), std::nullopt, output_mem_config),
-        0.0,
-        where(
-            ttnn::le(input, full_like(input, 3.0f), std::nullopt, output_mem_config),
-            ttnn::multiply(grad,
-                add_unary(mul_unary(input, 0.3333f, output_mem_config), 0.5f, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            grad),
-        output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardswish_bw)(grad, input, output_mem_config);
-}
-
 // Softplus
 std::vector<Tensor> _softplus_bw(
     const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor mul_input_beta = mul_unary(input, beta, output_mem_config);
-    Tensor exp_beta_self = exp(mul_input_beta, output_mem_config);
-    Tensor sub_result = add_unary(-threshold, mul_input_beta, output_mem_config);
+    Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
+    Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_mem_config);
+    Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_mem_config);
     Tensor temp =
         ttnn::multiply(ttnn::multiply(grad, exp_beta_self, std::nullopt, output_mem_config),
-            recip(add1(exp_beta_self, output_mem_config), output_mem_config),
+            ttnn::reciprocal(ttnn::add(exp_beta_self, 1.0f, std::nullopt, output_mem_config), output_mem_config),
             std::nullopt,
             output_mem_config);
-    Tensor grad_result = where(gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    Tensor grad_result = where(ttnn::gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
     mul_input_beta.deallocate();
     exp_beta_self.deallocate();
     sub_result.deallocate();
@@ -654,20 +397,20 @@ std::vector<Tensor> _polygamma_bw(
     Tensor grad_a = ttnn::multiply(grad, polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            lte_unary(input, 0.0, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::le(input, 0.0, std::nullopt, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-        mul_unary(
-            full_like(input, -std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(
+            full_like(input, -std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, std::nullopt, output_mem_config),
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-        mul_unary(
-            full_like(input, std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(
+            full_like(input, std::numeric_limits<float>::infinity(), output_mem_config), pos_neg, std::nullopt, output_mem_config),
         grad_a,
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
@@ -678,116 +421,13 @@ std::vector<Tensor> polygamma_bw(
     return operation::decorate_as_composite(__func__, _polygamma_bw)(grad, input, n, output_mem_config);
 }
 
-std::vector<Tensor> _atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    UnaryWithParam op1{UnaryOpType::SQUARE};
-    UnaryWithParam op2{UnaryOpType::ADD_UNARY_SFPU, 1.0f};
-    UnaryWithParam op3{UnaryOpType::RECIP};
-    Tensor grad_a = ttnn::multiply(grad, unary_chain(input, {op1, op2, op3}, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _atan_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
-    UnaryWithParam op1{UnaryOpType::SQUARE};
-    UnaryWithParam op2{UnaryOpType::SUB_UNARY_SFPU, 1.0f};
-    UnaryWithParam op3{UnaryOpType::NEG};
-    UnaryWithParam op4{UnaryOpType::RECIP};
-    Tensor grad_a =
-        ttnn::multiply(grad, unary_chain(input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
-    grad_a =
-        where(ttnn::logical_and(eqz(grad, output_mem_config), eqz(input, output_mem_config)), 0, grad_a, output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(
-            ttnn::logical_or(
-                eq_unary(input, 1, output_mem_config),
-                eq_unary(input, -1, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            nez(grad, output_mem_config)),
-        t_inf,
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(eq_unary(grad_a, t_inf, output_mem_config), ltz(grad, output_mem_config)),
-        -t_inf,
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _atanh_bw)(grad, input, output_mem_config);
-}
-
-// Asin
-// result: grad * (-self * self + 1).rsqrt()
-std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    UnaryWithParam op1{UnaryOpType::SQUARE};
-    UnaryWithParam op2{UnaryOpType::NEG};
-    UnaryWithParam op3{UnaryOpType::ADD_UNARY_SFPU, 1.0f};
-    UnaryWithParam op4{UnaryOpType::RSQRT, true};
-    Tensor grad_result =
-        ttnn::multiply(grad, unary_chain(input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-    Tensor sub_one = add_unary(-1, input, output_mem_config);
-    Tensor sub_minus_one = add1(input, output_mem_config);
-    Tensor result = where(
-        ltz(sub_minus_one, output_mem_config),
-        t_nan,
-        where(
-            gtz(sub_one, output_mem_config),
-            t_nan,
-            where(
-                eqz(sub_minus_one, output_mem_config),
-                ttnn::multiply(sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                where(
-                    eqz(sub_one, output_mem_config),
-                    ttnn::multiply(sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                    grad_result,
-                    output_mem_config),
-                output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _asin_bw)(grad, input, output_mem_config);
-}
-
-// Asinh
-// result: grad * (self * self + 1).rsqrt()
-std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    UnaryWithParam op1{UnaryOpType::SQUARE};
-    UnaryWithParam op2{UnaryOpType::ADD_UNARY_SFPU, 1.0f};
-    UnaryWithParam op3{UnaryOpType::RSQRT, true};
-    Tensor grad_result =
-        ttnn::multiply(grad, unary_chain(input, {op1, op2, op3}, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _asinh_bw)(grad, input, output_mem_config);
-}
-
 // name: cosh(Tensor self) -> Tensor
 // self: grad * self.sinh()
 std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor t_neg_inf =
-        mul_unary(sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), output_mem_config);
+        ttnn::multiply(ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor grad_a = where(
         ttnn::gt(input, full_like(input, 88.50, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
@@ -800,10 +440,10 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const Memo
     t_neg_inf.deallocate();
     t_inf.deallocate();
     grad_a = where(
-        gte_unary(grad_a, 3.4e+38, output_mem_config),
+        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
         where(
-            lte_unary(grad_a, -3.4e+38, output_mem_config),
+            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
             -std::numeric_limits<float>::infinity(),
             grad_a,
             output_mem_config),
@@ -813,116 +453,6 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 std::vector<Tensor> cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _cosh_bw)(grad, input, output_mem_config);
-}
-
-// name: cos(Tensor self) -> Tensor
-// self: grad * -self.sin()
-std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result =
-        ttnn::multiply(grad, (neg(sin(input_tensor, output_mem_config), output_mem_config)), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> cos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _cos_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor in_rsqrt = ttnn::square(input, output_mem_config);
-    in_rsqrt = rsqrt(sub_unary(in_rsqrt, 1.0, output_mem_config), true, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor cond_result = ttnn::logical_or(
-        ttnn::lt(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::gt(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_a = where(eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
-    cond_result = ttnn::logical_or(
-        ttnn::eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::eq(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_a = where(
-        ttnn::eq(cond_result, ones_like(input, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _acosh_bw)(grad, input, output_mem_config);
-}
-
-// # - name: acos(Tensor self) -> Tensor
-// #   self: grad * -((-self * self + 1).rsqrt())
-std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor neg_in = neg(input, output_mem_config);
-    Tensor in_rsqrt =
-        rsqrt(add1(ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), output_mem_config), true, output_mem_config);
-    in_rsqrt = neg(in_rsqrt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    Tensor neg_one = full_like(input, -1.0, output_mem_config);
-    Tensor pos_one = full_like(input, 1.0, output_mem_config);
-    Tensor t_inf = mul_unary(sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), output_mem_config);
-    grad_a = where(
-        ttnn::logical_or(
-            ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
-            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        std::nanf(" "),
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::eq(input, neg_one, std::nullopt, output_mem_config),
-        t_inf,
-        where(ttnn::eq(input, pos_one, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-
-std::vector<Tensor> acos_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _acos_bw)(grad, input, output_mem_config);
-}
-
-// Leaky_Relu
-// result: torch.where(self > 0, grad_output, grad_output * negative_slope)
-std::vector<Tensor> _leaky_relu_bw(
-    const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(
-        gtz(input, output_mem_config), grad, mul_unary(grad, negative_slope, output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> leaky_relu_bw(
-    const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _leaky_relu_bw)(grad, input, negative_slope, output_mem_config);
-}
-
-// ELU
-// result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
-std::vector<Tensor> _elu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(
-        gez(input, output_mem_config),
-        grad,
-        ttnn::multiply(grad, mul_unary(exp(input, output_mem_config), alpha, output_mem_config), std::nullopt, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> elu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _elu_bw)(grad, input, alpha, output_mem_config);
 }
 
 // Hardtanh
@@ -948,7 +478,7 @@ std::vector<Tensor> hardtanh_bw(
 // self: grad * self.cos()
 std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_input = ttnn::multiply(grad, cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_input);
     return grad_tensor;
 }
@@ -960,7 +490,7 @@ std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const Memory
 // self: grad * self.cosh()
 std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor grad_a = where(
         ttnn::gt(input, full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
@@ -972,10 +502,10 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
         output_mem_config);
     t_inf.deallocate();
     grad_a = where(
-        gte_unary(grad_a, 3.4e+38, output_mem_config),
+        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
         where(
-            lte_unary(grad_a, -3.4e+38, output_mem_config),
+            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
             -std::numeric_limits<float>::infinity(),
             grad_a,
             output_mem_config),
@@ -987,47 +517,25 @@ std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _sinh_bw)(grad, input, output_mem_config);
 }
 
-// Celu
-// result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
-std::vector<Tensor> _celu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor div_result = ttnn::multiply(
-        input, recip(full_like(input, alpha, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    Tensor exp_result = exp(div_result, output_mem_config);
-    Tensor grad_result = where(
-        ttnn::gt(input, zeros_like(input, output_mem_config), std::nullopt, output_mem_config),
-        grad,
-        ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
-        output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> celu_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _celu_bw)(grad, input, alpha, output_mem_config);
-}
-
-
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
 std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul_unary(
-        0.5,
-        ttnn::multiply(sqrt(full_like(input, M_PI, output_mem_config), output_mem_config),
-            ttnn::multiply(exp(ttnn::square(erfinv(input, output_mem_config), output_mem_config), output_mem_config),
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::sqrt(full_like(input, M_PI, output_mem_config), output_mem_config),
+            ttnn::multiply(ttnn::exp(ttnn::square(ttnn::erfinv(input, output_mem_config), output_mem_config), false, output_mem_config),
                 grad,
                 std::nullopt,
                 output_mem_config),
             std::nullopt,
             output_mem_config),
+        0.5,
+        std::nullopt,
         output_mem_config);
     Tensor neg_one = full_like(input, -1.0, output_mem_config);
     Tensor pos_one = full_like(input, 1.0, output_mem_config);
-    Tensor t_inf = mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     result = where(
         ttnn::logical_or(
             ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
@@ -1053,16 +561,16 @@ std::vector<Tensor> erfinv_bw(const Tensor& grad, const Tensor& input, const Mem
 std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
-        ltz(grad, output_mem_config),
+        ttnn::ltz(grad, output_mem_config),
         -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::infinity(),
         output_mem_config);
     Tensor grad_a = ttnn::multiply(
-        grad, recip(mul_unary(input, M_LN10, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         std::nanf(" "),
-        where(eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
+        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
@@ -1076,19 +584,19 @@ std::vector<Tensor> log10_bw(const Tensor& grad, const Tensor& input, const Memo
 std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
-        ltz(grad, output_mem_config),
+        ttnn::ltz(grad, output_mem_config),
         -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::infinity(),
         output_mem_config);
-    Tensor t_inp1 = add1(input, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, recip(t_inp1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inp1 = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(t_inp1, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(t_inp1, output_mem_config), eqz(grad, output_mem_config)),
+        ttnn::logical_and(ttnn::eqz(t_inp1, output_mem_config), ttnn::eqz(grad, output_mem_config)),
         std::nanf(" "),
         grad_a,
         output_mem_config);
@@ -1101,12 +609,13 @@ std::vector<Tensor> log1p_bw(const Tensor& grad, const Tensor& input, const Memo
 
 std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul_unary(
-        M_2_SQRTPI,
-        ttnn::multiply(exp(neg(ttnn::square(input, output_mem_config), output_mem_config), output_mem_config),
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
             grad,
             std::nullopt,
             output_mem_config),
+        M_2_SQRTPI,
+        std::nullopt,
         output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -1117,12 +626,13 @@ std::vector<Tensor> erf_bw(const Tensor& grad, const Tensor& input, const Memory
 
 std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul_unary(
-        -M_2_SQRTPI,
-        ttnn::multiply(exp(neg(ttnn::square(input, output_mem_config), output_mem_config), output_mem_config),
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
             grad,
             std::nullopt,
             output_mem_config),
+        -M_2_SQRTPI,
+        std::nullopt,
         output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -1137,17 +647,17 @@ std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const M
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         -t_inf,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
@@ -1161,7 +671,7 @@ std::vector<Tensor> digamma_bw(const Tensor& grad, const Tensor& input, const Me
 std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float M_PI_180 = M_PI / 180;
-    Tensor grad_result = mul_unary(grad, M_PI_180, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1169,30 +679,20 @@ std::vector<Tensor> deg2rad_bw(const Tensor& grad, const Tensor& input, const Me
     return operation::decorate_as_composite(__func__, _deg2rad_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _rad2deg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float M_180_PI = 180 / M_PI;
-    Tensor grad_result = mul_unary(grad, M_180_PI, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> rad2deg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _rad2deg_bw)(grad, input, output_mem_config);
-}
 
 std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
     grad_tensor.emplace_back(where(
-        eqz(input, output_mem_config),
+        ttnn::eqz(input, output_mem_config),
         where(
-            eqz(grad, output_mem_config),
+            ttnn::eqz(grad, output_mem_config),
             t_nan,
-            ttnn::multiply(t_inf, neg(sign(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(t_inf, ttnn::neg(ttnn::sign(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
-        ttnn::multiply(neg(grad, output_mem_config),
-            recip(ttnn::square(input, output_mem_config), output_mem_config),
+        ttnn::multiply(ttnn::neg(grad, output_mem_config),
+            ttnn::reciprocal(ttnn::square(input, output_mem_config), output_mem_config),
             std::nullopt,
             output_mem_config),
         output_mem_config));
@@ -1201,94 +701,6 @@ std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, cons
 std::vector<Tensor> reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _reciprocal_bw)(grad, input, output_mem_config);
 }
-
-std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_tensor = zeros_like(input, output_mem_config);
-    Tensor one_tensor = ones_like(input, output_mem_config);
-    Tensor six_tensor = full_like(input, 6, output_mem_config);
-    Tensor grad_result =
-        where(ttnn::le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
-    grad_result = where(
-        ttnn::logical_and(
-            gtz(input, output_mem_config),
-            ttnn::lt(input, six_tensor, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        grad,
-        grad_result,
-        output_mem_config);
-    grad_result =
-        where(ttnn::ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _relu6_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _rpow_bw(
-    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    Tensor grad_result = zeros_like(input, output_mem_config);
-    if (exponent != 0.0) {
-        grad_result =
-            ttnn::multiply(grad,
-                mul_unary(pow(input, exponent - 1, output_mem_config), exponent, output_mem_config),
-                std::nullopt,
-                output_mem_config);
-        grad_result = where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
-    }
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> rpow_bw(
-    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _rpow_bw)(grad, input, exponent, output_mem_config);
-}
-
-// Silu
-// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor add_sub = add1(
-        ttnn::multiply(sub_unary(1.0f, sigmoid(input, output_mem_config), output_mem_config),
-            input,
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _silu_bw)(grad, input, output_mem_config);
-}
-
-// Selu
-// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
-std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_lambd = mul_unary(grad, 1.0507f, output_mem_config);
-    Tensor grad_result = where(
-        gtz(input, output_mem_config),
-        grad_lambd,
-        ttnn::multiply(mul_unary(grad_lambd, 1.673260f, output_mem_config),
-            exp(input, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
-}
-
 
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
@@ -1317,7 +729,7 @@ std::vector<Tensor> _prod_bw(
         Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<bfloat16>(
             temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_mem_config);
         Tensor all_dimension_result =
-            ttnn::multiply(recip(input, output_mem_config), fill_tensor, std::nullopt, output_mem_config);
+            ttnn::multiply(ttnn::reciprocal(input, output_mem_config), fill_tensor, std::nullopt, output_mem_config);
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
@@ -1354,7 +766,7 @@ std::vector<Tensor> _prod_bw(
             }
         }
     }
-    Tensor reciprocal_input = recip(input, output_mem_config);
+    Tensor reciprocal_input = ttnn::reciprocal(input, output_mem_config);
     Tensor temp = ttnn::multiply(prod_result, (dim == 1 || dim == 0 || dim == -4 || dim == -3) ? grad : updated_grad, std::nullopt, output_mem_config);
     if(temp.get_layout()==Layout::ROW_MAJOR){
         temp = tt::tt_metal::change_layout_to_tile(temp, output_mem_config);
@@ -1441,88 +853,13 @@ std::vector<Tensor> prod_bw(
     return operation::decorate_as_composite(__func__, _prod_bw)(grad, input, all_dimensions, dim, output_mem_config);
 }
 
-// square
-// result:  2 * input * grad_data
-std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(mul_unary(grad, 2.0f, output_mem_config), input, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _square_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, digamma(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lgamma_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _frac_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-std::vector<Tensor> frac_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _frac_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _trunc_bw)(grad, input, output_mem_config);
-}
-
-// return: grad_output * (max_deriv - sign * (z / (1 + z)))
-// z = exp(-abs(input))
-std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor max_deriv = where(ltz(input, output_mem_config), 1, 0, output_mem_config);
-    Tensor in_sign = where(ltz(input, output_mem_config), 1, -1, output_mem_config);
-    Tensor in_abs = abs(input, output_mem_config);
-    Tensor z = exp(neg(in_abs, output_mem_config), output_mem_config);
-
-    Tensor mul_z = ttnn::multiply(z, recip((add1(z, output_mem_config)), output_mem_config), std::nullopt, output_mem_config);
-
-    Tensor mul_sign = ttnn::multiply(in_sign, mul_z, std::nullopt, output_mem_config);
-    Tensor sub_max = ttnn::subtract(max_deriv, mul_sign, std::nullopt, output_mem_config);
-
-    Tensor grad_result = ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
-}
-
-// tanhshrink
-// result:  torch.square(torch.tanh(input)) * grad_data
-std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor tanh_res = ttnn::square(tanh(input, output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _tanhshrink_bw)(grad, input, output_mem_config);
-}
-
 // threshold
 // if input <= threshold = 0 else grad
 std::vector<Tensor> _threshold_bw(
     const Tensor& grad, const Tensor& input, float threshold, float value, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = where(
-        gtz(add_unary(-threshold, input, output_mem_config), output_mem_config),
+        ttnn::gtz(ttnn::add(input, -threshold, std::nullopt, output_mem_config), output_mem_config),
         grad,
         zeros_like(input, output_mem_config),
         output_mem_config);
@@ -1557,7 +894,7 @@ std::vector<Tensor> _logiteps_bw(
     high = 1.0 - low;
     Tensor grad_result =
         ttnn::multiply(grad,
-            recip(ttnn::multiply(input, rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+            ttnn::reciprocal(ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
     Tensor t_eps = full_like(input, eps, output_mem_config);
@@ -1570,14 +907,14 @@ std::vector<Tensor> _logiteps_bw(
         output_mem_config);
     grad_result = where(
         ttnn::eq(ltl_gth, ones_like(input, output_mem_config), std::nullopt, output_mem_config),
-        where(ltz(t_eps, output_mem_config), std::nanf(" "), 0.0, output_mem_config),
+        where(ttnn::ltz(t_eps, output_mem_config), std::nanf(" "), 0.0, output_mem_config),
         where(
             ttnn::logical_or(
-                eq_unary(input, 0.0, output_mem_config),
-                eq_unary(input, 1.0, output_mem_config),
+                ttnn::eq(input, 0.0, std::nullopt, output_mem_config),
+                ttnn::eq(input, 1.0, std::nullopt, output_mem_config),
                 std::nullopt,
                 output_mem_config),
-            mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config),
+            ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config),
             grad_result,
             output_mem_config),
         output_mem_config);
@@ -1589,46 +926,19 @@ std::vector<Tensor> logiteps_bw(
     return operation::decorate_as_composite(__func__, _logiteps_bw)(grad, input, eps, output_mem_config);
 }
 
-std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result =
-        ttnn::multiply(grad,
-            recip(ttnn::multiply(input, rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
-            std::nullopt,
-            output_mem_config);
-    Tensor status = ttnn::logical_and(
-        gte_unary(input, 0.0f, output_mem_config),
-        lte_unary(input, 1.0f, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_result = where(
-        ttnn::eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, std::nanf(""));
-    grad_result = where(
-        ttnn::logical_or(
-            eq_unary(input, 0.0, output_mem_config),
-            eq_unary(input, 1.0, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config),
-        grad_result,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _logit_bw)(grad, input, output_mem_config);
-}
-
 // softsign
 // result = grad_data / torch.square(1 + torch.abs(input))
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    UnaryWithParam op1{UnaryOpType::ABS};
-    UnaryWithParam op2{UnaryOpType::ADD_UNARY_SFPU, 1.0f};
-    UnaryWithParam op3{UnaryOpType::SQUARE};
-    UnaryWithParam op4{UnaryOpType::RECIP};
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::ABS},
+    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam{UnaryOpType::SQUARE},
+    UnaryWithParam{UnaryOpType::RECIP}};
     grad_tensor.emplace_back(
-        ttnn::multiply(grad, unary_chain(input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config));
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 std::vector<Tensor> softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -1659,16 +969,16 @@ std::vector<Tensor> ceil_bw(const Tensor& grad, const Tensor& input, const Memor
 std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
-        ltz(grad, output_mem_config),
+        ttnn::ltz(grad, output_mem_config),
         -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::infinity(),
         output_mem_config);
     Tensor grad_a = ttnn::multiply(
-        grad, recip(mul_unary(input, M_LN2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN2, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
-        ttnn::logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         std::nanf(" "),
-        where(eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
+        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
@@ -1747,7 +1057,7 @@ std::vector<Tensor> _complex_recip_bw(const Tensor& grad, const Tensor& input, c
     Tensor input_r = real(input, output_mem_config);
     Tensor input_i = imag(input, output_mem_config);
     Tensor condition_nan =
-        ttnn::logical_and(eqz(input_r, output_mem_config), eqz(input_i, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::logical_and(ttnn::eqz(input_r, output_mem_config), ttnn::eqz(input_i, output_mem_config), std::nullopt, output_mem_config);
     input_r.deallocate();
     input_i.deallocate();
     Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
@@ -1756,7 +1066,7 @@ std::vector<Tensor> _complex_recip_bw(const Tensor& grad, const Tensor& input, c
         nan_flag,
         full_like(input, std::nanf(""), output_mem_config),
         complex_mul(
-            neg(grad, output_mem_config),
+            ttnn::neg(grad, output_mem_config),
             conj(
                 complex_mul(
                     complex_recip(input, output_mem_config),
@@ -1810,15 +1120,15 @@ std::vector<Tensor> _angle_bw(
         Tensor inp_r = real(input, output_mem_config);
         Tensor inp_i = imag(input, output_mem_config);
         Tensor condition_zero =
-            ttnn::logical_and(eqz(inp_r, output_mem_config), eqz(inp_i, output_mem_config), std::nullopt, output_mem_config);
-        Tensor abs_squared = recip(
+            ttnn::logical_and(ttnn::eqz(inp_r, output_mem_config), ttnn::eqz(inp_i, output_mem_config), std::nullopt, output_mem_config);
+        Tensor abs_squared = ttnn::reciprocal(
             ttnn::add(ttnn::square(inp_r, output_mem_config), ttnn::square(inp_i, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config);
         Tensor real = where(
             condition_zero,
             zeros_like(inp_r, output_mem_config),
             ttnn::multiply(grad,
-                ttnn::multiply(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config),
+                ttnn::multiply(ttnn::neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config),
                 std::nullopt,
                 output_mem_config),
             output_mem_config);
@@ -1855,10 +1165,10 @@ std::vector<Tensor> _complex_abs_bw(const Tensor& grad, const Tensor& input, con
     result = mk_complex(result, result, output_mem_config);
     Tensor grad_c = mk_complex(grad, grad, output_mem_config);
     Tensor grad_result = where(
-        eqz(result, output_mem_config),
+        ttnn::eqz(result, output_mem_config),
         zeros_like(result, output_mem_config),
         ttnn::multiply(grad_c,
-            ttnn::multiply(input, recip(result, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(input, ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         output_mem_config);
@@ -1881,9 +1191,9 @@ std::vector<Tensor> _polar_bw(
     Tensor abs_result = complex_abs(result, output_mem_config);
     abs_result = mk_complex(abs_result, abs_result, output_mem_config);
     Tensor sgn_result = where(
-        eqz(abs_result, output_mem_config),
+        ttnn::eqz(abs_result, output_mem_config),
         zeros_like(result, output_mem_config),
-        ttnn::multiply(result, recip(abs_result, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::multiply(result, ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config),
         output_mem_config);
     abs_result.deallocate();
     Tensor grad_abs =
@@ -1920,7 +1230,7 @@ std::vector<Tensor> _complex_div_bw(
     Tensor other_r = real(other, output_mem_config);
     Tensor other_i = imag(other, output_mem_config);
     Tensor condition_nan =
-        ttnn::logical_and(eqz(other_r, output_mem_config), eqz(other_i, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::logical_and(ttnn::eqz(other_r, output_mem_config), ttnn::eqz(other_i, output_mem_config), std::nullopt, output_mem_config);
     other_r.deallocate();
     other_i.deallocate();
     Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
@@ -1936,7 +1246,7 @@ std::vector<Tensor> _complex_div_bw(
         nan_flag,
         full_like(input, std::nanf(""), output_mem_config),
         complex_mul(
-            neg(grad, output_mem_config),
+            ttnn::neg(grad, output_mem_config),
             conj(complex_div(result, other, output_mem_config), output_mem_config),
             output_mem_config),
         output_mem_config);
@@ -1979,7 +1289,7 @@ std::vector<Tensor> _complex_add_bw(
     CHECK_FOR_COMPLEX(grad);
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor grad_b = mul_unary(grad, alpha, output_mem_config);
+    Tensor grad_b = ttnn::multiply(grad, alpha, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -1997,9 +1307,12 @@ std::vector<Tensor> _complex_sub_bw(
     CHECK_FOR_COMPLEX(grad);
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    UnaryWithParam op1{UnaryOpType::NEG};
-    UnaryWithParam op2{UnaryOpType::MUL_UNARY_SFPU, alpha};
-    Tensor grad_b = unary_chain(grad, {op1, op2}, output_mem_config);
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::NEG},
+    UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    Tensor grad_b = ttnn::unary_chain(grad, ops_chain, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -2053,33 +1366,13 @@ std::vector<Tensor> repeat_bw(
     return operation::decorate_as_composite(__func__, _repeat_bw)(grad, input, shape, output_mem_config);
 }
 
-std::vector<Tensor> _floor_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(t_zero);
-    return grad_tensor;
-}
-std::vector<Tensor> floor_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _floor_bw)(grad, output_mem_config);
-}
-
-std::vector<Tensor> _round_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(t_zero);
-    return grad_tensor;
-}
-std::vector<Tensor> round_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _round_bw)(grad, output_mem_config);
-}
-
 std::vector<Tensor> _unary_div_no_nan_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zeros = zeros_like(grad, output_mem_config);
     Tensor val = full_like(input, scalar, output_mem_config);
     Tensor result = where(
-        eq_unary(val, 0, output_mem_config), zeros, mul_unary(grad, 1 / scalar, output_mem_config), output_mem_config);
+        ttnn::eq(val, 0, std::nullopt, output_mem_config), zeros, ttnn::multiply(grad, 1 / scalar, std::nullopt, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }

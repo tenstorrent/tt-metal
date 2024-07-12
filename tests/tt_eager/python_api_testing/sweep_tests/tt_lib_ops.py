@@ -1115,6 +1115,24 @@ def eltwise_unary_floor_div(
 
 
 @setup_host_and_device
+def eltwise_rfloor_div(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.rfloor_div(value, t0, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def eltwise_round(
     x,
     *args,
@@ -1165,6 +1183,42 @@ def eltwise_unary_div_no_nan(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.div_no_nan(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def eltwise_unary_div_trunc(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.div_trunc(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def eltwise_unary_rdiv_trunc(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.unary_rdiv_trunc(value, t0, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2363,32 +2417,6 @@ def untilize_with_unpadding(
 
 
 @setup_host_and_device
-def pad(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    output_tensor_shape,
-    input_tensor_start,
-    pad_value,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.pad(
-        t0,
-        ttnn.Shape(output_tensor_shape),
-        ttnn.Shape(input_tensor_start),
-        pad_value,
-        memory_config=output_mem_config,
-    )
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def unpad(
     x,
     *args,
@@ -2617,7 +2645,9 @@ transpose_nh = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-2))
 transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
 transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
 eltwise_floor = make_unary_op(ttl.tensor.floor)
+eltwise_ceil = make_unary_op(ttl.tensor.ceil)
 eltwise_trunc = make_unary_op(ttl.tensor.trunc)
+eltwise_frac = make_unary_op(ttl.tensor.frac)
 
 
 @setup_host_and_device
@@ -2685,6 +2715,7 @@ def make_binary_op_ttnn(ttnn_tensor_binop):
 eltwise_add = make_binary_op_ttnn(ttnn.add)
 eltwise_sub = make_binary_op_ttnn(ttnn.sub)
 eltwise_mul = make_binary_op_ttnn(ttnn.mul)
+eltwise_div_trunc = make_binary_op(ttl.tensor.div_trunc)
 eltwise_squared_difference = make_binary_op_ttnn(ttnn.squared_difference)
 eltwise_hypot = make_binary_op_ttnn(ttnn.hypot)
 eltwise_atan2 = make_binary_op_ttnn(ttnn.atan2)

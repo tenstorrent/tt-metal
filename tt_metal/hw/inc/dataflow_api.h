@@ -27,7 +27,8 @@
 #include "dev_msgs.h"
 
 extern uint8_t noc_index;
-extern uint32_t tt_l1_ptr *l1_arg_base;
+extern uint32_t tt_l1_ptr *rta_l1_base;
+extern uint32_t tt_l1_ptr *crta_l1_base;
 
 /** @file */
 
@@ -42,11 +43,6 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
 
 
-// JIT Build flow will set this as needed.
-#ifndef COMMON_RT_ARGS_INDEX
-    #define COMMON_RT_ARGS_INDEX 0
-#endif
-
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 /**
@@ -60,7 +56,7 @@ inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | 
  */
 static FORCE_INLINE
 uint32_t get_arg_addr(int arg_idx) {
-    return (uint32_t)&l1_arg_base[arg_idx];;
+    return (uint32_t)&rta_l1_base[arg_idx];;
 }
 
 /**
@@ -74,7 +70,7 @@ uint32_t get_arg_addr(int arg_idx) {
  */
 static FORCE_INLINE
 uint32_t get_common_arg_addr(int arg_idx) {
-    return (uint32_t)&l1_arg_base[arg_idx + COMMON_RT_ARGS_INDEX];
+    return (uint32_t)&crta_l1_base[arg_idx];
 }
 
 /**

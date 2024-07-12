@@ -607,27 +607,17 @@ def get_model_config(
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
-        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
-            fuse_batch=True,
             fused_activation=None,
-            mcast_in0=True,
         )
-        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
-            out_subblock_h=1,
-            out_subblock_w=1,
             per_core_M=1,
             per_core_N=1,
-            fuse_batch=True,
             fused_activation=None,
-            mcast_in0=True,
         )
     else:
         # Llama MLP Module Prefill

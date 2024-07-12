@@ -56,11 +56,27 @@ Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_v
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
-Padding::PadDimension& Padding::operator[](const std::int64_t index) {
-    return this->pad_dimensions_[index];
+const uint32_t Padding::get_normalized_index(std::int64_t index) const {
+    std::int64_t rank = static_cast<std::int64_t>(this->rank_);
+    std::uint64_t normalized_index = index >= 0 ? index : rank + index;
+    TT_ASSERT(
+        normalized_index >= 0 and normalized_index < rank,
+        fmt::format(
+            "Index is out of bounds for the rank, should be between 0 and {} however is {}",
+            rank - 1,
+            normalized_index));
+    return normalized_index;
 }
 
-const Padding::PadDimension Padding::operator[](const std::int64_t index) const { return this->pad_dimensions_[index]; }
+Padding::PadDimension& Padding::operator[](const std::int64_t index) {
+    auto normalized_index = this->get_normalized_index(index);
+    return this->pad_dimensions_[normalized_index];
+}
+
+const Padding::PadDimension Padding::operator[](const std::int64_t index) const {
+    auto normalized_index = this->get_normalized_index(index);
+    return this->pad_dimensions_[normalized_index];
+}
 
 Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
 

@@ -488,40 +488,32 @@ static void dump_run_mailboxes(
 
     fprintf(f, "|");
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0] == 1) {
+    if (launch_msg->enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
+                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+                                DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+        log_running_kernels(launch_msg);
+        TT_THROW(
+            "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
+            core.str(),
+            launch_msg->enables);
+    }
+
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
         fprintf(f, "B");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0] == 0) {
+    } else {
         fprintf(f, "b");
-    } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected brisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_DM0]);
     }
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1] == 1) {
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         fprintf(f, "N");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1] == 0) {
-        fprintf(f, "n");
     } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_DM1]);
+        fprintf(f, "n");
     }
 
-    if (launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE] == 1) {
+    if (launch_msg->enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         fprintf(f, "T");
-    } else if (launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE] == 0) {
-        fprintf(f, "t");
     } else {
-        log_running_kernels(launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected trisc enable on core {}: {} (expected 0 or 1)",
-            core.str(),
-            launch_msg->enables[DISPATCH_CLASS_TENSIX_COMPUTE]);
+        fprintf(f, "t");
     }
 
     fprintf(f, " ");
@@ -566,31 +558,34 @@ static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
 static void validate_kernel_ids(
     FILE *f, std::map<int, bool> &used_kernel_names, chip_id_t device_id, CoreCoord core, const launch_msg_t *launch) {
     if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
+        uint16_t watcher_kernel_id = launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0];
         TT_THROW(
             "Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
+            watcher_kernel_id,
             kernel_names.size());
     }
     used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
 
     if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= kernel_names.size()) {
+        uint16_t watcher_kernel_id = launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1];
         TT_THROW(
             "Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
+            watcher_kernel_id,
             kernel_names.size());
     }
     used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
 
     if (launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >= kernel_names.size()) {
+        uint16_t watcher_kernel_id = launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE];
         TT_THROW(
             "Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
             device_id,
             core.str(),
-            launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE],
+            watcher_kernel_id,
             kernel_names.size());
     }
     used_kernel_names[launch->watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] = true;

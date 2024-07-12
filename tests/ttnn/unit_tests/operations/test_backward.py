@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from models.utility_functions import skip_for_wormhole_b0
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_val,
     compare_all_close,
 )
@@ -41,7 +41,7 @@ def run_backward_unary_test(device, h, w, in_val, grad_val, ttnn_function, torch
 @pytest.mark.parametrize("in_val", [-1, 0, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 def test_atan(device, h, w, in_val, grad_val):
-    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.experimental.tensor.atan_bw, torch.atan)
+    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.atan_bw, torch.atan)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -49,7 +49,7 @@ def test_atan(device, h, w, in_val, grad_val):
 @pytest.mark.parametrize("in_val", [-1, 0, 1])
 @pytest.mark.parametrize("grad_val", [1])
 def test_atanh(device, h, w, in_val, grad_val):
-    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.experimental.tensor.atanh_bw, torch.atanh)
+    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.atanh_bw, torch.atanh)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -58,7 +58,7 @@ def test_atanh(device, h, w, in_val, grad_val):
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
 def test_atanh_nan(device, h, w, in_val, grad_val):
-    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.experimental.tensor.atanh_bw, torch.atanh)
+    run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.atanh_bw, torch.atanh)
 
 
 def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_function, torch_function, pcc=0.9999):

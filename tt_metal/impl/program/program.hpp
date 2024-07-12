@@ -35,14 +35,16 @@ namespace detail{
 struct KernelGroup {
     CoreType core_type;
     CoreRangeSet core_ranges;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
+    uint32_t total_rta_size;
     launch_msg_t launch_msg;
 
     KernelGroup();
     KernelGroup(
         const Program &program,
         CoreType core_type,
-        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids,
+        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
@@ -50,6 +52,7 @@ struct KernelGroup {
     CoreType get_core_type() const;
 };
 
+// TODO: why is this in program.hpp
 template <typename CoreRangeContainer>
 vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
     // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -131,6 +134,10 @@ class Program {
 
     void allocate_circular_buffers();
 
+    void finalize_rt_args();
+    bool is_finalized() const { return loaded_onto_device; }
+    void set_finalized() { loaded_onto_device = true; }
+
    private:
     void populate_dispatch_data(Device *device);
 
@@ -192,6 +199,10 @@ class Program {
     std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
+
+    static constexpr uint32_t num_dispatchable_core_types = 2;
+    std::array<std::array<uint32_t, DISPATCH_CLASS_MAX>, num_dispatchable_core_types> crta_offsets;
+    std::array<std::array<uint32_t, DISPATCH_CLASS_MAX>, num_dispatchable_core_types> crta_sizes;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);

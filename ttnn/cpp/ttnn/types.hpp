@@ -4,9 +4,11 @@
 
 #pragma once
 
+
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 
 namespace ttnn {
 namespace types {
@@ -53,6 +55,37 @@ struct CoreGrid {
     }
 };
 
+// Keep track of live buffers and the device addresses they were assigned.
+// When a buffer is created, it is provided a buffer_id using get_buf_id().
+// The address for this buffer is assigned to buffer_id when the buffer is asynchronously allocated.
+// When the buffer destructor is called, or the buffer is asynchronously deallocated, the worker thread
+// will look up the address for buffer_id to free memory on device.
+class buffer_address_map {
+    public:
+        void insert(uint32_t buf_id, uint32_t buf_addr) {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            this->buf_id_to_address_map.insert({buf_id, buf_addr});
+        }
+        void erase(uint32_t buf_id) {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            this->buf_id_to_address_map.erase(buf_id);
+        }
+        uint32_t buffer_address(uint32_t buf_id) {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            return this->buf_id_to_address_map.at(buf_id);
+        }
+        uint32_t get_buf_id() {
+            return buf_id++;
+        }
+
+    private:
+    std::atomic<uint32_t> buf_id = 0;
+    std::mutex map_mutex;
+    std::unordered_map<uint32_t, uint32_t> buf_id_to_address_map = {};
+};
+
+inline buffer_address_map GLOBAL_BUFFER_ADDRESS_MAP;
+
 // This buffer class is compatible with multithreaded runtime (which lives in tt_eager)
 // It is derived from the tt_metal::Buffer class, but defines its own asynchronous allocation functions
 class Buffer : public tt::tt_metal::Buffer {
@@ -61,17 +94,21 @@ class Buffer : public tt::tt_metal::Buffer {
                 const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
                 std::optional< ShardSpecBuffer> shard_parameters = std::nullopt
             ) : tt::tt_metal::Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, false) {
+                this->buffer_id = GLOBAL_BUFFER_ADDRESS_MAP.get_buf_id(); // Each buffer has a unique ID
                 this->allocate();
             }
         ~Buffer() {
             this->deallocate();
         }
     private:
+        uint32_t buffer_id = 0;
         void allocate() {
             TT_ASSERT(this->device());
             this->device()->push_work([this] () mutable {
                 bool bottom_up = this->buffer_type() == BufferType::DRAM;
                 tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
+                // The address inserted here, will be used during asynchronous deallocate
+                GLOBAL_BUFFER_ADDRESS_MAP.insert(this->buffer_id, this->address());
 
             });
         }
@@ -81,8 +118,11 @@ class Buffer : public tt::tt_metal::Buffer {
             }
             this->set_size(0);
             TT_ASSERT(this->device()->allocator_ != nullptr, "Expected allocator to be initialized!");
-            this->device()->push_work([this] () mutable {
-                tt::tt_metal::detail::DeallocateBuffer(this);
+            // Extract the required buffer attributes from main thread (these are guaranteed to be correctly populated) and send to worker
+            this->device()->push_work([dev = this->device(), id = this->buffer_id, type = this->buffer_type()] () mutable {
+                // At this point, the address for this buffer has made it to GLOBAL_BUFFER_ADDRESS_MAP, since the worker has allocated the buffer.
+                tt::tt_metal::allocator::deallocate_buffer(*(dev->allocator_), GLOBAL_BUFFER_ADDRESS_MAP.buffer_address(id), type);
+                GLOBAL_BUFFER_ADDRESS_MAP.erase(id);
             });
         }
 };

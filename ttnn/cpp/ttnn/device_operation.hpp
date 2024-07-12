@@ -178,7 +178,7 @@ constexpr auto check_tensor_types = [](auto&& tensor) {
 
 #ifdef DEBUG
 
-constexpr auto OPERATION_TYPE = "device_v2";
+constexpr auto OPERATION_TYPE = "DeviceOperation";
 
 template <typename device_operation_t>
 static void append_operation_to_operation_history(

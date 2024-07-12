@@ -11,15 +11,22 @@ import pprint
 from typing import Optional
 from types import ModuleType
 
+import sys
+from pathlib import Path
 from loguru import logger
 
-import tt_lib as _tt_lib
+# Sets env and updates shared libs rpath
+# This is a tweak required for a proper wheel functioning
+import ttnn.library_tweaks
+
+library_tweaks.setup_ttnn_so()
+
 import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-UnaryWithParam = _tt_lib.tensor.FusibleActivationWithParam
-UnaryOpType = _tt_lib.tensor.FusibleActivation
+UnaryWithParam = ttnn._ttnn.deprecated.tensor.FusibleActivationWithParam
+UnaryOpType = ttnn._ttnn.deprecated.tensor.FusibleActivation
 
 
 @dataclasses.dataclass
@@ -310,5 +317,5 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
-from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim
+from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
 from ttnn.operations.pool import MaxPool2d

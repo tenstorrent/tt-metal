@@ -4,10 +4,13 @@
 
 #pragma once
 
-#include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 

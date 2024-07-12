@@ -4,8 +4,8 @@
 
 #include "async_runtime.hpp"
 
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tensor/tensor_impl_wrapper.hpp"
 
 namespace ttnn {
 using DeviceBuffer = std::shared_ptr<Buffer>;

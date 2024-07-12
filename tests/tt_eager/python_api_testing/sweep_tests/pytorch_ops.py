@@ -651,8 +651,17 @@ def floor(x, *args, **kwargs):
     return torch.floor(x)
 
 
+def ceil(x, *args, **kwargs):
+    return torch.ceil(x)
+
+
 def trunc(x, *args, **kwargs):
     return torch.trunc(x)
+
+
+def frac(x, *args, **kwargs):
+    result = torch.frac(x)
+    return result
 
 
 def floor_div(x, y, *args, **kwargs):
@@ -663,6 +672,12 @@ def floor_div(x, y, *args, **kwargs):
 def unary_floor_div(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.floor_divide(x, value)
+    return result
+
+
+def rfloor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(value, x)
     return result
 
 
@@ -751,6 +766,23 @@ def div(x, y, *args, accurate_mode, round_mode, **kwargs):
     if round_mode == "None":
         return torch.div(x, y)
     return torch.div(x, y, rounding_mode=round_mode)
+
+
+def div_trunc(x, y, *args, **kwargs):
+    result = torch.div(x, y, rounding_mode="trunc")
+    return result
+
+
+def unary_div_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.div(x, value, rounding_mode="trunc")
+    return result
+
+
+def unary_rdiv_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.trunc(value / x)
+    return result
 
 
 def div_no_nan(x, y, *args, **kwargs):

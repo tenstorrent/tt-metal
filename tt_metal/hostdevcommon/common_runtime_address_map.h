@@ -13,6 +13,8 @@
 * This file contains addresses that are visible to both host and device compiled code.
 */
 
+constexpr static std::uint32_t L1_ALIGNMENT = NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES;
+
 // TODO: these could be moved to even lower addresses -- 5 RISC-V hexes combined don't need 100 KB
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKER_UINT32_SIZE * sizeof(uint32_t);
@@ -42,11 +44,9 @@ constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
 
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = PROFILER_L1_END_ADDRESS;
-constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 3 * 1024;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 3 * 1024 + L1_ALIGNMENT; // alignment between unique&common RTAs
 
 constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = 32 * 1024;
-
-constexpr static std::uint32_t L1_ALIGNMENT = NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES;
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
 // 12 bytes for each buffer: (addr, size, size_in_tiles)

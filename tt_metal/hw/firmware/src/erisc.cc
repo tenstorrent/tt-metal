@@ -45,7 +45,8 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((used));
 
-uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     DEBUG_STATUS("I");
@@ -80,7 +81,9 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_ETH_DM0]);
+            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
+            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
+
             kernel_init();
         } else {
             internal_::risc_context_switch();

@@ -1,0 +1,1 @@
+../../../../../../../models/experimental/resnet/tests/test_ttnn_resnet50_performant.py
