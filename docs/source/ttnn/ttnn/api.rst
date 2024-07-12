@@ -103,6 +103,7 @@ Pointwise Unary
    ttnn/exp2
    ttnn/expm1
    ttnn/floor
+   ttnn/ceil
    ttnn/geglu
    ttnn/gelu
    ttnn/glu

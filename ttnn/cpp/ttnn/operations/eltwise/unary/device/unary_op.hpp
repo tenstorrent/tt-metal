@@ -88,6 +88,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
+    CEIL,
     LEFT_SHIFT,
     REMAINDER,
     FMOD,
