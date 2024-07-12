@@ -133,12 +133,7 @@ std::vector<Tensor> polygamma_bw(
     const Tensor& input,
     int n,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> erfinv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
+    
 std::vector<Tensor> hardtanh_bw(
     const Tensor& grad,
     const Tensor& input,

@@ -1043,6 +1043,43 @@ std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const M
     return grad_tensor;
 }
 
+// erfinv
+// self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
+// for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
+std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::sqrt(ttnn::operations::creation::full_like(input, M_PI), output_mem_config),
+            ttnn::multiply(ttnn::exp(ttnn::square(ttnn::erfinv(input, output_mem_config), output_mem_config), false, output_mem_config),
+                grad,
+                std::nullopt,
+                output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        0.5,
+        std::nullopt,
+        output_mem_config);
+    Tensor neg_one = ttnn::operations::creation::full_like(input, -1.0);
+    Tensor pos_one = ttnn::operations::creation::full_like(input, 1.0);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    result = where(
+        ttnn::logical_or(
+            ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
+            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        std::nanf(" "),
+        result,
+        output_mem_config);
+    result = where(
+        ttnn::eq(input, neg_one, std::nullopt, output_mem_config),
+        t_inf,
+        where(ttnn::eq(input, pos_one, std::nullopt, output_mem_config), t_inf, result, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1141,6 +1178,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _reciprocal_bw;
         case UnaryBackwardOpType::DIGAMMA_BW:
             return _digamma_bw;
+        case UnaryBackwardOpType::ERFINV_BW:
+            return _erfinv_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
