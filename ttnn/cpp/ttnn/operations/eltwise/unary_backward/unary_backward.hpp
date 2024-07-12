@@ -106,5 +106,11 @@ constexpr auto relu6_bw = ttnn::register_operation<operations::unary_backward::E
 constexpr auto abs_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ABS_BW>>("ttnn::abs_bw");
 constexpr auto silu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SILU_BW>>("ttnn::silu_bw");
 constexpr auto selu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SELU_BW>>("ttnn::selu_bw");
+constexpr auto square_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SQUARE_BW>>("ttnn::square_bw");
+constexpr auto hardswish_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW>>("ttnn::hardswish_bw");
+constexpr auto tanhshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::TANHSHRINK_BW>>("ttnn::tanhshrink_bw");
+constexpr auto atanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ATANH_BW>>("ttnn::atanh_bw");
+constexpr auto asin_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ASIN_BW>>("ttnn::asin_bw");
+constexpr auto asinh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ASINH_BW>>("ttnn::asinh_bw");
 
 }  // namespace ttnn

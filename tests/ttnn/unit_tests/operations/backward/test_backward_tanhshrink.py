@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -16,19 +16,17 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_asinh(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+def test_bw_tanhshrink(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
 
-    pyt_y = torch.asinh(in_data)
-
-    tt_output_tensor_on_device = tt_lib.tensor.asinh_bw(grad_tensor, input_tensor)
+    pyt_y = torch.nn.functional.tanhshrink(in_data)
+    tt_output_tensor_on_device = ttnn.tanhshrink_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
-
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
