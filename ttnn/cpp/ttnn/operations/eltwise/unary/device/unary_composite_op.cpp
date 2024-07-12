@@ -5,21 +5,29 @@
 
 #include <functional>
 #include <optional>
-#include <iostream>
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_eager/tt_numpy/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
+#include "unary_composite_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/cpp/ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 
 namespace ttnn::operations::unary{
 
-// tanhshrink(x) = x - tanh(x)
+Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return ttnn::multiply(input_tensor, (float)(M_PI / 180.0), std::nullopt, memory_config.value_or(input_tensor.memory_config()));
+}
+
+Tensor _rad2deg(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return ttnn::multiply(input_tensor, (float)(180.0 / M_PI), std::nullopt, memory_config.value_or(input_tensor.memory_config()));
+}
+
+// // tanhshrink(x) = x - tanh(x)
 Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor tan_x = ttnn::tanh(x, output_mem_config);
     Tensor result = ttnn::subtract(x, tan_x, std::nullopt, output_mem_config);
@@ -326,63 +334,65 @@ Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_
         return result;
 }
 
-
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
 }
 
-std::function<ttnn::Tensor(const Tensor&, const std::optional<MemoryConfig>&)> UnaryCompositeFunction::get_function_type1(UnaryCompositeOpType OpType){
-    switch (OpType) {
-        case UnaryCompositeOpType::TANHSHRINK:
-            return _tanhshrink;
-        case UnaryCompositeOpType::ACOSH:
-            return _acosh;
-        case UnaryCompositeOpType::ASINH:
-            return _asinh;
-        case UnaryCompositeOpType::ATANH:
-            return _atanh;
-        case UnaryCompositeOpType::CBRT:
-            return _cbrt;
-        case UnaryCompositeOpType::COSH:
-            return _cosh;
-        case UnaryCompositeOpType::DIGAMMA:
-            return _digamma;
-        case UnaryCompositeOpType::LGAMMA:
-            return _lgamma;
-        case UnaryCompositeOpType::LOG1P:
-            return _log1p;
-        case UnaryCompositeOpType::MISH:
-            return _mish;
-        case UnaryCompositeOpType::MULTIGAMMALN:
-            return _multigammaln;
-        case UnaryCompositeOpType::SINH:
-            return _sinh;
-        case UnaryCompositeOpType::SOFTSIGN:
-            return _softsign;
-        case UnaryCompositeOpType::SWISH:
-            return _swish;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
+Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor floor_res = ttnn::floor(input, output_mem_config);
+    Tensor trunc_res = where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f), floor_res);
+    Tensor result = where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
+    return result;
 }
 
-
-std::function<ttnn::Tensor(const Tensor&, float, float, const std::optional<MemoryConfig>&)> UnaryCompositeFunction::get_function_type2(UnaryCompositeOpType OpType){
-    switch (OpType) {
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
+Tensor _variance_impl(
+    const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    constexpr float correction = 0.0f;
+    auto shape_wh = y.get_legacy_shape();
+    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
+    Tensor sum_sqr_y_minus_mean_y =
+        reduce(sqr_y_minus_mean_y, ReduceOpMath::SUM, ReduceOpDim::HW, scale);
+    return sum_sqr_y_minus_mean_y;  // var
+}
+Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
-std::function<ttnn::Tensor(const Tensor&, int, const std::optional<MemoryConfig>&)> UnaryCompositeFunction::get_function_type3(UnaryCompositeOpType OpType){
-    switch (OpType) {
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
+Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(y.memory_config());
+    Tensor mean_y = mean_hw(y);
+    return _variance_impl(y, mean_y, output_memory_config);
+}
+
+// Function std
+// compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
+//  Ref: torch.std
+Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
+}
+
+Tensor _std(const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+}
+
+Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  output_mem_config) {
+    return ttnn::sqrt(_variance(y, output_mem_config));
+}
+
+// Function normalize
+// use transformation y = (y - mean(y))/std(y) by broadcast
+Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor mean_y = mean_hw(y);
+    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
+    Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
+    Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y);
+    return z;
 }
 
 }  // namespace ttnn::operations::unary
