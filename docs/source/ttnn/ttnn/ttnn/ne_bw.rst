@@ -3,4 +3,4 @@
 ttnn.ne_bw
 ###########
 
-.. autofunction:: ttnn.ne_bw_backward
+.. autofunction:: ttnn.ne_bw

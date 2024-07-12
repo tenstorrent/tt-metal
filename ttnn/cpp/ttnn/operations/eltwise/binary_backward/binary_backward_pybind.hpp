@@ -285,12 +285,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
-        ttnn::binary_ne_bw,
-        R"doc(Performs backward operations for not equal comparison on :attr:`input_tensor_a` , attr:`input_tensor_b` with given attr:`grad_tensor`.
-        Returns an tensor of zeros like :attr:`input_tensor_a` and :attr:`input_tensor_b` tensor.)doc");
-
-    detail::bind_binary_backward(
-        module,
         ttnn::min_bw,
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 

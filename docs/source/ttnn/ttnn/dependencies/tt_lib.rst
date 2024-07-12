@@ -848,16 +848,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.threshold_bw
 
-.. autofunction:: tt_lib.tensor.logiteps_bw
-
-.. autofunction:: tt_lib.tensor.sign_bw
-
-.. autofunction:: tt_lib.tensor.log2_bw
-
-.. autofunction:: tt_lib.tensor.unary_fmod_bw
-
-.. autofunction:: tt_lib.tensor.unary_remainder_bw
-
 .. autofunction:: tt_lib.tensor.complex_recip_bw
 
 .. autofunction:: tt_lib.tensor.imag_bw
