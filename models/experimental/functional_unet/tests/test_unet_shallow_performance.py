@@ -24,7 +24,7 @@ from models.experimental.functional_unet.unet_utils import create_unet_models, c
 import time
 import tt_lib as ttl
 import os
-import tt_lib.profiler as profiler
+from tt_lib import profiler
 
 import ttnn
 from models.perf.perf_utils import prep_perf_report

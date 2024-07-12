@@ -7,7 +7,7 @@ import ttnn
 
 import tt_lib as ttl
 import tt_lib.fallback_ops
-import tt_lib.profiler as profiler
+from tt_lib import profiler
 
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
