@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/prod/prod_op_all.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks Prod_op::create_program(
 }
 
 Tensor prod_all(const Tensor& input, const MemoryConfig& output_mem_config ) {
-    Tensor result = tiled_prod( operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0), output_mem_config);
+    Tensor result = ttnn::tiled_prod( operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0), output_mem_config);
     auto arch_env = detect_arch();
     if(arch_env == tt::ARCH::WORMHOLE_B0){
         return tt::numpy::prod_result_computation_WH_B0<bfloat16>(result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
