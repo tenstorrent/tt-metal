@@ -232,6 +232,7 @@ Pointwise Unary
    ttnn/fmod_bw
    ttnn/remainder_bw
    ttnn/div_no_nan_bw
+   ttnn/exp2_bw
 
 Pointwise Binary
 ================
