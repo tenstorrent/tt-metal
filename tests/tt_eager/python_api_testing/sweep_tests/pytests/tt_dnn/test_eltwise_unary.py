@@ -585,7 +585,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
+    @pytest.mark.parametrize("round_off_method", ["floor", "ceil", "trunc"])
     @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
     def test_run_eltwise_round_off_ops(
         self,
@@ -597,9 +597,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-1000, high=1000), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
