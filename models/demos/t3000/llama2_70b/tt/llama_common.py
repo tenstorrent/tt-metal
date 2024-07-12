@@ -78,13 +78,13 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2")
     else:
         if llama_version == "llama3":
-            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
-            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
+            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/llama3-data-repacked/llama-3-70b/")
+            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/proj_sw/llama3-data-repacked/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/llama-cache/llama-3-70b"))
         else:
-            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
-            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
+            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/proj_sw/llama2-data-repacked/llama-2-70b/")
+            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/proj_sw/llama2-data-repacked/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/proj_sw/llama-cache/llama-2-70b"))
 
         assert os.path.exists(
             ckpt_dir
