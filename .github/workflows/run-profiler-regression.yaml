@@ -22,6 +22,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
