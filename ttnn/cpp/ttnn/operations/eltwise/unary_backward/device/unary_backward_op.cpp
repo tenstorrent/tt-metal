@@ -1094,6 +1094,14 @@ std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const Memor
     return grad_tensor;
 }
 
+std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float M_PI_180 = M_PI / 180;
+    Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1196,6 +1204,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _erfinv_bw;
         case UnaryBackwardOpType::ERF_BW:
             return _erf_bw;
+        case UnaryBackwardOpType::DEG2RAD_BW:
+            return _deg2rad_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

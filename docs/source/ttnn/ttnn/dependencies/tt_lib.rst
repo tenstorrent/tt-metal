@@ -832,8 +832,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
-.. autofunction:: tt_lib.tensor.deg2rad_bw
-
 .. autofunction:: tt_lib.tensor.threshold_bw
 
 .. autofunction:: tt_lib.tensor.complex_recip_bw
