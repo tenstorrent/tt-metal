@@ -252,7 +252,7 @@ class TtFalconAttention:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
+        self.init_preprocessing(self.model_config["LLM_MODE"], self.max_position_embeddings)
 
     def init_preprocessing(self, llm_mode, max_sequence_size):
         if llm_mode == "prefill":
