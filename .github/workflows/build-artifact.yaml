@@ -29,7 +29,6 @@ jobs:
     strategy:
       matrix:
         arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
-        profiler-build: ${{ fromJson([inputs.profiler-build]) || [false] }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
@@ -46,18 +45,18 @@ jobs:
         run: |
           git submodule update --init --recursive
       - name: Build regular tt-metal and libs
-        if: ${{ !matrix.profiler-build }}
+        if: ${{ !inputs.profiler-build }}
         run: |
           cmake -B build -G Ninja
           cmake --build build --target tests
           cmake --build build --target install
       - name: Build regular tt-metal and libs
-        if: ${{ matrix.profiler-build }}
+        if: ${{ inputs.profiler-build }}
         run: ./scripts/build_scripts/build_with_profiler_opt.sh
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}${{ matrix.profiler-build && '_profiler' }}
+          name: TTMetal_build_${{ matrix.arch }}${{ inputs.profiler-build && '_profiler' }}
           path: ttm_${{ matrix.arch }}.tar
