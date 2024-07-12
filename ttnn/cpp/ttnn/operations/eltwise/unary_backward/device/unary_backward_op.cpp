@@ -627,7 +627,7 @@ std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const Mem
                 ttnn::eq(input, -1, std::nullopt, output_mem_config),
                 std::nullopt,
                 output_mem_config),
-            nez(grad, output_mem_config)),
+            ttnn::nez(grad, output_mem_config)),
         t_inf,
         grad_a,
         output_mem_config);
