@@ -18,15 +18,15 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k tteager tests", arch: wormhole_b0, cmd: run_t3000_tteager_tests, timeout: 60, 
-          runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
           { name: "t3k trace stress tests", arch: wormhole_b0, cmd: run_t3000_trace_stress_tests, timeout: 120, 
-          runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional", "t3k"], owner_id: U03NG0A5ND7}, #Aditya Saigal
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03NG0A5ND7}, #Aditya Saigal
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 120, 
-          runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"], owner_id: U04S2UV6L8N}, #Sofija Jovic 
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U04S2UV6L8N}, #Sofija Jovic 
           { name: "t3k llama2_70b tests", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 60, 
-          runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"], owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60, 
-          runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"], owner_id: U03PUAKE719}, #Miguel Tairum Cruz
+          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03PUAKE719}, #Miguel Tairum Cruz
         ]
     name: ${{ matrix.test-group.name }}
     env:
