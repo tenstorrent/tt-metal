@@ -448,7 +448,7 @@ std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
@@ -649,8 +649,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _eq_bw_inter;
         case BinaryBackwardOpType::ASSIGN_BW:
             return _assign_bw;
-        case BinaryBackwardOpType::BINARY_LE_BW:
-            return _binary_le_bw;
+        case BinaryBackwardOpType::LE_BW:
+            return _le_bw;
         case BinaryBackwardOpType::RSUB_BW:
             return _rsub_bw;
         case BinaryBackwardOpType::GT_BW:
