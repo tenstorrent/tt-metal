@@ -990,6 +990,16 @@ std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
+// bw(expm1) = grad * expm1(input) + 1
+std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor eresult = ttnn::expm1(input, output_mem_config);
+    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
+    Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -1048,7 +1058,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _silu_bw;
         case UnaryBackwardOpType::SELU_BW:
             return _selu_bw;
-<<<<<<< HEAD
         case UnaryBackwardOpType::SQUARE_BW:
             return _square_bw;
         case UnaryBackwardOpType::HARDSWISH_BW:
@@ -1081,10 +1090,10 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _log2_bw;
         case UnaryBackwardOpType::SIGN_BW:
             return _sign_bw;
-=======
         case UnaryBackwardOpType::EXP2_BW:
             return _exp2_bw;
->>>>>>> 792040fd61... #10074: Move exp2_bw to TTNN
+        case UnaryBackwardOpType::EXPM1_BW:
+            return _expm1_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
