@@ -804,16 +804,15 @@ void py_module(py::module& module) {
     detail::bind_power(module, ttnn::pow);
 
     // Other Unary composite
-    detail::bind_unary_composite_operation(module, ttnn::rad2deg);
-    detail::bind_unary_composite_operation(module, ttnn::deg2rad);
-
     detail::bind_unary_operation_with_scale_and_shift(module, ttnn::hardswish);
     detail::bind_unary_operation_with_scale_and_shift(module, ttnn::hardsigmoid);
     detail::bind_unary_operation_with_low_and_high(module, ttnn::hardtanh);
     detail::bind_unary_operation_with_diag(module, ttnn::tril);
     detail::bind_unary_operation_with_diag(module, ttnn::triu);
 
-    // new imported
+    // unary composite imported into ttnn
+    detail::bind_unary_composite(module, ttnn::deg2rad);
+    detail::bind_unary_composite(module, ttnn::rad2deg);
     detail::bind_unary_composite(module, ttnn::tanhshrink);
     detail::bind_unary_composite(module, ttnn::acosh);
     detail::bind_unary_composite(module, ttnn::asinh);
@@ -828,7 +827,10 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::sinh);
     detail::bind_unary_composite(module, ttnn::softsign);
     detail::bind_unary_composite(module, ttnn::swish);
-
+    detail::bind_unary_composite(module, ttnn::trunc);
+    detail::bind_unary_composite(module, ttnn::var_hw);
+    detail::bind_unary_composite(module, ttnn::std_hw);
+    detail::bind_unary_composite(module, ttnn::normalize_hw);
 }
 
 }  // namespace unary
