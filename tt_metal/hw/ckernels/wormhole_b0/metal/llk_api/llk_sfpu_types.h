@@ -84,5 +84,6 @@ enum SfpuType {
     left_shift,
     remainder,
     fmod,
+    ceil,
     unused,
 };

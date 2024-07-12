@@ -268,6 +268,18 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_div,
         "pytorch_op": pytorch_ops.div,
     },
+    "eltwise-div_trunc": {
+        "tt_op": tt_lib_ops.eltwise_div_trunc,
+        "pytorch_op": pytorch_ops.div_trunc,
+    },
+    "eltwise-unary_div_trunc": {
+        "tt_op": tt_lib_ops.eltwise_unary_div_trunc,
+        "pytorch_op": pytorch_ops.unary_div_trunc,
+    },
+    "eltwise-unary_rdiv_trunc": {
+        "tt_op": tt_lib_ops.eltwise_unary_rdiv_trunc,
+        "pytorch_op": pytorch_ops.unary_rdiv_trunc,
+    },
     "eltwise-div_no_nan": {
         "tt_op": tt_lib_ops.eltwise_div_no_nan,
         "pytorch_op": pytorch_ops.div_no_nan,
@@ -620,9 +632,17 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_floor,
         "pytorch_op": pytorch_ops.floor,
     },
+    "eltwise-ceil": {
+        "tt_op": tt_lib_ops.eltwise_ceil,
+        "pytorch_op": pytorch_ops.ceil,
+    },
     "eltwise-trunc": {
         "tt_op": tt_lib_ops.eltwise_trunc,
         "pytorch_op": pytorch_ops.trunc,
+    },
+    "eltwise-frac": {
+        "tt_op": tt_lib_ops.eltwise_frac,
+        "pytorch_op": pytorch_ops.frac,
     },
     "eltwise-floor_div": {
         "tt_op": tt_lib_ops.eltwise_floor_div,
@@ -631,6 +651,10 @@ op_map = {
     "eltwise-unary_floor_div": {
         "tt_op": tt_lib_ops.eltwise_unary_floor_div,
         "pytorch_op": pytorch_ops.unary_floor_div,
+    },
+    "eltwise-rfloor_div": {
+        "tt_op": tt_lib_ops.eltwise_rfloor_div,
+        "pytorch_op": pytorch_ops.rfloor_div,
     },
     "eltwise-round": {
         "tt_op": tt_lib_ops.eltwise_round,

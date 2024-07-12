@@ -278,7 +278,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= weight_matrix_width);
     uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
-    uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
+    uint32_t num_blocks_output_w = (uint32_t) std::ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
 

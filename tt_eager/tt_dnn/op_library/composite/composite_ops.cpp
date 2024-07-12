@@ -994,6 +994,65 @@ Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _trunc)(input, output_mem_config);
 }
 
+Tensor _frac(const Tensor& input, const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor trunc_res = trunc(input, output_mem_config);
+    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
+    return result;
+}
+Tensor frac(const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _frac)(input, output_mem_config);
+}
+
+Tensor _div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    auto arch = input_a.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor result = div(input_a, input_b, true);
+    return trunc(result);
+}
+Tensor div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_trunc)(input_a, input_b, output_mem_config);
+}
+
+Tensor _div_trunc_overload(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor result = div_unary(input, value);
+    return trunc(result);
+}
+Tensor div_trunc(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_trunc_overload)(input, value, output_mem_config);
+}
+
+Tensor _unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor result = div_unary(value, input);
+    return trunc(result);
+}
+Tensor unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _unary_rdiv_trunc)(value, input, output_mem_config);
+}
+
 Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::multiply(input, (1.0f/2.0f));
     Tensor floor_res = ttnn::floor(result);
@@ -1066,6 +1125,14 @@ Tensor _floor_div_overload(const Tensor& input, float value, const MemoryConfig&
 }
 Tensor floor_div(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _floor_div_overload)(input_a, value, output_mem_config);
+}
+
+Tensor _rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(value, input);
+    return floor(result, output_mem_config);
+}
+Tensor rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _rfloor_div)(value, input, output_mem_config);
 }
 
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {

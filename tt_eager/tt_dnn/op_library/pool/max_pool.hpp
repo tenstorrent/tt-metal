@@ -9,7 +9,7 @@
 #include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
-    return (uint32_t) ceil((float) n / m) * m;
+    return (uint32_t) std::ceil((float) n / m) * m;
 }
 
 namespace tt {

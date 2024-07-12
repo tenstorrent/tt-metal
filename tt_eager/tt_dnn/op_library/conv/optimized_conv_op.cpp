@@ -40,7 +40,7 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
     // pad height
     uint32_t num_rows = (uint32_t) batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
-    uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
+    uint32_t num_rows_padded = (uint32_t) (std::ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
     uint32_t num_cols_padded = round_up(conv_activation_shape[3] * filter_w, TILE_WIDTH) * filter_h;
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
