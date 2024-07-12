@@ -20,12 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"], name: E150},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
+          {arch: wormhole_b0, runs-on: ["issue-miw-256", "N150"], name: N150},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
+          {arch: wormhole_b0, runs-on: ["issue-miw-256", "N300"], name: N300},
         ]
         test-group: [
           {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },

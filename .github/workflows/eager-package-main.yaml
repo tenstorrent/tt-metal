@@ -50,7 +50,7 @@ jobs:
           {arch: grayskull},
           {arch: wormhole_b0},
         ]
-    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
+    runs-on: ["Linux", "issue-miw-256"]
     environment: production
     steps:
       - uses: actions/checkout@v4
