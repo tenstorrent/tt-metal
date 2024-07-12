@@ -4,9 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from math import pi
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -17,15 +16,14 @@ from math import pi
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_sin(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 2 * pi, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, False)
+def test_bw_erfc(input_shapes, device):
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True)
+    pyt_y = torch.erfc(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.sin_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.erfc_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
-
-    pyt_y = torch.sin(in_data)
 
     pyt_y.backward(gradient=grad_data)
 

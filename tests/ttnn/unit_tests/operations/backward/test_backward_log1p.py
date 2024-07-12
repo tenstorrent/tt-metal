@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -16,14 +16,15 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_ceil(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+def test_bw_log1p(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
 
-    pyt_y = torch.ceil(in_data)
-    tt_output_tensor_on_device = tt_lib.tensor.ceil_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.log1p_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
+
+    pyt_y = torch.log1p(in_data)
 
     pyt_y.backward(gradient=grad_data)
 

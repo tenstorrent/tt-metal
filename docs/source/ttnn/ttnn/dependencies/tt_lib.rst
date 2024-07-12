@@ -846,17 +846,7 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
-.. autofunction:: tt_lib.tensor.sin_bw
-
-.. autofunction:: tt_lib.tensor.sinh_bw
-
-.. autofunction:: tt_lib.tensor.log10_bw
-
-.. autofunction:: tt_lib.tensor.log1p_bw
-
 .. autofunction:: tt_lib.tensor.erf_bw
-
-.. autofunction:: tt_lib.tensor.erfc_bw
 
 .. autofunction:: tt_lib.tensor.digamma_bw
 
@@ -868,11 +858,7 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.logiteps_bw
 
-.. autofunction:: tt_lib.tensor.softsign_bw
-
 .. autofunction:: tt_lib.tensor.sign_bw
-
-.. autofunction:: tt_lib.tensor.ceil_bw
 
 .. autofunction:: tt_lib.tensor.log2_bw
 

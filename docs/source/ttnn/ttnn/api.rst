@@ -213,6 +213,13 @@ Pointwise Unary
    ttnn/atanh_bw
    ttnn/asin_bw
    ttnn/asinh_bw
+   ttnn/sin_bw
+   ttnn/sinh_bw
+   ttnn/log10_bw
+   ttnn/log1p_bw
+   ttnn/erfc_bw
+   ttnn/ceil_bw
+   ttnn/softsign_bw
 
 Pointwise Binary
 ================

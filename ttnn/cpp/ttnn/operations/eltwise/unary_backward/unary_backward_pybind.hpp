@@ -398,6 +398,41 @@ void py_module(py::module& module) {
         module,
         ttnn::asinh_bw,
         R"doc(Performs backward operations for  asinh on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+         
+    detail::bind_unary_backward(
+        module,
+        ttnn::sin_bw,
+        R"doc(Performs backward operations for sin on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::sinh_bw,
+        R"doc(Performs backward operations for sinh on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log10_bw,
+        R"doc(Performs backward operations for log10 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::log1p_bw,
+        R"doc(Performs backward operations for log1p on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::erfc_bw,
+        R"doc(Performs backward operations for erfc on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::ceil_bw,
+        R"doc(Performs backward operations for ceil on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::softsign_bw,
+        R"doc(Performs backward operations for softsign on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 
