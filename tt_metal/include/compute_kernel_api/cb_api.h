@@ -74,7 +74,6 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
     UNPACK(( llk_pop_tiles(cbid, ntiles)  ));
 }
 
-
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
  * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
@@ -92,7 +91,6 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
 {
     PACK(( llk_wait_for_free_tiles<false,false,false>(cbid,ntiles)  ));
 }
-
 
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.
@@ -127,5 +125,43 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles)
     PACK(( llk_push_tiles<false,false>(cbid, ntiles)  ));
 }
 
+/**
+ * Sends the pointer to the given tile index of the specified CB from the UNPACK
+ * thread to the MATH and PACK threads, using mailbox writes. Also posts UNPACK_OPERAND_SYNC
+ * semaphore for each of these threads.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | index     | The tile index within the CB         | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ * | p_tile    | The pointer that will be populated   | void*    | N/A                                                                                               | True     |
+ */
+ALWI void cb_get_tile(uint32_t cb_id, uint32_t index, volatile void* p_tile) {
+    UNPACK(llk_unpack_get_tile(cb_id, index, (uint32_t*)p_tile));
+
+    MATH(llk_math_get_tile(cb_id, index, (uint32_t*)p_tile));
+
+    PACK(llk_pack_get_tile(cb_id, index, (uint32_t*)p_tile));
+}
+
+/**
+ * Blocks UNPACK thread on UNPACK_OPERAND_SYNC semaphore being decremented by
+ * MATH and PACK threads.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ */
+ALWI void cb_release_tile(uint32_t cb_id) {
+    UNPACK(llk_unpack_release_tile(cb_id));
+
+    MATH(llk_math_release_tile(cb_id));
+
+    PACK(llk_pack_release_tile(cb_id));
+}
 
 } // namespace ckernel
