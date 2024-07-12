@@ -1,0 +1,2 @@
+put -r generated/benchmark_data/*.csv
+ls -hal

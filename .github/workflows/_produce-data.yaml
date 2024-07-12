@@ -19,7 +19,7 @@ on:
       - completed
 
 jobs:
-  produce-data:
+  produce-cicd-data:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pip3 install loguru && python3 .github/scripts/create_pipeline_csvs.py
+        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_pipeline_csvs.py
       - name: Show directory to see output files
         run: ls -hal
       - name: Show CSVs output
@@ -79,3 +79,22 @@ jobs:
               workflow.json
               workflow_jobs.json
               github_context.json
+  test-produce-benchmark-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: create dummy
+        shell: bash
+        run: |
+          mkdir -p generated/benchmark_data
+          touch 'generated/benchmark_data/measurement_2024-07-12T05:01:45+0000.csv'
+          touch 'generated/benchmark_data/measurement_2024-07-12T04:59:14+0000.csv'
+          touch 'generated/benchmark_data/measurement_2024-07-12T05:03:29+0000.csv'
+      - name: sdf
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ARCH_NAME: grayskull
+        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
+      - name: Show files
+        shell: bash
+        run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'
