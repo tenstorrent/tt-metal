@@ -140,11 +140,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> hardswish_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> softplus_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -156,21 +151,6 @@ std::vector<Tensor> polygamma_bw(
     const Tensor& grad,
     const Tensor& input,
     int n,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> atanh_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> asin_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> asinh_bw(
-    const Tensor& grad,
-    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> cosh_bw(
@@ -241,21 +221,11 @@ std::vector<Tensor> reciprocal_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> square_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> prod_bw(
     const Tensor& grad,
     const Tensor& input,
     bool all_dimensions,
     int64_t dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> tanhshrink_bw(
-    const Tensor& grad,
-    const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> threshold_bw(
