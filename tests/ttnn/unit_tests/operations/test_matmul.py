@@ -413,7 +413,7 @@ def test_matmul_with_core_grid(device, batch_size):
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])
 @pytest.mark.parametrize("n_size", [1021, 2048])
-def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(device, batch_size, m_size, k_size, n_size):
+def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -426,7 +426,7 @@ def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -438,7 +438,7 @@ def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
 @pytest.mark.parametrize("m_size", [1024, 2048])
 @pytest.mark.parametrize("k_size", [1023, 2048])
 @pytest.mark.parametrize("n_size", [32, 61])
-def test_tall_matmul_with_argument_for_using_1D_systolic_array_set_to_true(device, batch_size, m_size, k_size, n_size):
+def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -451,7 +451,7 @@ def test_tall_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -476,7 +476,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=input_tensor_a.device().core_grid,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -536,7 +536,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
         core_grid=core_grid,
     )
 
@@ -639,14 +638,12 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
-            # use_1d_systolic_array=True,
             core_grid=core_grid,
         )
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            # use_1d_systolic_array=True,
             core_grid=core_grid,
         )
 

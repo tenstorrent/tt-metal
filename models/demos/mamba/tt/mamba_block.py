@@ -115,7 +115,7 @@ class TtMambaBlock(torch.nn.Module):
             self.ssm_in_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
+            core_grid=x.device().core_grid,
             dtype=ttnn.bfloat16,  # convolution requires bfloat16
         )
         ttnn.deallocate(x)
@@ -200,7 +200,7 @@ class TtMambaBlock(torch.nn.Module):
             self.out_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
+            core_grid=out.device().core_grid,
             dtype=self.configs["dtype"]["activations"],
         )
         ttnn.deallocate(out)

@@ -125,7 +125,6 @@ class TtMambaSSM(torch.nn.Module):
             self.delta_t_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
             dtype=self.configs["dtype"]["activations"],
         )
@@ -136,7 +135,6 @@ class TtMambaSSM(torch.nn.Module):
             bias=self.dt_proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
             dtype=self.configs["dtype"]["activations"],
         )
@@ -176,7 +174,6 @@ class TtMambaSSM(torch.nn.Module):
             self.B_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
             dtype=self.configs["dtype"]["activations"],
         )
@@ -263,7 +260,6 @@ class TtMambaSSM(torch.nn.Module):
             self.C_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
             dtype=self.configs["dtype"]["activations"],
         )  # b,n

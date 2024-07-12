@@ -499,7 +499,6 @@ def test_4b_tensor(device_mesh):
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         ),
-        use_1d_systolic_array=True,
     )
 
 

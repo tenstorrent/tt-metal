@@ -125,8 +125,7 @@ def run(
         input_tensor_b,
         memory_config=output_memory_config,
         dtype=output_dtype,
-        core_grid=core_grid,
-        use_1d_systolic_array=use_1d_systolic_array,
+        core_grid=core_grid or device.core_grid,
         compute_kernel_config=compute_kernel_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
