@@ -30,13 +30,13 @@ namespace tt::tt_metal::sliding_window {
         uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
         uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
         uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
-
+        uint32_t i = 0;
         std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
             for (uint32_t h = 0; h < output_shape[1]; ++h) {
                 for (uint32_t w = 0; w < output_shape[2]; ++w) {
                     uint32_t input_index = b * padded_input_h * padded_input_w + h * config.stride_hw_.first * padded_input_w + w * config.stride_hw_.second;
-                    op_trace_metadata[b * output_shape[1] * output_shape[2] + h * output_shape[2] + w] = input_index;
+                    op_trace_metadata[i++] = input_index;
                 }
             }
         }
@@ -105,7 +105,17 @@ namespace tt::tt_metal::sliding_window {
         return tensor_metadata;
     }
 
-    std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device) {
+    uint32_t generate_max_out_nsticks_per_core(const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+        // calculate max_out_nsticks_per_core
+        uint32_t max_out_nsticks_per_core = 0;
+        for (auto [_, in_shard] : shard_boundaries) {
+            auto [in_start, in_end] = in_shard;
+            max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
+        }
+        return max_out_nsticks_per_core;
+    }
+
+    std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device) {
         auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
             auto num_cores_x = device->compute_with_storage_grid_size().x;
             auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id)) : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
@@ -142,13 +152,6 @@ namespace tt::tt_metal::sliding_window {
                 per_core_gather_data[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
             }
             ++ core_id;
-        }
-
-        // calculate max_out_nsticks_per_core
-        uint32_t max_out_nsticks_per_core = 0;
-        for (auto [_, in_shard] : shard_boundaries) {
-            auto [in_start, in_end] = in_shard;
-            max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
         }
 
         // construct the config tensors
@@ -311,8 +314,7 @@ namespace tt::tt_metal::sliding_window {
 
         return std::make_tuple(flattened_pad_config,
                                 flattened_local_config,
-                                flattened_remote_config,
-                                max_out_nsticks_per_core);
+                                flattened_remote_config);
     }
 
     std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile, bool pad_last_core) {
