@@ -538,12 +538,17 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::erfinv_bw,
-        R"doc(Performs backward operations for digamma on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for erfinv on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::erf_bw,
-        R"doc(Performs backward operations for digamma on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for erf on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
+    detail::bind_unary_backward(
+        module,
+        ttnn::deg2rad_bw,
+        R"doc(Performs backward operations for deg2rad on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
 }
 

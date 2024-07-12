@@ -238,6 +238,7 @@ Pointwise Unary
    ttnn/digamma_bw
    ttnn/erfinv_bw
    ttnn/erf_bw
+   ttnn/deg2rad_bw
 
 Pointwise Binary
 ================
