@@ -237,16 +237,6 @@ std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& inp
     return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<Tensor> _lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(t_zero);
-    return grad_tensor;
-}
-std::vector<Tensor> lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lt_bw)(grad, output_mem_config);
-}
-
 std::vector<Tensor> _ne_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_zero = zeros_like(grad, output_mem_config);
