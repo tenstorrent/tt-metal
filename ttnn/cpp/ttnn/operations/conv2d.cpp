@@ -679,7 +679,9 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             {batch_size, input_height, input_width, in_channels},
             conv_config.input_channels_alignment == 16,
             compute_kernel_config,
-            conv_config.enable_act_doule_buffer);
+            conv_config.enable_act_doule_buffer,
+            conv_config.enable_split_reader,
+            conv_config.enable_subblock_padding);
         // halo_output.deallocate();
         ttnn::operations::core::deallocate(halo_output);
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};

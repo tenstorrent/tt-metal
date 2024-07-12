@@ -71,11 +71,13 @@ Tensor optimized_conv(const Tensor& a,
             bool use_shallow_conv_variant,
             bool transpose_mcast,
             std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-            bool enable_act_doule_buffer
+            bool enable_act_doule_buffer,
+            bool enable_split_reader,
+            bool enable_subblock_padding
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, transpose_mcast, compute_kernel_config, enable_act_doule_buffer]
+        [conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, transpose_mcast, compute_kernel_config, enable_act_doule_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto& a = input_tensors.at(0);
                 auto& b = input_tensors.at(1);
@@ -98,7 +100,7 @@ Tensor optimized_conv(const Tensor& a,
                 bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, transpose_mcast, kernel_config_val, enable_act_doule_buffer
+                    OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, transpose_mcast, kernel_config_val, enable_act_doule_buffer, enable_split_reader, enable_subblock_padding
                     ),
                     input_tensors,
                     optional_input_tensors);
@@ -209,7 +211,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     if (input_tensor_a.memory_config().is_sharded()) {
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
-            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_doule_buffer);
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_doule_buffer, this->enable_split_reader, this->enable_subblock_padding);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
         }
@@ -279,7 +281,9 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    bool enable_act_doule_buffer
+    bool enable_act_doule_buffer,
+    bool enable_split_reader,
+    bool enable_subblock_padding
 ) {
     //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
@@ -296,7 +300,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
     return operation::run_without_autoformat(
-        OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_doule_buffer
+        OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_doule_buffer, enable_split_reader, enable_subblock_padding
         ),
         {a, b},
         {bias}).at(0);
@@ -420,7 +424,9 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         use_shallow_conv_variant,
         compute_kernel_config,
         output_tensor,
-        enable_act_doule_buffer);
+        enable_act_doule_buffer,
+        enable_split_reader,
+        enable_subblock_padding);
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
