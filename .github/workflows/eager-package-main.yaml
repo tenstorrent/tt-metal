@@ -47,7 +47,6 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         runner-hw-info: [
-          {arch: grayskull},
           {arch: wormhole_b0},
         ]
     runs-on: ["Linux", "issue-miw-256"]
