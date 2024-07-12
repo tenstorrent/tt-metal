@@ -1,8 +1,6 @@
-name: "[post-commit] metal - Run profiler regression"
+name: "[internal] metal - Run profiler regression impl"
 
 on:
-
-  workflow_dispatch:
   workflow_call:
 
 jobs:
@@ -31,10 +29,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
-          ./create_venv.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}_profiler
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
