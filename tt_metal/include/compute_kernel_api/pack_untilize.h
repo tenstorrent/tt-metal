@@ -23,6 +23,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
+    MATH(( llk_math_hw_configure_disaggregated() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_untilize_init<block_ct_dim>(ocb) ));

@@ -18,6 +18,8 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
+template <bool untilize_en = false>
+inline void llk_math_hw_configure_disaggregated() { /*Unused for GS*/ }
 
 inline void llk_math_wait_for_dest_available() {
     DEBUG_STATUS("MWDW");
