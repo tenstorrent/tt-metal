@@ -14,7 +14,7 @@
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace tt {
 
