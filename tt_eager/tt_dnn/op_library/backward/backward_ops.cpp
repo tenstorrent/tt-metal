@@ -474,49 +474,6 @@ std::vector<Tensor> hardtanh_bw(
     return operation::decorate_as_composite(__func__, _hardtanh_bw)(grad, input, min, max, output_mem_config);
 }
 
-// name: sin(Tensor self) -> Tensor
-// self: grad * self.cos()
-std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_input);
-    return grad_tensor;
-}
-std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sin_bw)(grad, input, output_mem_config);
-}
-
-// name: sinh(Tensor self) -> Tensor
-// self: grad * self.cosh()
-std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, full_like(input, -88.5, output_mem_config), std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_inf.deallocate();
-    grad_a = where(
-        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
-        std::numeric_limits<float>::infinity(),
-        where(
-            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
-            -std::numeric_limits<float>::infinity(),
-            grad_a,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sinh_bw)(grad, input, output_mem_config);
-}
-
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
@@ -557,56 +514,6 @@ std::vector<Tensor> erfinv_bw(const Tensor& grad, const Tensor& input, const Mem
     return operation::decorate_as_composite(__func__, _erfinv_bw)(grad, input, output_mem_config);
 }
 
-// bw(log10(in)) = grad/(in * 2.30258509299404568402)
-std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_inf = where(
-        ttnn::ltz(grad, output_mem_config),
-        -std::numeric_limits<float>::infinity(),
-        std::numeric_limits<float>::infinity(),
-        output_mem_config);
-    Tensor grad_a = ttnn::multiply(
-        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
-        std::nanf(" "),
-        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log10_bw)(grad, input, output_mem_config);
-}
-
-// bw(log1p(in)) = grad/(in + 1)
-// for -1 = inf
-std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor t_inf = where(
-        ttnn::ltz(grad, output_mem_config),
-        -std::numeric_limits<float>::infinity(),
-        std::numeric_limits<float>::infinity(),
-        output_mem_config);
-    Tensor t_inp1 = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(t_inp1, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(
-        ttnn::eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        grad_a,
-        output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eqz(t_inp1, output_mem_config), ttnn::eqz(grad, output_mem_config)),
-        std::nanf(" "),
-        grad_a,
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    return grad_tensor;
-}
-std::vector<Tensor> log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log1p_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
@@ -622,23 +529,6 @@ std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const Memor
 }
 std::vector<Tensor> erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _erf_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(
-        ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
-            grad,
-            std::nullopt,
-            output_mem_config),
-        -M_2_SQRTPI,
-        std::nullopt,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _erfc_bw)(grad, input, output_mem_config);
 }
 
 std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -926,25 +816,6 @@ std::vector<Tensor> logiteps_bw(
     return operation::decorate_as_composite(__func__, _logiteps_bw)(grad, input, eps, output_mem_config);
 }
 
-// softsign
-// result = grad_data / torch.square(1 + torch.abs(input))
-std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    using ttnn::operations::unary::UnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    std::vector<UnaryWithParam> ops_chain = {
-    UnaryWithParam{UnaryOpType::ABS},
-    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-    UnaryWithParam{UnaryOpType::SQUARE},
-    UnaryWithParam{UnaryOpType::RECIP}};
-    grad_tensor.emplace_back(
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
-    return grad_tensor;
-}
-std::vector<Tensor> softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _softsign_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = zeros_like(grad, output_mem_config);
@@ -953,16 +824,6 @@ std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 std::vector<Tensor> sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _sign_bw)(grad, input, output_mem_config);
-}
-
-std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    return grad_tensor;
-}
-std::vector<Tensor> ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _ceil_bw)(grad, input, output_mem_config);
 }
 
 // bw(log2(in)) = grad/(in * 0.69314718055994530942)

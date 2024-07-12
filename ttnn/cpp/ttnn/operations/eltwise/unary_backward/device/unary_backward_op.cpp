@@ -695,6 +695,124 @@ std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
+// name: sin(Tensor self) -> Tensor
+// self: grad * self.cos()
+std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_input);
+    return grad_tensor;
+}
+
+// name: sinh(Tensor self) -> Tensor
+// self: grad * self.cosh()
+std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor grad_a = where(
+        ttnn::gt(input, ttnn::operations::creation::full_like(input, 88.5), std::nullopt, output_mem_config),
+        t_inf,
+        where(
+            ttnn::lt(input, ttnn::operations::creation::full_like(input, -88.5), std::nullopt, output_mem_config),
+            t_inf,
+            ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
+            output_mem_config),
+        output_mem_config);
+    t_inf.deallocate();
+    grad_a = where(
+        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
+        std::numeric_limits<float>::infinity(),
+        where(
+            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
+            -std::numeric_limits<float>::infinity(),
+            grad_a,
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
+// bw(log10(in)) = grad/(in * 2.30258509299404568402)
+std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = where(
+        ttnn::ltz(grad, output_mem_config),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        output_mem_config);
+    Tensor grad_a = ttnn::multiply(
+        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        std::nanf(" "),
+        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
+// bw(log1p(in)) = grad/(in + 1)
+// for -1 = inf
+std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_inf = where(
+        ttnn::ltz(grad, output_mem_config),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        output_mem_config);
+    Tensor t_inp1 = ttnn::add(input, 1.0f, std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(t_inp1, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::eq(input, ttnn::operations::creation::full_like(input, -1.0), std::nullopt, output_mem_config),
+        t_inf,
+        grad_a,
+        output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(t_inp1, output_mem_config), eqz(grad, output_mem_config)),
+        std::nanf(" "),
+        grad_a,
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(
+        ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
+            grad,
+            std::nullopt,
+            output_mem_config),
+        -M_2_SQRTPI,
+        std::nullopt,
+        output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+
+// softsign
+// result = grad_data / torch.square(1 + torch.abs(input))
+std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam {UnaryOpType::ABS},
+    UnaryWithParam {UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam {UnaryOpType::SQUARE},
+    UnaryWithParam {UnaryOpType::RECIP}};
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
         case UnaryBackwardOpType::ASSIGN_BW:
@@ -765,6 +883,20 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _asin_bw;
         case UnaryBackwardOpType::ASINH_BW:
             return _asinh_bw;
+        case UnaryBackwardOpType::SIN_BW:
+            return _sin_bw;
+        case UnaryBackwardOpType::SINH_BW:
+            return _sinh_bw;
+        case UnaryBackwardOpType::LOG10_BW:
+            return _log10_bw;
+        case UnaryBackwardOpType::LOG1P_BW:
+            return _log1p_bw;
+        case UnaryBackwardOpType::ERFC_BW:
+            return _erfc_bw;
+        case UnaryBackwardOpType::CEIL_BW:
+            return _ceil_bw;
+        case UnaryBackwardOpType::SOFTSIGN_BW:
+            return _softsign_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
