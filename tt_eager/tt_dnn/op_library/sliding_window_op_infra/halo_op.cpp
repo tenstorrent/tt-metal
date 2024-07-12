@@ -8,6 +8,8 @@ namespace ttnn::operations::halo {
 
 using namespace tt::tt_metal;
 
+thread_local std::unordered_map<std::size_t, std::uint32_t> Halo::sliding_window_max_out_nsticks_per_core = {};
+
 void Halo::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
@@ -77,9 +79,23 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
 
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor_, parallel_config_, is_block_sharded, device);
-    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor_, parallel_config_, is_block_sharded, device);
-    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor_, parallel_config_, is_block_sharded, device);
+    auto pad_metadata = sliding_window::generate_pad_metadata(this->config_);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(this->config_);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(this->config_, op_trace_metadata);
+    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, this->config_, this->reshard_num_cores_nhw_);
+    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, this->transpose_mcast_, this->remote_read_, device);
+
+    const auto& pad_config = std::get<0>(kernel_config);
+    const auto& local_config = std::get<1>(kernel_config);
+    const auto& remote_config = std::get<2>(kernel_config);
+
+    auto pad_config_tensor = sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
+    auto local_config_tensor = sliding_window::construct_on_host_config_tensor(local_config, this->config_, this->parallel_config_);
+    auto remote_config_tensor = sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
+
+    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
+    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
+    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
@@ -117,29 +133,22 @@ Tensor halo_op(const Tensor& input_tensor,
 
     auto halo_func = [&config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-
         auto input_tensor = input_tensors.at(0);
 
         auto device = input_tensor.device();
-        auto pad_metadata = sliding_window::generate_pad_metadata(config);
-        auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-        auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
-        auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
-        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast, remote_read, device);
 
-        const auto& pad_config = std::get<0>(kernel_config);
-        const auto& local_config = std::get<1>(kernel_config);
-        const auto& remote_config = std::get<2>(kernel_config);
-        uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config);
+        auto sliding_window_hash = config.get_hash();
+        if (!Halo::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
+            auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
+            auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
+            Halo::sliding_window_max_out_nsticks_per_core.emplace(sliding_window_hash, sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
+        }
 
+        uint32_t max_out_nsticks_per_core = Halo::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
         ParallelConfig p_config;
         p_config.grid = input_tensor.shard_spec().value().grid;
         p_config.shard_scheme = input_tensor.memory_config().memory_layout;
         p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
-
-        auto pad_config_tensor = sliding_window::construct_on_host_config_tensor(pad_config, config, p_config);
-        auto local_config_tensor = sliding_window::construct_on_host_config_tensor(local_config, config, p_config);
-        auto remote_config_tensor = sliding_window::construct_on_host_config_tensor(remote_config, config, p_config);
 
         return operation::run(
             Halo{
@@ -150,10 +159,7 @@ Tensor halo_op(const Tensor& input_tensor,
                 .transpose_mcast_ = transpose_mcast,
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-                .output_memory_config_ = output_memory_config,
-                .pad_config_tensor_=pad_config_tensor,
-                .local_config_tensor_=local_config_tensor,
-                .remote_config_tensor_=remote_config_tensor
+                .output_memory_config_ = output_memory_config
             },
             {input_tensor});
     };

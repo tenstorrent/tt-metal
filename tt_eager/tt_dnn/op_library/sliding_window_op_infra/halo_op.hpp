@@ -17,6 +17,7 @@ namespace ttnn::operations {
 namespace halo {
 
 struct Halo {
+    thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     SlidingWindowConfig config_;
     ParallelConfig parallel_config_;
     uint32_t pad_val_;
@@ -25,9 +26,6 @@ struct Halo {
     uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
-    Tensor pad_config_tensor_;
-    Tensor local_config_tensor_;
-    Tensor remote_config_tensor_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
