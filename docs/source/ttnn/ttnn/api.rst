@@ -236,6 +236,7 @@ Pointwise Unary
    ttnn/expm1_bw
    ttnn/reciprocal_bw
    ttnn/digamma_bw
+   ttnn/erfinv_bw
 
 Pointwise Binary
 ================
