@@ -122,6 +122,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
+        ([1, 1, 32, 32 * 8], 3, ttl.tensor.Layout.TILE),
         ([1, 8, 1024, 1024], 3, ttl.tensor.Layout.TILE),
         ([1, 4, 2048, 1024], 3, ttl.tensor.Layout.TILE),
         # # # Has worker slice size warning - defaults to 1x1

@@ -321,6 +321,7 @@ struct EdmInterfaceAddresses {
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
     Device* device,
+    RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     ccl::CCLOpConfig const& op_config,
     std::vector<CoreCoord> const& worker_cores,
     uint32_t num_channels_per_edm,
@@ -350,6 +351,9 @@ static void add_worker_config_to_edm_builders(
                 device->worker_core_from_logical_core(worker_cores.at(w)).y));
         }
 
+        // Get the expected message size in bytes for this worker
+        uint32_t expected_message_size_bytes = tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
+
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
         if (sender_enabled) {
             auto& sender_edm_builder = is_buffer_in_clockwise_direction_fn(c) ? clockwise_edm_builders.at(link)
@@ -359,7 +363,8 @@ static void add_worker_config_to_edm_builders(
                 sender_edm_builder.add_sender_channel(
                     worker_sender_semaphore_address,
                     1,  // cw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
-                    sender_worker_coords);
+                    sender_worker_coords,
+                    expected_message_size_bytes);
             edm_interface_addresses.worker_sender_edm_semaphore_addresses.insert(
                 {global_worker_idx, sender_channel_buffer_info.eth_semaphore_l1_address});
             edm_interface_addresses.worker_sender_edm_buffer_addresses.insert(
@@ -378,7 +383,8 @@ static void add_worker_config_to_edm_builders(
                     // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
                     // messages the EDM must forward as it will receive its finish signal from the worker instead
                     1,
-                    receiver_worker_coords);
+                    receiver_worker_coords,
+                    expected_message_size_bytes);
             edm_interface_addresses.worker_receiver_edm_semaphore_addresses.insert(
                 {global_worker_idx, receiver_channel_buffer_info.eth_semaphore_l1_address});
             edm_interface_addresses.worker_receiver_edm_buffer_addresses.insert(
@@ -775,6 +781,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     for (std::size_t link = 0; link < num_links; link++) {
         add_worker_config_to_edm_builders(
             device,
+            tensor_slicer,
             op_config,
             worker_cores,
             num_edm_channels,

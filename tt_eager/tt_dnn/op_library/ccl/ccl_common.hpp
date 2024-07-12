@@ -333,6 +333,8 @@ class RingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
 
    public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
+    uint32_t get_worker_slice_size_bytes(int worker_index);
+
     static std::vector<tt_xy_pair> compute_worker_slice_offsets(
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 

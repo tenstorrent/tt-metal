@@ -224,6 +224,11 @@ RingReduceScatterTensorSlicer::RingReduceScatterTensorSlicer(
     TT_ASSERT(this->worker_slice_offsets.size() == this->worker_slice_shapes.size());
 }
 
+uint32_t RingReduceScatterTensorSlicer::get_worker_slice_size_bytes(int worker_index) {
+    auto worker_slice_shape = this->worker_slice_shapes.at(worker_index);
+    return worker_slice_shape.x * worker_slice_shape.y * this->input_page_size;
+}
+
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
     std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
     std::vector<tt_xy_pair> worker_slice_offsets;
