@@ -13,11 +13,6 @@
 
 using namespace ckernel::math;
 
-template <bool untilize_en>
-inline void llk_math_hw_configure_disaggregated() {
-    TT_LLK_DUMP("llk_math_hw_configure_disaggregated<{}>()", untilize_en);
-}
-
 template <DstSync Dst>
 inline void _llk_math_wait_for_dest_available_() {
     // These liteweight functions for sync with packer imply
