@@ -26,8 +26,7 @@ jobs:
             { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh, timeout: 30 },
             { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
             { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
-            # #9945: Skip SD for now
-            # { name: "[Unstable] N300 models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh, timeout: 45 },
+            { name: "[Unstable] N300 models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh, timeout: 45 },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:

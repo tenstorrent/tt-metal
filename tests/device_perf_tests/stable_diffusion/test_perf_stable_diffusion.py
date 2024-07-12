@@ -204,7 +204,6 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 
 
 @skip_for_grayskull()
-@pytest.mark.skip(reason="#9945: Skip for now since this breaks on WH because of di/dt")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
@@ -245,7 +244,6 @@ def test_stable_diffusion_device_perf(expected_perf):
 
 
 @skip_for_grayskull()
-@pytest.mark.skip(reason="#9945: Skip for now since this breaks on WH because of di/dt")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
