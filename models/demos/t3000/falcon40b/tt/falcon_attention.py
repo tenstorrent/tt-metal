@@ -205,7 +205,7 @@ class TtFalconAttention:
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
 
-        self.init_preprocessing(self.model_config["LLM_MODE"], self.model_config["SEQ_LEN"])
+        self.init_preprocessing(self.model_config["LLM_MODE"], max_position_embeddings)
         self.layer_past = None
 
     def initialize_kvcache(self):
@@ -381,7 +381,10 @@ class TtFalconAttention:
         num_slices = self.model_config["attention_params"]["attention_num_slices"]
 
         if num_slices > 1:
+            if not hasattr(self, "sliced_attn_output"):
+                self.online_preprocessing(llm_mode, q_len)
             attn_output_tensor = self.sliced_attn_output
+
             for slice_i in range(num_slices):
                 # Partially slice and convert activations to sharded
                 q_slices = ttnn.experimental.tensor.interleaved_to_sharded_partial(
