@@ -105,6 +105,11 @@ std::vector<Tensor> _gt_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
+std::vector<Tensor> _lt_bw(
+    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+    return _unary_comp_bw(grad, output_mem_config);
+}
+
 std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
@@ -1069,6 +1074,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _eq_bw;
         case UnaryBackwardOpType::GT_BW:
             return _gt_bw;
+        case UnaryBackwardOpType::LT_BW:
+            return _lt_bw;
         case UnaryBackwardOpType::SUB_BW:
             return _sub_bw;
         case UnaryBackwardOpType::HARDSHRINK_BW:
