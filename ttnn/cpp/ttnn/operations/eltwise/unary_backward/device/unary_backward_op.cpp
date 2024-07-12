@@ -121,7 +121,7 @@ std::vector<Tensor> _frac_bw(const Tensor& grad, const Tensor& input, const Memo
 
 std::vector<Tensor> _trunc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = tt::tt_metal::zeros_like(grad, output_mem_config);
+    Tensor grad_result = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
