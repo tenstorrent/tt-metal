@@ -719,18 +719,28 @@ std::vector<Tensor> ge_bw(const Tensor& grad, const MemoryConfig& output_mem_con
     return operation::decorate_as_composite(__func__, _ge_bw)(grad, output_mem_config);
 }
 
-<<<<<<< HEAD
-std::vector<Tensor> _le_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+// bw(log2(in)) = grad/(in * 0.69314718055994530942)
+std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(t_zero);
+    Tensor t_inf = where(
+        ttnn::ltz(grad, output_mem_config),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        output_mem_config);
+    Tensor grad_a = ttnn::multiply(
+        grad, ttnn::reciprocal(ttnn::multiply(input, M_LN2, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(
+        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        std::nanf(" "),
+        where(ttnn::eqz(input, output_mem_config), t_inf, grad_a, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
-std::vector<Tensor> le_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _le_bw)(grad, output_mem_config);
+std::vector<Tensor> log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _log2_bw)(grad, input, output_mem_config);
 }
 
-=======
 std::vector<Tensor> _unary_fmod_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

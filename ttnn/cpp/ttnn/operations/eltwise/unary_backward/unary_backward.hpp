@@ -75,6 +75,7 @@ constexpr auto eq_bw = ttnn::register_operation<operations::unary_backward::Exec
 constexpr auto gt_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::GT_BW>>("ttnn::gt_bw");
 constexpr auto lt_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LT_BW>>("ttnn::lt_bw");
 constexpr auto le_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LE_BW>>("ttnn::le_bw");
+constexpr auto ge_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::GE_BW>>("ttnn::ge_bw");
 constexpr auto lgamma_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LGAMMA_BW>>("ttnn::lgamma_bw");
 constexpr auto fill_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FILL_BW>>("ttnn::fill_bw");
 constexpr auto hardsigmoid_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSIGMOID_BW>>("ttnn::hardsigmoid_bw");
