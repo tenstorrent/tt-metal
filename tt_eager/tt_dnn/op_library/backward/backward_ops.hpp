@@ -202,9 +202,17 @@ std::vector<Tensor> threshold_bw(
 std::vector<Tensor> ge_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> le_bw(
-    const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+std::vector<Tensor> unary_fmod_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    float eps = 0.0f,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> unary_remainder_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    float eps = 0.0f,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> conj_bw(
     const Tensor& grad,
