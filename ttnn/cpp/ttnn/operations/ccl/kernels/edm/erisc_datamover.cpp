@@ -8,13 +8,9 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "eth_l1_address_map.h"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
-=======
+
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp"
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
 
 // Args Schema:
 // 1) handshake addr

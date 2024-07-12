@@ -92,11 +92,7 @@ KernelHandle generate_edm_kernel(
 
     auto eth_sender_kernel =tt::tt_metal::CreateKernel(
         program,
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.cpp
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
-=======
-        "ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp",
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp
+        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
         eth_core,
        tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
 

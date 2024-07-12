@@ -7,8 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/ccl/all_gather/ccl_all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/line_all_gather/ccl_line_all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
 #include "pybind11/operations/conv2d.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"

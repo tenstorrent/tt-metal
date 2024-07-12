@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/all_gather/device/ccl_all_gather_op.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
