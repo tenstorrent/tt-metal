@@ -540,6 +540,11 @@ void py_module(py::module& module) {
         ttnn::erfinv_bw,
         R"doc(Performs backward operations for digamma on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
+    detail::bind_unary_backward(
+        module,
+        ttnn::erf_bw,
+        R"doc(Performs backward operations for digamma on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+
 }
 
 }  // namespace binary_backward
