@@ -1852,10 +1852,10 @@ Tensor _outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
             a_slim,
             b_slim,
             /*bias=*/std::nullopt,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
+            tt::operations::primary::Matmul{
             /*program_config=*/std::nullopt,
-            output_mem_config
+            /*bcast_batch=*/std::nullopt,
+            output_mem_config}
             );
 }
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {

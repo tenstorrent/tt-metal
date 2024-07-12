@@ -39,10 +39,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         hidden_states,
         parameters.at(fmt::format("fused_qkv_weight_{}", encoder_index)),
         parameters.at(fmt::format("fused_qkv_bias_{}", encoder_index)),
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        fused_qkv_matmul_program_config,
-        l1_memory_config
+        tt::operations::primary::Matmul{
+            fused_qkv_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
 
 
@@ -62,10 +62,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
             query,
             key,
             /*bias=*/std::nullopt,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
+            tt::operations::primary::Matmul{
             pre_softmax_bmm_program_config,
-            dram_memory_config
+            /*bcast_batch=*/std::nullopt,
+            dram_memory_config}
             );
     query.deallocate();
     key.deallocate();
@@ -86,10 +86,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
             pre_softmax_bmm_matmul,
             value,
             /*bias=*/std::nullopt,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
+            tt::operations::primary::Matmul{
             post_softmax_bmm_program_config,
-            l1_memory_config
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
             );
     pre_softmax_bmm_matmul.deallocate();
     value.deallocate();
@@ -113,10 +113,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         concat_heads_output,
         parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
         parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        selfout_bmm_program_config,
-        l1_memory_config
+        tt::operations::primary::Matmul{
+            selfout_bmm_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
     concat_heads_output.deallocate();
 
@@ -147,10 +147,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         attention_layernorm_output,
         parameters.at(fmt::format("ff1_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff1_bias_{}", encoder_index)),
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        ff1_matmul_program_config,
-        dram_memory_config
+        tt::operations::primary::Matmul{
+            ff1_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            dram_memory_config}
     );
 
 
@@ -168,10 +168,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         ff1_matmul_output,
         parameters.at(fmt::format("ff2_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff2_bias_{}", encoder_index)),
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        ff2_matmul_program_config,
-        l1_memory_config
+        tt::operations::primary::Matmul{
+            ff2_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
     ff1_matmul_output.deallocate();
 
@@ -193,7 +193,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
 Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
 
-    auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt);
+    auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, tt::operations::primary::Matmul{});
     hidden_states.deallocate();
 
 

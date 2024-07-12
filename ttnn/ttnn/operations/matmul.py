@@ -71,17 +71,23 @@ def matmul(
       argument is 1-dimensional, a 1 is prepended to its dimension for the purpose of the
       batched matrix multiply.  If the second argument is 1-dimensional, a
       1 is appended to its dimension for the purpose of the batched matrix multiple.
-      The non-matrix (i.e. batch) dimensions must be broadcastable.  For example, if :attr:`input_tensor_a` is a
-      :math:`(j \\times 1 \\times n_size \\times n_size)` tensor and :attr:`input_tensor_b` is a :math:`(k_size \\times n_size \\times n_size)`
-      tensor, the result will be a :math:`(j \\times k_size \\times n_size \\times n_size)` tensor.
+      The non-matrix (i.e. batch) dimensions must be broadcastable.
+      The behaviour is the same as PyTorch, with the exception of two cases of batch dimensions:
+
+          - The two batch dimensions are swapped. E.g. :math:`(j \\times 1)` and :math:`(1 \\times j)`
+            or :math:`(1 \\times j)` and :math:`(j \\times 1)`
+          - When a batch dimension is implicitly extended then the two patch dimensions are swapped.
+            E.g.  :math:`(j \\times 1)` and :math:`(j)` which is treated as
+            :math:`(j \\times 1)` and :math:`(1 \\times j)`
+
     - In order to leverage sharded matmul implementations we can shard both input_tensor_a and input_tensor_b. The sharding strategy used will be according
       to the sharding stategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
 
       Note that the broadcasting logic only looks at the batch dimensions when determining if the inputs
       are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
-      :math:`(j \\times 1 \\times n_size \\times m_size)` tensor and :attr:`input_tensor_b` is a :math:`(k_size \\times m_size \\times p)`
+      :math:`(j \\times 1 \\times n\_size \\times m\_size)` tensor and :attr:`input_tensor_b` is a :math:`(k\_size \\times m\_size \\times p)`
       tensor, these inputs are valid for broadcasting even though the final two dimensions (i.e. the
-      matrix dimensions) are different. The operation will return a :math:`(j \\times k_size \\times n_size \\times p)` tensor.
+      matrix dimensions) are different. The operation will return a :math:`(j \\times k\_size \\times n\_size \\times p)` tensor.
 
 
     .. note::

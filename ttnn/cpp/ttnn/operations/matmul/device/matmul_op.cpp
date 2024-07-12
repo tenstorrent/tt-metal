@@ -509,35 +509,6 @@ tuple<uint32_t, uint32_t> get_subblock_sizes(
 }  // namespace bmm_op_utils
 
 namespace tt {
-namespace tt_metal {
-
-/**
- * Resnet50 matmul with fused batch
- */
-Tensor resnet_matmul(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    std::optional<const Tensor> bias,
-    const MemoryConfig& mem_config,
-    std::optional<const DataType> output_dtype,
-    const MathFidelity math_fidelity) {
-    std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
-    auto compute_kernel_config =
-        init_device_compute_kernel_config(input_a.device()->arch(), config, math_fidelity, true, false, false);
-    auto program_config = bmm_op_utils::get_mcast_1d_config(
-        input_a,
-        input_b,
-        true /* fuse_batch */,
-        std::nullopt /* fused_activation */,
-        true /* mcast_in0 */,
-        false /* out_sharded */,
-        std::nullopt /* compute_with_storage_grid_size */,
-        compute_kernel_config);
-    return operations::primary::matmul_1d(
-        input_a, input_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
-}
-
-}  // namespace tt_metal
 
 namespace operations {
 
@@ -672,7 +643,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const UnaryWithParam> user_fused_activation,
-    const std::optional<const bool> user_run_batched) {
+    const bool user_run_batched) {
     const bool has_user_grid = user_core_coord.has_value();
     if (has_user_grid || !input_tensor_a.is_sharded()) {
         CoreCoord core_coord;
@@ -684,7 +655,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             return create_simple_matmul_program_config(input_tensor_a, input_tensor_b, compute_kernel_config);
         }
     } else {
-        bool bmm = user_run_batched.value_or(false);
+        bool bmm = user_run_batched;
         return bmm_op_utils::get_matmul_program_config(
             input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
     }
@@ -762,7 +733,8 @@ void Matmul::validate(
         a_shape[-1],
         b_shape[-2]);
 
-    if (this->bcast_batch) {
+    TT_FATAL(this->bcast_batch.has_value());
+    if (this->bcast_batch.value()) {
         TT_FATAL(
             get_batch_size(b_shape) == 1 &&
             "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
@@ -800,7 +772,8 @@ void Matmul::validate(
     }
 
     if (this->untilize_out) {
-        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
+        TT_FATAL(this->output_dtype.has_value());
+        TT_FATAL((this->output_dtype.value() == DataType::BFLOAT16) || (this->output_dtype.value() == DataType::FLOAT32));
     }
 
     std::visit(
@@ -1079,6 +1052,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+    TT_FATAL(this->output_dtype.has_value());
     if (this->output_mem_config.is_sharded()) {
         MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
         return std::visit(
@@ -1105,7 +1079,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
                         this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype,
+                        this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
                         mem_config)};
@@ -1126,7 +1100,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
                         this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype,
+                        this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
                         mem_config)};
@@ -1155,7 +1129,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
                         this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype,
+                        this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
                         mem_config)};
@@ -1186,7 +1160,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
                         this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype,
+                        this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
                         mem_config)};
@@ -1198,7 +1172,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
             chosen_program_config);
     }
     return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+        *this, input_tensors, this->output_dtype.value(), Layout::TILE, this->output_mem_config);
 }
 
 uint32_t get_per_core_for_multiple_blocks(uint32_t per_core, uint32_t tiles) {
@@ -1230,13 +1204,16 @@ operation::ProgramWithCallbacks Matmul::create_program(
     const auto& bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    tt::tt_metal::DataType output_dtype = this->output_dtype;
+    TT_FATAL(this->output_dtype.has_value());
+    tt::tt_metal::DataType output_dtype = this->output_dtype.value();
 
     bool fuse_batch = true;
     // TODO: If input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] * ... except last two dimensions == 1, does matmuls work if
     // we treat it as bmm
     // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single core matmul/bmm
-    bool broadcast_batch = this->bcast_batch;
+    TT_FATAL(this->compute_kernel_config.has_value());
+    TT_FATAL(this->bcast_batch.has_value());
+    bool broadcast_batch = this->bcast_batch.value();
 
     MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
 
@@ -1253,7 +1230,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
                     output_dtype,
-                    this->compute_kernel_config,
+                    this->compute_kernel_config.value(),
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
@@ -1269,7 +1246,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    this->compute_kernel_config,
+                    this->compute_kernel_config.value(),
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
@@ -1287,7 +1264,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    this->compute_kernel_config,
+                    this->compute_kernel_config.value(),
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
@@ -1303,7 +1280,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     input_tensor_b,
                     bias,
                     output_tensor,
-                    this->compute_kernel_config,
+                    this->compute_kernel_config.value(),
                     program_config.in0_block_w,
                     program_config.per_core_M,
                     program_config.per_core_N,
@@ -1325,60 +1302,12 @@ operation::ProgramWithCallbacks Matmul::create_program(
         chosen_program_config);
 }
 
-Tensor matmul_1d(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    std::optional<const Tensor> bias,
-    std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config,
-    const MemoryConfig& mem_config,
-    std::optional<const DataType> output_dtype,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    bool untilize_out) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias}))};
-    operation::launch_op(
-        [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-            const auto& input_tensor_b = input_tensors.at(1);
-            if (!program_config.has_value()) {
-                program_config = bmm_op_utils::get_mcast_1d_config(
-                    input_tensor_a,
-                    input_tensor_b,
-                    false /* fuse_batch */,
-                    std::nullopt /* fused_activation */,
-                    true /* mcast_in0 */,
-                    false /* out_sharded */,
-                    std::nullopt /* compute_with_storage_grid_size */,
-                    compute_kernel_config);
-            }
-            auto kernel_config_val =
-                init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config);
-            return {operations::primary::matmul(
-                input_tensor_a,
-                input_tensor_b,
-                optional_input_tensors.at(0),
-                program_config.value(),
-                mem_config,
-                output_dtype,
-                kernel_config_val,
-                untilize_out)};
-        },
-        {input_tensor_a, input_tensor_b},
-        output_tensors,
-        {bias});
-    return output_tensors.at(0);
-}
-
-
 operation::OpPerformanceModel Matmul::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     return ::create_op_performance_model_for_matmul(
-        input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config);
+        input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config.value());
 }
 
 MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
