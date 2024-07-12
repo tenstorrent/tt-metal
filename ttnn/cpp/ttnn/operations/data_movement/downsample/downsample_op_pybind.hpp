@@ -6,14 +6,16 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <optional>
 
-#include "device/downsample_op.hpp"
+#include "ttnn/cpp/pybind11/decorators.hpp"
+
+#include "downsample.hpp"
+#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
-namespace ttnn {
-namespace operations {
-namespace downsample {
+namespace ttnn::operations::data_movement::detail {
 
 void bind_downsample(py::module& module) {
     const auto doc = R"doc(
@@ -32,12 +34,8 @@ void bind_downsample(py::module& module) {
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("downsample_params"),
-            py::arg("output_dtype") = std::nullopt});
-}
-void py_module(py::module& module) {
-    bind_downsample(module);
+            py::arg("dtype") = std::nullopt});
 }
 
-}
-}
+
 }

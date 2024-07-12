@@ -16,7 +16,7 @@ def _golden_function(
     **_,
 ):
     input_tensor = input_tensor.permute(0, 3, 1, 2)
-    ret = torch.nn.functional.downsample(input_tensor, downsample_params=downsample_params, output_dtype=output_dtype)
+    ret = torch.nn.functional.downsample(input_tensor, downsample_params=downsample_params, dtype=dtype)
     ret = ret.permute(0, 2, 3, 1)
     return ret
 

@@ -450,7 +450,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
 
     def conv_(activation):
         # downsample op
-        output = ttnn.downsample(activation, downsample_params, output_dtype=output_dtype)
+        output = ttnn.downsample(activation, downsample_params, dtype=output_dtype)
         output = ttnn.linear(
             output,
             weight_on_device,

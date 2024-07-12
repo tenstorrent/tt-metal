@@ -28,7 +28,6 @@
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
-#include "ttnn/operations/downsample/downsample_op_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -73,9 +72,6 @@ void py_module(py::module& module) {
 
     auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
-
-    auto m_downsample = module.def_submodule("downsample", "downsample operations");
-    downsample::py_module(m_downsample);
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv2d::py_module(m_conv2d);

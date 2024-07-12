@@ -87,7 +87,7 @@ std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor>&
         input_tensor.shard_spec().value().grid,
         std::array<uint32_t, 2>{{output_shard_height, output_shard_width}},
         input_tensor.shard_spec().value().orientation};
-    return {create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, this->dtype, Layout::TILE, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks Downsample::create_program(
@@ -98,19 +98,10 @@ operation::ProgramWithCallbacks Downsample::create_program(
 }
 
 Tensor downsample(
-    const Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
-    operation::launch_op(
-        [downsample_params, output_dtype](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run_without_autoformat(
-                Downsample{downsample_params, output_dtype.value_or(input_tensors.at(0).get_dtype())}, input_tensors);
-        },
-        {input_tensor_a},
-        output_tensors);
-    return output_tensors.at(0);
+              const ttnn::Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> dtype) {
+        auto dtype_ = dtype.has_value() ? dtype.value() : input_tensor_a.get_dtype();
+        auto output_tensors = operation::run(Downsample{downsample_params, dtype_}, {input_tensor_a});
+        return output_tensors.at(0);
 }
 
 struct DownsampleReadPatternParams {
@@ -637,7 +628,7 @@ operation::ProgramWithCallbacks downsample_single_core(
     // Writer to downsample - drops rows from untilized cb
     tt::tt_metal::KernelHandle downsample_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/downsample/device/kernels/downsample_writer_kernel.cpp",
         core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -652,10 +643,10 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_rows_of_output_tiles,
         num_output_tiles_in_row,
     };
-    string compute_kernel = "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_compute_kernel.cpp";
+    string compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/downsample/device/kernels/downsample_compute_kernel.cpp";
     if (num_input_tiles_in_row <= MAX_PACK_UNTILIZE_WIDTH) {
         compute_kernel =
-            "ttnn/cpp/ttnn/operations/downsample/device/kernels/downsample_fast_pack_untilize_compute_kernel.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/downsample/device/kernels/downsample_fast_pack_untilize_compute_kernel.cpp";
     }
     auto downsample_compute_kernel_id = tt::tt_metal::CreateKernel(
         program, compute_kernel, core_range, tt::tt_metal::ComputeConfig{.compile_args = compute_args});
