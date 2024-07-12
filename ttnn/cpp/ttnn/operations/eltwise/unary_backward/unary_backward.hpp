@@ -137,5 +137,6 @@ constexpr auto reciprocal_bw = ttnn::register_operation<operations::unary_backwa
 constexpr auto digamma_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::DIGAMMA_BW>>("ttnn::digamma_bw");
 constexpr auto erfinv_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ERFINV_BW>>("ttnn::erfinv_bw");
 constexpr auto erf_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ERF_BW>>("ttnn::erf_bw");
+constexpr auto deg2rad_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::DEG2RAD_BW>>("ttnn::deg2rad_bw");
 
 }  // namespace ttnn
