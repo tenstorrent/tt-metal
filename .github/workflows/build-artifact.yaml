@@ -58,5 +58,5 @@ jobs:
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}${{ inputs.profiler-build && '_profiler' }}
+          name: TTMetal_build_${{ matrix.arch }}${{ (inputs.profiler-build && '_profiler') || '' }}
           path: ttm_${{ matrix.arch }}.tar
