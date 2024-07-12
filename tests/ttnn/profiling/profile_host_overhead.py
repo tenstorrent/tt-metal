@@ -11,7 +11,7 @@ import statistics
 from loguru import logger
 
 from models.utility_functions import torch2tt_tensor
-from tests.tt_eager.profiling import ops_for_profiling
+from tests.ttnn.profiling import ops_for_profiling
 from tracy import signpost
 
 
@@ -250,13 +250,13 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
 def test_host_overhead(device, user_input):
     """
     Run witout tracy:
-    pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
+    pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 
     Run only for one op:
-    pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.isclose
+    pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::ttnn.add
 
     Run with tracy:
-    python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
+    python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
 
     # Enable program cache

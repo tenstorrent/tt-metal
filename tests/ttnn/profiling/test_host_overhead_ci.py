@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.tt_eager.profiling.profile_host_overhead_with_tracy import profile_host_overhead
+from tests.ttnn.profiling.profile_host_overhead_with_tracy import profile_host_overhead
 from loguru import logger
 import csv
 import os
@@ -15,7 +15,7 @@ def test_host_overhead_ci():
     profile_output_folder = "host_overhead_profile/"
     profile_output_filename = "final.csv"
     measured_filename = os.path.join(profile_output_folder, profile_output_filename)
-    reference_filename = "tests/tt_eager/profiling/reference.txt"
+    reference_filename = "tests/ttnn/profiling/reference.txt"
     measuring_tolerance = 1.13
 
     profile_host_overhead(profile_output_folder, profile_output_filename)
