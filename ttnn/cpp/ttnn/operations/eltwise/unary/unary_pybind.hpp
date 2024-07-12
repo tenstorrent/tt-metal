@@ -698,6 +698,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::expm1);
     detail::bind_unary_operation(module, ttnn::eqz);
     detail::bind_unary_operation(module, ttnn::floor, "Available for Wormhole_B0 only");
+    detail::bind_unary_operation(module, ttnn::ceil, "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::gez);
     detail::bind_unary_operation(module, ttnn::gtz);
     detail::bind_unary_operation(module, ttnn::i0);
