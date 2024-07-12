@@ -45,12 +45,13 @@ std::vector<Tensor> _clamp_max_bw(
 }
 
 std::vector<Tensor> _clamp_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = ttnn::ge(input, min, std::nullopt, output_mem_config);
-    Tensor maxT = ttnn::le(input, max, std::nullopt, output_mem_config);
-    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_mem_config);
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    Tensor minT = ttnn::ge(input, min, std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::le(input, max, std::nullopt, output_memory_config);
+    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
+    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -58,13 +59,14 @@ std::vector<Tensor> _clamp_bw(
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
 std::vector<Tensor> _hardtanh_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
     Tensor grad_result = where(
-        ttnn::le(input, ttnn::operations::creation::full_like(input, min), std::nullopt, output_mem_config),
+        ttnn::le(input, ttnn::operations::creation::full_like(input, min), std::nullopt, output_memory_config),
         0.0,
-        where(ttnn::ge(input, ttnn::operations::creation::full_like(input, max), std::nullopt, output_mem_config), 0.0, grad),
-        output_mem_config);
+        where(ttnn::ge(input, ttnn::operations::creation::full_like(input, max), std::nullopt, output_memory_config), 0.0, grad),
+        output_memory_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1276,16 +1278,16 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_two_float(UnaryBackwardOpType OpType){
-    switch (OpType) {
-        case UnaryBackwardOpType::CLAMP_BW:
-            return _clamp_bw;
-        case UnaryBackwardOpType::HARDTANH_BW:
-            return _hardtanh_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
+// std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_two_float(UnaryBackwardOpType OpType){
+//     switch (OpType) {
+//         case UnaryBackwardOpType::CLAMP_BW:
+//             return _clamp_bw;
+//         case UnaryBackwardOpType::HARDTANH_BW:
+//             return _hardtanh_bw;
+//         default:
+//             TT_ASSERT(false && "Undefined op type");
+//             return 0;
+//     }
+// }
 
 }  // namespace ttnn::operations::unary
