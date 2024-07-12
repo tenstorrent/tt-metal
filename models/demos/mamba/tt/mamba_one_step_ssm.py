@@ -149,8 +149,9 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(delta_t1)
 
         # calculate abar
+        abar0 = ttnn.to_memory_config(self.A, memory_config=ttnn.L1_MEMORY_CONFIG)
         abar1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
-            self.A,
+            abar0,
             delta_t2,
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
@@ -158,6 +159,7 @@ class TtMambaSSM(torch.nn.Module):
             output_dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
+        ttnn.deallocate(abar0)
 
         abar2 = ttl.tensor.exp(
             abar1,
