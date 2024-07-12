@@ -852,7 +852,9 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.ge_bw
 
-.. autofunction:: tt_lib.tensor.le_bw
+.. autofunction:: tt_lib.tensor.unary_fmod_bw
+
+.. autofunction:: tt_lib.tensor.unary_remainder_bw
 
 .. autofunction:: tt_lib.tensor.complex_recip_bw
 
