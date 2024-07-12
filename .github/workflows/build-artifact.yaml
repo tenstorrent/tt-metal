@@ -50,7 +50,7 @@ jobs:
           cmake -B build -G Ninja
           cmake --build build --target tests
           cmake --build build --target install
-      - name: Build regular tt-metal and libs
+      - name: Build profiler tt-metal and libs
         if: ${{ inputs.profiler-build }}
         run: ./scripts/build_scripts/build_with_profiler_opt.sh
       - name: 'Tar files'
