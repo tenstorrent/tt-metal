@@ -370,8 +370,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
         uint32_t mcast_num_dests = mcast_receiver_cores.num_cores(); // same as num_active_cores if Q_HEADS >= 32; also, always same as Q_HEADS
         uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
-        CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start;
-        CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end;
+        CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_;
+        CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_;
         CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
         CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
@@ -464,8 +464,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
         CoreRange all_cores_bounding_box = all_cores.bounding_box();
         std::vector<CoreCoord> cores = grid_to_cores_with_noop(
-            all_cores_bounding_box.end.x,
-            all_cores_bounding_box.end.y,
+            all_cores_bounding_box.end_.x,
+            all_cores_bounding_box.end_.y,
             device_compute_with_storage_grid.x,
             device_compute_with_storage_grid.y,
             row_major

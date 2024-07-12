@@ -65,7 +65,7 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
             // Cliff core is in the same row as the last core range, increment its end
             auto last_range = *all_cores.rbegin();
             auto node = all_cores.extract(last_range);
-            node.value().end = *cliff_core;
+            node.value().end_ = *cliff_core;
             all_cores.insert(std::move(node));
         }
     }

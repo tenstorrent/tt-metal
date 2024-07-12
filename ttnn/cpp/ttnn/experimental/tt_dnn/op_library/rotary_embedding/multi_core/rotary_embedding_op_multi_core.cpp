@@ -96,8 +96,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         num_output_tiles =
             out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end.x + 1;
-        num_cores_y = bbox.end.y + 1;
+        num_cores_x = bbox.end_.x + 1;
+        num_cores_y = bbox.end_.y + 1;
     } else {
         row_major = true;
         std::tie(

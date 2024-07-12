@@ -221,8 +221,8 @@ void TensorModule(py::module& m_tensor) {
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
-        .def_readonly("start", &CoreRange::start)
-        .def_readonly("end", &CoreRange::end)
+        .def_readonly("start", &CoreRange::start_)
+        .def_readonly("end", &CoreRange::end_)
         .def("grid_size", &CoreRange::grid_size);
 
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(

@@ -40,8 +40,8 @@ void ConfigureKernelGroup(
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
     std::optional<uint32_t> address = nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+    for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+        for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
             CoreCoord logical_core(x, y);
             auto semaphores = program.semaphores_on_core(logical_core);
             if (semaphores.size() == NUM_SEMAPHORES) {
@@ -87,8 +87,8 @@ inline void SetRuntimeArgs(
     const std::vector<uint32_t> &runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
-        for (auto x = core_range.start.x; x <= core_range.end.x; ++x) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; ++y) {
+        for (auto x = core_range.start_.x; x <= core_range.end_.x; ++x) {
+            for (auto y = core_range.start_.y; y <= core_range.end_.y; ++y) {
                 kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
             }
         }
@@ -103,8 +103,8 @@ inline void SetRuntimeArgs(
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (const auto &core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; ++x) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; ++y) {
+            for (auto x = core_range.start_.x; x <= core_range.end_.x; ++x) {
+                for (auto y = core_range.start_.y; y <= core_range.end_.y; ++y) {
                     kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
                 }
             }
@@ -125,15 +125,15 @@ inline void SetRuntimeArgs(
             if constexpr (std::is_same_v<T, CoreCoord>) {
                 EnqueueSetRuntimeArgs(cq, kernel, core_spec, runtime_args, blocking);
             } else if constexpr (std::is_same_v<T, CoreRange>) {
-                for (auto x = core_spec.start.x; x <= core_spec.end.x; x++) {
-                    for (auto y = core_spec.start.y; y <= core_spec.end.y; y++) {
+                for (auto x = core_spec.start_.x; x <= core_spec.end_.x; x++) {
+                    for (auto y = core_spec.start_.y; y <= core_spec.end_.y; y++) {
                         EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 for (const auto &core_range : core_spec.ranges()) {
-                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                    for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+                        for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                             EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
                         }
                     }
@@ -623,8 +623,8 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+                    for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
@@ -831,8 +831,8 @@ uint32_t CreateSemaphore(
             std::optional<uint32_t> address;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto &core_range : crs.ranges()) {
-                CoreCoord start_core = core_range.start;
-                CoreCoord end_core = core_range.end;
+                CoreCoord start_core = core_range.start_;
+                CoreCoord end_core = core_range.end_;
                 std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
                     address = addr_candidate;

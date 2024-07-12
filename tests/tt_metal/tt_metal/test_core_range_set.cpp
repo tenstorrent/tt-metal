@@ -22,8 +22,8 @@ using namespace tt;
 void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compute_kernel_args) {
     // every kernel, semaphore and CB should be mapped to each core in the core ranges of core_range_set
     for (auto core_range : core_range_set.ranges()) {
-        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                     auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
@@ -47,8 +47,8 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
 
 void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
-        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
@@ -86,8 +86,8 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     std::map<CoreCoord, std::shared_ptr<tt_metal::Buffer>> core_to_l1_buffer;
     for (auto core_range : core_range_set.ranges()) {
-        auto start = core_range.start;
-        auto end = core_range.end;
+        auto start = core_range.start_;
+        auto end = core_range.end_;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core(x, y);

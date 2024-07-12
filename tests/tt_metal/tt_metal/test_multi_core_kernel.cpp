@@ -25,8 +25,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     const std::vector<uint32_t> &eltwise_unary_args) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreCoord start_core = all_cores.start;
-    CoreCoord end_core = all_cores.end;
+    CoreCoord start_core = all_cores.start_;
+    CoreCoord end_core = all_cores.end_;
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
     for (auto x = start_core.x; x <= end_core.x; x++) {
@@ -88,8 +88,8 @@ void compile_and_configure_program(
 }
 
 void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
-    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+    for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+        for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
             CoreCoord core = CoreCoord(x, y);
             tt_metal::SetRuntimeArgs(program, kernel, core, rt_args);
         }

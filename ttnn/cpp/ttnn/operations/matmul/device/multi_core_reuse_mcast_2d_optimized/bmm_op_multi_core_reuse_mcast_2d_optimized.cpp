@@ -792,16 +792,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
+    const auto& cores = grid_to_cores(all_cores.start_, all_cores.end_, true);
     const auto& in0_sender_interleaved_cores =
-        grid_to_cores(in0_sender_interleaved.start, in0_sender_interleaved.end, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start, in1_sender.end, true);
+        grid_to_cores(in0_sender_interleaved.start_, in0_sender_interleaved.end_, true);  // Only used for interleaved in0
+    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_, in1_sender.end_, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         in1_receiver_other_cores = grid_to_cores(
-            in0_receiver_in1_receiver_interleaved_other_cores.value().start,
-            in0_receiver_in1_receiver_interleaved_other_cores.value().end,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().start_,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().end_,
             true);
     }
 

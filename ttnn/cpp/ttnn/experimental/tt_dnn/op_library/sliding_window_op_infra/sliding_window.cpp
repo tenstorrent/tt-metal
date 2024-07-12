@@ -376,8 +376,8 @@ namespace tt::tt_metal::sliding_window {
         } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
             // NOTE: it is assumed that the range start is always (0, 0)
-            uint32_t ncores_y = p_config.grid.ranges().begin()->end.y + 1;
-            uint32_t ncores_x = p_config.grid.ranges().begin()->end.x + 1;
+            uint32_t ncores_y = p_config.grid.ranges().begin()->end_.y + 1;
+            uint32_t ncores_x = p_config.grid.ranges().begin()->end_.x + 1;
             std::vector<uint16_t> repeat_config;
             uint32_t repeat_factor = 0;
             if (p_config.shard_orientation == ShardOrientation::ROW_MAJOR) {

@@ -505,9 +505,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
             if (kg.total_rta_size != 0) {
-                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
-                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                    for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+                        for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                             CoreCoord core_coord(x, y);
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
@@ -751,8 +751,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t i = 0;
             uint32_t max_overall_base_index = 0;
             for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-                const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-                const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+                const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_);
+                const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_);
 
                 const uint32_t num_receivers = core_range.size();
                 auto& cb_config_payload = cb_config_payloads[i];
@@ -935,9 +935,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
-                    device->physical_core_from_logical_core(core_range.start, kernel_group.get_core_type());
+                    device->physical_core_from_logical_core(core_range.start_, kernel_group.get_core_type());
                 CoreCoord physical_end =
-                    device->physical_core_from_logical_core(core_range.end, kernel_group.get_core_type());
+                    device->physical_core_from_logical_core(core_range.end_, kernel_group.get_core_type());
 
                 multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                     .noc_xy_addr = this->device->get_noc_multicast_encoding(
@@ -961,8 +961,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+                    for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                         CoreCoord physical_coord =
                             device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{

@@ -29,8 +29,8 @@ void SplitFusedQKVAndSplitHeads::validate(const std::vector<Tensor>& input_tenso
     } else {
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
         TT_FATAL(
-            (bbox.end.x < this->compute_with_storage_grid_size.x &&
-             bbox.end.y < this->compute_with_storage_grid_size.y));
+            (bbox.end_.x < this->compute_with_storage_grid_size.x &&
+             bbox.end_.y < this->compute_with_storage_grid_size.y));
         TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
         TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     }
@@ -63,7 +63,7 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
         ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
         auto bbox = all_cores.bounding_box();
-        uint32_t num_M_cores = shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end.x + 1 : bbox.end.y + 1;
+        uint32_t num_M_cores = shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end_.x + 1 : bbox.end_.y + 1;
         // shard spec
         uint32_t per_core_M_qv = (num_heads / num_M_cores) * M;  // 768
         uint32_t per_core_N_qv = K;                              // 64

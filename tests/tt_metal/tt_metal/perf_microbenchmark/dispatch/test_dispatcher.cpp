@@ -81,8 +81,8 @@ void init(int argc, char **argv) {
         log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:dram paged_write 3:l1 paged_write 4:packed_write 5:packed_write_large (default {})", 0);
         log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end.x);
-        log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
+        log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end_.x);
+        log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end_.y);
         log_info(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
         log_info(LogTest, "   -pi: prefetcher iterations (looping on device) (default {})", 1);
         log_info(LogTest, "  -lps: log of page size of prefetch/dispatch buffer (default {})", DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE);
@@ -109,8 +109,8 @@ void init(int argc, char **argv) {
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     prefetcher_iterations_g = test_args::get_command_option_uint32(input_args, "-pi", 1);
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", 0);
-    all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
-    all_workers_g.end.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end.y);
+    all_workers_g.end_.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end_.x);
+    all_workers_g.end_.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end_.y);
 
     log_dispatch_buffer_page_size_g = test_args::get_command_option_uint32(input_args, "-lps", DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE);
     dispatch_buffer_page_size_g = 1 << log_dispatch_buffer_page_size_g;
@@ -211,7 +211,7 @@ void gen_linear_or_packed_write_test(uint32_t& cmd_count,
             if (is_linear_multicast) {
                 gen_dispatcher_multicast_write_cmd(device, dispatch_cmds, worker_cores, device_data, xfer_size_bytes);
             } else {
-                gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, device_data, xfer_size_bytes);
+                gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start_, device_data, xfer_size_bytes);
             }
             break;
         }

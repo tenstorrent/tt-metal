@@ -24,9 +24,17 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange cr14 = CoreRange({0, 1}, {1, 1});
     CoreRange cr15 = CoreRange({0, 1}, {0, 2});
     CoreRange cr16 = CoreRange({0, 0}, {1, 2});
+    CoreRange cr17 = CoreRange({2, 3}, {2, 3});
+    CoreRange cr18 = CoreRange({3, 1}, {3, 3});
 
     CoreRange sc1 = CoreRange({1, 1}, {1, 1});
     CoreRange sc2 = CoreRange({0, 1}, {0, 1});
     CoreRange sc3 = CoreRange({0, 2}, {0, 2});
     CoreRange sc4 = CoreRange({1, 2}, {1, 2});
+
+    // CoreRange cr1_iterator = CoreRange({0, 0}, {0, 1}, {1, 0}, {1, 1});
+    // CoreRange cr2_iterator = CoreRange({3, 3}, {3, 4}, {4, 3}, {4, 4}, {5, 3}, {5, 4});
+    // CoreRange cr3_iterator = CoreRange({1, 2}, {2, 2});
+    // CoreRange cr15_iterator = CoreRange({0, 1}, {0, 2});
+    // CoreRange cr17_iterator = CoreRange({2, 3});
 };

@@ -24,8 +24,8 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
 
     for (const auto cb: program.circular_buffers()) {
         for (const CoreRange &core_range : cb->core_ranges().ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
+                for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
                     CoreCoord core_coord(x, y);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);

@@ -59,8 +59,8 @@ vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Devic
     vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
-        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
-        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
+        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start_, core_type);
+        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end_, core_type);
 
         uint32_t num_receivers = core_range.size();
         dst_noc_multicast_info.push_back(std::make_pair(CoreRange(physical_start, physical_end), num_receivers));

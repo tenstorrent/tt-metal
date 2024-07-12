@@ -53,13 +53,13 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     // cores to read and write to output
     uint32_t num_cores = q_cores.num_cores(); // number of cores of the output
     auto core_grid = q_cores.bounding_box();
-    uint32_t num_cores_x = core_grid.end.x + 1, num_cores_y = core_grid.end.y + 1;
+    uint32_t num_cores_x = core_grid.end_.x + 1, num_cores_y = core_grid.end_.y + 1;
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
 
     // cores for input
     uint32_t in_num_cores = in_cores.num_cores(); // number of cores of the input
     auto in_core_grid = in_cores.bounding_box();
-    uint32_t in_num_cores_x = in_core_grid.end.x + 1, in_num_cores_y = in_core_grid.end.y + 1;
+    uint32_t in_num_cores_x = in_core_grid.end_.x + 1, in_num_cores_y = in_core_grid.end_.y + 1;
 
     std::vector<uint32_t> noc_x_coords;
     noc_x_coords.reserve(in_num_cores_x);

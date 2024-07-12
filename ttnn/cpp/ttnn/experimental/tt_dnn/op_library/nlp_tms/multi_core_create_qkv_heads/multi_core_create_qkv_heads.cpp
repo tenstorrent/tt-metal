@@ -32,8 +32,8 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     auto bbox = all_cores.bounding_box();
     ShardOrientation shard_orientation = shard_spec.orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end.y + 1 : bbox.end.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end.x + 1 : bbox.end.y + 1;
+    uint32_t num_h_cores = rm ? bbox.end_.y + 1 : bbox.end_.x + 1;
+    uint32_t num_w_cores = rm ? bbox.end_.x + 1 : bbox.end_.y + 1;
 
     TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimensions of QKV {} must be a multiple of width cores {} times tile width {}", input_shape[3], num_w_cores, TILE_WIDTH));
     TT_FATAL(groups % num_w_cores == 0, fmt::format("number of groups {} must be a multiple of the number of width cores {}", groups, num_w_cores));

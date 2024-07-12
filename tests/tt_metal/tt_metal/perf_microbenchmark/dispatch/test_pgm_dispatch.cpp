@@ -123,8 +123,8 @@ void init(int argc, char **argv) {
 }
 
 void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
-    for (int core_idx_y = kg.start.y; core_idx_y <= kg.end.y; core_idx_y++) {
-        for (int core_idx_x = kg.start.x; core_idx_x <= kg.end.x; core_idx_x++) {
+    for (int core_idx_y = kg.start_.y; core_idx_y <= kg.end_.y; core_idx_y++) {
+        for (int core_idx_x = kg.start_.x; core_idx_x <= kg.end_.x; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
             tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
@@ -158,7 +158,7 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
     }
 
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
-    CoreRange kg = { workers_g.start, { workers_g.end.x - n_kgs_g + 1, workers_g.end.y }};
+    CoreRange kg = { workers_g.start_, { workers_g.end_.x - n_kgs_g + 1, workers_g.end_.y }};
     for (uint32_t i = 0; i < n_kgs_g; i++) {
         defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
 
@@ -192,8 +192,8 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
             tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
         }
 
-        kg.start = { kg.end.x + 1, kg.end.y };
-        kg.end = kg.start;
+        kg.start_ = { kg.end_.x + 1, kg.end_.y };
+        kg.end_ = kg.start_;
     }
 }
 
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
         log_info(LogTest, "Iterations: {}", iterations_g);
-        log_info(LogTest, "Grid: ({}-{}) ({} cores)", workers_g.start.str(), workers_g.end.str(), workers_g.size());
+        log_info(LogTest, "Grid: ({}-{}) ({} cores)", workers_g.start_.str(), workers_g.end_.str(), workers_g.size());
         log_info(LogTest, "Kernel size: {}", kernel_size_g);
         if (nfast_kernels_g != 0) {
             log_info(LogTest, "Fast kernel cycles: {}", fast_kernel_cycles_g);

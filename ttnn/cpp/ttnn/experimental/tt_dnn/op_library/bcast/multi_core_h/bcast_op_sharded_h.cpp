@@ -56,7 +56,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 
     uint32_t Wt, Ht;
     if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
-        ncores_x = all_cores.ranges().begin()->end.y + 1;
+        ncores_x = all_cores.ranges().begin()->end_.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else if(a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED){

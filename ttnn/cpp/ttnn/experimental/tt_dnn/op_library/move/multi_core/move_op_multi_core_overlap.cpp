@@ -25,11 +25,11 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
 
     std::vector<CoreRange> logical_core_ranges;
     auto split_core_range_containing_controller = [&](const CoreRange &controller_core_range) {
-        TT_ASSERT(controller_core_range.start == logical_controller);
-        CoreRange right_block(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end);
+        TT_ASSERT(controller_core_range.start_ == logical_controller);
+        CoreRange right_block(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_);
         CoreRange remaining_stick = CoreRange(
             CoreCoord(logical_controller.x, logical_controller.y + 1),
-            CoreCoord(logical_controller.x, controller_core_range.end.y)
+            CoreCoord(logical_controller.x, controller_core_range.end_.y)
         );
 
         logical_core_ranges.push_back(right_block);
@@ -41,10 +41,10 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
         split_core_range_containing_controller(range_0);
     } else {
         CoreRange range_1 = *all_cores.ranges().rbegin();
-        if (range_0.start == logical_controller) {
+        if (range_0.start_ == logical_controller) {
             split_core_range_containing_controller(range_0);
             logical_core_ranges.push_back(range_1);
-        } else if (range_1.start == logical_controller) {
+        } else if (range_1.start_ == logical_controller) {
             split_core_range_containing_controller(range_1);
             logical_core_ranges.push_back(range_0);
         } else {
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start), device->worker_core_from_logical_core(logical_cr.end));
+        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start_), device->worker_core_from_logical_core(logical_cr.end_));
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 
@@ -145,20 +145,20 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
             (uint32_t)noc_controller.y,
             /*control_value=*/(num_cores - 1),
             (uint32_t)is_controller,
-            (uint32_t)range_0_noc.start.x,
-            (uint32_t)range_0_noc.start.y,
-            (uint32_t)range_0_noc.end.x,
-            (uint32_t)range_0_noc.end.y,
+            (uint32_t)range_0_noc.start_.x,
+            (uint32_t)range_0_noc.start_.y,
+            (uint32_t)range_0_noc.end_.x,
+            (uint32_t)range_0_noc.end_.y,
             (uint32_t)logical_multicast_regions[0].size(),
-            (uint32_t)range_1_noc.start.x,
-            (uint32_t)range_1_noc.start.y,
-            (uint32_t)range_1_noc.end.x,
-            (uint32_t)range_1_noc.end.y,
+            (uint32_t)range_1_noc.start_.x,
+            (uint32_t)range_1_noc.start_.y,
+            (uint32_t)range_1_noc.end_.x,
+            (uint32_t)range_1_noc.end_.y,
             (uint32_t)logical_multicast_regions[1].size(),
-            (uint32_t)noc_multicast_regions.back().start.x,
-            (uint32_t)noc_multicast_regions.back().start.y,
-            (uint32_t)noc_multicast_regions.back().end.x,
-            (uint32_t)noc_multicast_regions.back().end.y,
+            (uint32_t)noc_multicast_regions.back().start_.x,
+            (uint32_t)noc_multicast_regions.back().start_.y,
+            (uint32_t)noc_multicast_regions.back().end_.x,
+            (uint32_t)noc_multicast_regions.back().end_.y,
             (uint32_t)logical_multicast_regions.back().size(),
             (uint32_t)do_third_multicast
         };

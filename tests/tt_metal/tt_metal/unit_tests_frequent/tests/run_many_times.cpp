@@ -51,7 +51,7 @@ void RunTest(Device *device) {
         return (uint32_t) core.y * 100 * multiplier;
     };
     for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start;
+        CoreCoord core = core_range.start_;
         std::vector<uint32_t> brisc_rt_args = {
             get_first_arg(device, core, 1),
             get_second_arg(device, core, 1)
@@ -77,7 +77,7 @@ void RunTest(Device *device) {
 
     // Check results
     for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start;
+        CoreCoord core = core_range.start_;
         std::vector<uint32_t> brisc_result;
         tt_metal::detail::ReadFromDeviceL1(
             device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), brisc_result
