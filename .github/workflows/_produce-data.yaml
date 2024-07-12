@@ -83,10 +83,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: create dummy
+        shell: bash
+        run: |
+          mkdir generated/benchmark_data
+          touch 'generated/benchmark_data/measurement_2024-07-12T05:01:45+0000.csv'
+          touch 'generated/benchmark_data/measurement_2024-07-12T04:59:14+0000.csv'
+          touch 'generated/benchmark_data/measurement_2024-07-12T05:03:29+0000.csv'
       - name: sdf
         env:
           PYTHONPATH: ${{ github.workspace }}
           ARCH_NAME: grayskull
-        run: pip3 install loguru && python3 -c 'from infra.data_collection.github.utils import create_csv_for_github_benchmark_environment; create_csv_for_github_benchmark_environment("environment.csv")'
-      - name: Show file
-        run: cat environment.csv
+        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
+      - name: Show files
+        shell: bash
+        run: find generated/benchmark_data -type f | xargs -n 1 -I {} cat {}
