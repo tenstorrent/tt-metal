@@ -155,126 +155,6 @@ def scaled_dot_product_attention_simulated(
     return output_tensor
 
 
-def run_test_sdpa_decode(
-    device,
-    b,
-    nh,
-    nkv,
-    s,
-    d,
-    dtype,
-    grid_size,
-    q_dtype=ttnn.bfloat16,
-    sharded_in=False,
-    sharded_out=False,
-):
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
-        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-
-    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
-    torch.manual_seed(1234)
-
-    num_parallel_cores = grid_size[0] * grid_size[1] // b
-    if num_parallel_cores == 1:
-        min_pcc = 0.90
-    else:
-        min_pcc = 0.99
-        if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
-            min_pcc = 0.98
-        min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
-
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
-
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
-
-    height_sharded_memcfg = ttnn.types.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-
-    K = torch.randn(nkv, b, s, d)
-    V = torch.randn(nkv, b, s, d)
-
-    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
-    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
-
-    start_idx = 31
-
-    while start_idx < s:
-        scale = d**-0.5
-
-        k_chunk_size = get_chunk_size(start_idx + 1)
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
-            compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
-            q_chunk_size=padded_num_heads,
-            k_chunk_size=k_chunk_size,
-        )
-
-        padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
-
-        # Test various sequence lengths
-        logger.info(f"Testing with sequence length: {start_idx}")
-        logger.info(f"Using chunk size: {k_chunk_size}")
-        logger.info(f"Using padded layer length: {padded_layer_len}")
-        logger.info(f"Using padded num heads: {padded_num_heads}")
-
-        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
-        # Assume all users are at same position
-        attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-
-        Q = torch.randn(1, b, padded_num_heads, d)
-
-        tt_Q = ttnn.as_tensor(
-            Q,
-            device=device,
-            dtype=q_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
-        )
-
-        tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
-            tt_Q,
-            tt_K,
-            tt_V,
-            [start_idx for _ in range(b)],
-            scale=scale,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-        )
-
-        tt_back = ttnn.to_torch(tt_back)
-
-        tt_back = tt_back[:, :, :nh, :]
-
-        Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
-
-        expect = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-        )  # b, nh, 1, d
-        expect = expect.squeeze().unsqueeze(0)
-
-        out_pass, out_pcc = comp_pcc(expect, tt_back, min_pcc)
-
-        logger.debug(f"python vs pytorch: {out_pcc}")
-
-        assert out_pass
-
-        start_idx += 601 if start_idx < 4096 else 3001
-
-
 def run_test_sdpa_decode_multi_pos(
     device,
     b,
@@ -580,6 +460,60 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.skip("Skipping Perf Test in CI")
+def test_sdpa_decode_perf(device, use_program_cache):
+    dtype = tt_lib.tensor.DataType.BFLOAT8_B
+    q_dtype = tt_lib.tensor.DataType.BFLOAT16
+    nh = 8
+    nkv = 1
+    d = 128
+    grid_size = (8, 8)
+
+    bs_combs = [
+        (32, 2048),
+        (16, 2048),
+        (32, 8192),
+        (16, 8192),
+        (8, 8192),
+        (16, 8192 * 2),
+        (8, 8192 * 2),
+        (16, 8192 * 4),
+        (8, 8192 * 4),
+        (4, 8192 * 4),
+    ]
+
+    for b, s in bs_combs:
+        run_test_sdpa_decode_single_iter(  # different user pos
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            grid_size,
+            q_dtype,
+            sharded_in=True,
+            sharded_out=True,
+            start_indices=np.linspace(0, s - 1, b, dtype=np.int32).tolist(),
+        )
+        run_test_sdpa_decode_single_iter(  # all same user pos
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            grid_size,
+            q_dtype,
+            sharded_in=True,
+            sharded_out=True,
+            start_indices=[s - 1 for _ in range(b)],
+        )
+
+
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
     [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
@@ -737,9 +671,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
             # Assume all users are at same position
             attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
-            # Q = torch.eye(padded_num_heads, d).expand(1, b, padded_num_heads, d)
-            # Q = torch.ones(1, b, padded_num_heads, d) * 1
-
             tt_Q = ttnn.as_tensor(
                 Q,
                 device=device,
@@ -747,12 +678,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=dram_memcfg,  # height_sharded_memcfg
             )
-            # print(f"Q memcfg: {tt_Q.memory_config()}")
-
-            # logger.info(f"Q shape: {Q.shape}")
-            # logger.info(f"K shape: {K.shape}")
-            # logger.info(f"V shape: {V.shape}")
-            # logger.info(f"attn_mask shape: {attn_mask.shape}")
 
             tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
                 tt_Q,
@@ -802,9 +727,9 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         # [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B],
     ],
     ids=[
-        # "bfp16_bfp16_bfp8",
-        "bfp8_bfp8_bfp8",
-        # "bfp4_bfp4_bfp8",
+        # "bfp16_bfp16",
+        "bfp8_bfp8",
+        # "bfp4_bfp4",
     ],
 )
 @pytest.mark.parametrize(

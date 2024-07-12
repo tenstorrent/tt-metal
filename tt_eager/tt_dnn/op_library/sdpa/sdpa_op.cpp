@@ -346,6 +346,11 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->k_chunk_size);
 }
 
+const operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<ScaledDotProductAttentionDecode>(this->scale, this->output_mem_config, this->program_config, this->compute_kernel_config, this->k_chunk_size, input_tensors);
+}
+
 namespace transformers {
 // Function which is bound to the Python API
 Tensor scaled_dot_product_attention(

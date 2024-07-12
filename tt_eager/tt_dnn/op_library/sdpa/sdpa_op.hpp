@@ -83,7 +83,8 @@ struct ScaledDotProductAttentionDecode {
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    tt::stl::reflection::Attributes attributes() const;
+    const operation::Hash compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const;
 };
 
 operation::ProgramWithCallbacks sdpa_decode_multi_core(
