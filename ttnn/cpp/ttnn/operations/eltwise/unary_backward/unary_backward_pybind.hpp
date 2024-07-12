@@ -200,6 +200,12 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
+        ttnn::gt_bw,
+        R"doc(Performs backward operations for greater than comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
+
+    detail::bind_unary_backward(
+        module,
         ttnn::lgamma_bw,
         R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
@@ -298,7 +304,7 @@ void py_module(py::module& module) {
         module,
         ttnn::logit_bw,
         R"doc(Performs backward operations for logit on :attr:`input_tensor` or attr:`input_tensor_a` with given :attr:`grad_tensor`.)doc");
-    
+
     detail::bind_unary_backward(
         module,
         ttnn::floor_bw,
@@ -338,7 +344,7 @@ void py_module(py::module& module) {
         module,
         ttnn::rpow_bw,
         R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
-        
+
     detail::bind_unary_backward(
         module,
         ttnn::round_bw,
@@ -368,7 +374,7 @@ void py_module(py::module& module) {
         module,
         ttnn::selu_bw,
         R"doc(Performs backward operations for selu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
-    
+
     detail::bind_unary_backward(
         module,
         ttnn::square_bw,

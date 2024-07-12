@@ -20,6 +20,7 @@ enum class UnaryBackwardOpType {
     MULTIGAMMALN_BW,
     ADD_BW,
     EQ_BW,
+    GT_BW,
     LGAMMA_BW,
     FILL_BW,
     HARDSIGMOID_BW,
