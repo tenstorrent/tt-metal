@@ -14,8 +14,17 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
 =======
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+<<<<<<< HEAD
 #include "ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp"
 >>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
+=======
+<<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
+========
+#include "ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp"
+>>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
+>>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 
 // Args Schema:
 // 1) handshake addr

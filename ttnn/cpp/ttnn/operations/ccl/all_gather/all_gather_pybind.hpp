@@ -8,27 +8,39 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.hpp
 #include "ttnn/operations/ccl/all_gather/all_gather_op.hpp"
 =======
 #include "ttnn/operations/ccl/line_all_gather/device/ccl_line_all_gather_op.hpp"
 >>>>>>> 60a6703d2e... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/line_all_gather/ccl_line_all_gather_pybind.hpp
+=======
+#include "ttnn/operations/ccl/all_gather/all_gather_op.hpp"
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace operations {
+<<<<<<< HEAD
 namespace ccl_line_all_gather {
+=======
+namespace ccl {
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 
 namespace detail {
 
 template <typename ccl_operation_t>
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.hpp
 void bind_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
 =======
 void bind_ccl_line_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
 >>>>>>> 60a6703d2e... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/line_all_gather/ccl_line_all_gather_pybind.hpp
+=======
+void bind_all_gather(py::module& module, const ccl_operation_t& operation, const char* doc) {
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
     bind_registered_operation(
         module,
         operation,
@@ -51,8 +63,12 @@ void bind_ccl_line_all_gather(py::module& module, const ccl_operation_t& operati
 }  // namespace detail
 
 
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.hpp
 void py_bind_all_gather(py::module& module) {
+=======
+void py_module_all_gather(py::module& module) {
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
     detail::bind_all_gather(
         module,
         ttnn::all_gather,
@@ -74,6 +90,7 @@ void py_bind_all_gather(py::module& module) {
             >>> output = ttnn.all_gather(tensor, dim=0)
 
         )doc");
+<<<<<<< HEAD
 =======
 void py_module(py::module& module) {
 >>>>>>> 60a6703d2e... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/line_all_gather/ccl_line_all_gather_pybind.hpp
@@ -102,5 +119,10 @@ void py_module(py::module& module) {
 }
 
 }  // namespace ccl_line_all_gather
+=======
+}
+
+}  // namespace ccl
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 }  // namespace operations
 }  // namespace ttnn

@@ -4,17 +4,22 @@
 
 #pragma once
 
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather_op.hpp
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 =======
 #include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
 >>>>>>> 60a6703d2e... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/line_all_gather/device/ccl_line_all_gather_op.hpp
+=======
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 #include "ttnn/cpp/ttnn/multi_device.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace ccl {
 
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather_op.hpp
 struct ExecuteAllGather {
 
@@ -30,6 +35,9 @@ struct ExecuteAllGather {
 =======
 >>>>>>> 60a6703d2e... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/line_all_gather/device/ccl_line_all_gather_op.hpp
 struct ExecuteLineAllGather {
+=======
+struct ExecuteAllGather {
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
     static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
         return {ttnn::TensorSchema{
             2,
@@ -52,13 +60,21 @@ struct ExecuteLineAllGather {
         const uint32_t dim,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
+<<<<<<< HEAD
         return ttnn::operations::ccl::line_all_gather(input_tensor, dim, num_links, memory_config);
+=======
+        return ttnn::operations::ccl::all_gather(input_tensor, dim, num_links, memory_config);
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
     }
 };
 
 }  // namespace ccl
 }  // namespace operations
 
+<<<<<<< HEAD
 constexpr auto line_all_gather = ttnn::register_operation<ttnn::operations::ccl::ExecuteLineAllGather>("ttnn::line_all_gather");
+=======
+constexpr auto all_gather = ttnn::register_operation<ttnn::operations::ccl::ExecuteAllGather>("ttnn::all_gather");
+>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 
 }  // namespace ttnn
