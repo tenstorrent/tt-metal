@@ -12,6 +12,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -139,7 +140,7 @@ struct Reduce {
                     std::nullopt,
                     memory_config);
                 if constexpr (reduce_type == ReduceType::Std) {
-                    output_tensor = tt::tt_metal::sqrt(output_tensor, memory_config);
+                    output_tensor = ttnn::sqrt(output_tensor, memory_config);
                 }
             } else {
                 TT_THROW("Unsupported reduction operation");

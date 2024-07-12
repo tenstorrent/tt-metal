@@ -979,29 +979,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def(
-        "softplus",
-        &softplus,
-        py::arg("input_a").noconvert(),
-        py::arg("beta") = 1.0f,
-        py::arg("threshold") = 20.0f,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns tensor with the softplus activation of elements of the input tensor ``{0}``.
-            If ``input * beta`` > ``threshold`` returns input
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Tensor softplus is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "beta", "Beta value", "float", "default to 1.0f", "No"
-                "threshold", "Threshold value", "float", "default to 20.0f", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
 
 #if 0
         m_tensor.def("bitwise_complement", &bitwise_complement, R"doc(
