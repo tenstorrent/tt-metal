@@ -1,0 +1,52 @@
+name: "[internal] syseng asset upgrade mmio timeout test"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rkim/miw-256-upgrade
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+  single-chip:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          # N150
+          {arch: wormhole_b0, runs-on: ["issue-miw-256", "N150"], name: N150},
+          # N300
+          {arch: wormhole_b0, runs-on: ["issue-miw-256", "N300"], name: N300},
+          # T3K
+          # {name: "n300-2x4", arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8", "issue-miw-162"]},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      CONFIG: ci
+    environment: dev
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run pre/post regression tests
+        timeout-minutes: 60
+        run: |
+          source build/python_env/bin/activate
+          tt-smi-metal -r 0 ; for i in {1..20}; do tt-smi-metal -r 0 && (timeout 10 ./build/test/tt_metal/unit_tests_fast_dispatch || true) ; tt-smi-metal -r 0; done; ./build/test/tt_metal/unit_tests_fast_dispatch
+          tt-smi-metal -r 0 ; for i in {1..20}; do tt-smi-metal -r 0 && (TT_METAL_SLOW_DISPATCH_MODE=1 timeout 10 ./build/test/tt_metal/unit_tests || true) ; tt-smi-metal -r 0; done; TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests
