@@ -57,7 +57,7 @@ void py_module(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -76,7 +76,9 @@ void py_module(py::module& module) {
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
-            py::arg("enable_act_doule_buffer") = false
+            py::arg("enable_act_doule_buffer") = false,
+            py::arg("enable_split_reader") = false,
+            py::arg("enable_subblock_padding") = false
         );
         py_conv_config.def_readwrite("math_fidelity", &Conv2dConfig::math_fidelity);
         py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
@@ -96,6 +98,8 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
         py_conv_config.def_readwrite("enable_act_doule_buffer", &Conv2dConfig::enable_act_doule_buffer);
+        py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
+        py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",

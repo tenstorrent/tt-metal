@@ -116,6 +116,8 @@ def run_conv(
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
         enable_act_doule_buffer=False if (batch_size == 20 and output_channels == 64) else True,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
