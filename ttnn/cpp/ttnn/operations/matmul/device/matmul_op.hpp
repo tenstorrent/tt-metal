@@ -31,11 +31,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(c
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out);
 
-/**
- * Resnet matmul for linear
- */
-Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi);
-
 
 /**
  * Generalized blocked matmul with support for tilize and untilize and mixed-prec
@@ -142,15 +137,17 @@ using MatmulProgramConfig = std::variant<
 
 
 struct Matmul {
-    const std::optional<const MatmulProgramConfig> program_config;
-    bool bcast_batch;
-    const MemoryConfig output_mem_config;
-    const DataType output_dtype;
-    const DeviceComputeKernelConfig compute_kernel_config;
-    const bool untilize_out;
-    const std::optional<const CoreCoord> user_core_coord;
-    const std::optional<const UnaryWithParam> user_fused_activation;
-    const std::optional<const bool> user_run_batched;
+    const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
+    const std::optional<bool> bcast_batch = std::nullopt;
+    const MemoryConfig output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    const std::optional<DataType> output_dtype = std::nullopt;
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+    const bool untilize_out = false;
+    const std::optional<const CoreCoord> user_core_coord = std::nullopt;
+    const std::optional<const UnaryWithParam> user_fused_activation = std::nullopt;
+    const bool user_run_batched = false;
+    const bool transpose_a = false;
+    const bool transpose_b = false;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -200,43 +197,34 @@ inline Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     std::optional<const Tensor> bias = std::nullopt,
-    const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DataType> output_dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool untilize_out = false,
-    std::optional<const CoreCoord> user_core_coord = std::nullopt,
-    std::optional<UnaryWithParam> user_fused_activation = std::nullopt,
-    std::optional<const bool> input_b_is_batched = std::nullopt) {
+    const struct Matmul& parameters = Matmul{}) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    if (bias) {
-        optional_input_tensors.push_back(bias);
-        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias}))};
+    if (bias.has_value()) {
+        optional_input_tensors.push_back(bias.value());
+        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
         output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
     operation::launch_op(
-            [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, user_fused_activation, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            [parameters] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         const auto& input_tensor_a = input_tensors.at(0);
         const auto& input_tensor_b = input_tensors.at(1);
         auto arch = input_tensor_a.device()->arch();
-        const bool has_user_grid = user_core_coord.has_value();
-        const bool has_program_config = program_config.has_value();
+        const bool has_user_grid = parameters.user_core_coord.has_value();
+        const bool has_program_config = parameters.program_config.has_value();
         const auto increase_fidelity = !has_program_config && !has_user_grid;
         auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-        auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity);
-        bool broadcast_batch = get_broadcast_batch(input_tensor_a, input_tensor_b, program_config);
+        auto kernel_config_val = init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity);
+        bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
         TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
-        return operation::run(Matmul{program_config, broadcast_batch, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out, user_core_coord, user_fused_activation, input_b_is_batched}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
+        return operation::run(Matmul{parameters.program_config, broadcast_batch, parameters.output_mem_config, parameters.output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, parameters.untilize_out, parameters.user_core_coord, parameters.user_fused_activation, parameters.user_run_batched}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
     },
     {input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
     return output_tensors.at(0);
 }
-
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false);
 
 MatmulProgramConfig generate_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &mem_config, const std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const std::optional<const CoreCoord> user_core_coord, const std::optional<const UnaryWithParam> user_fused_activation, const std::optional<const bool> user_run_batched);
 

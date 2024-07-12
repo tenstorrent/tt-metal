@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "tt_metal/common/core_coord.h"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
@@ -143,19 +144,16 @@ void py_module(py::module& module) {
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
            const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+            std::optional<CoreCoord> user_core_coord;
+            if (core_grid.has_value()) {
+                user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+            }
+            bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
             return ttnn::operations::matmul::matmul(
                 input_tensor_a,
                 input_tensor_b,
                 /*bias=*/std::nullopt,
-                transpose_a,
-                transpose_b,
-                program_config,
-                memory_config,
-                dtype,
-                activation,
-                compute_kernel_config,
-                core_grid,
-                /*propagate_is_b_batched=*/true);
+                Matmul{program_config, /*bcast_batch=*/std::nullopt, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false, user_core_coord, get_fused_activation(activation), user_run_batched, transpose_a, transpose_b});
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -182,18 +180,18 @@ void py_module(py::module& module) {
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
            const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+            std::optional<CoreCoord> user_core_coord;
+            if (core_grid.has_value()) {
+                user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+            }
+            bool b_is_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
+            TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+
             return ttnn::operations::matmul::matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias,
-                transpose_a,
-                transpose_b,
-                program_config,
-                memory_config,
-                dtype,
-                activation,
-                compute_kernel_config,
-                core_grid);
+                tt::operations::primary::Matmul{program_config, /*bcast_batch=*/std::nullopt, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false, user_core_coord, get_fused_activation(activation), /*user_run_batched=*/false, transpose_a, transpose_b});
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),

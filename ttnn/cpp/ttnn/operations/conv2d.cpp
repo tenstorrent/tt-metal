@@ -706,13 +706,12 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             matmul_input,
             weight_tensor_on_device,
             bias_tensor_on_device,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
+            tt::operations::primary::Matmul{
             matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
             conv_out_memory_config,
             conv_config.dtype,
-            std::nullopt, // activation fused into matmul. part of the matmul config.
-            compute_kernel_config);
+            compute_kernel_config});
         if (conv_config.deallocate_activation) {
             // matmul_input.deallocate();
             ttnn::operations::core::deallocate(matmul_input);
