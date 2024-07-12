@@ -105,7 +105,7 @@ class TtMambaBlock(torch.nn.Module):
             self.mlp_proj_weights,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
+            core_grid=x.device().core_grid,
             dtype=self.configs["dtype"]["activations"],
             activation="silu",
         )
