@@ -73,6 +73,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::BITWISE_OR: defines["SFPU_OP_BITWISE_OR_INCLUDE"] = "1"; break;
         case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
+        case UnaryOpType::CEIL: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
         case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
@@ -254,6 +255,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
             break;
         case UnaryOpType::FLOOR: op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile({});", idst)}; break;
+        case UnaryOpType::CEIL: op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
@@ -374,6 +376,7 @@ inline void validate_supported_arch_dtype(tt::ARCH arch, DataType input_datatype
     switch (op_type) {
         case UnaryOpType::REMAINDER:
         case UnaryOpType::FLOOR:
+        case UnaryOpType::CEIL:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::RIGHT_SHIFT:
             TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Operation is not supported on Grayskull");
