@@ -237,19 +237,6 @@ std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& inp
     return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-// bw(expm1) = grad * expm1(input) + 1
-std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor eresult = ttnn::expm1(input, output_mem_config);
-    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _expm1_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _gelu_bw(
     const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

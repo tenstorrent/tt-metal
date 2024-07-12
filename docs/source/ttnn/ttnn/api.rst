@@ -233,6 +233,7 @@ Pointwise Unary
    ttnn/remainder_bw
    ttnn/div_no_nan_bw
    ttnn/exp2_bw
+   ttnn/expm1_bw
 
 Pointwise Binary
 ================
