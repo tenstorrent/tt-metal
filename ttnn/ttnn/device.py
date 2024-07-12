@@ -76,7 +76,7 @@ def manage_device(device_id: int):
 
 
 def dump_device_memory_state(device, prefix=""):
-    ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
+    ttnn._ttnn.deprecated.device.DumpDeviceMemoryState(device, prefix)
 
 
 def is_wormhole_b0(device):

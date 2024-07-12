@@ -7,7 +7,7 @@ import torch.nn as nn
 import ttnn
 
 import tt_lib.fallback_ops
-import tt_lib.profiler as profiler
+from tt_lib import profiler
 
 from loguru import logger
 
