@@ -35,7 +35,7 @@ enum class BinaryBackwardOpType {
     GT_BW,
     LT_BW,
     BINARY_NE_BW,
-    BINARY_GE_BW,
+    GE_BW,
     MIN_BW,
     MAX_BW,
     DIV_BW,
