@@ -134,5 +134,6 @@ constexpr auto div_no_nan_bw = ttnn::register_operation<operations::unary_backwa
 constexpr auto exp2_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::EXP2_BW>>("ttnn::exp2_bw");
 constexpr auto expm1_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::EXPM1_BW>>("ttnn::expm1_bw");
 constexpr auto reciprocal_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RECIPROCAL_BW>>("ttnn::reciprocal_bw");
+constexpr auto digamma_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::DIGAMMA_BW>>("ttnn::digamma_bw");
 
 }  // namespace ttnn
