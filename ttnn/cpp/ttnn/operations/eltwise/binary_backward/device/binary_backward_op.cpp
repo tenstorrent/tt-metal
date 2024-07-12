@@ -436,7 +436,7 @@ std::vector<Tensor> _bias_gelu_bw(
 }
 
 
-std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
@@ -653,8 +653,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_le_bw;
         case BinaryBackwardOpType::RSUB_BW:
             return _rsub_bw;
-        case BinaryBackwardOpType::BINARY_GT_BW:
-            return _binary_gt_bw;
+        case BinaryBackwardOpType::GT_BW:
+            return _gt_bw;
         case BinaryBackwardOpType::BINARY_LT_BW:
             return _binary_lt_bw;
         case BinaryBackwardOpType::BINARY_NE_BW:

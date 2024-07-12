@@ -152,7 +152,6 @@ constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward:
 constexpr auto binary_le_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LE_BW>>("ttnn::binary_le_bw");
 constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
 constexpr auto bias_gelu_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
-constexpr auto binary_gt_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GT_BW>>("ttnn::binary_gt_bw");
 constexpr auto binary_lt_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LT_BW>>("ttnn::binary_lt_bw");
 constexpr auto binary_ne_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_NE_BW>>("ttnn::binary_ne_bw");
 constexpr auto binary_ge_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GE_BW>>("ttnn::binary_ge_bw");
