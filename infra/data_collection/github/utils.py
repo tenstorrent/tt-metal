@@ -248,7 +248,7 @@ def create_csvs_for_data_analysis(
     create_csv(github_jobs_csv_filename, JOB_CSV_FIELDS, job_rows)
 
 
-def get_github_benchmark_environment_csv_filename():
+def get_github_benchmark_environment_csv_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
     current_utils_path = pathlib.Path(__file__)
@@ -257,14 +257,20 @@ def get_github_benchmark_environment_csv_filename():
     assert benchmark_data_dir.is_dir()
 
     measurement_csv_paths = list(benchmark_data_dir.glob("measurement_*.csv"))
-    assert (
-        len(measurement_csv_paths) == 1
-    ), f"There needs to be exactly one measurement csv as we're assuming a single test is run for now: {measurement_csv_paths}"
-    timestamp_str = str(measurement_csv_paths[0].name).replace("measurement_", "").replace(".csv", "")
+    assert len(
+        measurement_csv_paths
+    ), f"There needs to be at least one measurement csv since we're making an environment CSV for each one"
+    timestamp_strs = list(
+        map(
+            lambda csv_path_: str(csv_path_.name).replace("measurement_", "").replace(".csv", ""), measurement_csv_paths
+        )
+    )
 
-    csv_filename = str(benchmark_data_dir / f"environment_{timestamp_str}.csv")
-    logger.info(f"Saving to {csv_filename}")
-    return csv_filename
+    csv_filenames = list(
+        map(lambda timestamp_str_: str(benchmark_data_dir / f"environment_{timestamp_str_}.csv"), timestamp_strs)
+    )
+    logger.info(f"The following environment CSVs should be created: {csv_filenames}")
+    return csv_filenames
 
 
 def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv_filename):
