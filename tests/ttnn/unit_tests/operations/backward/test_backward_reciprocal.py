@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     compare_pcc,
     data_gen_with_range,
     data_gen_with_val,
@@ -26,7 +26,7 @@ def test_bw_reciprocal_0(input_shapes, device):
 
     pyt_y = torch.reciprocal(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.reciprocal_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.reciprocal_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -51,7 +51,7 @@ def test_bw_reciprocal(input_shapes, device):
 
     pyt_y = torch.reciprocal(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.reciprocal_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.reciprocal_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
