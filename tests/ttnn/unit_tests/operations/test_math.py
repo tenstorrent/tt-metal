@@ -26,6 +26,8 @@ def run_math_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+    if ttnn_function == ttnn.cbrt:
+        output_tensor = output_tensor.squeeze()
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
