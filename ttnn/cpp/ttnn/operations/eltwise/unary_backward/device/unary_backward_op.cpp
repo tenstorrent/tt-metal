@@ -432,7 +432,7 @@ std::vector<Tensor> _elu_bw(
     const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
-        gez(input, output_mem_config),
+        ttnn::gez(input, output_mem_config),
         grad,
         ttnn::multiply(grad, ttnn::multiply(ttnn::exp(input, false, output_mem_config), alpha, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
         output_mem_config);
