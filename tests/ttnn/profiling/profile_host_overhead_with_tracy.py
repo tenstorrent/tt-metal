@@ -54,7 +54,7 @@ def extract_profile_details(final_df, row, index, df):
 
 def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
     currentEnvs = dict(os.environ)
-    currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
+    # currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
     start_time = time.time()
 
     all_ops = []
