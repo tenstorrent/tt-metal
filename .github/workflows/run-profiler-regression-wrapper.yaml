@@ -3,6 +3,9 @@ name: "[post-commit] metal - Run profiler regression"
 on:
   workflow_dispatch:
   workflow_call:
+  push:
+    branches:
+      - rkim/9715-profiler-artifact
 
 jobs:
   build-artifact-profiler:
