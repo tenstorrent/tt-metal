@@ -81,6 +81,7 @@ enum class UnaryBackwardOpType {
     DIV_NO_NAN_BW,
     EXP2_BW,
     EXPM1_BW,
+    RECIPROCAL_BW,
 };
 
 struct UnaryBackwardFunction{
