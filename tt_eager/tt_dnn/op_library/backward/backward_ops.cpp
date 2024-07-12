@@ -250,20 +250,6 @@ std::vector<Tensor> expm1_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _expm1_bw)(grad, input, output_mem_config);
 }
 
-// #  bw (exp2) = grad * exp2(input) * M_LN2
-// # M_LN2 = 0.693147180559945309417
-std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor exp_result = ttnn::exp2(input, output_mem_config);
-    exp_result = ttnn::multiply(exp_result, M_LN2, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _exp2_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _gelu_bw(
     const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

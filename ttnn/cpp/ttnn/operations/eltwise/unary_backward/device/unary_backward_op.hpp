@@ -79,6 +79,7 @@ enum class UnaryBackwardOpType {
     FMOD_BW,
     REMAINDER_BW,
     DIV_NO_NAN_BW,
+    EXP2_BW,
 };
 
 struct UnaryBackwardFunction{
