@@ -278,7 +278,6 @@ Pointwise Binary
    ttnn/binary_le_bw
    ttnn/rsub_bw
    ttnn/bias_gelu_bw
-   ttnn/binary_gt_bw
    ttnn/binary_lt_bw
    ttnn/binary_ne_bw
    ttnn/binary_ge_bw
