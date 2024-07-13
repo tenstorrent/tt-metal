@@ -84,7 +84,15 @@ class TtMambaSSM(torch.nn.Module):
             x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
             return x.repeat(self.configs["outer_dim"], 1)  # (B, 2EN)
 
+        def preprocess_A_decode(x):
+            x = -torch.exp(x.float())  # (2E, N) where N=16
+            x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))  # (2E, N) where N=32
+            x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
+            return x.repeat(self.configs["num_users"], 1)  # (B, 2EN)
+
         self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.configs['outer_dim']}")
+
+        self.A_decode = load_fn(A_weight_name, tm_fn=preprocess_A_decode, postfix=f"A_{self.configs['num_users']}")
 
         # D weight
         D_weight_name = "mixer.D"
@@ -94,18 +102,25 @@ class TtMambaSSM(torch.nn.Module):
             postfix=f"D_{self.configs['outer_dim']}",
         )
 
+        self.D_decode = load_fn(
+            D_weight_name,
+            lambda x: x.repeat(self.configs["num_users"], 1),
+            postfix=f"D_{self.configs['num_users']}",
+        )
+
         # hidden state
 
         if self.configs["mode"] == ModelMode.DECODE:
             prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
-            self.tt_hidden_state = load_fn(
+            self.tt_hidden_states = load_fn(
                 f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
             )
         else:
             prev_hidden_states = torch.zeros((1, 1, 1, self.hidden_size * self.n))
-            self.tt_hidden_state = load_fn(
+            self.prev_hidden_state = load_fn(
                 f"tt_hidden_state_{1}", torch_tensor=prev_hidden_states, tt_layout=ttnn.ROW_MAJOR_LAYOUT
             )
+            self.tt_hidden_states = []
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
@@ -115,6 +130,22 @@ class TtMambaSSM(torch.nn.Module):
         self.eltwise_math_fidelity = ttl.tensor.MathFidelity.HiFi2
         self.core_grid_row = self.configs["core_grid_row"]
         self.core_grid_col = self.configs["core_grid_col"]
+
+    def to_decode(self, decode_config):
+        self.configs = decode_config
+        # deallocate prefill A and D, need to reinitialize when back in prefill mode
+        ttnn.deallocate(self.A)
+        ttnn.deallocate(self.D)
+        self.A = self.A_decode
+        self.D = self.D_decode
+        self.tt_hidden_states = torch.cat(self.tt_hidden_states, dim=2)
+        self.tt_hidden_states = ttnn.from_torch(
+            self.tt_hidden_states,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
+        )
 
     def forward(self, x):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
@@ -209,7 +240,7 @@ class TtMambaSSM(torch.nn.Module):
             # multiply abar and hidden_state
             hidden_state0 = ttnn.multiply(
                 abar2,
-                self.tt_hidden_state,
+                self.tt_hidden_states,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=self.configs["dtype"]["activations"],
                 output_tensor=abar2,
@@ -225,14 +256,14 @@ class TtMambaSSM(torch.nn.Module):
             )
             ttnn.deallocate(bmulx0)
 
-            ttnn.deallocate(self.tt_hidden_state)
-            self.tt_hidden_state = ttnn.to_memory_config(
+            ttnn.deallocate(self.tt_hidden_states)
+            self.tt_hidden_states = ttnn.to_memory_config(
                 hidden_state0, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
             )
 
         elif self.configs["mode"] == ModelMode.PREFILL:
             prev_hidden_state = ttnn.to_memory_config(
-                self.tt_hidden_state, memory_config=self.configs["sharded_prev_hidden"]
+                self.prev_hidden_state, memory_config=self.configs["sharded_prev_hidden"]
             )
             abar2_sharded = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
             ttnn.deallocate(abar2)
@@ -248,7 +279,10 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(abar2_sharded)
             ttnn.deallocate(bmulx0_sharded)
 
-            self.tt_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # TODO Need to update when chunkimg is supported, however, this also need to be reset to zeros for next user
+            # self.prev_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            self.tt_hidden_states.append(ttnn.to_torch(prev_hidden_state))
             ttnn.deallocate(prev_hidden_state)
 
             hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
