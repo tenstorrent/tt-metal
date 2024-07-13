@@ -93,9 +93,9 @@ enum class UnaryBackwardOpType {
 struct UnaryBackwardFunction{
     static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType);
     static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(UnaryBackwardOpType OpType);
-    // static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> get_function_type1_w_two_float(UnaryBackwardOpType OpType);
 };
 
+//OpHandler_two_float : get_function_type1_w_two_float
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
