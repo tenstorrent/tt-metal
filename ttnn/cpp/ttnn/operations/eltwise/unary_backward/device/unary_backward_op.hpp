@@ -18,6 +18,7 @@ enum class UnaryBackwardOpType {
     CLAMP_BW,
     HARDTANH_BW,
     THRESHOLD_BW,
+    SOFTPLUS_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -100,9 +101,16 @@ std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, float mi
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
+//OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
+std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float;
+
+// OpHandler struct template
+template <UnaryBackwardOpType OpType>
+struct OpHandler_two_float_with_default;
 
 template <>
 struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
@@ -125,10 +133,22 @@ struct OpHandler_two_float<UnaryBackwardOpType::THRESHOLD_BW> {
     }
 };
 
+template <>
+struct OpHandler_two_float_with_default<UnaryBackwardOpType::SOFTPLUS_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _softplus_bw(grad, input, beta, threshold, output_mem_config);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
     return &OpHandler_two_float<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_w_two_float_with_default() {
+    return &OpHandler_two_float_with_default<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward

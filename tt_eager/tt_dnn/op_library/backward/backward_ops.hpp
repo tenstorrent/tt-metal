@@ -121,24 +121,10 @@ std::vector<Tensor> bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> softplus_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float beta = 1.0,
-    float threshold = 20.0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> polygamma_bw(
     const Tensor& grad,
     const Tensor& input,
     int n,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> hardtanh_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float min,
-    float max,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> angle_bw(
