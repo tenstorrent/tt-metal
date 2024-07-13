@@ -822,15 +822,9 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.softplus_bw
-
 .. autofunction:: tt_lib.tensor.polygamma_bw
 
-.. autofunction:: tt_lib.tensor.hardtanh_bw
-
 .. autofunction:: tt_lib.tensor.angle_bw
-
-.. autofunction:: tt_lib.tensor.threshold_bw
 
 .. autofunction:: tt_lib.tensor.complex_recip_bw
 
