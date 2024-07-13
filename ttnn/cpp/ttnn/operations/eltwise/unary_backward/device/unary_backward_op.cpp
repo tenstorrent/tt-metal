@@ -107,6 +107,31 @@ std::vector<Tensor> _softplus_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _unary_div_bw(
+    const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    float inv_scalar = 1.0f / scalar;
+    if (round_mode == "None") {
+        Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());
+        if (scalar == 0.0) {
+            float t_nan = std::nanf("");
+            grad_tensor.emplace_back(where(
+                ttnn::eqz(grad, output_memory_config),
+                t_nan,
+                ttnn::multiply(ttnn::sign(grad, output_memory_config), t_inf, std::nullopt, output_memory_config),
+                output_memory_config));
+        } else {
+            grad_tensor.emplace_back(ttnn::multiply(grad, inv_scalar, std::nullopt, output_memory_config));
+        }
+    } else {
+        Tensor result = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(result);
+    }
+    return grad_tensor;
+}
+
 std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);

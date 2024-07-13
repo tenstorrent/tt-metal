@@ -19,6 +19,7 @@ enum class UnaryBackwardOpType {
     HARDTANH_BW,
     THRESHOLD_BW,
     SOFTPLUS_BW,
+    UNARY_DIV_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -103,7 +104,10 @@ std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, floa
 
 //OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config  = std::nullopt);
+std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+//OpHandler_float_string_default : get_function_type1_float_string_default
+std::vector<Tensor> _unary_div_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
@@ -111,6 +115,9 @@ struct OpHandler_two_float;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float_with_default;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_float_string_default;
 
 template <>
 struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
@@ -140,6 +147,13 @@ struct OpHandler_two_float_with_default<UnaryBackwardOpType::SOFTPLUS_BW> {
     }
 };
 
+template <>
+struct OpHandler_float_string_default<UnaryBackwardOpType::UNARY_DIV_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _unary_div_bw(grad, input, scalar, round_mode, output_mem_config);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -149,6 +163,11 @@ auto get_function_type1_w_two_float() {
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float_with_default() {
     return &OpHandler_two_float_with_default<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_float_string_default() {
+    return &OpHandler_float_string_default<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward

@@ -90,7 +90,7 @@ void bind_unary_backward_two_float_with_default(py::module& module, const unary_
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = {1}(grad_tensor, input, float, float)
+            >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -119,6 +119,60 @@ void bind_unary_backward_two_float_with_default(py::module& module, const unary_
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt}
+    );
+}
+
+//OpHandler_float_string_default : get_function_type1_float_string_default
+template <typename unary_backward_operation_t>
+void bind_unary_backward_float_string_default(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, string parameter_b_value, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {4}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {7}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
+            * :attr:`{2}` (float): {3}
+
+        Keyword args:
+            * :attr:`{4}` (string): {5} , Default value = {6}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input, {2}, {4} = {6})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               string parameter_b,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()),
+            py::kw_only(),
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::arg("memory_config") = std::nullopt}
     );
@@ -300,6 +354,13 @@ void py_module(py::module& module) {
         module,
         ttnn::assign_bw,
         R"doc(Performs backward operations for assign on :attr:`input_tensor` or attr:`input_tensor_a`, attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward_float_string_default(
+        module,
+        ttnn::unary_div_bw,
+        "scalar", "Denominator",
+        "round_mode", "Mode of Rounding", "None",
+        R"doc(Performs backward operations for Unary division on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`round_mode`.)doc");
 
     detail::bind_unary_backward(
         module,
