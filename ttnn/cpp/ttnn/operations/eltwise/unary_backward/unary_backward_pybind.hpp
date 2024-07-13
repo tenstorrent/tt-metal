@@ -57,8 +57,6 @@ void bind_unary_backward_two_float(py::module& module, const unary_backward_oper
                float min,
                float max,
                const std::optional<MemoryConfig>& memory_config)  {
-                // auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-                // return self(grad_tensor, input_tensor, min, max, output_memory_config);
                 return self(grad_tensor, input_tensor, min, max, memory_config);
             },
             py::arg("grad_tensor"),

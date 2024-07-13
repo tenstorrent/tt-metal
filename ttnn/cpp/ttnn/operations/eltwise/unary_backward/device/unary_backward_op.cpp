@@ -1293,16 +1293,4 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
     }
 }
 
-// std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_two_float(UnaryBackwardOpType OpType){
-//     switch (OpType) {
-//         case UnaryBackwardOpType::CLAMP_BW:
-//             return _clamp_bw;
-//         case UnaryBackwardOpType::HARDTANH_BW:
-//             return _hardtanh_bw;
-//         default:
-//             TT_ASSERT(false && "Undefined op type");
-//             return 0;
-//     }
-// }
-
 }  // namespace ttnn::operations::unary
