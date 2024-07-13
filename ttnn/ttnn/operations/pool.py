@@ -64,11 +64,11 @@ def golden_maxpool2d(
 
 
 max_pool2d = ttnn.register_python_operation(name="ttnn.max_pool2d", golden_function=golden_maxpool2d)(
-    ttnn._ttnn.operations.maxpool.max_pool2d
+    ttnn._ttnn.operations.pool.max_pool2d
 )
 
 max_pool2d_legacy = ttnn.register_python_operation(name="ttnn.max_pool2d_legacy", golden_function=golden_maxpool2d)(
-    ttnn._ttnn.operations.maxpool.max_pool2d_legacy
+    ttnn._ttnn.operations.pool.max_pool2d_legacy
 )
 
 
@@ -416,3 +416,19 @@ class TTPyMaxPool(TTPyOp):
         interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         output_d = ttl.tensor.sharded_to_interleaved(output_d, interleaved_mem_config)
         return output_d.cpu()
+
+
+def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
+    import torch
+
+    output_size = (1, 1)
+    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
+
+
+global_avg_pool2d = ttnn.register_python_operation(
+    name="ttnn.global_avg_pool2d", golden_function=golden_global_avg_pool2d
+)(ttnn._ttnn.operations.pool.global_avg_pool2d)
+
+avg_pool2d = ttnn.register_python_operation(name="ttnn.avg_pool2d", golden_function=golden_global_avg_pool2d)(
+    ttnn._ttnn.operations.pool.avg_pool2d
+)

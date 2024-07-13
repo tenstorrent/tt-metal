@@ -91,11 +91,9 @@ void py_module(py::module& module) {
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv2d::py_module(m_conv2d);
 
-    auto m_maxpool = module.def_submodule("maxpool", "maxpool  operation");
-    maxpool::py_module(m_maxpool);
-
-    auto m_avgpool = module.def_submodule("avgpool", "avgpool  operation");
-    avgpool::py_module(m_avgpool);
+    auto m_pool = module.def_submodule("pool", "pooling  operations");
+    maxpool::py_module(m_pool);
+    avgpool::py_module(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
