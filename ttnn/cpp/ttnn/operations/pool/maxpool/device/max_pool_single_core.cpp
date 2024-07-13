@@ -55,13 +55,13 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t) ceil((float) input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
-    uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t) std::ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t) std::ceil((float) input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_hw = (uint32_t) std::ceil((float) output_shape[2] / constants::TILE_HEIGHT);
+    uint32_t out_ntiles_c = (uint32_t) std::ceil((float) output_shape[3] / constants::TILE_WIDTH);
 
     uint32_t out_nelems = nblocks;     // TODO [AS]: Remove hard coding after identifying optimal param val
-    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
+    uint32_t out_w_loop_count = std::ceil((float) out_w / out_nelems);
 
     uint32_t in_hw = in_h * in_w;
     uint32_t out_hw = out_h * out_w;
@@ -221,8 +221,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          kernel_size_hw_padded,
                                                          out_h,
                                                          out_w,
-                                                         (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
-                                                         (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
+                                                         (uint32_t) std::ceil((float) output_shape[2] / constants::TILE_HEIGHT),
+                                                         (uint32_t) std::ceil((float) output_shape[3] / constants::TILE_WIDTH),
                                                          out_nelems,
                                                          out_w_loop_count,
                                                          nbatch,

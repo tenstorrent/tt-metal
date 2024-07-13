@@ -91,7 +91,7 @@ uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) 
                 break;
             default:
                 // TT_ASSERT(false, "General case is not yet handled! Only RN50 shapes supported in multicore.");
-                uint32_t out_nhw_per_core = (uint32_t)ceil((float)out_nhw / avail_ncores);
+                uint32_t out_nhw_per_core = (uint32_t)std::ceil((float)out_nhw / avail_ncores);
                 ncores = out_nhw / out_nhw_per_core;
                 while (avail_ncores > 0) {
                     if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
@@ -104,7 +104,7 @@ uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) 
                 break;
         }
     } else if (device->arch() == ARCH::WORMHOLE_B0) {
-        uint32_t out_nhw_per_core = (uint32_t)ceil((float)out_nhw / avail_ncores);
+        uint32_t out_nhw_per_core = (uint32_t)std::ceil((float)out_nhw / avail_ncores);
         ncores = out_nhw / out_nhw_per_core;
         while (avail_ncores > 0) {
             if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
@@ -215,14 +215,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)ceil((float)input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t)ceil((float)output_shape[2] / constants::TILE_HEIGHT);
-    uint32_t out_ntiles_c = (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_hw = (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH);
 
     uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
                                     // Also ensure the calculated ncores is good
-    uint32_t out_w_loop_count = ceil((float)out_w / out_nelems);
+    uint32_t out_w_loop_count = std::ceil((float)out_w / out_nelems);
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = in_hw * nbatch;
@@ -523,8 +523,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
         kernel_size_hw,
         out_h,
         out_w,
-        (uint32_t)ceil((float)output_shape[2] / constants::TILE_HEIGHT),
-        (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH),
+        (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT),
+        (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         out_nelems,
         out_w_loop_count,
         nbatch,
@@ -724,9 +724,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)ceil((float)input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH);
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
@@ -735,7 +735,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         TT_FATAL(input_shape[3] == 16);
         tile_w = constants::FACE_WIDTH;
     }
-    uint32_t out_w_loop_count = ceil((float)out_w / nblocks);
+    uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();

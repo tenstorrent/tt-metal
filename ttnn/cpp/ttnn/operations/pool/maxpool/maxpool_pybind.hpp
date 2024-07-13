@@ -13,7 +13,6 @@
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
-using array2_t = std::array<uint32_t, 2>;
 namespace ttnn {
 namespace operations {
 namespace maxpool {
