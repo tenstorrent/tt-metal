@@ -118,11 +118,17 @@ def test_run_resnet50_inference(device, use_program_cache, batch_size, act_dtype
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_trace_inference(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_resnet50_trace_inference(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, enable_async
+):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    device.enable_async(enable_async)
+
     test_infra = create_test_infra(
         device,
         batch_size,
@@ -163,6 +169,8 @@ def test_run_resnet50_trace_inference(device, use_program_cache, batch_size, act
     if use_signpost:
         signpost(header="stop")
     test_infra.validate()
+
+    device.enable_async(False)
 
 
 @skip_for_grayskull(reason_str="Untested for Grayskull")
@@ -242,13 +250,23 @@ def test_run_resnet50_2cqs_inference(device, use_program_cache, batch_size, act_
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_2cqs_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    device.enable_async(enable_async)
+
     test_infra = create_test_infra(
         device,
         batch_size,
@@ -331,3 +349,5 @@ def test_run_resnet50_trace_2cqs_inference(
         signpost(header="stop")
     for output in outputs:
         test_infra.validate(output)
+
+    device.enable_async(False)
