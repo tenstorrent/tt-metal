@@ -61,8 +61,6 @@ run_device_perf_models() {
 
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/resnet/tests -m $test_marker
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
-
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
@@ -87,6 +85,8 @@ run_device_perf_models() {
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests -m $test_marker
     fi
+
+    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     ## Merge all the generated reports
     env python models/perf/merge_device_perf_results.py
