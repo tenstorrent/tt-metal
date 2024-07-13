@@ -400,8 +400,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
         }
 
         if (input_tensor_on_device) {
-            auto resharded_input_tensor = ttnn::operations::core::ToMemoryConfig::execute_on_worker_thread(
-                input_tensor, input_tensor_sharded_memory_config, {});
+            auto resharded_input_tensor = ttnn::to_memory_config(
+                input_tensor, input_tensor_sharded_memory_config, std::nullopt);
             if (conv_config.deallocate_activation) {
                 input_tensor.deallocate();
                 resharded_input_tensor = ttnn::operations::core::reallocate(resharded_input_tensor, resharded_input_tensor.memory_config());
@@ -490,10 +490,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         tt::tt_metal::Shape bias_channels_padded_shape = tt::tt_metal::Shape(
             std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
         bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-        bias_tensor_ = ttnn::operations::core::ToLayout::execute_on_worker_thread(
-            bias_tensor_, Layout::TILE, {}, {}, (Device*)nullptr);
+        bias_tensor_ = ttnn::to_layout(
+            bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
         if (bias_tensor_.get_dtype() != weights_bias_dtype) {
-            bias_tensor_ = ttnn::operations::core::ToDtype::execute_on_worker_thread(bias_tensor_, weights_bias_dtype);
+            bias_tensor_ = ttnn::to_dtype(bias_tensor_, weights_bias_dtype);
         }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
@@ -602,7 +602,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                                    groups == 1;
     Tensor input_tensor_post_tm_out;
     if (use_matmul_for_1x1_conv) {
-        input_tensor_post_tm_out = ttnn::operations::core::ToLayout::execute_on_worker_thread(
+        input_tensor_post_tm_out = ttnn::to_layout(
             input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), &device);
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();

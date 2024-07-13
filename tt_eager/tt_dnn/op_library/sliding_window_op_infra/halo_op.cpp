@@ -131,7 +131,7 @@ Tensor halo_op(const Tensor& input_tensor,
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto halo_func = [&config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
+    auto halo_func = [config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, output_memory_config]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         auto input_tensor = input_tensors.at(0);
 

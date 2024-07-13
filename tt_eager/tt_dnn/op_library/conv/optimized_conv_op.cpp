@@ -285,25 +285,34 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_split_reader,
     bool enable_subblock_padding
 ) {
-    //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
-    TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
-    const auto& ashape = Shape(input_tensor_shape);
-    auto padded_a_shape = Shape({ashape[0], ashape[1], ashape[2], round_up(ashape[3], 16)});
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
-    FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
-    FormatParams input_bias_format_params = {};
-    if (bias.has_value()) {
-        input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
-    }
-    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
-    bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
-    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
-    return operation::run_without_autoformat(
-        OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
-        ),
-        {a, b},
-        {bias}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
+    operation::launch_op(
+        [conv_params, output_channels, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
+            (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                auto& a = input_tensors.at(0);
+                auto& b = input_tensors.at(1);
+                auto& bias = optional_input_tensors.at(0);
+                //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
+                TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
+                const auto& ashape = Shape(input_tensor_shape);
+                auto padded_a_shape = Shape({ashape[0], ashape[1], ashape[2], round_up(ashape[3], 16)});
+                FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
+                FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
+                FormatParams input_bias_format_params = {};
+                if (bias.has_value()) {
+                    input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
+                }
+                auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+                auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+                bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
+                auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
+                return operation::run_without_autoformat(
+                    OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
+                    ),
+                    input_tensors,
+                    optional_input_tensors);
+            }, {a, b}, output_tensors, {bias});
+    return output_tensors.at(0);
 }
 
 void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
