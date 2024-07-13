@@ -343,11 +343,9 @@ class DeviceCommand {
 
         if (inline_data) {
             TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
-            this->add_data(data, data_sizeB, increment_sizeB);
-        } else {
-            this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, data_sizeB);
         }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
