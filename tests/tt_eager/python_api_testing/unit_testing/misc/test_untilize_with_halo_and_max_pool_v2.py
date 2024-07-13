@@ -10,11 +10,11 @@ from loguru import logger
 import torch
 
 
-from ttnn.operations.max_pool2d import (
+from ttnn.operations.pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from ttnn.operations.max_pool2d import max_pool2d_legacy as ttnn_max_pool2d_legacy
+from ttnn.operations.pool import max_pool2d_legacy as ttnn_max_pool2d_legacy
 
 
 import tt_lib as ttl
