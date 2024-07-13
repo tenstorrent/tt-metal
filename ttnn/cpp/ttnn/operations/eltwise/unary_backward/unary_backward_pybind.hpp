@@ -71,19 +71,19 @@ void bind_unary_backward_two_float(py::module& module, const unary_backward_oper
 
 //OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 template <typename unary_backward_operation_t>
-void bind_unary_backward_two_float_with_default(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward_two_float_with_default(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, beta: float, threshold: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {4}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
-        {2}
+        {8}
 
         Args:
             * :attr:`grad_tensor`
             * :attr:`input_tensor`
-            * :attr:`float`
-            * :attr:`float`
 
         Keyword args:
+            * :attr:`{2}` (float): {3} , Default value = {4}
+            * :attr:`{5}` (float): {6} , Default value = {7}
             * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
 
         Example:
@@ -94,6 +94,12 @@ void bind_unary_backward_two_float_with_default(py::module& module, const unary_
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
         description);
 
     bind_registered_operation(
@@ -104,16 +110,16 @@ void bind_unary_backward_two_float_with_default(py::module& module, const unary_
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               float beta,
-               float threshold,
+               float parameter_a,
+               float parameter_b,
                const std::optional<MemoryConfig>& memory_config)  {
-                return self(grad_tensor, input_tensor, beta, threshold, memory_config);
+                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg("beta") = 1.0f,
-            py::arg("threshold") = 20.0f,
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::arg("memory_config") = std::nullopt}
     );
 }
@@ -284,7 +290,9 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_two_float_with_default(
         module,
         ttnn::softplus_bw,
-        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta` (default value = 1.0f ), :attr:`threshold` (default value = = 20.0f ) with given :attr:`grad_tensor`.)doc");
+        "beta", "Beta value for the Softplus formula ", 1.0,
+        "threshold", "Threshold value", 20.0,
+        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward(
         module,
