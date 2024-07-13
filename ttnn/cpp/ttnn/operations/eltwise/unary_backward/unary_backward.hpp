@@ -93,6 +93,7 @@ constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::Exe
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");
 constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>("ttnn::hardtanh_bw");
+constexpr auto threshold_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>("ttnn::threshold_bw");
 constexpr auto assign_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ASSIGN_BW>>("ttnn::assign_bw");
 constexpr auto multigammaln_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MULTIGAMMALN_BW>>("ttnn::multigammaln_bw");
 constexpr auto add_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ADD_BW>>("ttnn::add_bw");

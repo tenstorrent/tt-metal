@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -26,7 +26,7 @@ def test_bw_threshold(input_shapes, threshold, value, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
 
     pyt_y = torch.threshold(in_data, threshold=threshold, value=value)
-    tt_output_tensor_on_device = tt_lib.tensor.threshold_bw(grad_tensor, input_tensor, threshold, value)
+    tt_output_tensor_on_device = ttnn.threshold_bw(grad_tensor, input_tensor, threshold, value)
 
     in_data.retain_grad()
 

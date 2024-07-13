@@ -154,13 +154,6 @@ std::vector<Tensor> prod_bw(
     int64_t dim,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> threshold_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float threshold,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> conj_bw(
     const Tensor& grad,
     const Tensor& input,
