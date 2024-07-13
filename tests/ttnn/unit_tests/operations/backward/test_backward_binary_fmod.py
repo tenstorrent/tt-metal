@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
+from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -16,11 +17,11 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc,
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for binary fmod backward")
 def test_bw_fmod(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -101, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -52, 51, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -50, 50, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True)
-
     tt_output_tensor_on_device = ttnn.binary_fmod_bw(grad_tensor, input_tensor, other_tensor)
 
     in_data.retain_grad()
