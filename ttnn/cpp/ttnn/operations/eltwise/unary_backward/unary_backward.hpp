@@ -50,11 +50,11 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
     static std::vector<Tensor> execute_on_main_thread(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        float beta,
-        float threshold,
+        float parameter_a,
+        float parameter_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
         auto op_type = get_function_type1_w_two_float_with_default<unary_backward_op_type>();
-        return op_type(grad_tensor_arg, input_tensor_arg, beta, threshold, memory_config);
+        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, memory_config);
         }
 
 };
