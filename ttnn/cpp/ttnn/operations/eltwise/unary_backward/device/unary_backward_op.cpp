@@ -71,6 +71,21 @@ std::vector<Tensor> _hardtanh_bw(
     return grad_tensor;
 }
 
+// threshold
+// if input <= threshold = 0 else grad
+std::vector<Tensor> _threshold_bw(
+    const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    Tensor result = where(
+        ttnn::gtz(ttnn::add(input, -threshold, std::nullopt, output_memory_config), output_memory_config),
+        grad,
+        ttnn::operations::creation::zeros_like(grad, input.get_dtype(), input.get_layout(), std::nullopt, output_memory_config),
+        output_memory_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
