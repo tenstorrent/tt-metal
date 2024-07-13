@@ -764,6 +764,11 @@ void py_module(py::module& module) {
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_backward_ops(
+        module,
+        ttnn::binary_fmod_bw,
+        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a` and attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
+
     detail::bind_binary_backward_float_string_default(
         module,
         ttnn::bias_gelu_bw,

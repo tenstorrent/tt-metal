@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_val,
     compare_all_close,
@@ -136,8 +136,9 @@ def test_ldexp(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [-1, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
-def test_fmod(device, h, w, in_val, grad_val, other_val):
-    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.fmod_bw, torch.fmod)
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for binary fmod backward")
+def test_binary_fmod(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.binary_fmod_bw, torch.fmod)
 
 
 @pytest.mark.parametrize("h", [64])
