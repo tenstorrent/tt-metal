@@ -8,19 +8,19 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/device/ccl_reduce_scatter_op.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace operations {
-namespace ccl_reduce_scatter {
+namespace ccl {
 
 namespace detail {
 
 template <typename ccl_operation_t>
-void bind_ccl_reduce_scatter(py::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_reduce_scatter(py::module& module, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -45,9 +45,9 @@ void bind_ccl_reduce_scatter(py::module& module, const ccl_operation_t& operatio
 }  // namespace detail
 
 
-void py_module(py::module& module) {
+void py_module_reduce_scatter(py::module& module) {
 
-    detail::bind_ccl_reduce_scatter(
+    detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter,
         R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceOpMath, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> std::vector<ttnn.Tensor>
@@ -70,6 +70,6 @@ void py_module(py::module& module) {
         )doc");
 }
 
-}  // namespace ccl_reduce_scatter
+}  // namespace ccl
 }  // namespace operations
 }  // namespace ttnn

@@ -51,15 +51,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp
    ttnn::ccl::Topology topology);
-=======
-<<<<<<< HEAD:tt_eager/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp
-   ttnn::utils::ccl::Topology topology);
-=======
-    tt::tt_metal::ccl::Topology topology);
->>>>>>> bdb9766ed5... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp
 }
 }; // namespace ccl
 

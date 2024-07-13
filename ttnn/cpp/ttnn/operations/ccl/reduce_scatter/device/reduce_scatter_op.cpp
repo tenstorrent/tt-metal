@@ -2,11 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.cpp
-#include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
-=======
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.cpp
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -76,6 +72,7 @@ std::vector<Tensor> reduce_scatter_impl(
     output_tensors.reserve(input_tensors.size());
     std::vector<ReduceScatter> ops;
     ops.reserve(input_tensors.size());
+<<<<<<< HEAD
 <<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.cpp
     bool is_ring = topology ==ttnn::ccl::Topology::Ring;
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
@@ -85,7 +82,13 @@ std::vector<Tensor> reduce_scatter_impl(
     bool is_ring = topology ==ttnn::utils::ccl::Topology::Ring;
 >>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.cpp
 
+=======
+    bool is_ring = topology == ccl::Topology::Ring;
+>>>>>>> a98abddcea... #0: Fix issues
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+        bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
+        bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
+
         std::optional<chip_id_t> receiver_device_id =
             is_last_chip_in_clockwise_direction
                 ? std::nullopt

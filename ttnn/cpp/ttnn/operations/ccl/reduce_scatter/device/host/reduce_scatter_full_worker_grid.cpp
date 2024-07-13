@@ -379,6 +379,9 @@ static void add_worker_config_to_edm_builders(
             log_trace(tt::LogOp, "Adding receiver EDM channel");
            ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
                 receiver_edm_builder.add_receiver_channel(
+                    worker_receiver_semaphore_address,
+                    // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
+                    // messages the EDM must forward as it will receive its finish signal from the worker instead
                     1,
                     receiver_worker_coords,
                     expected_message_size_bytes);
@@ -393,19 +396,12 @@ static void add_worker_config_to_edm_builders(
 static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     tt::tt_metal::Program& program,
     Device const* device,
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::RingTopology const& topology_config,
    ttnn::ccl::CCLOpConfig const& op_config,
     ReduceScatterWorkerArgBuilder const& worker_arg_builder,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
-=======
-    ttnn::utils::ccl::CCLOpConfig const& op_config,
-    ReduceScatterWorkerArgBuilder const& worker_arg_builder,
-    std::vector<ttnn::utils::ccl::EriscDatamoverBuilder>& cw_edm_builders,
-    std::vector<ttnn::utils::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     CoreCoord const& worker_core,
     uint32_t num_edm_channels,
     uint32_t link,
@@ -419,15 +415,9 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     static std::string const& receiver_kernel_path =
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
-    static std::string const& sender_kernel_path =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
-=======
         "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
     static std::string const& sender_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
 
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
@@ -611,11 +601,7 @@ static uint32_t compute_maximum_worker_slice_in_bytes(
 }
 
 static bool is_cb_buffering_sufficient_to_avoid_deadlock(
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::InterleavedTensorWorkerSlice const& worker_slice,
-=======
-    ttnn::utils::ccl::InterleavedTensorWorkerSlice const& worker_slice,
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     uint32_t cb_src0_size_pages,
     uint32_t cb_dst0_size_pages,
     uint32_t cb_short_circuit_size_pages,
@@ -641,11 +627,7 @@ static bool is_cb_buffering_sufficient_to_avoid_deadlock(
 
 static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular_buffers(
     Tensor const& input_tensor,
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::CCLOpConfig const& op_config,
-=======
-    ttnn::utils::ccl::CCLOpConfig const& op_config,
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     CoreRangeSet const& worker_core_range,
     uint32_t worker_pages_per_transfer,
     tt::tt_metal::Program& program) {
@@ -697,11 +679,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::Topology topology) {
-=======
-    ttnn::utils::ccl::Topology topology) {
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
         input_tensors.at(0).get_legacy_shape()[scatter_split_dim] ==
@@ -713,21 +691,12 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     /////////////// Constants/Configuration
     /// Constants/Configuration
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
     auto const& op_config =ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> input_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensors.at(0));
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensors.at(0));
-=======
-    ttnn::utils::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::utils::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
-    auto const& op_config =ttnn::utils::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    std::unique_ptr<ttnn::utils::ccl::CclOpTensorConfig> input_tensor_config =
-        ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensors.at(0));
-    std::unique_ptr<ttnn::utils::ccl::CclOpTensorConfig> output_tensor_config =
-        ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensors.at(0));
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     uint32_t per_step_dim_size = input_tensors.at(0).get_legacy_shape()[scatter_split_dim] / ring_size;
     uint32_t input_tensor_num_units_per_scatter_dim =
         per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
@@ -884,11 +853,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     // Generate the EDM kernels
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
    ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
-=======
-    ttnn::utils::ccl::generate_edm_kernels_for_ring_or_linear_topology(
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
         program,
         device,
         topology_config,
