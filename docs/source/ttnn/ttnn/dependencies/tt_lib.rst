@@ -276,17 +276,11 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div_no_nan
 
-
-
 .. autofunction:: tt_lib.tensor.log1p
 
 .. autofunction:: tt_lib.tensor.clip
 
 .. autofunction:: tt_lib.tensor.hardtanh
-
-.. autofunction:: tt_lib.tensor.deg2rad
-
-.. autofunction:: tt_lib.tensor.rad2deg
 
 .. autofunction:: tt_lib.tensor.cbrt
 
@@ -317,8 +311,6 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.remainder
-
-.. autofunction:: tt_lib.tensor.unary_fmod
 
 .. autofunction:: tt_lib.tensor.fmod
 
