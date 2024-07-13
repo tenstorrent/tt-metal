@@ -28,5 +28,5 @@ Our ImageProcessor on other hand is based on `microsoft/resnet-50` from huggingf
 + To obtain device performance, run `./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/resnet/tests/test_metal_resnet50_performant.py::test_run_resnet50_inference[LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20-device_params0]"`
 This will generate a CSV report under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
 
-+ For end-to-end performance, run `pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_trace_2cqs_bare_metal[20-0.0042-19-device_params0]>`. This will generate a CSV with the timings and throughputs.
-Expected end-to-end perf: For batch = 20, it is about `5100 fps` currently. This may vary machine to machine.
++ For end-to-end performance, run `pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_trace_2cqs_bare_metal[20-0.0040-19-device_params0]`. This will generate a CSV with the timings and throughputs.
+Expected end-to-end perf: For batch = 20, it is about `5500 fps` currently. This may vary machine to machine.

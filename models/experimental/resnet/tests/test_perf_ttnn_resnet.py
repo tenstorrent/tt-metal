@@ -68,6 +68,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
+    ttnn.device.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -123,6 +124,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
+    ttnn.device.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -175,6 +177,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
+    ttnn.device.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -251,6 +254,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
+    ttnn.device.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -365,7 +369,7 @@ def run_perf_resnet(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 4, 25),),  # E2E perf without trace currently unstable
+    ((16, 0.006, 25),),
 )
 def test_perf_bare_metal(
     device,
@@ -386,8 +390,8 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "batch_size, enable_async, expected_inference_time, expected_compile_time",
     (
-        # (16, True, 0.009, 25),
-        (16, False, 0.009, 25),
+        (16, True, 0.005, 25),
+        (16, False, 0.0046, 25),
     ),
 )
 def test_perf_trace_bare_metal(
@@ -417,7 +421,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 4, 25),),  # E2E perf without trace currently unstable
+    ((16, 0.006, 25),),
 )
 def test_perf_2cqs_bare_metal(
     device,
@@ -439,7 +443,7 @@ def test_perf_2cqs_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.008, 25),),
+    ((16, 0.004, 25),),
 )
 def test_perf_trace_2cqs_bare_metal(
     device,
