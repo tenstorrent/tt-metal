@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_val,
     compare_all_close,
@@ -67,7 +67,6 @@ def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_fun
     torch_input_tensor, input_tensor = data_gen_with_val([1, 1, h, w], device, True, val=in_val)
     torch_other_tensor, other_tensor = data_gen_with_val([1, 1, h, w], device, True, val=other_val)
     torch_grad_tensor, grad_tensor = data_gen_with_val([1, 1, h, w], device, val=grad_val)
-
     torch_output_tensor = torch_function(torch_input_tensor, torch_other_tensor)
 
     output_tensor = ttnn_function(grad_tensor, input_tensor, other_tensor)
@@ -182,5 +181,6 @@ def test_max(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [-1, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
-def test_binary_remainder_bw(device, h, w, in_val, grad_val, other_val):
+@skip_for_grayskull("Skipped due to hardware restriction")
+def test_binary_remainder(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.binary_remainder_bw, torch.remainder)

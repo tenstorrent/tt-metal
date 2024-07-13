@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -22,7 +22,7 @@ def test_bw_remainder(input_shapes, device):
     other_data, other_tensor = data_gen_with_range(input_shapes, -1e6, 1e6, device, True)
     pyt_y = torch.remainder(in_data, other_data)
 
-    tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, other_tensor)
+    tt_output_tensor_on_device = ttnn.binary_remainder_bw(grad_tensor, input_tensor, other_tensor)
 
     in_data.retain_grad()
     other_data.retain_grad()

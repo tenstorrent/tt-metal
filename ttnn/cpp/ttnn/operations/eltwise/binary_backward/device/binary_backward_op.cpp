@@ -284,6 +284,15 @@ std::vector<ttnn::Tensor> _logaddexp2_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _binary_remainder_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor result_div = ttnn::div(input, other, true, "floor");
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
 
 std::vector<ttnn::Tensor> _squared_difference_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
