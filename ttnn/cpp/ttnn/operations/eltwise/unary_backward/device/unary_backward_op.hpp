@@ -98,17 +98,16 @@ struct UnaryBackwardFunction{
 
 //OpHandler_two_float : get_function_type1_w_two_float
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
 //OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config  = std::nullopt);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float;
 
-// OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float_with_default;
 
@@ -120,7 +119,7 @@ struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
 };
 
 template <>
-struct OpHandler_two_float<UnaryBackwardOpType::HARDTANH_BW> {
+struct OpHandler_two_float_with_default<UnaryBackwardOpType::HARDTANH_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
         return _hardtanh_bw(grad, input, min, max, output_mem_config);
     }
