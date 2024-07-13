@@ -47,7 +47,7 @@ std::vector<Tensor> _clamp_max_bw(
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     Tensor minT = ttnn::ge(input, min, std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max, std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
@@ -61,7 +61,7 @@ std::vector<Tensor> _clamp_bw(
 std::vector<Tensor> _hardtanh_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     Tensor grad_result = where(
         ttnn::le(input, ttnn::operations::creation::full_like(input, min), std::nullopt, output_memory_config),
         0.0,
@@ -76,7 +76,7 @@ std::vector<Tensor> _hardtanh_bw(
 std::vector<Tensor> _threshold_bw(
     const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     Tensor result = where(
         ttnn::gtz(ttnn::add(input, -threshold, std::nullopt, output_memory_config), output_memory_config),
         grad,
@@ -90,7 +90,7 @@ std::vector<Tensor> _threshold_bw(
 std::vector<Tensor> _softplus_bw(
     const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_memory_config);
     Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_memory_config);
     Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_memory_config);
