@@ -535,24 +535,6 @@ std::vector<Tensor> prod_bw(
     return operation::decorate_as_composite(__func__, _prod_bw)(grad, input, all_dimensions, dim, output_mem_config);
 }
 
-// threshold
-// if input <= threshold = 0 else grad
-std::vector<Tensor> _threshold_bw(
-    const Tensor& grad, const Tensor& input, float threshold, float value, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = where(
-        ttnn::gtz(ttnn::add(input, -threshold, std::nullopt, output_mem_config), output_mem_config),
-        grad,
-        zeros_like(input, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> threshold_bw(
-    const Tensor& grad, const Tensor& input, float threshold, float value, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _threshold_bw)(grad, input, threshold, value, output_mem_config);
-}
-
 #define CHECK_FOR_COMPLEX(input)                                                     \
     do {                                                                             \
         TT_ASSERT(utility::is_complex_shape(input), "works for complex shape only"); \
