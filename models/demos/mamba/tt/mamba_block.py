@@ -65,16 +65,24 @@ class TtMambaBlock(torch.nn.Module):
             lambda x: x.repeat(self.configs["outer_dim"], 1),
             postfix=f"{self.configs['outer_dim']}",
         )
+        self.conv1d_bias_decode = load_fn(
+            conv1d_bias_name,
+            lambda x: x.repeat(self.configs["num_users"], 1),
+            postfix=f"{self.configs['num_users']}",
+        )
 
-        self.conv_states = []
-        for i in range(4):
-            self.conv_states.append(
-                load_fn(
-                    f"conv_state{i}",
-                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
-                    postfix=f"{args.batch_size}",
+        if self.configs["mode"] == ModelMode.DECODE:
+            self.conv_states = []
+            for i in range(4):
+                self.conv_states.append(
+                    load_fn(
+                        f"conv_state{i}",
+                        torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
+                        postfix=f"{args.batch_size}",
+                    )
                 )
-            )
+        elif self.configs["mode"] == ModelMode.PREFILL:
+            self.conv_states = [[], [], [], []]
 
         self.use_torch_conv = True
         if self.use_torch_conv:
@@ -96,6 +104,22 @@ class TtMambaBlock(torch.nn.Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+
+    def to_decode(self, decode_config):
+        self.configs = decode_config
+        self.tt_ssm.to_decode(self.configs)
+        # deallocate prefill conv_bias, need to reinitialize when back in prefill mode
+        ttnn.deallocate(self.conv1d_bias)
+        self.conv1d_bias = self.conv1d_bias_decode
+        for i in range(4):
+            self.conv_states[i] = torch.cat(self.conv_states[i], dim=2)
+            self.conv_states[i] = ttnn.from_torch(
+                self.conv_states[i],
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
@@ -166,6 +190,10 @@ class TtMambaBlock(torch.nn.Module):
         elif self.configs["mode"] == ModelMode.PREFILL:
             if self.use_torch_conv:
                 x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)
+                # cache pre-conv states
+                for i in range(0, 4):
+                    self.conv_states[i].append(x_ssm_torch[:, :, -(4 - i), :].unsqueeze(2))
+
                 ttnn.deallocate(x_ssm)
                 x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
                 conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)

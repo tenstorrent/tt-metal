@@ -25,6 +25,10 @@ class TtResidualBlock(torch.nn.Module):
 
         self.tt_mamba_block = TtMambaBlock(self.args, self.device, configs, load_fn)
 
+    def to_decode(self, decode_config):
+        self.configs = decode_config
+        self.tt_mamba_block.to_decode(decode_config)
+
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba residual block expects inputs to be rank 4"
 
