@@ -321,7 +321,7 @@ struct EdmInterfaceAddresses {
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
     Device* device,
-    RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
+    ttnn::utils::ccl::RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     ttnn::utils::ccl::CCLOpConfig const& op_config,
     std::vector<CoreCoord> const& worker_cores,
     uint32_t num_channels_per_edm,
