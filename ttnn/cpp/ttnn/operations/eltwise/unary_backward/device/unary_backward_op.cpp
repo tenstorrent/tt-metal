@@ -86,6 +86,28 @@ std::vector<Tensor> _threshold_bw(
     return grad_tensor;
 }
 
+// Softplus
+std::vector<Tensor> _softplus_bw(
+    const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_memory_config);
+    Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_memory_config);
+    Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_memory_config);
+    Tensor temp =
+        ttnn::multiply(ttnn::multiply(grad, exp_beta_self, std::nullopt, output_memory_config),
+            ttnn::reciprocal(ttnn::add(exp_beta_self, 1.0f, std::nullopt, output_memory_config), output_memory_config),
+            std::nullopt,
+            output_memory_config);
+    Tensor grad_result = where(ttnn::gtz(sub_result, output_memory_config), grad, temp, output_memory_config);
+    mul_input_beta.deallocate();
+    exp_beta_self.deallocate();
+    sub_result.deallocate();
+    temp.deallocate();
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);

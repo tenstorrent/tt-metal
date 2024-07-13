@@ -13,6 +13,7 @@ namespace ttnn {
 
 namespace operations::unary_backward {
 
+//OpHandler_two_float : get_function_type1_w_two_float
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {
 
@@ -31,6 +32,29 @@ struct ExecuteUnaryBackwardTwoFloat {
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
         auto op_type = get_function_type1_w_two_float<unary_backward_op_type>();
         return op_type(grad_tensor_arg, input_tensor_arg, min, max, memory_config);
+        }
+
+};
+
+//OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardTwoFloatWithDefault {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 1 inputs, 1 grad tensor, 2 float
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float beta,
+        float threshold,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_type1_w_two_float_with_default<unary_backward_op_type>();
+        return op_type(grad_tensor_arg, input_tensor_arg, beta, threshold, memory_config);
         }
 
 };
@@ -77,6 +101,9 @@ struct ExecuteUnaryBackward {
 constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>("ttnn::hardtanh_bw");
 constexpr auto threshold_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>("ttnn::threshold_bw");
+
+//ExecuteUnaryBackwardTwoFloatWithDefault : get_function_type1_w_two_float_with_default
+constexpr auto softplus_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>("ttnn::softplus_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");

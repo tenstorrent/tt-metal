@@ -172,6 +172,7 @@ Pointwise Unary
    ttnn/clamp_bw
    ttnn/hardtanh_bw
    ttnn/threshold_bw
+   ttnn/softplus_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
