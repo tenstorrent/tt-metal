@@ -61,6 +61,30 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
 
 };
 
+//OpHandler_float_string_default : get_function_type1_float_string_default
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardFloatStringDefault {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 1 inputs, 1 grad tensor, 1 float, 1 default string
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        string parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_type1_float_string_default<unary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        }
+
+};
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackward {
 
@@ -106,6 +130,9 @@ constexpr auto threshold_bw = ttnn::register_operation<operations::unary_backwar
 //ExecuteUnaryBackwardTwoFloatWithDefault : get_function_type1_w_two_float_with_default
 constexpr auto softplus_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>("ttnn::softplus_bw");
 constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>("ttnn::hardtanh_bw");
+
+//ExecuteUnaryBackwardFloatStringDefault : get_function_type1_float_string_default
+constexpr auto unary_div_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::UNARY_DIV_BW>>("ttnn::unary_div_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");
