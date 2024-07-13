@@ -234,20 +234,6 @@ def run_test_FalconCausalLM_end_to_end(
     for device in devices:
         ttnn.device.synchronize_device(device)
 
-    # Prepare inputs
-    if llm_mode == "prefill":
-        model_inputs = torch.split(model_input, 1)
-        tt_inputs, tt_attention_mask = zip(
-            *[
-                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
-                for m_i in model_inputs
-            ]
-        )
-    elif llm_mode == "decode":
-        tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
-            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
-        )
-
     # Run for perf iteration - profiler enabled
     profiler.enable()
     enable_persistent_kernel_cache()
@@ -258,6 +244,15 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("PERF_RUN")
 
     if llm_mode == "prefill":
+        # Push inputs to device and do preprocessing
+        model_inputs = torch.split(model_input, 1)
+        tt_inputs, tt_attention_mask = zip(
+            *[
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                for m_i in model_inputs
+            ]
+        )
+        # Prefill - forward pass
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -270,10 +265,13 @@ def run_test_FalconCausalLM_end_to_end(
                 use_cache=use_cache,
             )
             tt_outs.append(tt_out)
-        # Retrieve single tile from device to synchronize with host
-        _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
 
     elif llm_mode == "decode":
+        # Prepare inputs
+        tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
+        )
+        # Decode - forward pass
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
             llm_mode=llm_mode,
@@ -282,12 +280,13 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        # Retrieve single tile from device to synchronize with host
+        # TODO: Return token id to simulate real situation in decode
         _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
 
-    profiler.end(f"model_run_for_inference")
     for device in devices:
         ttnn.device.synchronize_device(device)
+
+    profiler.end(f"model_run_for_inference")
 
     profiler.print()
 

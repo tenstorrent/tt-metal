@@ -129,13 +129,18 @@ class TtFalconDecoderLayer:
 
         self.layernorm_eps = config.layer_norm_epsilon
 
+        self.init_preprocessing("prefill", 1, max_position_embeddings)
+
     def set_model_config(self, model_config):
         self.model_config = model_config
         self.self_attn.set_model_config(model_config)
         self.mlp.set_model_config(model_config)
 
-    def preprocessing(self, llm_mode, batch_size, sequence_size):
-        self.self_attn.preprocessing(llm_mode, batch_size, sequence_size)
+    def init_preprocessing(self, llm_mode, batch_size, max_sequence_size):
+        self.self_attn.init_preprocessing(llm_mode, max_sequence_size)
+
+    def online_preprocessing(self, llm_mode, sequence_size):
+        self.self_attn.online_preprocessing(llm_mode, sequence_size)
 
     def __call__(
         self,
