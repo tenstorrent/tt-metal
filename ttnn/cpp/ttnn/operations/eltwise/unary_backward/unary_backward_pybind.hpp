@@ -73,7 +73,7 @@ void bind_unary_backward_two_float(py::module& module, const unary_backward_oper
 template <typename unary_backward_operation_t>
 void bind_unary_backward_two_float_with_default(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {4}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
         {8}
 
@@ -277,9 +277,11 @@ void py_module(py::module& module) {
         ttnn::clamp_bw,
         R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward_two_float(
+    detail::bind_unary_backward_two_float_with_default(
         module,
         ttnn::hardtanh_bw,
+        "min", "Minimum value", -1.0,
+        "max", "Maximum value", 1.0,
         R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward_two_float(
