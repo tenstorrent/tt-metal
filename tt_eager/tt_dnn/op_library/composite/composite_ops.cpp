@@ -1470,11 +1470,11 @@ Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 }
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    tt::tt_metal::ShapeArray start_index = {0, 0, 0, 0};
+    tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
     ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);
 
-    Tensor index = ttnn::pad(0, ones_like(input_tensor_4D, output_mem_config), input_b.get_legacy_shape().to_array(), start_index, 0, false, std::nullopt);
-    Tensor temp_a = ttnn::pad(0, input_tensor_4D,input_b.get_legacy_shape().to_array(), start_index, 0, false, std::nullopt);
+    Tensor index = ttnn::pad(0, ones_like(input_tensor_4D, output_mem_config), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor temp_a = ttnn::pad(0, input_tensor_4D,input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     return where(index, temp_a, input_b, output_mem_config);
 }
 Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {

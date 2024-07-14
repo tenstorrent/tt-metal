@@ -12,7 +12,6 @@
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -94,14 +93,14 @@ Tensor AutoFormat::format_input_tensor(
             }
         } else if (!convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
-                return ttnn::pad(0, (const ttnn::Tensor) formatted_input, padded_shape.to_array(), tt::tt_metal::ShapeArray({0, 0, 0, 0}), pad_value, false, mem_config);
+                return ttnn::pad(0, (const ttnn::Tensor) formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value, false, mem_config);
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
                 return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = untilize(formatted_input, mem_config);
-                return ttnn::pad(0, (const ttnn::Tensor) formatted_input, padded_shape.to_array(), tt::tt_metal::ShapeArray({0, 0, 0, 0}), pad_value, false, mem_config);
+                return ttnn::pad(0, (const ttnn::Tensor) formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value, false, mem_config);
             }
         }
         // Fall back to host conversions
@@ -114,7 +113,7 @@ Tensor AutoFormat::format_input_tensor(
             formatted_input = layout_conversion_on_host(formatted_input, Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
-        formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input, padded_shape.to_array(), tt::tt_metal::ShapeArray({0, 0, 0, 0}), pad_value);
+        formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value);
     }
 
     if (convert_layout) {
@@ -210,7 +209,7 @@ Tensor AutoFormat::format_output_tensor(
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         formatted_output =
-            unpad_on_host(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}));
     }
 
     if (convert_layout) {
