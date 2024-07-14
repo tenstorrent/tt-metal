@@ -228,19 +228,6 @@ ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_c
 
 // backward ops for type2 complex tensor
 
-// complex add
-// self: grad, other: grad * alpha
-std::vector<ComplexTensor> complex_add_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_a = grad;
-    grad_tensor.emplace_back(grad_a);
-    const Tensor& grad_r = grad.real();
-    const Tensor& grad_i = grad.imag();
-    ComplexTensor grad_b = ComplexTensor({ttnn::multiply(grad_r, alpha, std::nullopt, output_mem_config), ttnn::multiply(grad_i, alpha, std::nullopt, output_mem_config)});
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-
 // complex sub
 // self: grad, other: -grad * alpha
 std::vector<ComplexTensor> complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config) {
