@@ -390,11 +390,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                 input_tensor = ttnn::pad(
                     input_tensor,
-                    tt::tt_metal::ShapeArray({input_tensor.get_shape()[0],
+                    tt::tt_metal::Array4D({input_tensor.get_shape()[0],
                      input_tensor.get_shape()[1],
                      input_padded_shape[-2],
                      input_padded_shape[-1]}),
-                    tt::tt_metal::ShapeArray({0, 0, 0, 0}),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
                     0);
             }
         }
@@ -472,7 +472,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
 
-    weight_tensor_ = ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array(), tt::tt_metal::ShapeArray({0, 0, 0, 0}), 0);
+    weight_tensor_ = ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -489,7 +489,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
         tt::tt_metal::Shape bias_channels_padded_shape = tt::tt_metal::Shape(
             std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
-        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array(), tt::tt_metal::ShapeArray({0, 0, 0, 0}), 0);
+        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
         bias_tensor_ = ttnn::operations::core::ToLayout::execute_on_worker_thread(
             bias_tensor_, Layout::TILE, {}, {}, (Device*)nullptr);
         if (bias_tensor_.get_dtype() != weights_bias_dtype) {
