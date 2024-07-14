@@ -1204,6 +1204,18 @@ void gen_smoke_test(Device *device,
     gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32, device_data.size_at(worker_core, 0) - 32 / sizeof(uint32_t));
 
+    // Touch test write offset
+    // Making sure this really works by doing a write would break lots of
+    // existing test infra, so not tested yet. TODO
+    dispatch_cmds.resize(0);
+    uint32_t write_offset = 48;
+    gen_dispatcher_set_write_offset_cmd(dispatch_cmds, write_offset);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    write_offset = 0;
+    gen_dispatcher_set_write_offset_cmd(dispatch_cmds, write_offset);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
     // Test host
     if (!use_dram_exec_buf_g) {
         for (int multiplier = 1; multiplier <= 3; multiplier++) {

@@ -254,13 +254,15 @@ class DeviceCommand {
         uint32_t noc_xy_addr,
         uint32_t addr,
         uint32_t data_sizeB,
-        const void *data = nullptr) {
+        const void *data = nullptr,
+        uint32_t write_offset_index = 0) {
         uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
         auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
             write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
             write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
+            write_cmd->write_linear.write_offset_index = write_offset_index;
             write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
             write_cmd->write_linear.addr = addr;
             write_cmd->write_linear.length = data_sizeB;
@@ -367,6 +369,24 @@ class DeviceCommand {
         }
     }
 
+    void add_dispatch_set_writeoffset(uint32_t write_offset) {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+        auto initialize_write_offset_cmd = [&](CQDispatchCmd *write_offset_cmd) {
+            *write_offset_cmd = {};
+            write_offset_cmd->base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+        };
+        CQDispatchCmd *write_offset_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_offset_cmd;
+            initialize_write_offset_cmd(&write_offset_cmd);
+            this->memcpy(write_offset_cmd_dst, &write_offset_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_offset_cmd(write_offset_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
     void add_dispatch_terminate() {
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
         auto initialize_terminate_cmd = [&](CQDispatchCmd *terminate_cmd) {
@@ -450,7 +470,8 @@ class DeviceCommand {
         const std::vector<std::pair<const void *, uint32_t>> &data_collection,
         uint32_t packed_write_max_unicast_sub_cmds,
         const uint32_t offset_idx = 0,
-        const bool no_stride = false) {
+        const bool no_stride = false,
+        uint32_t write_offset_index = 0) {
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -473,6 +494,7 @@ class DeviceCommand {
                 (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
                 (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
             write_packed_cmd->write_packed.count = num_sub_cmds;
+            write_packed_cmd->write_packed.write_offset_index = write_offset_index;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;
         };
@@ -586,7 +608,8 @@ class DeviceCommand {
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd> &sub_cmds,
-        const uint32_t offset_idx = 0) {
+        const uint32_t offset_idx = 0,
+        uint32_t write_offset_index = 0) {
 
         TT_ASSERT(num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS, "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeCmd", num_sub_cmds);
         static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
@@ -599,6 +622,7 @@ class DeviceCommand {
             write_packed_large_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
             write_packed_large_cmd->write_packed_large.count = num_sub_cmds;
             write_packed_large_cmd->write_packed_large.alignment = alignment;
+            write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
         };
         uint32_t payload_dst_size = align(sizeof(CQPrefetchCmd) + payload_size, PCIE_ALIGNMENT) - sizeof(CQPrefetchCmd);
         CQDispatchCmd * write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd *>(payload_dst_size);

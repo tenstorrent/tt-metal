@@ -1077,11 +1077,25 @@ inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
 
+inline void gen_dispatcher_set_write_offset_cmd(vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
+
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+    cmd.set_write_offset.offset0 = wo0;
+    cmd.set_write_offset.offset1 = wo1;
+    cmd.set_write_offset.offset2 = wo2;
+    uint32_t payload_length = 0;
+    add_dispatcher_cmd(cmds, cmd, payload_length);
+}
+
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
-    add_dispatcher_cmd(cmds, cmd, 0);
+    uint32_t payload_length = 0;
+    add_dispatcher_cmd(cmds, cmd, payload_length);
 }

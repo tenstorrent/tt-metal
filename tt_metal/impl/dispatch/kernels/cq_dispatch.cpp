@@ -75,8 +75,8 @@ static uint32_t wr_block_idx;
 
 static uint32_t cb_fence;  // walks through cb page by page
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
-
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
+static uint32_t write_offset[3];  // added to write address on non-host writes
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
@@ -377,7 +377,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
-    uint32_t dst_addr = cmd->write_linear.addr;
+    uint32_t write_offset_index = cmd->write_linear.write_offset_index;
+    uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     while (length != 0) {
@@ -563,7 +564,8 @@ void process_write_packed(uint32_t flags) {
         (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t), l1_cache);
 
     uint32_t xfer_size = cmd->write_packed.size;
-    uint32_t dst_addr = cmd->write_packed.addr;
+    uint32_t write_offset_index = cmd->write_packed.write_offset_index;
+    uint32_t dst_addr = cmd->write_packed.addr + write_offset[write_offset_index];
 
     ASSERT(xfer_size <= dispatch_cb_page_size);
 
@@ -577,7 +579,7 @@ void process_write_packed(uint32_t flags) {
     volatile uint32_t tt_l1_ptr *l1_addr = (uint32_t *)(cmd_ptr + sizeof(CQDispatchCmd));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
-    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
+    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " " << dst_addr << " " << ENDL();
     uint32_t writes = 0;
     uint32_t mcasts = 0;
     WritePackedSubCmd *sub_cmd_ptr = (WritePackedSubCmd *)l1_cache;
@@ -678,6 +680,8 @@ void process_write_packed_large() {
 
     uint32_t count = cmd->write_packed_large.count;
     uint32_t alignment = cmd->write_packed_large.alignment;
+    uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
+    uint32_t local_write_offset = write_offset[write_offset_index];
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeSubCmd);
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
@@ -693,7 +697,7 @@ void process_write_packed_large() {
 
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
@@ -960,6 +964,17 @@ re_run_command:
             cmd_ptr += sizeof(CQDispatchCmd);
             break;
 
+        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+            DPRINT << "write offset: " <<
+                cmd->set_write_offset.offset0 << " " <<
+                cmd->set_write_offset.offset1 << " " <<
+                cmd->set_write_offset.offset2 << ENDL();
+            write_offset[0] = cmd->set_write_offset.offset0;
+            write_offset[1] = cmd->set_write_offset.offset1;
+            write_offset[2] = cmd->set_write_offset.offset2;
+            cmd_ptr += sizeof(CQDispatchCmd);
+            break;
+
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch terminate\n";
             if (is_d_variant && !is_h_variant) {
@@ -1045,6 +1060,9 @@ void kernel_main() {
     wr_block_idx = 0;
     block_noc_writes_to_clear[0] = noc_nonposted_writes_num_issued[noc_index] + 1;
     cmd_ptr = dispatch_cb_base;
+    write_offset[0] = 0;
+    write_offset[1] = 0;
+    write_offset[2] = 0;
 
     {
         uint32_t completion_queue_wr_ptr_and_toggle = *get_cq_completion_write_ptr();
