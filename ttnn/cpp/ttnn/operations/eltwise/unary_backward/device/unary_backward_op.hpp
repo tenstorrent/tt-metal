@@ -20,6 +20,7 @@ enum class UnaryBackwardOpType {
     THRESHOLD_BW,
     SOFTPLUS_BW,
     UNARY_DIV_BW,
+    RDIV_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -108,6 +109,7 @@ std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float
 
 //OpHandler_float_string_default : get_function_type1_float_string_default
 std::vector<Tensor> _unary_div_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
@@ -151,6 +153,13 @@ template <>
 struct OpHandler_float_string_default<UnaryBackwardOpType::UNARY_DIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _unary_div_bw(grad, input, scalar, round_mode, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_float_string_default<UnaryBackwardOpType::RDIV_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
     }
 };
 

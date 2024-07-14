@@ -133,59 +133,6 @@ std::vector<std::optional<Tensor>> sqrt_bw(const Tensor& grad, const Tensor& inp
     return operation::decorate_as_composite(__func__, _sqrt_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<Tensor> _rdiv_bw(
-    const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
-    if (round_mode == "None") {
-        Tensor result = where(
-            ttnn::nez(input),
-            ttnn::multiply(ttnn::neg(grad, output_mem_config),
-                (ttnn::multiply(ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
-                std::nullopt,
-                output_mem_config),
-            t_nan,
-            output_mem_config);
-        if (scalar > 0) {
-            result = where(
-                ttnn::logical_and(
-                    ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-                t_inf,
-                result,
-                output_mem_config);
-            result = where(
-                ttnn::logical_and(
-                    ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-                -t_inf,
-                result,
-                output_mem_config);
-        } else if (scalar < 0) {
-            result = where(
-                ttnn::logical_and(
-                    ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-                -t_inf,
-                result,
-                output_mem_config);
-            result = where(
-                ttnn::logical_and(
-                    ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-                t_inf,
-                result,
-                output_mem_config);
-        }
-        grad_tensor.emplace_back(result);
-    } else {
-        Tensor result = zeros_like(grad, output_mem_config);
-        grad_tensor.emplace_back(result);
-    }
-    return grad_tensor;
-}
-std::vector<Tensor> rdiv_bw(
-    const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _rdiv_bw)(grad, input, scalar, round_mode, output_mem_config);
-}
-
 std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
     TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");

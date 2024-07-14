@@ -68,13 +68,6 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
     std::optional<Tensor> input_grad = std::nullopt);
 
-std::vector<Tensor> rdiv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float scalar,
-    string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // bw = grad(1 - tanh(x) ** 2)
 std::vector<std::optional<Tensor>> tanh_bw(
     uint8_t cq_id,
