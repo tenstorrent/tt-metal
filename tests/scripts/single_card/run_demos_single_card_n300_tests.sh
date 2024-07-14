@@ -9,7 +9,7 @@ fi
 
 # Not working on N150, working on N300
 unset WH_ARCH_YAML
-pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
+pytest models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
 rm -rf built
 
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
