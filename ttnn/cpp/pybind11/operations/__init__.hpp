@@ -30,6 +30,7 @@
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -62,6 +63,9 @@ void py_module(py::module& module) {
 
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);
+    
+    auto m_complex_binary_backward = module.def_submodule("complex_binary_backward", "complex_binary_backward operations");
+    complex_binary_backward::py_module(m_complex_binary_backward);
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);

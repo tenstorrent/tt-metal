@@ -167,7 +167,6 @@ Pointwise Unary
    ttnn/triu
    ttnn/tanhshrink
    ttnn/threshold
-   ttnn/mul_bw
    ttnn/clamp_min_bw
    ttnn/clamp_max_bw
    ttnn/clamp_bw
@@ -315,6 +314,8 @@ Pointwise Binary
    ttnn/min_bw
    ttnn/max_bw
    ttnn/lerp_bw
+   ttnn/mul_bw
+   ttnn/complex_add_bw
 
 Pointwise Ternary
 =================
