@@ -176,6 +176,7 @@ Pointwise Unary
    ttnn/softplus_bw
    ttnn/unary_div_bw
    ttnn/rdiv_bw
+   ttnn/bias_gelu_unary_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
