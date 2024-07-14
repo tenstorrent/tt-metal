@@ -145,11 +145,18 @@ inline std::ostream &operator<<(std::ostream &os, const Padding &padding) {
 
 bool operator==(const Padding &, const Padding &);
 bool operator!=(const Padding &, const Padding &);
-typedef std::array<uint32_t, 4> ShapeArray;
+typedef std::array<uint32_t, 1> Array1D;
+typedef std::array<uint32_t, 2> Array2D;
+typedef std::array<uint32_t, 3> Array3D;
+typedef std::array<uint32_t, 4> Array4D;
+typedef std::array<uint32_t, 5> Array5D;
+typedef std::array<uint32_t, 6> Array6D;
+typedef std::array<uint32_t, 7> Array7D;
+typedef std::array<uint32_t, 8> Array8D;
 
 class Shape {
     std::size_t rank_;
-    ShapeArray dimensions_;
+    std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
    public:
@@ -173,8 +180,8 @@ class Shape {
         }
     }
 
-    Shape(const std::array<uint32_t, MAX_NUM_DIMENSIONS> &shape, uint32_t _rank) : rank_(_rank), dimensions_{}, padding_{_rank} {
-        for (auto index = 0; index < _rank; index++) {
+    Shape(const Array4D &shape) : rank_(4), dimensions_{}, padding_{4} {
+        for (auto index = 0; index < 4; index++) {
             this->dimensions_[index] = shape[index];
         }
     }
@@ -220,8 +227,8 @@ class Shape {
     }
     friend std::ostream &operator<<(std::ostream &os, const Shape &shape);
 
-    ShapeArray to_array() const {
-        ShapeArray ret_array;
+    Array4D to_array_4D() const {
+        Array4D ret_array;
         for(int i=0; i<rank(); i++) {
             ret_array[i] = this->operator[](i);
         }

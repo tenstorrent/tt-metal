@@ -8,7 +8,6 @@
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
