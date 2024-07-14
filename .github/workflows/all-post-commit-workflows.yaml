@@ -19,6 +19,11 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      profiler-build: true
+    secrets: inherit
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
@@ -28,6 +33,7 @@ jobs:
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
   profiler-regression:
+    needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
   eager-package-main:

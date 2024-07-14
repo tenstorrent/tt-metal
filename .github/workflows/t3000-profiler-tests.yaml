@@ -7,7 +7,14 @@ on:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+      profiler-build: true
+    secrets: inherit
   t3000-profiler-tests:
+    needs: build-artifact-profiler
     strategy:
       fail-fast: false
       matrix:
@@ -32,10 +39,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
-          ./create_venv.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
@@ -44,4 +53,4 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U03BJ1L3LUQ # Mo Memarian  
+          owner: U03BJ1L3LUQ # Mo Memarian

@@ -27,7 +27,6 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-info.arch }}
       LOGURU_LEVEL: INFO
-      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": true}'
     environment: dev
     runs-on: ${{ matrix.test-info.runs-on }}
     steps:
