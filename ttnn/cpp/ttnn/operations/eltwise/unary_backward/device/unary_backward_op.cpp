@@ -132,6 +132,57 @@ std::vector<Tensor> _unary_div_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _rdiv_bw(
+    const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    float t_nan = std::nanf("");
+    float t_inf = std::numeric_limits<float>::infinity();
+    if (round_mode == "None") {
+        Tensor result = where(
+            ttnn::nez(input),
+            ttnn::multiply(ttnn::neg(grad, output_memory_config),
+                (ttnn::multiply(ttnn::reciprocal(ttnn::square(input, output_memory_config)), scalar, std::nullopt, output_memory_config)),
+                std::nullopt,
+                output_memory_config),
+            t_nan,
+            output_memory_config);
+        if (scalar > 0) {
+            result = where(
+                ttnn::logical_and(
+                    ttnn::eqz(input, output_memory_config), ttnn::ltz(grad, output_memory_config), std::nullopt, output_memory_config),
+                t_inf,
+                result,
+                output_memory_config);
+            result = where(
+                ttnn::logical_and(
+                    ttnn::eqz(input, output_memory_config), ttnn::gtz(grad, output_memory_config), std::nullopt, output_memory_config),
+                -t_inf,
+                result,
+                output_memory_config);
+        } else if (scalar < 0) {
+            result = where(
+                ttnn::logical_and(
+                    ttnn::eqz(input, output_memory_config), ttnn::ltz(grad, output_memory_config), std::nullopt, output_memory_config),
+                -t_inf,
+                result,
+                output_memory_config);
+            result = where(
+                ttnn::logical_and(
+                    ttnn::eqz(input, output_memory_config), ttnn::gtz(grad, output_memory_config), std::nullopt, output_memory_config),
+                t_inf,
+                result,
+                output_memory_config);
+        }
+        grad_tensor.emplace_back(result);
+    } else {
+        Tensor result = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(result);
+    }
+    return grad_tensor;
+}
+
 std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
