@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_eager/tt_dnn/op_library/backward/backward_ops.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -180,6 +181,14 @@ std::vector<Tensor> _rdiv_bw(
         Tensor result = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
         grad_tensor.emplace_back(result);
     }
+    return grad_tensor;
+}
+
+std::vector<Tensor> _bias_gelu_unary_bw( const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
+    Tensor input = ttnn::add(input_tensor, bias);
+    grad_tensor = tt::tt_metal::gelu_bw(grad, input, approximate = approximate);
     return grad_tensor;
 }
 

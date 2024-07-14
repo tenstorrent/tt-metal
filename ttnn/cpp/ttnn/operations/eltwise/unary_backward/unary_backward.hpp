@@ -134,6 +134,7 @@ constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward
 //ExecuteUnaryBackwardFloatStringDefault : get_function_type1_float_string_default
 constexpr auto unary_div_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::UNARY_DIV_BW>>("ttnn::unary_div_bw");
 constexpr auto rdiv_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>("ttnn::rdiv_bw");
+constexpr auto bias_gelu_unary_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_UNARY_BW>>("ttnn::bias_gelu_unary_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");
