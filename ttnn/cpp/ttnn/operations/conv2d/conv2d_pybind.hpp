@@ -17,6 +17,21 @@ namespace operations {
 namespace conv2d {
 
 void py_module(py::module& module) {
+
+    module.def("conv", &conv, R"doc(
+        Perform a conv ``A x B`` with two tensors
+        This op tilizes tensor A and untilizes the output
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
     module.def(
         "conv2d",
         [](const ttnn::Tensor& input_tensor,

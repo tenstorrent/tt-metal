@@ -26,6 +26,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_weight_tensor_special_padding,
 )
 import torch
+import ttnn
 
 
 @pytest.mark.parametrize("untilize_out", (False,))
@@ -145,7 +146,7 @@ def test_run_optimized_conv(
         # Run TT metal OP
         if not has_bias:
             bias_device = None
-        out = ttl.tensor.optimized_conv(
+        out = ttnn.operations.conv2d.optimized_conv(
             A,
             B_tiled,
             bias_device,
@@ -156,13 +157,13 @@ def test_run_optimized_conv(
             has_bias,
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(
+            ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(1, 1),
                 num_cores_nhw=1,
                 per_core_out_matrix_height_ntiles=out_matrix_height_ntiles,
                 per_core_out_matrix_width_ntiles=weight_matrix_width_ntiles,
             ),
-            ttl.tensor.OptimizedConvBlockConfig(
+            ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,

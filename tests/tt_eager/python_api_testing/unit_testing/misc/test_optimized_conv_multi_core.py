@@ -8,7 +8,7 @@ import sys
 from loguru import logger
 
 import numpy as np
-
+import ttnn
 import tt_lib as ttl
 from tt_lib.utils import (
     tilize_to_list,
@@ -152,7 +152,7 @@ def test_run_optimized_conv(
         # Run TT metal OP
         if not has_bias:
             bias_device = None
-        out = ttl.tensor.optimized_conv(
+        out = ttnn.operations.conv2d.optimized_conv(
             A,
             B_tiled,
             bias_device,
@@ -163,13 +163,13 @@ def test_run_optimized_conv(
             has_bias,
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(
+            ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(num_cores_x, num_cores_y),
                 num_cores_nhw=num_cores_y,
                 per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
                 per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
-            ttl.tensor.OptimizedConvBlockConfig(
+            ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,

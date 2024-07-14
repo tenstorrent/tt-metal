@@ -37,6 +37,7 @@ get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv2d.get_co
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv2d.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv2d.OptimizedConvBlockConfig
 optimized_conv = ttnn._ttnn.operations.conv2d.optimized_conv
+conv_legacy = ttnn._ttnn.operations.conv2d.conv
 
 
 class Conv2d:
