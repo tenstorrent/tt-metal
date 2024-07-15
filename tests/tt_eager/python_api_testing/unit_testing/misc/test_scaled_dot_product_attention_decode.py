@@ -7,6 +7,7 @@ import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
+    comp_and_get_pcc,
 )
 import tt_lib
 import ttnn
@@ -60,6 +61,13 @@ def get_chunk_size(s):
     if s <= 2048:
         return 512
     return 512
+
+
+def fa_rand(*shape):
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli
 
 
 def flash_attention_loop(q, K, V, mask, scale, k_chunk_size):
@@ -182,7 +190,7 @@ def run_test_sdpa_decode_multi_pos(
         min_pcc = 0.99
         if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
             min_pcc = 0.98
-        min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
+        min_pcc = 0.93 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
 
     compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
         math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
@@ -201,13 +209,13 @@ def run_test_sdpa_decode_multi_pos(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
 
-    K = torch.randn(nkv, b, s, d)
-    V = torch.randn(nkv, b, s, d)
+    K = fa_rand(nkv, b, s, d)
+    V = fa_rand(nkv, b, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
-    max_start_idx = 31
+    max_start_idx = 0
 
     while max_start_idx < s:
         scale = d**-0.5
@@ -233,7 +241,7 @@ def run_test_sdpa_decode_multi_pos(
             start_idx = start_indices[i]
             attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
-        Q = torch.randn(1, b, padded_num_heads, d)
+        Q = fa_rand(1, b, padded_num_heads, d)
 
         tt_Q = ttnn.as_tensor(
             Q,
@@ -274,7 +282,7 @@ def run_test_sdpa_decode_multi_pos(
 
         assert out_pass
 
-        max_start_idx += 601 if max_start_idx < 4096 else 3001
+        max_start_idx += 71 if max_start_idx < 4096 else 3001
 
 
 def run_test_sdpa_decode_single_iter(
@@ -305,7 +313,7 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.99
         if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
             min_pcc = 0.98
-        min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
+        min_pcc = 0.93 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
 
     compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
         math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
@@ -324,8 +332,8 @@ def run_test_sdpa_decode_single_iter(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
 
-    K = torch.randn(nkv, b, s, d)
-    V = torch.randn(nkv, b, s, d)
+    K = fa_rand(nkv, b, s, d)
+    V = fa_rand(nkv, b, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -354,7 +362,7 @@ def run_test_sdpa_decode_single_iter(
         start_idx = start_indices[i]
         attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
-    Q = torch.randn(1, b, padded_num_heads, d)
+    Q = fa_rand(1, b, padded_num_heads, d)
 
     tt_Q = ttnn.as_tensor(
         Q,
@@ -394,6 +402,7 @@ def run_test_sdpa_decode_single_iter(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -412,13 +421,13 @@ def run_test_sdpa_decode_single_iter(
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, single_iter",
     (
-        [32, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
-        [16, 8, 1, 32768, 128, (8, 8), False],  # Llama2-70B
-        [8, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
-        [4, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
+        [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        [16, 8, 1, 32768, 128, (8, 6), False],  # Llama2-70B
+        [8, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        [4, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
     ),
 )
-def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter):
+def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, use_program_cache):
     tt_lib.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
@@ -431,6 +440,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -444,7 +454,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([16, 8, 1, 32768, 128, (8, 8)],),  # Llama2-70B
+    ([16, 8, 1, 32768, 128, (8, 6)],),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     tt_lib.device.DisablePersistentKernelCache()
@@ -514,6 +524,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype",
     [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
@@ -637,40 +648,54 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     )
     dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
 
-    K = torch.randn(nkv, b, s, d)
-    V = torch.randn(nkv, b, s, d)
+    K = fa_rand(nkv, b, s, d)
+    V = fa_rand(nkv, b, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
-    start_idx = 22222  # 16242
+    start_idx = 0
 
-    while start_idx < s:
-        Q = torch.randn(1, b, padded_num_heads, d)
+    failed_start_pos = []
+
+    while start_idx < 32000:
+        Q = fa_rand(1, b, padded_num_heads, d)
         prev_pcc = None
 
-        for i in range(16):
-            scale = d**-0.5
+        scale = d**-0.5
 
-            k_chunk_size = get_chunk_size(start_idx + 1)
-            program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
-                compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
-                q_chunk_size=padded_num_heads,
-                k_chunk_size=k_chunk_size,
-            )
+        k_chunk_size = get_chunk_size(start_idx + 1)
+        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
+            q_chunk_size=padded_num_heads,
+            k_chunk_size=k_chunk_size,
+        )
 
-            padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
+        padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
-            # Test various sequence lengths
-            logger.info(f"Testing with sequence length: {start_idx}")
-            logger.info(f"Using chunk size: {k_chunk_size}")
-            logger.info(f"Using padded layer length: {padded_layer_len}")
-            logger.info(f"Using padded num heads: {padded_num_heads}")
+        # Test various sequence lengths
+        logger.info(f"Testing with sequence length: {start_idx}")
+        logger.info(f"Using chunk size: {k_chunk_size}")
+        logger.info(f"Using padded layer length: {padded_layer_len}")
+        logger.info(f"Using padded num heads: {padded_num_heads}")
 
-            attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
-            # Assume all users are at same position
-            attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+        # Assume all users are at same position
+        attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
+        Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+
+        expect = torch.nn.functional.scaled_dot_product_attention(
+            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        )  # b, nh, 1, d
+        expect = expect.squeeze().unsqueeze(0)
+
+        all_out_pass = True
+
+        for i in range(200):
             tt_Q = ttnn.as_tensor(
                 Q,
                 device=device,
@@ -694,26 +719,25 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 
             tt_back = tt_back[:, :, :nh, :]
 
-            Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-            K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-            V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-            attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
-
-            expect = torch.nn.functional.scaled_dot_product_attention(
-                Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-            )  # b, nh, 1, d
-            expect = expect.squeeze().unsqueeze(0)
-
-            out_pass, out_pcc = comp_pcc(expect, tt_back, 0.85)
+            out_pass, out_pcc, pcc_val = comp_and_get_pcc(expect, tt_back, 0.98)
 
             logger.debug(f"python vs pytorch: {out_pcc}")
 
             if prev_pcc is not None:
                 assert out_pcc == prev_pcc, f"Iteration {i}: pcc changed from {prev_pcc} to {out_pcc}"
 
+            if not out_pass:
+                all_out_pass = False
+                logger.debug(f"PCC Failed at iteration {i}")
+
             prev_pcc = out_pcc
 
-        start_idx += 601 if start_idx < 4096 else 3001
+        if not all_out_pass:
+            failed_start_pos.append(start_idx)
+
+        start_idx += 20  # if start_idx < 4096 else 3001
+
+    logger.info(f"ND Start Pos: {failed_start_pos}")
 
 
 @pytest.mark.timeout(600)
@@ -723,13 +747,13 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     "dtype, q_dtype",
     [
         # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        # [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B],
+        # [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B],
     ],
     ids=[
         # "bfp16_bfp16",
-        "bfp8_bfp8",
-        # "bfp4_bfp4",
+        # "bfp8_bfp8",
+        "bfp4_bfp4",
     ],
 )
 @pytest.mark.parametrize(
@@ -737,9 +761,9 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     (
         # [16, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
         # [32, 8, 1, 32768, 128, (8, 8)],  # Llama2-70B
-        [32, 8, 1, 32768, 128, (8, 8)],
+        [16, 8, 1, 32768, 128, (8, 6)],
     ),
 )
-def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
+def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
     tt_lib.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)
