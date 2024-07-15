@@ -83,7 +83,13 @@ def test_run_resnet50_inference(device, use_program_cache, batch_size, act_dtype
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
     test_infra = create_test_infra(
-        device, batch_size, act_dtype, weight_dtype, math_fidelity, True, ttnn.L1_MEMORY_CONFIG
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, input_mem_config = setup_l1_sharded_input(
@@ -118,7 +124,13 @@ def test_run_resnet50_trace_inference(device, use_program_cache, batch_size, act
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
     test_infra = create_test_infra(
-        device, batch_size, act_dtype, weight_dtype, math_fidelity, True, ttnn.DRAM_MEMORY_CONFIG
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -165,7 +177,13 @@ def test_run_resnet50_2cqs_inference(device, use_program_cache, batch_size, act_
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
     test_infra = create_test_infra(
-        device, batch_size, act_dtype, weight_dtype, math_fidelity, True, ttnn.L1_MEMORY_CONFIG
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -232,7 +250,13 @@ def test_run_resnet50_trace_2cqs_inference(
     if is_wormhole_b0() and batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
     test_infra = create_test_infra(
-        device, batch_size, act_dtype, weight_dtype, math_fidelity, True, ttnn.DRAM_MEMORY_CONFIG
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
