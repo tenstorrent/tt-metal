@@ -100,7 +100,8 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 
 We use CMake for our build flows.
 
-Set up the environment variables and invoke our build scripts.
+Set up the environment variables and invoke our build scripts. Note that for
+source builds, you must set these environment variables every time.
 
 ```sh
 export ARCH_NAME=<ARCH_NAME>
