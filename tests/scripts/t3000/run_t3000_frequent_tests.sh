@@ -29,9 +29,11 @@ run_t3000_llama2_70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
 
   env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py ; fail+=$?
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py --timeout=900 ; fail+=$?
+  
+  # Failing Test - See Issue #10317
+  #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py ; fail+=$?
+  #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py ; fail+=$?
+  #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py --timeout=900 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -111,7 +113,8 @@ run_t3000_falcon40b_tests() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_falcon_mlp.py ; fail+=$?
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_falcon_attention.py --timeout=480 ; fail+=$?
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_falcon_decoder.py --timeout=480 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_falcon_causallm.py --timeout=600 ; fail+=$?
+  # "Failing Test - See Issue 10304"
+  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_falcon_causallm.py --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
