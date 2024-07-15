@@ -138,6 +138,7 @@ void py_module(py::module& m_transformers) {
         py::arg("input_tensor").noconvert(),
         py::arg("update_idxs").noconvert(),
         py::arg("update_idxs_tensor").noconvert() = std::nullopt,
+        py::arg("page_table").noconvert() = std::nullopt,
         py::arg("batch_offset") = 0,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(

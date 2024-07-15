@@ -26,11 +26,24 @@ void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const 
 
     // input_tensor: [1, b, padded_heads, head_dim]
     // cache_tensor: [b, 1, kv_len, head_dim]
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1]);
     TT_FATAL(input_tensor.get_legacy_shape()[0] == 1);
-    TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
-    TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0]);
     TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1]);
+
+    const bool paged_cache = optional_input_tensors.at(1).has_value();
+    uint32_t batch_size;
+    if (!paged_cache) {
+        TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
+        TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0]);
+    } else {
+        TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
+        // TODO: How to validate page_table and paged_cache?
+        auto page_table = optional_input_tensors.at(1).value();
+        TT_FATAL(page_table.get_dtype() == DataType::INT32);
+        TT_FATAL(page_table.get_layout() == Layout::ROW_MAJOR);
+        TT_FATAL(page_table.get_legacy_shape()[0] == input_tensor.get_legacy_shape()[1], "Batch size between page_table and input_tensor must match");
+        TT_FATAL(page_table.get_legacy_shape()[1] <= cache_tensor.get_legacy_shape()[0], "max_num_blocks_per_seq must be less than max_num_blocks");
+    }
 
     TT_FATAL(this->op_type == PagedUpdateCacheOpType::UPDATE, "Only UPDATE operation is supported for PagedUpdateCache");
 
@@ -52,20 +65,23 @@ void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const 
         } else {
             num_indices = this->update_idxs.size();
         }
+
         TT_FATAL(input_tensor.get_legacy_shape()[1] == num_indices, "Number of update_idxs should match batch size");
+
         TT_FATAL(input_tensor.is_sharded());
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
             TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1]);
             // Require even work division for now
-            TT_FATAL(input_tensor.shard_spec().value().grid.num_cores() == cache_tensor.get_legacy_shape()[0], "Input must be sharded on batch num cores");
+            // TT_FATAL(input_tensor.shard_spec().value().grid.num_cores() == cache_tensor.get_legacy_shape()[0], "Input must be sharded on batch num cores");
             TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0);
             TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Only ROW_MAJOR sharding is supported");
         }
-        TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-1]);
+        // TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-1]);
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
-        if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32);
-        else TT_FATAL(this->batch_offset == 0);
+        // if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32);
+        // else TT_FATAL(this->batch_offset == 0);
+        TT_FATAL(this->batch_offset == 0);
     }
 }
 
@@ -86,12 +102,13 @@ operation::ProgramWithCallbacks PagedUpdateCache::create_program(
     const auto& cache_tensor = input_tensors.at(0);
     const auto& input_tensor = input_tensors.at(1);
     const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
+    const auto page_table = optional_input_tensors.at(1);
 
 
     switch(this->get_parallelization_strategy(input_tensors)) {
         case PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE:
         default:
-            return paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, this->update_idxs, this->batch_offset, this->compute_kernel_config);
+            return paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config);
     };
 }
 

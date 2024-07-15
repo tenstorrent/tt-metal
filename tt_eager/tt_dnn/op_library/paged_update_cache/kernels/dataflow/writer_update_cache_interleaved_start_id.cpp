@@ -23,20 +23,28 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t Wbytes = get_compile_time_arg_val(9);
 
-    DPRINT << "WRITER:"  << "cache_is_dram: " << (uint32_t)cache_is_dram << ENDL();
-    DPRINT << "WRITER:"  << "cache_cb_id: " << cache_cb_id << ENDL();
-    DPRINT << "WRITER:"  << "untilized_cache_cb_id: " << untilized_cache_cb_id << ENDL();
-    DPRINT << "WRITER:"  << "untilized_cache2_cb_id: " << untilized_cache2_cb_id << ENDL();
-    DPRINT << "WRITER:"  << "untilized_input_cb_id: " << untilized_input_cb_id << ENDL();
-    DPRINT << "WRITER:"  << "use_index_tensor: " << (uint32_t)use_index_tensor << ENDL();
-    DPRINT << "WRITER:"  << "cb_index_id: " << cb_index_id << ENDL();
-    DPRINT << "WRITER:"  << "cache_batch_num_tiles: " << cache_batch_num_tiles << ENDL();
-    DPRINT << "WRITER:"  << "Wt: " << Wt << ENDL();
-    DPRINT << "WRITER:"  << "Wbytes: " << Wbytes << ENDL();
+    // paged_cache args
+    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
+    constexpr uint32_t block_size = get_compile_time_arg_val(12);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
+    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
+    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
-    DPRINT << "WRITER:"  << "cache_addr: " << cache_addr << ENDL();
-    DPRINT << "WRITER:"  << "cache_start_id: " << cache_start_id << ENDL();
-    DPRINT << "WRITER " << "cache_tile_offset_B: " << cache_tile_offset_B << ENDL();
+    // DPRINT << "WRITER:"  << "cache_is_dram: " << (uint32_t)cache_is_dram << ENDL();
+    // DPRINT << "WRITER:"  << "cache_cb_id: " << cache_cb_id << ENDL();
+    // DPRINT << "WRITER:"  << "untilized_cache_cb_id: " << untilized_cache_cb_id << ENDL();
+    // DPRINT << "WRITER:"  << "untilized_cache2_cb_id: " << untilized_cache2_cb_id << ENDL();
+    // DPRINT << "WRITER:"  << "untilized_input_cb_id: " << untilized_input_cb_id << ENDL();
+    // DPRINT << "WRITER:"  << "use_index_tensor: " << (uint32_t)use_index_tensor << ENDL();
+    // DPRINT << "WRITER:"  << "cb_index_id: " << cb_index_id << ENDL();
+    // DPRINT << "WRITER:"  << "cache_batch_num_tiles: " << cache_batch_num_tiles << ENDL();
+    // DPRINT << "WRITER:"  << "Wt: " << Wt << ENDL();
+    // DPRINT << "WRITER:"  << "Wbytes: " << Wbytes << ENDL();
+
+    // DPRINT << "WRITER:"  << "cache_addr: " << cache_addr << ENDL();
+    // DPRINT << "WRITER:"  << "cache_start_id: " << cache_start_id << ENDL();
+    // DPRINT << "WRITER " << "cache_tile_offset_B: " << cache_tile_offset_B << ENDL();
 
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
@@ -51,6 +59,7 @@ void kernel_main() {
     };
 
     uint32_t cache_id = cache_start_id;
+    uint32_t update_idx = 0;
 
     if constexpr (use_index_tensor) {
         cb_wait_front(cb_index_id, 1);
@@ -58,13 +67,32 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
         for (uint32_t b = 0; b < 32; ++b) {
             uint32_t index = index_ptr[b];
-            DPRINT << "b=" << b << " index=" << index << ENDL();
+            // DPRINT << "b=" << b << " index=" << index << ENDL();
         }
         const uint32_t update_idx = index_ptr[my_batch_idx];
-        const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-        cache_id = cache_start_id;
 
+        if constexpr (is_paged_cache) {
+            cb_wait_front(page_table_cb_id, 1);
+            uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
+            volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+            for (uint32_t block_id = 0; block_id < max_blocks_per_seq; ++block_id) {
+                uint32_t physical_block = page_table_ptr[block_id];
+                DPRINT << "b=" << my_batch_idx << " virtual: " << block_id << " -> physical: " << physical_block << ENDL();
+            }
+
+            const uint32_t virtual_block_id = update_idx / block_size;
+            const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+            const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+            const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+            const uint32_t block_offset = block_row_tile * Wt;
+            cache_id = block_start_id + block_offset;
+            DPRINT << "b=" << my_batch_idx << " update_idx: " << update_idx << " block_start_id: " << block_start_id << " block_offset: " << block_offset << " cache_id: " << cache_id << ENDL();
+
+        } else {
+            const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+            const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+            cache_id = cache_start_id;
+        }
         cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
     }
 
