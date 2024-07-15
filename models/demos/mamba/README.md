@@ -1,12 +1,19 @@
-# Mamba Model
+# Mamba
 
 ## Inference Demo
 
-This demo is designed to run Mamba-2.8b on  a `wormhole` card and generate outputs for a set of prompts. We used finetuned version [state-spaces/mamba-2.8b-slimpj](https://huggingface.co/state-spaces/mamba-2.8b-slimpj) for quality outputs. Follow the instructions below to run the demo successfully.
+This demo is designed to run Mamba-2.8b on  a `wormhole_b0` card and generate outputs for a set of prompts. We used finetuned version [state-spaces/mamba-2.8b-slimpj](https://huggingface.co/state-spaces/mamba-2.8b-slimpj) for quality outputs. Follow the instructions below to run the demo successfully.
 
 ### How to Run
 
+To get the best performance during decode we can use the 8x8 core grid. To enable it run the following command:
+
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 To run the model for a single user you can use the command line input:
+
 ```
 pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/mamba/demo/demo.py
 ```
@@ -22,13 +29,14 @@ To run the demo using custom input prompts, you can provide a different path to 
 ```
 pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/mamba/demo/demo.py
 ```
-Note: We currently only support json file with strictly 32 user prompts with same token length. Check the `models/demos/mamba/demo/prompts.json` file for reference.
+
+Any sequence length is supported. We currently only support JSON file with strictly 32 user prompts with same token length. Check the `models/demos/mamba/demo/prompts.json` file for reference.
+
+The prefill graph is not currently integrated into the demo. Therefore we currently process the prompt a single token at a time using the decode graph.
 
 ---
 
-Feel free to reach out if you have any questions or need further assistance!
-
-## Mamba Unit Tests
+## Unit Tests
 
 These unit tests are designed to test the Mamba model and its components. The tests are written using the `pytest` framework.
 
@@ -57,13 +65,13 @@ pytest -svv models/demos/mamba/tests/test_residual_block.py
 
 ### Full Model
 
-Note : input embedding layer amd TopK are on CPU
+Note : input embedding layer and TopK are on CPU
 
 ```
-pytest -svv models/demos/mamba/tests/test_full_model.py::test_inference[state-spaces/mamba-2.8b-32-0.98-64-1]
+pytest -svv models/demos/mamba/tests/test_full_model.py::test_inference
 ```
 
-## Mamba Model Performance Tests
+## Performance Tests
 
 These tests are designed to evaluate device-side and host performance of Mamba model. The tests are written using the `pytest` framework.
 **Navigate to the `tt-metal` directory**
@@ -80,7 +88,6 @@ Build with profiler support enabled (use the build script `./scripts/build_scrip
 
 ```
 pytest -svv models/demos/mamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal
-
 ```
 
 This will also generate device and host profiling logs in directory `generated/profiler/reports/ttnn_mamba`
