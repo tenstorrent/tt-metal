@@ -280,11 +280,6 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
-        ttnn::bias_gelu_bw,
-        R"doc(Performs backward operations for binary gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
-
-    detail::bind_binary_backward(
-        module,
         ttnn::min_bw,
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
