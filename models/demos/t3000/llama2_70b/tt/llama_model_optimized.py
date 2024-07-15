@@ -39,7 +39,6 @@ class TtLlamaModel_optimized:
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
-        read_cache = False
         self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
