@@ -163,6 +163,7 @@ def run_mamba_prefill_decode_demo(
     for user_idx in tqdm(range(num_users), desc="Prefilling the prompt(s)..."):
         with torch.no_grad():
             model(sequences[user_idx, :-1].unsqueeze(0))  # Omit the last token in the sequence
+            model.configs["current_user"] += 1
 
     # Decode
     decode_model_config = model_config.create_model_config(
