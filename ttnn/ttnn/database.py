@@ -213,6 +213,11 @@ def get_or_create_sqlite_db(report_path):
     return sqlite_connection
 
 
+def get_cursor(report_path):
+    sqlite_connection = get_or_create_sqlite_db(report_path)
+    return sqlite_connection.cursor()
+
+
 DEVICE_IDS_IN_DATABASE = set()
 
 
@@ -579,7 +584,7 @@ def store_tensors(report_path, tensors):
 
 
 def query_device_by_id(report_path, device_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
@@ -588,13 +593,11 @@ def query_device_by_id(report_path, device_id):
         device = ttnn.database.Device(*row)
         break
 
-    sqlite_connection.close()
-
     return device
 
 
 def query_operation_by_id(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operations WHERE operation_id = ?", (operation_id,))
@@ -603,13 +606,11 @@ def query_operation_by_id(report_path, operation_id):
         operation = ttnn.database.Operation(*row)
         break
 
-    sqlite_connection.close()
-
     return operation
 
 
 def query_operation_by_id_together_with_previous_and_next(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operations WHERE operation_id = ?", (operation_id,))
@@ -632,13 +633,11 @@ def query_operation_by_id_together_with_previous_and_next(report_path, operation
         next_operation = ttnn.database.Operation(*row)
         break
 
-    sqlite_connection.close()
-
     return operation, previous_operation, next_operation
 
 
 def query_operations(report_path):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operations")
@@ -646,11 +645,22 @@ def query_operations(report_path):
         operation = ttnn.database.Operation(*row)
         yield operation
 
-    sqlite_connection.close()
+
+def query_latest_operation(report_path):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM operations ORDER BY operation_id DESC LIMIT 1")
+    operation = None
+    for row in cursor.fetchall():
+        operation = ttnn.database.Operation(*row)
+        break
+
+    return operation
 
 
 def query_operation_arguments(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operation_arguments WHERE operation_id = ?", (operation_id,))
@@ -658,11 +668,9 @@ def query_operation_arguments(report_path, operation_id):
         operation_argument = ttnn.database.OperationArgument(*row)
         yield operation_argument
 
-    sqlite_connection.close()
-
 
 def query_stack_trace(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
@@ -670,35 +678,29 @@ def query_stack_trace(report_path, operation_id):
     for row in cursor.fetchall():
         _, stack_trace = row
         break
-
-    sqlite_connection.close()
     return stack_trace
 
 
 def query_buffers(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffers WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
         yield ttnn.database.Buffer(*row)
 
-    sqlite_connection.close()
-
 
 def query_buffer_pages(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffer_pages WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
         yield ttnn.database.BufferPage(*row)
 
-    sqlite_connection.close()
-
 
 def query_tensor_by_id(report_path, tensor_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM tensors WHERE tensor_id = ?", (tensor_id,))
@@ -707,35 +709,29 @@ def query_tensor_by_id(report_path, tensor_id):
         tensor = ttnn.database.Tensor(*row)
         break
 
-    sqlite_connection.close()
-
     return tensor
 
 
 def query_input_tensors(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM input_tensors WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
         yield ttnn.database.InputTensor(*row)
 
-    sqlite_connection.close()
-
 
 def query_output_tensors(report_path, operation_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM output_tensors WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
         yield ttnn.database.OutputTensor(*row)
 
-    sqlite_connection.close()
-
 
 def query_output_tensor_by_tensor_id(report_path, tensor_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
@@ -744,13 +740,11 @@ def query_output_tensor_by_tensor_id(report_path, tensor_id):
         output_tensor = ttnn.database.OutputTensor(*row)
         break
 
-    sqlite_connection.close()
-
     return output_tensor
 
 
 def query_tensor_comparison_record(report_path, table_name, tensor_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute(f"SELECT * FROM {table_name} WHERE tensor_id = ?", (tensor_id,))
@@ -759,13 +753,11 @@ def query_tensor_comparison_record(report_path, table_name, tensor_id):
         tensor_comparison_record = ttnn.database.TensorComparisonRecord(*row)
         break
 
-    sqlite_connection.close()
-
     return tensor_comparison_record
 
 
 def query_producer_operation_id(report_path, tensor_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
@@ -774,18 +766,14 @@ def query_producer_operation_id(report_path, tensor_id):
         operation_id, *_ = row
         break
 
-    sqlite_connection.close()
-
     return operation_id
 
 
 def query_consumer_operation_ids(report_path, tensor_id):
-    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM input_tensors WHERE tensor_id = ?", (tensor_id,))
     for row in cursor.fetchall():
         operation_id, *_ = row
         yield operation_id
-
-    sqlite_connection.close()
