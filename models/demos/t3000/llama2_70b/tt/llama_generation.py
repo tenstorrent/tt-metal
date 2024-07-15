@@ -53,6 +53,8 @@ class TtLlamaModelForGeneration:
         del state_dict
 
     def forward(self, tokens: torch.Tensor, start_pos: int):
+        if start_pos > 2048 + 128:
+            raise ValueError("Exceeding current max context length of 2k+128 tokens")
         _, seq_len = tokens.shape
         if seq_len == 1:
             return self.decode_forward(tokens, start_pos)
