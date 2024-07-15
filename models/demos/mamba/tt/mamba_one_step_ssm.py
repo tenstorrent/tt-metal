@@ -18,6 +18,7 @@ class TtMambaSSM(torch.nn.Module):
 
         self.device = device
         self.args = args
+        self.load_fn = load_fn
 
         # hidden state
         self.batch_size = args.batch_size
@@ -115,6 +116,14 @@ class TtMambaSSM(torch.nn.Module):
         self.eltwise_math_fidelity = ttl.tensor.MathFidelity.HiFi2
         self.core_grid_row = self.configs["core_grid_row"]
         self.core_grid_col = self.configs["core_grid_col"]
+
+    def reset_states(self):
+        ttnn.deallocate(self.tt_hidden_state)
+        self.initialize_hidden_state()
+
+    def initialize_hidden_state(self):
+        prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
+        self.tt_hidden_state = self.load_fn(f"tt_hidden_state_{self.args.batch_size}", torch_tensor=prev_hidden_states)
 
     def forward(self, x):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"

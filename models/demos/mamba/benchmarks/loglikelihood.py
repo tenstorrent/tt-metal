@@ -4,22 +4,26 @@
 
 import torch
 
+from typing import Union
+
 from models.demos.mamba.reference.decode_model import MambaDecode
+from models.demos.mamba.tt.full_model import MambaTT
 
 
-def compute_loglikelihood(logits, labels) -> float:
-    assert len(logits.shape) == 3, "Expected rank 3"
+def compute_loglikelihood(probs, labels) -> float:
+    assert len(probs.shape) == 3, "Expected rank 3"
     assert labels.shape[-1] == 1, "Label should be 1 in final dim"
     assert len(labels.shape) == 3, "Expected rank 3"
-    assert logits.shape[-1] > 1, "Logits should be >1 in final dim"
-    assert labels.shape[1] == logits.shape[1], "Length dimension should match"
-    logits = torch.nn.functional.log_softmax(logits, dim=-1)  # (B x L x VOCAB)
-    return torch.gather(logits, -1, labels).sum().detach().cpu().item()
+    assert probs.shape[-1] > 1, "Probs should be >1 in final dim"
+    assert labels.shape[1] == probs.shape[1], "Length dimension should match"
+    return torch.gather(probs, -1, labels).sum().detach().cpu().item()
 
 
-def compute_loglikelihood_given_prompt_and_target(context_ids, target_ids, model: MambaDecode, vocab_size: int):
+def compute_loglikelihood_given_prompt_and_target(
+    context_ids, target_ids, model: Union[MambaDecode, MambaTT], vocab_size: int
+):
     # Reset the model hidden/conv states before decoding
-    model.initialize_states()
+    model.reset_states()
 
     # We want logits for each target token so slice the last one off
     input_ids = torch.cat([context_ids, target_ids], dim=-1)[:, :-1]  # B x L
@@ -27,10 +31,21 @@ def compute_loglikelihood_given_prompt_and_target(context_ids, target_ids, model
     num_target_tokens = target_ids.shape[1]
     last_token = context_ids[:, -1].unsqueeze(1)  # Model expects (Bx1)
 
+    def fwd(inputs):
+        with torch.no_grad():
+            if isinstance(model, MambaDecode):
+                return model(inputs[:, idx].unsqueeze(1))  # (B x 1) => (B x 1 x VOCAB)
+            elif isinstance(model, MambaTT):
+                # Replicate inputs to match the model's expected input shape
+                inputs = input_ids[:, idx].unsqueeze(1).repeat(32, 1)
+                with torch.no_grad():
+                    out = model(inputs)  # (B x 1) => (B x 1 x VOCAB)
+                    return out[0].unsqueeze(0)
+
     logits = []
     is_greedy = True
     for idx in range((input_ids.shape[-1])):
-        out = model(input_ids[:, idx].unsqueeze(1))  # (B x 1) => (B x 1 x VOCAB)
+        out = fwd(input_ids)
         probs = torch.nn.functional.log_softmax(out, dim=-1)
         logits.append(probs)
 

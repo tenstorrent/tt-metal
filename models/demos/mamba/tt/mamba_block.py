@@ -21,6 +21,7 @@ class TtMambaBlock(torch.nn.Module):
         self.args = args
         self.batch_size = args.batch_size
         self.configs = configs
+        self.load_fn = load_fn
 
         in_proj_weight_name = "mixer.in_proj.weight"
 
@@ -66,15 +67,7 @@ class TtMambaBlock(torch.nn.Module):
             postfix=f"{self.configs['outer_dim']}",
         )
 
-        self.conv_states = []
-        for i in range(4):
-            self.conv_states.append(
-                load_fn(
-                    f"conv_state{i}",
-                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
-                    postfix=f"{args.batch_size}",
-                )
-            )
+        self.initialize_conv_states()
 
         self.use_torch_conv = True
         if self.use_torch_conv:
@@ -96,6 +89,23 @@ class TtMambaBlock(torch.nn.Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+
+    def reset_states(self):
+        for i in range(len(self.conv_states)):
+            ttnn.deallocate(self.conv_states[i])
+        self.initialize_conv_states()
+        self.tt_ssm.reset_states()
+
+    def initialize_conv_states(self):
+        self.conv_states = []
+        for i in range(4):
+            self.conv_states.append(
+                self.load_fn(
+                    f"conv_state{i}",
+                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
+                    postfix=f"{self.args.batch_size}",
+                )
+            )
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
