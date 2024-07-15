@@ -178,6 +178,7 @@ Pointwise Unary
    ttnn/rdiv_bw
    ttnn/bias_gelu_bw
    ttnn/pow_bw
+   ttnn/exp_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw

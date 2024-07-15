@@ -197,7 +197,6 @@ std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input_tenso
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
     TT_FATAL(are_required_outputs.at(0) , "input_grad derivative is required output");
-    // auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
@@ -224,6 +223,30 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
         where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config, input_grad);
     } else {
         input_grad = where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config);
+    }
+    grad_tensor.emplace_back(input_grad);
+    return grad_tensor;
+}
+
+std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor;
+    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is a required output");
+
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
+    Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
+    result = where(queue_id, ttnn::ge(queue_id, result, 1e+38, std::nullopt, output_mem_config), t_inf, result, output_mem_config);
+    result = where(queue_id, ttnn::ge(queue_id, result, -1e+38, std::nullopt,  output_mem_config), -t_inf, result, output_mem_config);
+    if(input_grad.has_value()){
+        where(queue_id,
+        ttnn::logical_and(
+            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
+            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
+    } else {
+    input_grad = where(queue_id,
+        ttnn::logical_and(
+            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
+            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
     }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
