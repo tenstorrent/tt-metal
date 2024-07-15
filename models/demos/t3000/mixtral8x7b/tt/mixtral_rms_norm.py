@@ -93,12 +93,12 @@ class TtRMSNormSharded(LightweightModule):
         x = ttnn.experimental.tensor.interleaved_to_sharded(
             x, sharded_mem_config=self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
         )
-        x = ttnn.experimental.operations.primary.rmsnorm(
+        x = ttnn.rms_norm(
             x,
-            self.eps,
-            self.weight,
+            epsilon=self.eps,
+            weight=self.weight,
             program_config=self.model_config["SHARDED_NORM_PRGM_CFG"],
-            output_mem_config=self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"],
         )
         if out_sharded:
             return x

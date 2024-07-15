@@ -28,7 +28,7 @@ class TtRobertaSelfOutput(nn.Module):
 
         gamma = pad_by_zero(state_dict[f"{base_address}.LayerNorm.weight"], self.device)[0]
         beta = pad_by_zero(state_dict[f"{base_address}.LayerNorm.bias"], self.device)[0]
-        self.LayerNorm = partial(tt_lib.tensor.layernorm, eps=config.layer_norm_eps, gamma=gamma, beta=beta)
+        self.LayerNorm = partial(ttnn.layer_norm, epsilon=config.layer_norm_eps, weight=gamma, bias=beta)
 
         # TODO: Add dropout when supported
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)

@@ -39,7 +39,6 @@ class TtLlamaModel_optimized:
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
-        read_cache = False
         self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
@@ -346,12 +345,12 @@ class TtLlamaModel_optimized:
         )
 
         # In-place RMSNorm
-        norm_out_replicated = tt_lib.operations.primary.rmsnorm(
+        norm_out_replicated = ttnn.rms_norm(
             xs,
-            self.norm_eps,
-            self.norm,
+            epsilon=self.norm_eps,
+            weight=self.norm,
             program_config=self.model_config["LN_F_PROGCFG"],
-            output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 

@@ -174,21 +174,21 @@ class TtEmbeddings:
                 token_type_embeddings.deallocate()
             position_ids.deallocate()
 
-            embeddings_tt_tensor_layerNorm = ttl.operations.primary.add_layernorm(
+            embeddings_tt_tensor_layerNorm = ttnn.layer_norm(
                 position_embeddings_tt_tensor,
-                inputs_plus_token_type_embeddings_tt_tensor,
-                self.layerNorm_eps,
-                gamma=self.layerNorm_gamma,
-                beta=self.layerNorm_beta,
-                output_mem_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
+                residual_input_tensor=inputs_plus_token_type_embeddings_tt_tensor,
+                epsilon=self.layerNorm_eps,
+                weight=self.layerNorm_gamma,
+                bias=self.layerNorm_beta,
+                memory_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
             )
         else:
-            embeddings_tt_tensor_layerNorm = ttl.operations.primary.add_layernorm(
+            embeddings_tt_tensor_layerNorm = ttnn.layer_norm(
                 inputs_embeds,
-                token_type_embeddings,
-                self.layerNorm_eps,
-                gamma=self.layerNorm_gamma,
-                beta=self.layerNorm_beta,
-                output_mem_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
+                residual_input_tensor=token_type_embeddings,
+                epsilon=self.layerNorm_eps,
+                weight=self.layerNorm_gamma,
+                bias=self.layerNorm_beta,
+                memory_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
             )
         return embeddings_tt_tensor_layerNorm

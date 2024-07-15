@@ -10,6 +10,8 @@ import torch.nn as nn
 import random
 from typing import Optional, Tuple, Union
 
+import ttnn
+
 from transformers import WhisperConfig
 from dataclasses import dataclass
 
@@ -68,9 +70,7 @@ class TtWhisperEncoder(nn.Module):
         self.conv2.bias = nn.Parameter(state_dict[f"{base_address}.conv2.bias"])
 
         self.embed_positions = nn.Embedding(self.max_source_positions, embed_dim)
-        self.embed_positions.weight = nn.Parameter(
-            state_dict[f"{base_address}.embed_positions.weight"]
-        )
+        self.embed_positions.weight = nn.Parameter(state_dict[f"{base_address}.embed_positions.weight"])
 
         self.layers = nn.ModuleList(
             [
@@ -97,9 +97,7 @@ class TtWhisperEncoder(nn.Module):
             self.device,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        self.layer_norm = partial(
-            tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05
-        )
+        self.layer_norm = partial(ttnn.layer_norm, weight=gamma, bias=beta, epsilon=1e-05)
 
         self.gradient_checkpointing = False
 
@@ -148,19 +146,11 @@ class TtWhisperEncoder(nn.Module):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
 
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         input_features = tt2torch_tensor(input_features).to(torch.float)
         input_features = torch.squeeze(input_features, 0)
@@ -175,9 +165,7 @@ class TtWhisperEncoder(nn.Module):
         """PyTorch implementation end"""
 
         """TT implementation"""
-        hidden_states = torch2tt_tensor(
-            hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        hidden_states = torch2tt_tensor(hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         # TODO: Not suppporting dropout at moment
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -199,9 +187,7 @@ class TtWhisperEncoder(nn.Module):
             dropout_probability = random.uniform(0, 1)
 
             # TODO: Not supporting training at moment
-            if self.training and (
-                dropout_probability < self.layerdrop
-            ):  # skip the layer
+            if self.training and (dropout_probability < self.layerdrop):  # skip the layer
                 layer_outputs = (None, None)
             else:
                 # TODO: Not supporting training at moment
@@ -246,11 +232,7 @@ class TtWhisperEncoder(nn.Module):
             encoder_states = encoder_states + (hidden_states,)
 
         if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, encoder_states, all_attentions]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
 
         """
         model's outputs
