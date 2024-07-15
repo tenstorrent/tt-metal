@@ -25,6 +25,7 @@ enum class UnaryBackwardOpType {
     POW_BW,
     TANH_BW,
     EXP_BW,
+    SQRT_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -123,6 +124,7 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
 //OpHandler_unary_optional : get_function_unary_optional
 std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
@@ -207,6 +209,13 @@ template <>
 struct OpHandler_unary_optional<UnaryBackwardOpType::TANH_BW> {
     static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
         return _tanh_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+    }
+};
+
+template <>
+struct OpHandler_unary_optional<UnaryBackwardOpType::SQRT_BW> {
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
+        return _sqrt_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 

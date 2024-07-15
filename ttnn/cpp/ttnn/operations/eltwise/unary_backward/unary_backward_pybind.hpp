@@ -526,6 +526,11 @@ void py_module(py::module& module) {
         ttnn::tanh_bw,
         R"doc(Performs backward operations for Hyperbolic Tangent (Tanh) function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_unary_backward_unary_optional(
+        module,
+        ttnn::sqrt_bw,
+        R"doc(Performs backward operations for square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
     detail::bind_unary_backward(
         module,
         ttnn::multigammaln_bw,

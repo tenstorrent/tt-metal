@@ -180,6 +180,7 @@ Pointwise Unary
    ttnn/pow_bw
    ttnn/exp_bw
    ttnn/tanh_bw
+   ttnn/sqrt_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
