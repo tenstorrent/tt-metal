@@ -23,6 +23,7 @@ enum class UnaryBackwardOpType {
     RDIV_BW,
     BIAS_GELU_BW,
     POW_BW,
+    EXP_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -117,6 +118,9 @@ std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input, floa
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 
+//OpHandler_unary_optional : get_function_unary_optional
+std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float;
@@ -129,6 +133,9 @@ struct OpHandler_float_string_default;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_unary_optional_float;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_unary_optional;
 
 template <>
 struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
@@ -186,6 +193,13 @@ struct OpHandler_unary_optional_float<UnaryBackwardOpType::POW_BW> {
     }
 };
 
+template <>
+struct OpHandler_unary_optional<UnaryBackwardOpType::EXP_BW> {
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
+        return _exp_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -205,6 +219,11 @@ auto get_function_type1_float_string_default() {
 template <UnaryBackwardOpType OpType>
 auto get_function_unary_optional_float() {
     return &OpHandler_unary_optional_float<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_unary_optional() {
+    return &OpHandler_unary_optional<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward
