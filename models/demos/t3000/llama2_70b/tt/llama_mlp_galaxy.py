@@ -3,64 +3,91 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+from typing import List
 import torch
-from torch import nn
-import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
-    get_weight_cache_path_galaxy,
-    tt_all_reduce,
-)
+from ttnn import ReplicateTensorToMesh
+from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
+from models.utility_functions import nearest_32
 
 
-class TtLlamaMLP_galaxy(nn.Module):
+class TtLlamaMLP_galaxy:
     def __init__(
         self,
-        devices,
+        device_mesh,
+        cluster_shape,
         state_dict,
         base_url,
         layer_num,
         hidden_size: int,
         model_config,
-        emulated=True,
         cache_path=None,
+        read_cache=False,
     ):
-        super().__init__()
-
         self.state_dict = state_dict
-        self.devices = devices
-        self.num_devices = len(devices)
-        assert self.num_devices == 32
-
-        self.frac_grid = [4, 8]  # [8,4]
+        self.device_mesh = device_mesh
+        self.num_devices = device_mesh.get_num_devices()
+        self.model_config = model_config
+        self.read_cache = read_cache
+        self.cluster_shape = cluster_shape
 
         self.hidden_size = hidden_size
-        self.model_config = model_config
-        self.emulated = emulated
-        self.cache_path = cache_path
 
         self.layer_name = f"{base_url}.{layer_num}"
+        self.cache_path = cache_path
 
-        self.FF1_groups = [list(range(i, i + self.frac_grid[0])) for i in range(0, self.num_devices, self.frac_grid[0])]
-        # [[0, 1, 2, 3],
-        # [4, 5, 6, 7],
-        # [8, 9, 10, 11],
-        # [12, 13, 14, 15],
-        # [16, 17, 18, 19],
-        # [20, 21, 22, 23],
-        # [24, 25, 26, 27],
-        # [28, 29, 30, 31]]
-        self.FF2_groups = [
-            [i + j for j in range(0, self.num_devices, self.frac_grid[0])] for i in range(self.frac_grid[0])
-        ]
-        # [[0, 4, 8, 12, 16, 20, 24, 28],
-        # [1, 5, 9, 13, 17, 21, 25, 29],
-        # [2, 6, 10, 14, 18, 22, 26, 30],
-        # [3, 7, 11, 15, 19, 23, 27, 31]]
-
+        self.get_mlp_model_config()
         self.load_weights()
+
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+
+    def get_mlp_model_config(self):
+        if self.model_config["LLM_MODE"] == "decode":
+            # Weight Sharding
+            weight_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(
+                            self.device_mesh.get_device(0).dram_grid_size().x - 1,
+                            self.device_mesh.get_device(0).dram_grid_size().y - 1,
+                        ),
+                    )
+                }
+            )
+            M, K, N = 32, 8192, 32768
+
+            K = K // self.cluster_shape[0]
+            N = N // self.cluster_shape[1]
+            shard_shape = (K, nearest_32(N // 12))  # padded cols to divide by 12
+            shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+            self.w1_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
+            )
+
+            w2_K, w2_N = N, K
+            shard_shape = (w2_K, nearest_32(w2_N // 12))  # padded cols to divide by 12
+            shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+            self.w2_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
+            )
+
+            self.DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=K
+                // 8
+                // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
+            self.COMPUTE_KERNEL_LOFI = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def load_weights(self):
         assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
@@ -71,311 +98,201 @@ class TtLlamaMLP_galaxy(nn.Module):
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        self.w1_list = []
-        self.w3_list = []
-        self.w2_list = []
+        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard.weight"
+        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard.weight"
+        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard.weight"
 
-        # Test if the all weights have been cached
-        test_cache_path = get_weight_cache_path_galaxy(
-            self.cache_path, w2_str, self.num_devices - 1, self.num_devices, x=3, y=7
-        )
-        if test_cache_path.exists():
-            for x in range(self.frac_grid[1]):
-                for y in range(self.frac_grid[0]):
-                    device_id = self.FF1_groups[x][y]
-                    # logger.info(f"Loading weights FF1 for weight chunk ({x},{y}) on device {device_id}")
-                    tensor_cache_path = get_weight_cache_path_galaxy(
-                        self.cache_path, w1_str, device_id, self.num_devices, x, y
-                    )
-                    self.w1_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                            self.devices[device_id], self.model_config["DRAM_MEMCFG"]
-                        )
-                    )
-                    tensor_cache_path = get_weight_cache_path_galaxy(
-                        self.cache_path, w3_str, device_id, self.num_devices, x, y
-                    )
-                    self.w3_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                            self.devices[device_id], self.model_config["DRAM_MEMCFG"]
-                        )
-                    )
-            for y in range(self.frac_grid[1]):
-                for x in range(self.frac_grid[0]):
-                    device_id = self.FF2_groups[x][y]
-                    # logger.info(f"Loading weights FF2 for weight chunk ({x},{y}) on device {device_id}")
-                    tensor_cache_path = get_weight_cache_path_galaxy(
-                        self.cache_path, w2_str, device_id, self.num_devices, x, y
-                    )
-                    self.w2_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                            self.devices[device_id], self.model_config["DRAM_MEMCFG"]
-                        )
-                    )
-        else:
+        w1_dtype = ttnn.bfloat4_b
+        w2_dtype = ttnn.bfloat8_b
+        w3_dtype = ttnn.bfloat4_b
+
+        padded_w1 = None
+        padded_w2 = None
+        padded_w3 = None
+        if not self.read_cache:
             # Do padding
             H = 8 * 1024
             PADDED_H4 = 32 * 1024
             H4 = 28 * 1024
-            padded_w1 = torch.zeros(H, PADDED_H4)
-            padded_w2 = torch.zeros(PADDED_H4, H)
-            padded_w3 = torch.zeros(H, PADDED_H4)
-            padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
+            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
+            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
+            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
+            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
 
-            # Chunk by 8 in the columns
-            col_w1_chunks = torch.chunk(padded_w1, self.frac_grid[1], dim=-1)
-            col_w3_chunks = torch.chunk(padded_w3, self.frac_grid[1], dim=-1)
-            # Chunk by 4 in the columns
-            col_w2_chunks = list(torch.chunk(padded_w2, self.frac_grid[0], dim=-1))
+        self.w1 = ttnn.as_tensor(
+            padded_w1,
+            dtype=w1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.w1_mem_config,
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            cache_file_name=self.cache_path / w1_cache_str,
+        )
 
-            block_w1_chunks = [torch.chunk(chunk, self.frac_grid[0], dim=0) for chunk in col_w1_chunks]
-            block_w3_chunks = [torch.chunk(chunk, self.frac_grid[0], dim=0) for chunk in col_w3_chunks]
-            block_w2_chunks = [torch.chunk(chunk, self.frac_grid[1], dim=0) for chunk in col_w2_chunks]
+        self.w3 = ttnn.as_tensor(
+            padded_w3,
+            dtype=w3_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.w1_mem_config,
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            cache_file_name=self.cache_path / w3_cache_str,
+        )
 
-            # Loop down and then right
-            for x in range(len(block_w1_chunks)):  # 0-7
-                for y in range(len(block_w1_chunks[x])):  # 0-3
-                    device_id = self.FF1_groups[x][y]
-                    # logger.info(f"Saving weights FF1 for weight chunk ({x},{y}) on device {device_id}")
-                    w1_host = torch2tt_tensor(
-                        block_w1_chunks[x][y],
-                        None,
-                        tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                        tt_dtype=self.model_config["BFP8_DTYPE"],
-                    )
-                    self.w1_list.append(w1_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
-                        str(get_weight_cache_path_galaxy(self.cache_path, w1_str, device_id, self.num_devices, x, y)),
-                        w1_host,
-                    )
-                    w3_host = torch2tt_tensor(
-                        block_w3_chunks[x][y],
-                        None,
-                        tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                        tt_dtype=self.model_config["BFP8_DTYPE"],
-                    )
-                    self.w3_list.append(w3_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
-                        str(get_weight_cache_path_galaxy(self.cache_path, w3_str, device_id, self.num_devices, x, y)),
-                        w3_host,
-                    )
+        self.w2 = ttnn.as_tensor(
+            padded_w2,
+            dtype=w2_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.w2_mem_config,
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
+            cache_file_name=self.cache_path / w2_cache_str,
+        )
 
-            # Loop right then down
-            for y in range(len(block_w2_chunks[0])):  # 0-7
-                for x in range(len(block_w2_chunks)):  # 0-3
-                    device_id = self.FF2_groups[x][y]
-                    # logger.info(f"Saving weights FF2 for weight chunk ({x},{y}) on device {device_id}")
-                    w2_host = torch2tt_tensor(
-                        block_w2_chunks[x][y],
-                        None,
-                        tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                        tt_dtype=self.model_config["BFP8_DTYPE"],
-                    )
-                    self.w2_list.append(w2_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
-                        str(get_weight_cache_path_galaxy(self.cache_path, w2_str, device_id, self.num_devices, x, y)),
-                        w2_host,
-                    )
+    def __call__(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+        # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
+        if self.model_config["LLM_MODE"] == "decode":
+            return self.decode_forward(x)
+        else:
+            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def prepare_inputs(self, x):
-        batch, seq_len = 32, 1
-        assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        x_multichip = []
-        for i in range(self.num_devices):
-            x_multichip.append(
-                torch2tt_tensor(
-                    x.clone(),
-                    self.devices[i],
-                    tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-                    tt_memory_config=self.model_config["L1_MEMCFG"],
-                )
+    def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+        w1_out = ttnn.matmul(
+            x,
+            self.w1,
+            program_config=self.DRAM_SHARDED_PROGCFG,
+            compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        w3_out = ttnn.matmul(
+            x,
+            self.w3,
+            program_config=self.DRAM_SHARDED_PROGCFG,
+            compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        x.deallocate(True)
+
+        def tt_all_reduce(tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
+            """
+            reduction of a multi-device tensor
+            """
+            concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
+
+            out = ttnn.to_torch(
+                tensors,
+                mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
             )
-        for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
-                x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+            out = torch.sum(out, dim=1, keepdim=True)
+
+            shape = (
+                out.shape[2],
+                out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
             )
-        return x_multichip
 
-    def prepare_inputs_mlp(self, x_multichip):
-        # len(x) = 32, each is 1 x 1 x 32 x 8k sharded on a single chip
-        assert len(x_multichip) == 32
-        batch, seq_len = 32, 1
-        for i in range(len(x_multichip)):
-            assert x_multichip[i].shape == (seq_len, 1, batch, self.hidden_size)
-            x_multichip[i] = tt_lib.tensor.sharded_to_interleaved(
-                x_multichip[i], output_mem_config=self.model_config["L1_MEMCFG"]
+            if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
+                act_mem_config = ttnn.create_sharded_memory_config(
+                    shape=shape,
+                    core_grid=ttnn.CoreGrid(y=1, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            else:
+                act_mem_config = None
+
+            act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
+            out_tt = ttnn.from_torch(
+                out,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=act_mem_config,
+                device=self.device_mesh,
+                mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
             )
-        for FF1_group in self.FF1_groups:
-            for chunk_id, device_id in enumerate(FF1_group):
-                # logger.info(f"Preparing input for FF1 on device {device_id} with chunk {chunk_id}")
-                start = chunk_id * self.hidden_size // 4
-                end = start + self.hidden_size // 4
-                x_multichip[device_id] = ttnn.slice(
-                    x_multichip[device_id],
-                    [0, 0, 0, start],
-                    [
-                        seq_len - 1,
-                        0,
-                        batch - 1,
-                        end - 1,
-                    ],
-                    memory_config=self.model_config["L1_MEMCFG"],
+
+            return out_tt
+
+        w1_out = tt_all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        w3_out = tt_all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+        # w1_out = ttnn.all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        # w3_out = ttnn.all_reduce(w4_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+        w1_out = ttnn.silu(w1_out)
+
+        hidden_states = ttnn.mul(
+            w1_out,
+            w3_out,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
+        w1_out.deallocate(True)
+        w3_out.deallocate(True)
+
+        hidden_states = ttnn.matmul(
+            hidden_states,
+            self.w2,
+            program_config=self.DRAM_SHARDED_PROGCFG,
+            compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        hidden_states = tt_all_reduce(hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+        # hidden_states = ttnn.all_reduce(hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+        def tt_all_gather(tensors, dim, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
+            """
+            gather of a multi-device tensor
+            """
+            concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
+
+            out = ttnn.to_torch(
+                tensors,
+                mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
+            )
+            out = out[:, 0:1, :, :]
+
+            shape = (out.shape[2], out.shape[3] // 32)
+
+            if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
+                act_mem_config = ttnn.create_sharded_memory_config(
+                    shape=shape,
+                    core_grid=ttnn.CoreGrid(y=4, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
                 )
+            else:
+                act_mem_config = None
 
-        return x_multichip
+            out_tt = ttnn.from_torch(
+                out,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=act_mem_config,
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            )
 
-    def forward(self, x: list) -> list:
-        x = self.prepare_inputs_mlp(x)
-        hidden_states_32chips = []
-        w1_32chips = []
-        w3_32chips = []
+            return out_tt
 
-        for FF1_group in self.FF1_groups:
-            w1_4chips = []
-            for device_id in FF1_group:
-                # logger.info(f"FF1 matmul on device {device_id} for chips {FF1_group}")
-                w1_4chips.append(
-                    ttnn.matmul(
-                        x[device_id],
-                        self.w1_list[device_id],
-                        program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                        dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    )
-                )
-            w1_32chips.append(w1_4chips)
+        hidden_states = tt_all_gather(
+            hidden_states, dim=3, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
 
-        for i in range(len(w1_32chips)):
-            for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
-                    w1_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
-                )
+        # hidden_states = ttnn.all_gather(
+        #     hidden_states,
+        #     dim=3,
+        #     cluster_axis=0,
+        #     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        # )
 
-        if self.emulated:
-            for i in range(len(w1_32chips)):
-                # logger.info(f"FF1 All-Reduce for chips {self.FF1_groups[i]}")
-                w1_32chips[i] = tt_all_reduce(
-                    w1_32chips[i],
-                )
-
-        for i in range(len(w1_32chips)):
-            for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = ttnn.silu(w1_32chips[i][j])
-
-        for FF3_group in self.FF1_groups:
-            w3_4chips = []
-            for device_id in FF3_group:
-                w3_4chips.append(
-                    ttnn.matmul(
-                        x[device_id],
-                        self.w3_list[device_id],
-                        program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                        dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    )
-                )
-                x[device_id].deallocate(True)
-            w3_32chips.append(w3_4chips)
-
-        for i in range(len(w1_32chips)):
-            for j in range(len(w1_32chips[i])):
-                w3_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
-                    w3_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
-                )
-
-        if self.emulated:
-            for i in range(len(w3_32chips)):
-                # logger.info(f"FF3 All-Reduce for chips {self.FF1_groups[i]}")
-                w3_32chips[i] = tt_all_reduce(
-                    w3_32chips[i],
-                )
-
-        for i in range(len(w1_32chips)):
-            for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = tt_lib.tensor.interleaved_to_sharded(
-                    w1_32chips[i][j],
-                    sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
-                )
-                w3_32chips[i][j] = tt_lib.tensor.interleaved_to_sharded(
-                    w3_32chips[i][j],
-                    sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
-                )
-
-        # w1_4chips = [ff1_out, ff1_out, ff1_out, ff1_out]
-        # w1_32chips = [[ff1_out, ff1_out, ff1_out, ff1_out], [ff1_out, ff1_out, ff1_out, ff1_out], ...]
-        for i in range(len(w1_32chips)):
-            hidden_states_4chips = []
-            for j in range(len(w1_32chips[i])):
-                hidden_states_4chips.append(
-                    ttnn.mul(
-                        w1_32chips[i][j],
-                        w3_32chips[i][j],
-                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    )
-                )
-                w1_32chips[i][j].deallocate(True)
-                w3_32chips[i][j].deallocate(True)
-            hidden_states_32chips.append(hidden_states_4chips)
-
-        # Flatten the original 8x4 2D list into a 1D list with chip 0-31
-        hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
-
-        # Transform the flattened list into the 4x8 2D list for FF2 matmuls
-        hidden_states_32chips = [
-            [hidden_states_32chips[i + j * self.frac_grid[0]] for j in range(self.frac_grid[1])]
-            for i in range(self.frac_grid[0])
-        ]
-
-        for i in range(len(hidden_states_32chips)):
-            for j in range(len(hidden_states_32chips[i])):
-                device_id = self.FF2_groups[i][j]
-                # logger.info(f"FF2 matmul on device {device_id} for chips {self.FF2_groups[i]}")
-                hidden_states_32chips[i][j] = ttnn.matmul(
-                    hidden_states_32chips[i][j],
-                    self.w2_list[device_id],
-                    program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-                    memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                )
-
-        for i in range(len(hidden_states_32chips)):
-            for j in range(len(hidden_states_32chips[i])):
-                hidden_states_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
-                    hidden_states_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
-                )
-
-        if self.emulated:
-            for i in range(len(hidden_states_32chips)):
-                # logger.info(f"Final All-Reduce for chips {self.FF2_groups[i]}")
-                hidden_states_32chips[i] = tt_all_reduce(
-                    hidden_states_32chips[i],
-                )
-
-        # Select the first chip of each column to get the full output
-        # hidden_states_width_sharded_by_4 = [chip_column[0] for chip_column in hidden_states_32chips]
-        # return hidden_states_width_sharded_by_4
-        # TODO: Do a all_gather along x axis to let every chip have a full activation?
-        hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
-
-        # Transform back to the original pattern
-        hidden_states_32chips = [hidden_states_32chips[i :: self.frac_grid[1]] for i in range(self.frac_grid[1])]
-
-        if self.emulated:
-            for i in range(len(hidden_states_32chips)):
-                hidden_states_32chips[i] = tt_all_gather_torch(hidden_states_32chips[i], dim=-1)
-
-        hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
-
-        if self.emulated:
-            # FOR BRINGUP! Outputs are Interaved, Shard them
-            for i in range(len(hidden_states_32chips)):
-                hidden_states_32chips[i] = tt_lib.tensor.interleaved_to_sharded(
-                    hidden_states_32chips[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
-                )
-
-        return hidden_states_32chips
+        return hidden_states
