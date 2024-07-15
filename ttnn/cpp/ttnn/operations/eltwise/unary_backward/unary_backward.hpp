@@ -132,7 +132,7 @@ constexpr auto softplus_bw = ttnn::register_operation<operations::unary_backward
 constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>("ttnn::hardtanh_bw");
 
 //ExecuteUnaryBackwardFloatStringDefault : get_function_type1_float_string_default
-constexpr auto unary_div_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::UNARY_DIV_BW>>("ttnn::unary_div_bw");
+constexpr auto div_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::DIV_BW>>("ttnn::div_bw");
 constexpr auto rdiv_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>("ttnn::rdiv_bw");
 constexpr auto bias_gelu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
 

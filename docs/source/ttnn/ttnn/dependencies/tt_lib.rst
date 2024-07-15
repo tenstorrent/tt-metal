@@ -663,8 +663,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.gelu_bw
 
-.. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
-
 .. autofunction:: tt_lib.tensor.angle_bw
 
 .. autofunction:: tt_lib.tensor.complex_recip_bw

@@ -108,7 +108,7 @@ std::vector<Tensor> _softplus_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_div_bw(
+std::vector<Tensor> _div_bw(
     const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
