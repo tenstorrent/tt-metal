@@ -202,16 +202,16 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
 
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 template <typename unary_backward_operation_t>
-void bind_unary_backward_unary_optional_float(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward_unary_optional_float(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, exponent: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
 
-        {2}
+        {4}
 
         Args:
             * :attr:`grad_tensor`
             * :attr:`input_tensor`
-            * :attr:`float`
+            * :attr:`{2}` (float): {3}
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
@@ -223,10 +223,12 @@ void bind_unary_backward_unary_optional_float(py::module& module, const unary_ba
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = {1}(grad_tensor, tensor, float)
+            >>> output = {1}(grad_tensor, tensor, `{2}`)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
         description);
 
     bind_registered_operation(
@@ -237,16 +239,16 @@ void bind_unary_backward_unary_optional_float(py::module& module, const unary_ba
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               float exponent,
+               float parameter,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
                const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, exponent, memory_config, are_required_outputs, input_grad);
+                return self(queue_id, grad_tensor, input_tensor, parameter, memory_config, are_required_outputs, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
-            py::arg("exponent"),
+            py::arg(parameter_name.c_str()),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true},
@@ -511,6 +513,7 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_unary_optional_float(
         module,
         ttnn::pow_bw,
+        "exponent", "Exponent value",
         R"doc(Performs backward operations for power on :attr:`input_tensor` , :attr:`exponent` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_unary_backward_unary_optional(

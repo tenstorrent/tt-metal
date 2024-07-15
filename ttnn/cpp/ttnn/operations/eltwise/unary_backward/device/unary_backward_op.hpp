@@ -98,6 +98,7 @@ enum class UnaryBackwardOpType {
 };
 
 struct UnaryBackwardFunction{
+    //TODO: Use get_function_unary_optional , get_function_unary_optional_float after optional tensor support
     static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(UnaryBackwardOpType OpType);
     static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> get_function_type1_w_float(UnaryBackwardOpType OpType);
 };
