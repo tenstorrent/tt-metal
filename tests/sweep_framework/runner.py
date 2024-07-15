@@ -13,7 +13,7 @@ from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorStatus
 import architecture
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, NotFoundError
 
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
@@ -127,7 +127,7 @@ def get_batch_vectors(client, vector_index, batch):
     return header_info, test_vectors
 
 
-def run_sweeps(module_name, batch_name):
+def run_sweeps(module_name, batch_name, vector_id):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
@@ -153,6 +153,9 @@ def run_sweeps(module_name, batch_name):
                     print(f"SWEEPS: Completed tests for module {sweep_name}, batch {batch}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
+            except NotFoundError as e:
+                print(f"SWEEPS: No test vectors found for module {sweep_name}. Skipping...")
+                continue
             except Exception as e:
                 print(e)
                 continue
@@ -165,9 +168,15 @@ def run_sweeps(module_name, batch_name):
             exit(1)
         vector_index = module_name + "_test_vectors"
 
-        try:
-            if not batch_name:
-                try:
+        if vector_id:
+            test_vector = client.get(index=vector_index, id=vector_id)["_source"]
+            test_vector["vector_id"] = vector_id
+            header_info, test_vectors = sanitize_inputs([test_vector])
+            results = execute_batch(test_module, test_vectors)
+            export_test_results(header_info, results)
+        else:
+            try:
+                if not batch_name:
                     response = client.search(
                         index=vector_index, aggregations={"batches": {"terms": {"field": "batch_name.keyword"}}}
                     )
@@ -182,18 +191,15 @@ def run_sweeps(module_name, batch_name):
                         print(f"SWEEPS: Completed tests for module {module_name}, batch {batch}.")
                         print(f"SWEEPS: Tests Executed - {len(results)}")
                         export_test_results(header_info, results)
-                except Exception as e:
-                    print(e)
-                    return
-            else:
-                print(f"SWEEPS: Executing tests for module {module_name}, batch {batch_name}.")
-                header_info, test_vectors = get_batch_vectors(client, vector_index, batch_name)
-                results = execute_batch(test_module, test_vectors)
-                print(f"SWEEPS: Completed tests for module {module_name}, batch {batch_name}.")
-                print(f"SWEEPS: Tests Executed - {len(results)}")
-                export_test_results(header_info, results)
-        except Exception as e:
-            print(e)
+                else:
+                    print(f"SWEEPS: Executing tests for module {module_name}, batch {batch_name}.")
+                    header_info, test_vectors = get_batch_vectors(client, vector_index, batch_name)
+                    results = execute_batch(test_module, test_vectors)
+                    print(f"SWEEPS: Completed tests for module {module_name}, batch {batch_name}.")
+                    print(f"SWEEPS: Tests Executed - {len(results)}")
+                    export_test_results(header_info, results)
+            except Exception as e:
+                print(e)
 
     client.close()
 
@@ -243,6 +249,9 @@ if __name__ == "__main__":
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--batch-name", required=False, help="Batch of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
+        "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
+    )
+    parser.add_argument(
         "--arch",
         required=True,
         choices=["grayskull", "wormhole", "wormhole_b0", "blackhole"],
@@ -262,8 +271,12 @@ if __name__ == "__main__":
 
     if not args.module_name and args.batch_name:
         parser.print_help()
-        print("ERROR: Module name is required if batch id is specified.")
+        print("ERROR: Module name is required if batch name is specified.")
         exit(1)
+
+    if not args.module_name and args.vector_id:
+        parser.print_help()
+        print("ERROR: Module name is required if vector id is specified.")
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
@@ -280,7 +293,7 @@ if __name__ == "__main__":
     from ttnn import *
     from serialize import *
 
-    run_sweeps(args.module_name, args.batch_name)
+    run_sweeps(args.module_name, args.batch_name, args.vector_id)
 
     if args.watcher:
         disable_watcher()

@@ -270,11 +270,16 @@ def detail(ctx):
 
     def add_results_for_module(module_name):
         results_index = module_name + "_test_results"
-        results = client.search(index=results_index, size=10000, query={"bool": {"must": matches}})["hits"]["hits"]
+        results = client.search(
+            index=results_index,
+            size=10000,
+            sort=[{"timestamp.keyword": {"order": "asc"}}],
+            query={"bool": {"must": matches}},
+        )["hits"]["hits"]
         for result in results:
             source = result["_source"]
             try:
-                detail = source["message"]
+                detail = "PCC: " + source["message"]
             except:
                 detail = str(source["exception"]).replace("\n", " ")[:50]
             table.rows.append(
