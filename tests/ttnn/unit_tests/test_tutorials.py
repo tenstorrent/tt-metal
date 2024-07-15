@@ -35,6 +35,7 @@ def collect_tutorials():
             yield file_name
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("notebook_path", collect_tutorials())
 def test_tutorials(notebook_path, clear_wh_arch_yaml_var):
     with open(notebook_path) as f:
