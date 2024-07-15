@@ -221,6 +221,7 @@ constexpr auto pow_bw = ttnn::register_operation<operations::unary_backward::Exe
 
 //OpHandler_unary_optional : get_function_unary_optional
 constexpr auto exp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptional<operations::unary_backward::UnaryBackwardOpType::EXP_BW>>("ttnn::exp_bw");
+constexpr auto tanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptional<operations::unary_backward::UnaryBackwardOpType::TANH_BW>>("ttnn::tanh_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");

@@ -58,29 +58,6 @@ std::vector<std::optional<Tensor>> sqrt_bw(const Tensor& grad, const Tensor& inp
     return operation::decorate_as_composite(__func__, _sqrt_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> grad_tensor;
-    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");
-
-    Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
-    tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
-    if(input_grad.has_value()){
-        ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
-    } else {
-    input_grad = ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config);
-    }
-    grad_tensor.emplace_back(input_grad);
-    return grad_tensor;
-}
-std::vector<std::optional<Tensor>> tanh_bw(uint8_t queue_id,  const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
-    return operation::decorate_as_composite(__func__, _tanh_bw)(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
-}
-std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
-    uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
-}
-
 std::vector<Tensor> _gelu_bw(
     const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

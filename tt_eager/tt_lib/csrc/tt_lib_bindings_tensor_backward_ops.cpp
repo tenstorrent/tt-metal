@@ -41,39 +41,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("tanh_bw",
-            [](const Tensor& grad,
-                const Tensor& input,
-                const MemoryConfig& output_mem_config,
-                const std::vector<bool>& are_required_outputs,
-                std::optional<Tensor> input_grad,
-                uint8_t queue_id) {
-                    return tanh_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
-                },
-            py::arg("grad").noconvert(),
-            py::arg("input").noconvert(),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true},
-            py::arg("input_grad").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Performs backward operations for tanh with given ``grad``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensors will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Input Tensor ", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "are_required_outputs", "input_grad is always required output", "List of bool", "Default value is [True]", "No"
-                "input_grad", "Optional Output Tensor for input_grad", "Tensor", "Default value is None", "No"
-                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
-        )doc");
-
 
     m_tensor.def("sqrt_bw",
             [](const Tensor& grad,
