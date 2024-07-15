@@ -1141,7 +1141,7 @@ def test_galaxy_layernorm(M, N, device_mesh):
         packer_l1_acc=False,
     )
 
-    LN_PROGCFG = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=M // 32,
@@ -1166,12 +1166,12 @@ def test_galaxy_layernorm(M, N, device_mesh):
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    norm_output = ttnn.experimental.operations.primary.rmsnorm(
+    norm_output = ttnn.rms_norm(
         layernorm_input_tt,
-        norm_eps,
-        norm_weights_tt,
+        epsilon=norm_eps,
+        weight=norm_weights_tt,
         program_config=LN_PROGCFG,
-        output_mem_config=LN_OUTPUT_MEMCFG,
+        memory_config=LN_OUTPUT_MEMCFG,
         compute_kernel_config=LN_COMPUTE_KERNEL_CONFIG,
     )
 
