@@ -7,8 +7,11 @@
 2. **Repack the weights:**
     ```bash
     # This concatenates the sharded checkpoints and makes it easier for us to load.
-    python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
+    python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
     ```
+    Note: Use `5` for `chunk_size`.
+
+    Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
 
 ### Running the Demo
 
@@ -66,14 +69,14 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 - **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
 - **Model Functionality:**
     - The maximum context length is currently limited to (2k + 128) tokens. Support for 8k context is in testing.
-    - The demo can run in `decode_only` mode in which we use decode mode to consume the context one tokena at a time, or `prefill_decode` mode in which we prefill the context and then decode.
+    - The demo can run in `decode_only` mode in which we use decode mode to consume the context one token at a time, or `prefill_decode` mode in which we prefill the context and then decode.
 
 - **Demo arguments:**
     - `ground_truth: [check_disabled, check_enabled]`: Enable or disable ground truth checking, used for testing
     - `sampling: [greedy, sampling]`: Select between greedy decoding and top-k/top-p sampling
     - `implementation: [tt-70b-T3000]`: Run the 70B model on the Tenstorrent backend
-    - `num_layers: [1L, ..., 80L]`: Select 80L to run the full model
-    - `decode_only: [decode_only, prefill_decode]`: Use decode-to-prefill. Alternately, choose `prefill_decode` to enable prefill-decode mode
+    - `num_layers: [1L, 2L, 10L, 80L]`: Select 80L to run the full model
+    - `decode_only: [decode_only, prefill_decode]`: Use `decode_only`. Alternately, choose `prefill_decode` to enable prefill-decode mode
     - `chat: [text_completion, chat_completion]`: Run in text_completion mode for the pretrained model or chat_completion for the finetuned model
     - `llama_version: [llama3]`: Select the Llama3 model
 
