@@ -384,13 +384,13 @@ class TtFalconModelShared:
         )
 
         # apply final norm layer
-        layer_output = ttnn.experimental.operations.primary.layernorm(
+        layer_output = ttnn.layer_norm(
             layer_output,
-            self.layernorm_eps,
-            self.layernorm_gamma,
-            self.layernorm_beta,
-            self.model_config["LN_F_OUTPUT_MEMCFG"],
-            self.model_config["LN_F_PROGCFG"],
+            epsilon=self.layernorm_eps,
+            weight=self.layernorm_gamma,
+            bias=self.layernorm_beta,
+            memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_F_PROGCFG"],
         )
 
         return layer_output, presents

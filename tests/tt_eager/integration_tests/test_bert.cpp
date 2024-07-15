@@ -7,7 +7,6 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
@@ -15,6 +14,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
 
@@ -121,12 +121,12 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     concat_heads_output.deallocate();
 
 
-    auto attention_layernorm_output = tt::operations::primary::add_layernorm(
+    auto attention_layernorm_output = ttnn::layer_norm(
         hidden_states,
-        selfout_bmm_output,
         1e-12,
         parameters.at(fmt::format("attention_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("attention_layernorm_bias_{}", encoder_index)),
+        selfout_bmm_output,
         l1_memory_config
     );
     hidden_states.deallocate();
@@ -176,12 +176,12 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     ff1_matmul_output.deallocate();
 
 
-    auto feedforward_layernorm_output = tt::operations::primary::add_layernorm(
+    auto feedforward_layernorm_output = ttnn::layer_norm(
         attention_layernorm_output,
-        ff2_matmul_output,
         1e-12,
         parameters.at(fmt::format("feedforward_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("feedforward_layernorm_bias_{}", encoder_index)),
+        ff2_matmul_output,
         l1_memory_config
     );
     attention_layernorm_output.deallocate();

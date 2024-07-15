@@ -24,7 +24,7 @@ def test_rms_norm(device, batch_size, h, w):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.rms_norm(input_tensor, weight)
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

@@ -303,14 +303,14 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             False,
         ),
     )
-    model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    model_config["LN_ATTN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=1,
         block_w=8,
         inplace=False,
     )
-    model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    model_config["LN_MLP_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=1,
@@ -1147,7 +1147,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             False,
         ),
     )
-    model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=1,
