@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_numpy/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
@@ -53,11 +53,8 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
        // To handle inputs <= 1
        // input < 1, output is nan
        // input > 1, output is acosh(input)
-       Tensor scalar = ttnn::operations::creation::create_scalar(
-           std::nanf(""), input_a.get_dtype(), Layout::TILE, input_a.device());
        Tensor nan_res = ttnn::multiply(
-           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), scalar, std::nullopt, output_mem_config);
-       scalar.deallocate();
+           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), std::nanf(""), std::nullopt, output_mem_config);
        t_result = ttnn::multiply(
            ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
@@ -112,12 +109,9 @@ Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
 //         = exp[ (1/3)*log[a] ]
 Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
    constexpr float scale = (float)(1.0 / 3.0);
-   Tensor t_scale =
-       ttnn::operations::creation::create_scalar(scale, input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
    Tensor t_ln_input =
        ttnn::log(ttnn::abs(input_tensor, output_mem_config), output_mem_config);  // negative log is not useful here
-   Tensor t1 = ttnn::multiply(t_ln_input, t_scale, std::nullopt);
-   t_scale.deallocate();
+   Tensor t1 = ttnn::multiply(t_ln_input, scale, std::nullopt);
    t_ln_input.deallocate();
    Tensor t2 = ttnn::exp(t1, false, output_mem_config);
    t1.deallocate();
