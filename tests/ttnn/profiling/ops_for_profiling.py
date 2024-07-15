@@ -1221,7 +1221,7 @@ def permute(x):
 
 
 def tilize(x):
-    tt_lib.tensor.tilize(x)
+    ttnn.tilize(x)
 
 
 def tilize_with_val_padding(x):
@@ -1229,7 +1229,7 @@ def tilize_with_val_padding(x):
 
     output_tensor_shape = [shape[-4], shape[-3], shape[-2] + 32, shape[-1] + 32]
 
-    tt_lib.tensor.tilize_with_val_padding(x, output_tensor_shape, 1.0)
+    ttnn.tilize_with_val_padding(x, output_tensor_shape, 1.0)
 
 
 def untilize_with_unpadding(x):
@@ -1940,7 +1940,7 @@ all_unary_ops = [
     },
     {
         "op": tilize,
-        "name": "tt_lib.tensor.tilize",
+        "name": "ttnn.tilize",
     },
     {
         "op": tt_lib.tensor.untilize,
@@ -1948,7 +1948,7 @@ all_unary_ops = [
     },
     {
         "op": tilize_with_val_padding,
-        "name": "tt_lib.tensor.tilize_with_val_padding",
+        "name": "ttnn.tilize_with_val_padding",
         "layout": "ROW_MAJOR",
     },
     {
@@ -1956,8 +1956,8 @@ all_unary_ops = [
         "name": "tt_lib.tensor.untilize_with_unpadding",
     },
     {
-        "op": tt_lib.tensor.tilize_with_zero_padding,
-        "name": "tt_lib.tensor.tilize_with_zero_padding",
+        "op": ttnn.tilize_with_zero_padding,
+        "name": "ttnn.tilize_with_zero_padding",
     },
     {
         "op": pad,

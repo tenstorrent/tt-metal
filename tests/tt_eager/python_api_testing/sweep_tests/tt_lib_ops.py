@@ -5,7 +5,6 @@
 import torch
 import ttnn
 import tt_lib as ttl
-import ttnn
 from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
@@ -2339,7 +2338,7 @@ def split_last_dim_two_chunks_tiled(x, *args, device, dtype, layout, input_mem_c
 @setup_host_and_device
 def tilize(x, *args, device, dtype, layout, input_mem_config, output_mem_config, use_multicore, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.tilize(t0, output_mem_config=output_mem_config, use_multicore=use_multicore)
+    t1 = ttnn.tilize(t0, memory_config=output_mem_config, use_multicore=use_multicore)
 
     return t1.cpu().to_torch()
 
@@ -2347,7 +2346,7 @@ def tilize(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 @setup_host_and_device
 def tilize_with_zero_padding(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.tilize_with_zero_padding(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.tilize_with_zero_padding(t0, memory_config=output_mem_config)
 
     return t1.cpu().to_torch()
 
@@ -2366,11 +2365,11 @@ def tilize_with_val_padding(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.tilize_with_val_padding(
+    t1 = ttnn.tilize_with_val_padding(
         t0,
         output_tensor_shape,
         pad_value,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
 
     return t1.cpu().to_torch()

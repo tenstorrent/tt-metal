@@ -37,7 +37,7 @@ def run_tilize_matmul_test(M, K, N, device):
         ttl.tensor.Layout.ROW_MAJOR,
         device,
     )
-    a_t = ttl.tensor.tilize_with_zero_padding(a)
+    a_t = ttnn.tilize_with_zero_padding(a)
     print("Shape of A_t - " + str(a_t.get_legacy_shape()))
     b_t = ttl.tensor.Tensor(
         tilize_to_list(B),
