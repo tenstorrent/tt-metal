@@ -82,28 +82,4 @@ std::vector<ComplexTensor> _complex_div_bw(const ComplexTensor& grad, const Comp
     return grad_tensor;
 }
 
-std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> ComplexBinaryBackwardFunction::get_function_type1(ComplexBinaryBackwardOpType OpType){
-    switch (OpType) {
-        case ComplexBinaryBackwardOpType::COMPLEX_ADD_BW:
-            return _complex_add_bw;
-        case ComplexBinaryBackwardOpType::COMPLEX_SUB_BW:
-            return _complex_sub_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&)> ComplexBinaryBackwardFunction::get_function_type2(ComplexBinaryBackwardOpType OpType){
-    switch (OpType) {
-        case ComplexBinaryBackwardOpType::COMPLEX_MUL_BW:
-            return _complex_mul_bw;
-        case ComplexBinaryBackwardOpType::COMPLEX_DIV_BW:
-            return _complex_div_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
 }  // namespace ttnn::operations::complex_binary_backward
