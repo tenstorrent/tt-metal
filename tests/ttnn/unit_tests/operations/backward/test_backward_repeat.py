@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_pt_tt, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ def test_bw_repeat(input_shapes, sizes, device):
 
     grad_data, grad_tensor = data_gen_pt_tt(pyt_y.shape, device, True)
 
-    tt_output_tensor_on_device = tt_lib.tensor.repeat_bw(grad_tensor, input_tensor, sizes)
+    tt_output_tensor_on_device = ttnn.repeat_bw(grad_tensor, input_tensor, sizes)
 
     in_data.retain_grad()
 

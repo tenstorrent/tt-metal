@@ -252,6 +252,7 @@ Pointwise Unary
    ttnn/deg2rad_bw
    ttnn/polygamma_bw
    ttnn/gelu_bw
+   ttnn/repeat_bw
 
 Pointwise Binary
 ================

@@ -470,50 +470,6 @@ std::vector<Tensor> complex_sub_bw(
 }
 #undef CHECK_FOR_COMPLEX
 
-// Repeat Backward
-std::vector<Tensor> _repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    auto shape_wh = input.get_legacy_shape();
-    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1");
-    // input.get_legacy_shape()[0]
-    // If repeat shape has 0's, it returns zeros of given input
-    if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
-        Tensor zero_tensor = zeros_like(input, output_mem_config);
-        grad_tensor.emplace_back(zero_tensor);
-        return grad_tensor;
-    } else if (shape[0] > 1) {
-        std::vector<int64_t> dim = {0};
-        TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[1], [2], [3] should be 1");
-        Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(
-            grad,
-            dim,
-            true,
-            zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
-            output_mem_config);
-        grad_tensor.emplace_back(result);
-        return grad_tensor;
-    } else if (shape[1] > 1) {
-        std::vector<int64_t> dim = {1};
-        TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[0], [2], [3] should be 1");
-        Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(
-            grad,
-            dim,
-            true,
-            zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
-            output_mem_config);
-        grad_tensor.emplace_back(result);
-        return grad_tensor;
-    }
-    return grad_tensor;
-}
-std::vector<Tensor> repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _repeat_bw)(grad, input, shape, output_mem_config);
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt
