@@ -43,5 +43,6 @@ PYBIND11_MODULE(_ttnn, module) {
     module.attr("CONFIG") = &ttnn::CONFIG;
 
     module.def("get_operation_id", []() { return ttnn::OPERATION_ID; }, "Get operation id");
+    module.def("set_operation_id", [](int operation_id) { ttnn::OPERATION_ID = operation_id; }, "Set operation id");
     module.def("increment_operation_id", []() { ttnn::OPERATION_ID++; }, "Increment operation id");
 }
