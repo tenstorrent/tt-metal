@@ -99,12 +99,18 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_sum_nc.cpp";
+    // set preserve_fp32_precision to the same value as fp32_dest_acc_en
+    bool preserve_fp32_precision = fp32_dest_acc_en;
+    auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_sum_nc.cpp";
+    if (device->arch() == tt::ARCH::GRAYSKULL) {
+        compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_sum_nc_gs.cpp";
+    }
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
         math_fidelity,
         fp32_dest_acc_en,
-        math_approx_mode);
+        math_approx_mode,
+        preserve_fp32_precision);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -116,7 +122,8 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
             compute_defines,
             math_fidelity,
             fp32_dest_acc_en,
-            math_approx_mode);
+            math_approx_mode,
+            preserve_fp32_precision);
     }
 
     ////////////////////////////////////////////////////////////////////////////

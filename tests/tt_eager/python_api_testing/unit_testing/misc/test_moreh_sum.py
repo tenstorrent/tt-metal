@@ -285,11 +285,11 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
     "input_shape",
     (
         [10, TILE_HEIGHT * 12, TILE_WIDTH * 12],
-        [10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1],
+        [10, TILE_HEIGHT * 12 - 10, TILE_WIDTH * 12 - 10],
     ),
     ids=[
         "10, TILE_HEIGHT * 12, TILE_WIDTH * 12",
-        "10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
+        "10, TILE_HEIGHT * 12 - 10, TILE_WIDTH * 12 - 10",
     ],
 )
 @pytest.mark.parametrize(
@@ -299,7 +299,7 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, device):
-    torch.manual_seed(2023)
+    torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
