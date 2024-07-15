@@ -174,6 +174,25 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt},
+
+    ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               string parameter_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+                using BinaryBackwardOp = ttnn::operations::binary_backward::ExecuteBinaryBackward<binary_backward::BinaryBackwardOpType::BIAS_GELU_BW>;
+                return BinaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, parameter_b, input_tensor_b, output_memory_config);
+
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::arg("memory_config") = std::nullopt}
     );
 }
@@ -373,10 +392,10 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward_float_string_default(
         module,
-        ttnn::bias_gelu_unary_bw,
+        ttnn::bias_gelu_bw,
         "bias", "Bias value",
         "approximate", "Approximation type", "none",
-        R"doc(Performs backward operations for Unary bias_gelu on :attr:`input_tensor`, :attr:`bias` with given :attr:`grad_tensor` using given :attr:`approximate` mode.
+        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
         :attr:`approximate` mode can be 'none', 'tanh'.)doc");
 
     detail::bind_unary_backward(
