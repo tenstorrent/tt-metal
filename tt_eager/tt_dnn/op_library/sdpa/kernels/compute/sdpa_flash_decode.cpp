@@ -97,8 +97,11 @@ void reduce_c() {
         release_dst(tt::DstMode::Half);
     }
 
-   reduce_revert_delta<reduce_dim>(out_cb);
-   UNPACK(tensix_sync());
+    reduce_revert_delta<reduce_dim>(out_cb);
+
+    // UNPACK(TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_RESET_ALL_BANKS);)
+    UNPACK(TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_RESET_ALL_BANKS);)
+    UNPACK(tensix_sync());
 }
 
 void __attribute((noinline)) recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -225,6 +228,43 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
     cb_pop_front(in1_cb, num_tiles);
     UNPACK(tensix_sync());
+}
+
+void add_block_inplace2(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles consumed
+
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+
+
+    add_tiles_init();
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst(tt::DstMode::Half);
+        add_tiles(in0_cb, in1_cb, 0, i, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst(tt::DstMode::Half);
+    }
+
+    cb_pop_front(in1_cb, num_tiles);
+    UNPACK(tensix_sync());
+
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
 }
 
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -657,7 +697,11 @@ void MAIN {
                 /// O = O_1 + O_2
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
                 // pack_reconfig_data_format(cb_out_accumulate_im);
-                add_block_inplace(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
+                add_block_inplace2(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
+                // cb_pop_front(cb_out_accumulate_im_2, q_chunk_tiles);
+
+                // cb_pop_front(cb_out_accumulate_im, q_chunk_tiles);
+                // copy_block(cb_out_accumulate_im_2, cb_out_accumulate_im, q_chunk_tiles);
 
                 // unpack_reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
                 // pack_reconfig_data_format(cb_cur_max);

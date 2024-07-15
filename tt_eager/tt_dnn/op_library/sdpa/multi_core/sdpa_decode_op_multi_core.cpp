@@ -287,7 +287,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     tt::DataFormat v_df = tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;
     // tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
