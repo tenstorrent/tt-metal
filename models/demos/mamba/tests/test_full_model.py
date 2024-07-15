@@ -136,6 +136,15 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             1,
             0.96,
         ),
+        (
+            "state-spaces/mamba-2.8b",
+            ModelMode.DECODE,
+            32,
+            1,
+            1,
+            1,
+            0.995,
+        ),
     ),
 )
 def test_inference(
