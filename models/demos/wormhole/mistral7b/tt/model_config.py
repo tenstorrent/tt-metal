@@ -128,9 +128,7 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"] = self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
-            self.model_config[
-                "SHARDED_NORM_PRGM_CFG"
-            ] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            self.model_config["SHARDED_NORM_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=[8, 4],
                 subblock_w=4,
                 block_h=shard_height // 32,

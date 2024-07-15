@@ -76,7 +76,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=True,
             fused_activation=None,
         ),
-        "layernorm_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=4,
             block_h=12,

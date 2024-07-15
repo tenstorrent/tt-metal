@@ -166,34 +166,30 @@ class TtBertEncoder:
                 return mha_out
 
         self.op7_mm_plus_bias = op7_mm_plus_bias
-        self.mha_ln_program_config = model_config.get(
-            "OP8_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
-        )
-        self.ffn_ln_program_config = model_config.get(
-            "OP11_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
-        )
+        self.mha_ln_program_config = model_config.get("OP8_LAYERNORM_CONFIG", ttnn.LayerNormDefaultProgramConfig())
+        self.ffn_ln_program_config = model_config.get("OP11_LAYERNORM_CONFIG", ttnn.LayerNormDefaultProgramConfig())
 
     def op8_add_layernorm(self, activation, mha_out):
-        mha_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        mha_out_add_and_norm = ttnn.layer_norm(
             activation,
-            mha_out,
-            self.layer_norm_eps,
-            self.mha_gamma,
-            self.mha_beta,
+            residual_input_tensor=mha_out,
+            epsilon=self.layer_norm_eps,
+            weight=self.mha_gamma,
+            bias=self.mha_beta,
             program_config=self.mha_ln_program_config,
-            output_mem_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return mha_out_add_and_norm
 
     def op11_add_layernorm(self, mha_out_add_and_norm, ffn_out):
-        ffn_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        ffn_out_add_and_norm = ttnn.layer_norm(
             mha_out_add_and_norm,
-            ffn_out,
-            self.layer_norm_eps,
-            self.ffn_gamma,
-            self.ffn_beta,
+            residual_input_tensor=ffn_out,
+            epsilon=self.layer_norm_eps,
+            weight=self.ffn_gamma,
+            bias=self.ffn_beta,
             program_config=self.ffn_ln_program_config,
-            output_mem_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return ffn_out_add_and_norm
 

@@ -6,6 +6,8 @@ import torch
 import pytest
 from loguru import logger
 
+import ttnn
+
 import tt_lib
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.model_config import (
@@ -54,11 +56,11 @@ class TtLlamaRMSNorm(torch.nn.Module):
         x = tt_lib.tensor.interleaved_to_sharded(
             x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
         )
-        x_attn_norm = tt_lib.operations.primary.rmsnorm(
+        x_attn_norm = ttnn.rms_norm(
             x,
-            self.norm_eps,
-            self.attn_norm,
-            output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+            epsilon=self.norm_eps,
+            weight=self.attn_norm,
+            memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_ATTN_PROGCFG"],
         )
         return x_attn_norm

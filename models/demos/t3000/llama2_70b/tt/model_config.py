@@ -257,7 +257,7 @@ def get_model_config(
                 False,
             ),
         )
-        model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
             block_h=shard_height // 32,
@@ -301,7 +301,7 @@ def get_model_config(
                 False,
             ),
         )
-        model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
             subblock_w=8,
             block_h=num_tiles_per_core_h,

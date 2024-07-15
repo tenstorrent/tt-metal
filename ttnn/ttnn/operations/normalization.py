@@ -98,6 +98,10 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
+LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
+LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
+LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
+
 
 # group norm helper function
 def determine_expected_group_norm_sharded_config_and_grid_size(
