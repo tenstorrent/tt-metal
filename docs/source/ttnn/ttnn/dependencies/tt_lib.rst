@@ -651,8 +651,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.conj_bw
 
-.. autofunction:: tt_lib.tensor.sqrt_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
 
 .. autofunction:: tt_lib.tensor.gelu_bw
