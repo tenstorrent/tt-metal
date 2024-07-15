@@ -174,7 +174,7 @@ Pointwise Unary
    ttnn/hardtanh_bw
    ttnn/threshold_bw
    ttnn/softplus_bw
-   ttnn/unary_div_bw
+   ttnn/div_bw
    ttnn/rdiv_bw
    ttnn/bias_gelu_bw
    ttnn/assign_bw
@@ -297,7 +297,6 @@ Pointwise Binary
    ttnn/rsub_bw
    ttnn/min_bw
    ttnn/max_bw
-   ttnn/div_bw
    ttnn/lerp_bw
 
 Pointwise Ternary

@@ -204,25 +204,6 @@ std::vector<Tensor> gelu_bw(
     return operation::decorate_as_composite(__func__, _gelu_bw)(grad, input, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _bias_gelu_unary_bw(
-    const Tensor& grad,
-    const Tensor& input_tensor,
-    float bias,
-    string approximate,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor input = ttnn::add(input_tensor, bias);
-
-    grad_tensor = gelu_bw(grad, input, approximate = approximate);
-
-    return grad_tensor;
-}
-std::vector<Tensor> bias_gelu_unary_bw(
-    const Tensor& grad, const Tensor& input, float bias, string approximate, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _bias_gelu_unary_bw)(
-        grad, input, bias, approximate, output_mem_config);
-}
-
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
