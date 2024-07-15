@@ -188,7 +188,7 @@ std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input_tenso
     std::vector<Tensor> grad_tensor;
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
     Tensor input = ttnn::add(input_tensor, bias);
-    grad_tensor = tt::tt_metal::gelu_bw(grad, input, approximate = approximate);
+    grad_tensor = _gelu_bw(grad, input, approximate = approximate);
     return grad_tensor;
 }
 
@@ -1368,6 +1368,53 @@ std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const M
     float M_PI_180 = M_PI / 180;
     Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+
+std::vector<Tensor> _gelu_bw(
+    const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximate mode (expected 'None', 'tanh')");
+
+    if (approximate == "tanh") {
+        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
+        float kKappa = 0.044715;
+        Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_memory_config);
+        Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_memory_config);
+        Tensor inner = ttnn::multiply(ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_memory_config)), kBeta, std::nullopt, output_mem_config);
+        Tensor tanh_inner = ttnn::tanh(inner, output_memory_config);
+
+        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_memory_config);
+        Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_memory_config);
+
+        Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_memory_config);
+
+        Tensor tanh_derivative =
+            ttnn::neg(ttnn::subtract(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config),
+                output_memory_config);
+        Tensor inner_derivative = ttnn::multiply(
+            (ttnn::add(
+                ttnn::multiply(ttnn::multiply(x_sq, kKappa, std::nullopt, output_memory_config), 3, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config)), kBeta);
+        Tensor right_derivative =
+            ttnn::multiply(ttnn::multiply(tanh_derivative, left, std::nullopt, output_memory_config),
+                inner_derivative,
+                std::nullopt,
+                output_memory_config);
+
+        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(grad_a);
+    } else {
+        float kAlpha = M_SQRT1_2;
+        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
+        Tensor cdf =
+            ttnn::multiply((ttnn::add(ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)), 1, std::nullopt, output_memory_config)), 0.5);
+        Tensor pdf = ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config), kBeta, std::nullopt, output_memory_config);
+        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(cdf, ttnn::multiply(input, pdf))));
+        grad_tensor.emplace_back(grad_a);
+    }
+
     return grad_tensor;
 }
 

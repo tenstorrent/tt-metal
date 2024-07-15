@@ -653,8 +653,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.complex_abs_bw
 
-.. autofunction:: tt_lib.tensor.gelu_bw
-
 .. autofunction:: tt_lib.tensor.angle_bw
 
 .. autofunction:: tt_lib.tensor.complex_recip_bw

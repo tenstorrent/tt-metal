@@ -85,6 +85,29 @@ struct ExecuteUnaryBackwardFloatStringDefault {
 
 };
 
+//OpHandler_string_default : get_function_type1_string_default
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardStringDefault {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 1 inputs, 1 grad tensor, 1 float, 1 default string
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_type1_string_default<unary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
+        }
+
+};
+
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloat {
@@ -215,6 +238,9 @@ constexpr auto hardtanh_bw = ttnn::register_operation<operations::unary_backward
 constexpr auto div_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::DIV_BW>>("ttnn::div_bw");
 constexpr auto rdiv_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>("ttnn::rdiv_bw");
 constexpr auto bias_gelu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
+
+//ExecuteUnaryBackwardStringDefault : get_function_type1_string_default
+constexpr auto gelu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardStringDefault<operations::unary_backward::UnaryBackwardOpType::GELU_BW>>("ttnn::gelu_bw");
 
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 constexpr auto pow_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptionalFloat<operations::unary_backward::UnaryBackwardOpType::POW_BW>>("ttnn::pow_bw");

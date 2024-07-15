@@ -25,54 +25,6 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<Tensor> _gelu_bw(
-    const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-
-    if (approximate == "tanh") {
-        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
-        float kKappa = 0.044715;
-        Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_mem_config);
-        Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_mem_config);
-        Tensor inner = ttnn::multiply(ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_mem_config)), kBeta, std::nullopt, output_mem_config);
-        Tensor tanh_inner = ttnn::tanh(inner, output_mem_config);
-
-        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_mem_config);
-        Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_mem_config);
-
-        Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_mem_config);
-
-        Tensor tanh_derivative =
-            ttnn::neg(ttnn::subtract(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_mem_config), 1, std::nullopt, output_mem_config),
-                output_mem_config);
-        Tensor inner_derivative = ttnn::multiply(
-            (ttnn::add(
-                ttnn::multiply(ttnn::multiply(x_sq, kKappa, std::nullopt, output_mem_config), 3, std::nullopt, output_mem_config), 1, std::nullopt, output_mem_config)), kBeta);
-        Tensor right_derivative =
-            ttnn::multiply(ttnn::multiply(tanh_derivative, left, std::nullopt, output_mem_config),
-                inner_derivative,
-                std::nullopt,
-                output_mem_config);
-
-        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(grad_a);
-    } else {
-        float kAlpha = M_SQRT1_2;
-        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
-        Tensor cdf =
-            ttnn::multiply((ttnn::add(ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_mem_config)), 1, std::nullopt, output_mem_config)), 0.5);
-        Tensor pdf = ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_mem_config), kBeta, std::nullopt, output_mem_config);
-        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(cdf, ttnn::multiply(input, pdf))));
-        grad_tensor.emplace_back(grad_a);
-    }
-
-    return grad_tensor;
-}
-std::vector<Tensor> gelu_bw(
-    const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _gelu_bw)(grad, input, approximate, output_mem_config);
-}
-
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;

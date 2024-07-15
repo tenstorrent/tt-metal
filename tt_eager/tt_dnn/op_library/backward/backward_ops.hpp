@@ -31,12 +31,6 @@ std::vector<Tensor> complex_abs_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> gelu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> angle_bw(
     const Tensor& grad,
     const Tensor& input,
