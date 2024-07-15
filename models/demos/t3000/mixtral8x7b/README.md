@@ -52,7 +52,7 @@ pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mix
 
 ### Run the demo
 
-Mistral-7B does not run fast prefill currently. It does prefill via sequential decoding.
+Mixtral-8x7B does not run fast prefill currently. It does prefill via sequential decoding.
 
 The largest context length supported is 3100 tokens.
 
