@@ -44,7 +44,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         bias_on_device = bias_.to(device)
 
     def conv_(activation):
-        output = tensor.conv(
+        output = ttnn.operations.conv2d.conv_legacy(
             activation,
             weight_on_device,
             None,
@@ -236,13 +236,13 @@ def resnet50_optimized_conv(
     )
     bias_on_device = bias_.to(device)
 
-    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+    opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
-    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+    opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
         out_subblock_h_ntiles=out_subblock_h,
@@ -251,7 +251,7 @@ def resnet50_optimized_conv(
 
     def conv_(activation):
         # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.optimized_conv(
+        output = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
             bias_on_device,
@@ -355,13 +355,13 @@ def resnet50_first_conv(
     P_H = 0
     P_W = 0
 
-    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+    opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
-    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+    opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
         out_subblock_h_ntiles=out_subblock_h,
@@ -370,7 +370,7 @@ def resnet50_first_conv(
 
     def conv_(activation):
         # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
-        output_plus_bias = tensor.optimized_conv(
+        output_plus_bias = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
             bias_on_device,
