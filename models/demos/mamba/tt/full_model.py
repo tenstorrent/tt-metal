@@ -139,7 +139,6 @@ class MambaTT(torch.nn.Module):
         )
 
         for i, layer in enumerate(self.layers):
-            # print(f"Running layer {i}")
             x = layer(x)
 
         if self.return_logits or self.configs["mode"] == ModelMode.DECODE:

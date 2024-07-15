@@ -9,8 +9,9 @@ import tt_lib as ttl
 from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
-from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
 from models.demos.mamba.reference.args import ModelMode
+from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
+from models.demos.mamba.tt.cache import TensorCache
 
 
 class TtMambaBlock(torch.nn.Module):
@@ -46,10 +47,9 @@ class TtMambaBlock(torch.nn.Module):
             out_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=self.configs["dtype"]["weights"]
         )
 
-        # conv states
+        # conv1d_weights (2E, 1, 4)->(2E, 1)->(2E, 1, 1)->(1, 1, 2E)
         conv1d_weight_name = "mixer.conv1d.weight"
         self.conv1d_weights = []
-        # conv1d_weights (2E, 1, 4)->(2E, 1)->(2E, 1, 1)->(1, 1, 2E)
         for i in range(4):
             self.conv1d_weights.append(
                 load_fn(
@@ -82,7 +82,8 @@ class TtMambaBlock(torch.nn.Module):
                     )
                 )
         elif self.configs["mode"] == ModelMode.PREFILL:
-            self.conv_states = [[], [], [], []]
+            self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
+            self.conv_states = [self.convolution_cache.concat_users(i) for i in range(4)]
 
         self.use_torch_conv = True
         if self.use_torch_conv:
@@ -90,7 +91,7 @@ class TtMambaBlock(torch.nn.Module):
                 in_channels=self.args.d_inner,
                 out_channels=self.args.d_inner,
                 kernel_size=4,
-                padding=3,
+                padding=0,
                 groups=self.args.d_inner,
                 bias=True,
             )
@@ -108,17 +109,14 @@ class TtMambaBlock(torch.nn.Module):
     def to_decode(self, decode_config):
         self.configs = decode_config
         self.tt_ssm.to_decode(self.configs)
+
         # deallocate prefill conv_bias, need to reinitialize when back in prefill mode
         ttnn.deallocate(self.conv1d_bias)
         self.conv1d_bias = self.conv1d_bias_decode
-        for i in range(4):
-            self.conv_states[i] = torch.cat(self.conv_states[i], dim=2)
-            self.conv_states[i] = ttnn.from_torch(
-                self.conv_states[i],
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=self.configs["dtype"]["activations"],
+
+        for i in range(0, 4):
+            self.conv_states[i] = ttnn.typecast(
+                self.convolution_cache.concat_users(i), self.configs["dtype"]["activations"]
             )
 
     def forward(self, x):
@@ -189,17 +187,35 @@ class TtMambaBlock(torch.nn.Module):
 
         elif self.configs["mode"] == ModelMode.PREFILL:
             if self.use_torch_conv:
-                x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)
-                # cache pre-conv states
+                x_ssm = ttnn.to_layout(x_ssm, ttnn.ROW_MAJOR_LAYOUT)
+                x_ssm = ttnn.concat(
+                    [
+                        (self.convolution_cache.get(self.configs["current_user"], 1)),
+                        (self.convolution_cache.get(self.configs["current_user"], 2)),
+                        (self.convolution_cache.get(self.configs["current_user"], 3)),
+                        x_ssm,
+                    ],
+                    dim=-2,
+                )  # (1, 1, L+3, E)
+
                 for i in range(0, 4):
-                    self.conv_states[i].append(x_ssm_torch[:, :, -(4 - i), :].unsqueeze(2))
+                    slice_start = (0, 0, x_ssm.shape[2] - (4 - i), 0)
+                    slice_end = (0, 0, x_ssm.shape[2] - (4 - i), self.args.d_inner - 1)
+                    entry = ttnn.slice(x_ssm, ttnn.Shape(slice_start), ttnn.Shape(slice_end))
+                    self.convolution_cache.set(self.configs["current_user"], i, entry)
+                    ttnn.deallocate(entry)
+
+                x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)  # 1, 1, 35, 2E
 
                 ttnn.deallocate(x_ssm)
-                x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
+
+                x_ssm_torch = x_ssm_torch.squeeze(0).permute(0, 2, 1)
                 conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
+
                 x_ssm_torch.data = torch.tensor([])
+
                 # omit the padding at the end
-                conv_out_with_bias = conv_out_with_bias[:, :, :-3]
+                # conv_out_with_bias = conv_out_with_bias[:, :, :-3]
                 conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
                 conv_out_with_bias = ttnn.from_torch(
                     conv_out_with_bias,

@@ -17,6 +17,7 @@ def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=
     configs["seq_len"] = seq_len
     configs["batch_size"] = batch_size
     configs["num_users"] = 32  # fixing the number of users to 32 throughout the model
+    configs["current_user"] = 0  # fixing the number of users to 32 throughout the model
 
     if mode == ModelMode.DECODE:
         outer_dim = batch_size
