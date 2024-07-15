@@ -671,8 +671,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.complex_sub_bw
 
-.. autofunction:: tt_lib.tensor.repeat_bw
-
 Loss Functions
 ==============
 
