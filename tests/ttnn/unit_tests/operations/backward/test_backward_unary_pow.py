@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     compare_pcc,
 )
@@ -27,7 +27,7 @@ def test_negative_exponent(input_shapes, exponent, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
 
     with pytest.raises(RuntimeError) as _e:
-        tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+        tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
     assert "exponent >= 0.0" in str(_e.value)
 
 
@@ -48,7 +48,7 @@ def test_fw_exponent(input_shapes, exponent, device):
     golden_tensor = [
         torch.pow(grad_data, exponent),
     ]
-    tt_output_tensor_on_device = tt_lib.tensor.pow(grad_tensor, exponent)
+    tt_output_tensor_on_device = ttnn.pow(grad_tensor, exponent)
     status = compare_pcc([tt_output_tensor_on_device], golden_tensor)
     assert status
 
@@ -80,7 +80,7 @@ def test_bw_unary_pow(input_shapes, exponent_and_pcc, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
     in_data.retain_grad()
 
@@ -103,7 +103,7 @@ def test_bw_unary_pow_test_inf(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 9, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
     in_data.retain_grad()
 
@@ -126,7 +126,7 @@ def test_bw_unary_pow_test_neg_inf(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, -1, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
     in_data.retain_grad()
 
@@ -169,7 +169,7 @@ def test_bw_unary_pow_output(input_shapes, exponent_and_pcc, device):
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(
+    tt_output_tensor_on_device = ttnn.pow_bw(
         grad_tensor,
         input_tensor,
         exponent=exponent,
