@@ -46,7 +46,7 @@
 |--------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b)                                  | 129th              | 32                   | 13.3 t/s/u - 425 t/s         | 15.4 t/s/u - 493 t/s        | 26             |
 | [Mistral-7B-decode](./models/demos/wormhole/mistral7b)                               | 129th              | 32                   | 9.9 t/s/u - 317 t/s         | 11.0 t/s/u - 352 t/s        | 25             |
-| [Mamba-2.8B-decode](./models/demos/mamba)                                            | any                | 32                   | 9.8 t/s/u - 307 t/s          | 15.8 t/s/u - 506 t/s        | 41             |
+| [Mamba-2.8B-decode](./models/demos/mamba)                                            | any                | 32                   | 11.6 t/s/u - 370 t/s         | 16.5 t/s/u - 528 t/s        | 41             |
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                        |                    | 8                    | 270                          | 340                         | 400            |
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 6                            | 5                           |                |
 
