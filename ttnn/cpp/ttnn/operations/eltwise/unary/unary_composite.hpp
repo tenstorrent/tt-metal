@@ -97,6 +97,67 @@ struct ExecuteUnaryCompositeOp
 
 };
 
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithScaleShift
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float scale,
+        float shift,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type2<unary_comp_op_type>();
+            return op_type(input_tensor, scale, shift, memory_config);
+        }
+
+};
+
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithLowHigh
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float low,
+        float high,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type3<unary_comp_op_type>();
+            return op_type(input_tensor, low, high, memory_config);
+        }
+
+};
+
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithScaleAlpha
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float scale,
+        float alpha,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type4<unary_comp_op_type>();
+            return op_type(input_tensor, scale, alpha, memory_config);
+        }
+
+};
+
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithThresholdValue
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float threshold,
+        float value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type5<unary_comp_op_type>();
+            return op_type(input_tensor, threshold, value, memory_config);
+        }
+
+};
+
+
 // re-implement tt_eager composite unary op => ttnn composite unary ops.
 Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     float t_inf = std::numeric_limits<float>::infinity();
@@ -115,31 +176,6 @@ Tensor div_unary(uint8_t queue_id, const Tensor& input_tensor, float value, cons
 // TODO: update these composite unary ops pending decision on TensorAsync implementation.
 
 // TODO: implement these composite unary ops with optional output tensor and queue id.
-
-Tensor hardswish(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    float scale,
-    float shift,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::hardswish(input_tensor, scale, shift, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor hardsigmoid(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    float scale,
-    float shift,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::hardsigmoid(input_tensor, scale, shift, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor hardtanh(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    float low /* = -1.0f */,
-    float high /* = +1.0f */,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::hardtanh(input_tensor, low, high, memory_config.value_or(input_tensor.memory_config()));
-}
 
 Tensor tril(
     uint8_t queue_id,
@@ -209,11 +245,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 constexpr auto rdiv = ttnn::register_operation("ttnn::rdiv", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rdiv));
 
 
-constexpr auto hardswish = ttnn::register_operation("ttnn::hardswish", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardswish));
-constexpr auto hardsigmoid =
-    ttnn::register_operation("ttnn::hardsigmoid", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardsigmoid));
-constexpr auto hardtanh = ttnn::register_operation("ttnn::hardtanh", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::hardtanh));
-
 constexpr auto tril = ttnn::register_operation("ttnn::tril", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::tril));
 constexpr auto triu = ttnn::register_operation("ttnn::triu", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::triu));
 
@@ -238,5 +269,14 @@ constexpr auto trunc = ttnn::register_operation<operations::unary::ExecuteUnaryC
 constexpr auto var_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>("ttnn::var_hw");
 constexpr auto std_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>>("ttnn::std_hw");
 constexpr auto normalize_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>("ttnn::normalize_hw");
+
+constexpr auto hardswish= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSWISH>>("ttnn::hardswish");
+constexpr auto hardsigmoid = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>("ttnn::hardsigmoid");
+
+constexpr auto hardtanh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::HARDTANH>>("ttnn::hardtanh");
+constexpr auto clip = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLIP>>("ttnn::clip");
+constexpr auto clamp = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLAMP>>("ttnn::clamp");
+constexpr auto selu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleAlpha<operations::unary::UnaryCompositeOpType::SELU>>("ttnn::selu");
+constexpr auto threshold = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithThresholdValue<operations::unary::UnaryCompositeOpType::THRESHOLD>>("ttnn::threshold");
 
 }  // namespace ttnn

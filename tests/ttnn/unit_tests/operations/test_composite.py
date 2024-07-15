@@ -282,3 +282,115 @@ def test_unary_trunc_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_hardswish_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.hardswish(input_tensor)
+    golden_tensor = torch.nn.functional.hardswish(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_hardsigmoid_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.hardsigmoid(input_tensor)
+    golden_tensor = torch.nn.functional.hardsigmoid(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_hardtanh_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    low = -1
+    high = 1
+    output_tensor = ttnn.hardtanh(input_tensor, low, high)
+    golden_tensor = torch.nn.functional.hardtanh(in_data, min_val=low, max_val=high)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_clip_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    low = -10
+    high = 10
+    output_tensor = ttnn.clip(input_tensor, low, high)
+    golden_tensor = torch.clip(in_data, low, high)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_clamp_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    low = -10
+    high = 10
+    output_tensor = ttnn.clamp(input_tensor, low, high)
+    golden_tensor = torch.clamp(in_data, low, high)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_threshold_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    threshold = -10
+    value = 10
+    output_tensor = ttnn.threshold(input_tensor, threshold, value)
+    golden_tensor = torch.threshold(in_data, threshold, value)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

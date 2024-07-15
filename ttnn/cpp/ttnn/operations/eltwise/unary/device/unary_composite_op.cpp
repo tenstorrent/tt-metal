@@ -389,4 +389,113 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
     return z;
 }
 
+// Function Hard Sigmoid
+//     Ref: https://github.com/Theano/Theano/blob/master/theano/tensor/nnet/sigm.py
+//
+//     slope = tensor.constant(0.2, dtype=out_dtype)
+//     shift = tensor.constant(0.5, dtype=out_dtype)
+//
+//     x1 = (x * slope) + shift
+//     y = tensor.clip(x1, 0, 1)
+//
+// PyTorch version:
+// hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
+Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
+//    std::cout<<"\n\n hit in ttnn hardsigmoid";
+
+   Tensor a_t = ttnn::full_like(a,value_1);
+   Tensor b_t = ttnn::full_like(a,value_2);
+   Tensor a_mac = mac(a, a_t, b_t);  // multiply and add.
+   Tensor a_clip = relu_max(a_mac, 1.0f);
+   return a_clip;
+}
+
+// Function @hard_swish
+// use transformation y = x * hardsigmoid( x ) by broadcast
+// Ref: PyTorch
+// hard swish(x) = x*hardsigmoid(x,scale,shift)
+Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
+//    std::cout<<"\n\n hit in ttnn hardswish";
+   Tensor a_sigmoid = _hardsigmoid(a, value_1, value_2, output_mem_config);
+   Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt);
+   return result_sq;
+}
+
+// Function Clip
+// use clip y = min( max( x, min_value), max_value) by broadcast
+// Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
+Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    const Tensor h_const = full_like(a, high);
+    Tensor a_max = tt::tt_metal::min(a, h_const, output_memory_config);
+    if (low == 0.0f) {
+        return ttnn::relu(a_max, output_memory_config);
+    } else {
+        const Tensor l_const = full_like(a, low);
+        return tt::tt_metal::max(a_max, l_const, output_memory_config);
+    }
+}
+
+// clamp
+Tensor _clamp(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
+    return _clip(a, low, high, output_mem_config);
+}
+
+// hardtanh
+Tensor _hardtanh(
+    const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const std::optional<MemoryConfig>& output_mem_config) {
+        auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    return _clip(a, low, high, output_memory_config);
+}
+
+// Theano defines this differently...
+/**
+ *
+ *   alpha = 1.6732632423543772848170429916717
+ *    scale = 1.0507009873554804934193349852946
+ *    return scale * elu(x, alpha)
+ *
+ */
+// Function Selu - scaled exponential linear
+// use transformation y = scale *(max(0,x)) + min(0,alpha * (exp(X)-1)) by broadcast
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
+Tensor _selu(const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    // term 2
+    Tensor x_Exp = ttnn::exp(x, false, output_mem_config);
+    Tensor minus_one = ttnn::operations::creation::create_scalar(-1.0f, x.get_dtype(), Layout::TILE, x.device());
+    Tensor x_Exp_minus_1 =ttnn::subtract(x_Exp , minus_one, std::nullopt, output_mem_config);
+    x_Exp.deallocate();
+    minus_one.deallocate();
+    Tensor t_alpha = ttnn::operations::creation::create_scalar(alpha, x.get_dtype(), Layout::TILE, x.device());
+    Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, t_alpha, std::nullopt, output_mem_config);
+    x_Exp_minus_1.deallocate();
+    t_alpha.deallocate();
+    Tensor result_term2 =
+        ttnn::multiply(ttnn::gtz(result_t2_, output_mem_config), result_t2_, std::nullopt, output_mem_config);
+    result_t2_.deallocate();
+
+    // term 1
+    Tensor t_scale = ttnn::operations::creation::create_scalar(scale, x.get_dtype(), Layout::TILE, x.device());
+    Tensor x_relu = ttnn::relu(x, output_mem_config);
+    Tensor result_term1 = ttnn::multiply(x_relu, t_scale, std::nullopt, output_mem_config);
+    t_scale.deallocate();
+    x_relu.deallocate();
+    Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
+
+    return result_selu;
+}
+
+// threshold(a,t,v) = (a <= t)*v + (a > t)*a
+Tensor _threshold(const Tensor& input_tensor, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_threshold = ttnn::operations::creation::create_scalar(
+        threshold, input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
+    Tensor t0 = ttnn::subtract(input_tensor, t_threshold, std::nullopt, output_mem_config);
+    t_threshold.deallocate();
+    Tensor t_value =
+        ttnn::operations::creation::create_scalar(value, input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
+    Tensor t1 = ttnn::multiply(ttnn::lez(t0), t_value, std::nullopt, output_mem_config);
+    t_value.deallocate();
+    Tensor t2 = ttnn::multiply(ttnn::gtz(t0, output_mem_config), input_tensor, std::nullopt, output_mem_config);
+    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+}
 }  // namespace ttnn::operations::unary
