@@ -184,7 +184,7 @@ std::vector<Tensor> _rdiv_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _bias_gelu_unary_bw( const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
     Tensor input = ttnn::add(input_tensor, bias);
