@@ -62,26 +62,26 @@ struct CoreGrid {
 // will look up the address for buffer_id to free memory on device.
 class buffer_address_map {
     public:
-        void insert(uint32_t buf_id, uint32_t buf_addr) {
+        void insert(uint64_t buf_id, uint32_t buf_addr) {
             std::scoped_lock<std::mutex> lock(this->map_mutex);
             this->buf_id_to_address_map.insert({buf_id, buf_addr});
         }
-        void erase(uint32_t buf_id) {
+        void erase(uint64_t buf_id) {
             std::scoped_lock<std::mutex> lock(this->map_mutex);
             this->buf_id_to_address_map.erase(buf_id);
         }
-        uint32_t buffer_address(uint32_t buf_id) {
+        uint32_t buffer_address(uint64_t buf_id) {
             std::scoped_lock<std::mutex> lock(this->map_mutex);
             return this->buf_id_to_address_map.at(buf_id);
         }
-        uint32_t get_buf_id() {
+        uint64_t get_buf_id() {
             return buf_id++;
         }
 
     private:
-    std::atomic<uint32_t> buf_id = 0;
+    std::atomic<uint64_t> buf_id = 0;
     std::mutex map_mutex;
-    std::unordered_map<uint32_t, uint32_t> buf_id_to_address_map = {};
+    std::unordered_map<uint64_t, uint32_t> buf_id_to_address_map = {};
 };
 
 inline buffer_address_map GLOBAL_BUFFER_ADDRESS_MAP;
@@ -101,7 +101,7 @@ class Buffer : public tt::tt_metal::Buffer {
             this->deallocate();
         }
     private:
-        uint32_t buffer_id = 0;
+        uint64_t buffer_id = 0;
         void allocate() {
             TT_ASSERT(this->device());
             this->device()->push_work([this] () mutable {
