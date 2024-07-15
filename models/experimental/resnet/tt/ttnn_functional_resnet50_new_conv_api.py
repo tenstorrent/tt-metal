@@ -746,7 +746,7 @@ class resnet50:
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True if whb0_and_b16 else False,
             enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         if is_first_run:
@@ -770,7 +770,7 @@ class resnet50:
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
             enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         logger.debug(f"==== Running layer 1 module 3")
@@ -784,7 +784,7 @@ class resnet50:
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
             enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         if self.batch_size == 20 and is_wormhole_b0():
