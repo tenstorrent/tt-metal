@@ -298,7 +298,7 @@ void kernel_main() {
 
             // DPRINT << "[Writer Reducer] Done iteration " << block << ENDL();
         }
-        cb_pop_front(cb_intermed_out, num_tiles_to_wait);
+        // cb_pop_front(cb_intermed_out, num_tiles_to_wait);
 
         // DPRINT << "[Writer Reducer] Done sending intermediate chunks to compute" << ENDL();
     }
