@@ -82,7 +82,7 @@ class TtMambaBlock(torch.nn.Module):
                     )
                 )
         elif self.configs["mode"] == ModelMode.PREFILL:
-            self.conv_states = [[], [], [], []]
+            self.conv_states = [torch.zeros(1, 1, self.configs["num_users"], 5120) for i in range(4)]
 
         self.use_torch_conv = True
         if self.use_torch_conv:
@@ -90,7 +90,7 @@ class TtMambaBlock(torch.nn.Module):
                 in_channels=self.args.d_inner,
                 out_channels=self.args.d_inner,
                 kernel_size=4,
-                padding=3,
+                padding=0,
                 groups=self.args.d_inner,
                 bias=True,
             )
@@ -112,7 +112,7 @@ class TtMambaBlock(torch.nn.Module):
         ttnn.deallocate(self.conv1d_bias)
         self.conv1d_bias = self.conv1d_bias_decode
         for i in range(4):
-            self.conv_states[i] = torch.cat(self.conv_states[i], dim=2)
+            # self.conv_states[i] = torch.cat(self.conv_states[i], dim=2)
             self.conv_states[i] = ttnn.from_torch(
                 self.conv_states[i],
                 device=self.device,
@@ -190,16 +190,28 @@ class TtMambaBlock(torch.nn.Module):
         elif self.configs["mode"] == ModelMode.PREFILL:
             if self.use_torch_conv:
                 x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)
-                # cache pre-conv states
-                for i in range(0, 4):
-                    self.conv_states[i].append(x_ssm_torch[:, :, -(4 - i), :].unsqueeze(2))
-
                 ttnn.deallocate(x_ssm)
-                x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
+
+                x_ssm_torch = torch.concat(
+                    [
+                        self.conv_states[1][:, :, self.configs["current_user"]],
+                        self.conv_states[2][:, :, self.configs["current_user"]],
+                        self.conv_states[3][:, :, self.configs["current_user"]],
+                        x_ssm_torch.squeeze(0),
+                    ],
+                    dim=-2,
+                )  # (1, 1, L, E)
+
+                for i in range(0, 4):
+                    self.conv_states[i][:, :, self.configs["current_user"]] = x_ssm_torch[:, -(4 - i)]
+                # self.conv_states[3][:, :, self.configs["current_user"]] = x_ssm_torch[:, :, 0]
+
+                x_ssm_torch = x_ssm_torch.permute(0, 2, 1)
                 conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
+
                 x_ssm_torch.data = torch.tensor([])
                 # omit the padding at the end
-                conv_out_with_bias = conv_out_with_bias[:, :, :-3]
+                # conv_out_with_bias = conv_out_with_bias[:, :, :-3]
                 conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
                 conv_out_with_bias = ttnn.from_torch(
                     conv_out_with_bias,
