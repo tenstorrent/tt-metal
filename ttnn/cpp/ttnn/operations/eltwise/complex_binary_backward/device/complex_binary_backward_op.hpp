@@ -20,9 +20,53 @@ enum class ComplexBinaryBackwardOpType {
     COMPLEX_DIV_BW,
 };
 
-struct ComplexBinaryBackwardFunction{
-static std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&)> get_function_type1(ComplexBinaryBackwardOpType OpType);
-static std::function<std::vector<ComplexTensor>(const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&)> get_function_type2(ComplexBinaryBackwardOpType OpType);
+std::vector<ComplexTensor> _complex_add_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config);
+std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config);
+std::vector<ComplexTensor> _complex_mul_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config);
+std::vector<ComplexTensor> _complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config);
+
+template <ComplexBinaryBackwardOpType OpType>
+struct OpHandler_complex_wo_float;
+
+template <ComplexBinaryBackwardOpType OpType>
+struct OpHandler_complex_w_float;
+
+template <>
+struct OpHandler_complex_wo_float<ComplexBinaryBackwardOpType::COMPLEX_MUL_BW> {
+    static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config ) {
+        return _complex_mul_bw(grad, input, other, output_mem_config);
+    }
 };
+
+template <>
+struct OpHandler_complex_wo_float<ComplexBinaryBackwardOpType::COMPLEX_DIV_BW> {
+    static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config ) {
+        return _complex_div_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_complex_w_float<ComplexBinaryBackwardOpType::COMPLEX_ADD_BW> {
+    static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config ) {
+        return _complex_add_bw(grad, input, other, alpha, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_complex_w_float<ComplexBinaryBackwardOpType::COMPLEX_SUB_BW> {
+    static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config ) {
+        return _complex_sub_bw(grad, input, other, alpha, output_mem_config);
+    }
+};
+
+template <ComplexBinaryBackwardOpType OpType>
+auto get_function_wo_float() {
+    return &OpHandler_complex_wo_float<OpType>::handle;
+}
+
+template <ComplexBinaryBackwardOpType OpType>
+auto get_function_w_float() {
+    return &OpHandler_complex_w_float<OpType>::handle;
+}
 
 }  // namespace ttnn::operations::complex_binary_backward
