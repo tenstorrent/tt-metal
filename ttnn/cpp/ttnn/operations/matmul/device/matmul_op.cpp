@@ -325,6 +325,61 @@ tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     return {1, 1};
 }
 
+
+tt::operations::primary::MatmulProgramConfig get_reuse_matmul_program_config(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const MemoryConfig& output_mem_config,
+    const bool fp32_dest_acc_en,
+    const CoreCoord& grid_size) {
+    // TODO: Need a better criteria for BMMs and MatmulMultiCoreReuseProgramConfig
+    TT_FATAL(input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+
+    bool per_core_N_equals_subblock_w_constraint = false;
+    if (output_mem_config.is_sharded()) {
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == output_mem_config.buffer_type);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == output_mem_config.memory_layout);
+        per_core_N_equals_subblock_w_constraint = true;
+    }
+
+    uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t K = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t N = input_tensor_b.get_legacy_shape()[-1] / TILE_WIDTH;
+
+    auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
+    uint32_t per_core_M = in0_shard_shape[0] / TILE_HEIGHT;
+    uint32_t per_core_N = N;
+    uint32_t in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
+
+    auto subblock_hw = get_matmul_subblock_params(
+            per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
+    auto out_subblock_h = std::get<0>(subblock_hw);
+    auto out_subblock_w = std::get<1>(subblock_hw);
+
+    // TODO: Temporarily allow for single core; should support bcast_batch in general
+    uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
+    uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
+    bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
+    TT_FATAL(!broadcast_batch);
+
+    if (input_tensor_b.is_sharded()) {
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == input_tensor_b.memory_config().buffer_type);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
+        TT_FATAL(input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid);
+        TT_FATAL(
+                input_tensor_a.shard_spec().value().orientation == input_tensor_b.shard_spec().value().orientation);
+    }
+
+    return tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+        .compute_with_storage_grid_size = grid_size,
+            .in0_block_w = in0_block_w,
+            .out_subblock_h = out_subblock_h,
+            .out_subblock_w = out_subblock_w,
+            .per_core_M = per_core_M,
+            .per_core_N = per_core_N,
+    };
+}
+
 // TODO: Only supports sharded matmul for now; infer most matmul params from shard spec
 tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
     const Tensor& input_tensor_a,
@@ -441,52 +496,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             };
         }
     } else {
-        // TODO: Need a better criteria for BMMs and MatmulMultiCoreReuseProgramConfig
-        TT_FATAL(input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-
-        bool per_core_N_equals_subblock_w_constraint = false;
-        if (output_mem_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().buffer_type == output_mem_config.buffer_type);
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == output_mem_config.memory_layout);
-            per_core_N_equals_subblock_w_constraint = true;
-        }
-
-        uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
-        uint32_t K = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
-        uint32_t N = input_tensor_b.get_legacy_shape()[-1] / TILE_WIDTH;
-
-        auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
-        uint32_t per_core_M = in0_shard_shape[0] / TILE_HEIGHT;
-        uint32_t per_core_N = N;
-        uint32_t in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
-
-        auto subblock_hw = get_matmul_subblock_params(
-            per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
-        auto out_subblock_h = std::get<0>(subblock_hw);
-        auto out_subblock_w = std::get<1>(subblock_hw);
-
-        // TODO: Temporarily allow for single core; should support bcast_batch in general
-        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
-        uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
-        bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
-        TT_FATAL(!broadcast_batch);
-
-        if (input_tensor_b.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().buffer_type == input_tensor_b.memory_config().buffer_type);
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
-            TT_FATAL(input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid);
-            TT_FATAL(
-                input_tensor_a.shard_spec().value().orientation == input_tensor_b.shard_spec().value().orientation);
-        }
-
-        return tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
-            .compute_with_storage_grid_size = grid_size,
-            .in0_block_w = in0_block_w,
-            .out_subblock_h = out_subblock_h,
-            .out_subblock_w = out_subblock_w,
-            .per_core_M = per_core_M,
-            .per_core_N = per_core_N,
-        };
+        return get_reuse_matmul_program_config(input_tensor_a, input_tensor_b, output_mem_config, fp32_dest_acc_en, grid_size);
     }
     return tt::operations::primary::create_matmul_program_config(input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
 }
@@ -554,6 +564,7 @@ inline uint32_t get_per_core_factor(
 inline MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    const MemoryConfig& mem_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     const auto &ashape = input_tensor_a.get_legacy_shape(), bshape = input_tensor_b.get_legacy_shape();
     uint32_t batch_size_a = get_batch_size(ashape);
@@ -625,15 +636,10 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 .fuse_batch = false,
             };
         }
-        // If we don't need padding, use the default multi_core reuse/reuse_mcast
-        else if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
-            return MatmulMultiCoreNonOptimizedReuseProgramConfig{};
-        } else {
-            return MatmulMultiCoreProgramConfig{};
-        }
-    } else {
-        return MatmulMultiCoreProgramConfig{};
     }
+    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
+    auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    return bmm_op_utils::get_reuse_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, fp32_dest_acc_en, grid_size);
 }
 
 inline MatmulProgramConfig generate_matmul_program_config(
@@ -652,7 +658,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             return create_matmul_program_config(
                 input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
         } else {
-            return create_simple_matmul_program_config(input_tensor_a, input_tensor_b, compute_kernel_config);
+            return create_simple_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, compute_kernel_config);
         }
     } else {
         bool bmm = user_run_batched;
