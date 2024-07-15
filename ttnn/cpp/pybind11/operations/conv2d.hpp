@@ -76,7 +76,7 @@ void py_module(py::module& module) {
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
-            py::arg("enable_act_doule_buffer") = false,
+            py::arg("enable_act_double_buffer") = false,
             py::arg("enable_split_reader") = false,
             py::arg("enable_subblock_padding") = false
         );
@@ -97,7 +97,7 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
-        py_conv_config.def_readwrite("enable_act_doule_buffer", &Conv2dConfig::enable_act_doule_buffer);
+        py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer);
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
