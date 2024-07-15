@@ -476,7 +476,7 @@ def eltwise_relu_max(
 @setup_host_and_device
 def std_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.std_hw(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.std_hw(t0)
 
     output = tt2torch_tensor(t1)
     output = output.max(2, True)[0].max(3, True)[0]
@@ -487,10 +487,20 @@ def std_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 @setup_host_and_device
 def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.var_hw(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.var_hw(t0)
 
     output = tt2torch_tensor(t1)
     output = output.max(2, True)[0].max(3, True)[0]
+
+    return output
+
+
+@setup_host_and_device
+def normalize_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.normalize_hw(t0)
+
+    output = tt2torch_tensor(t1)
 
     return output
 
@@ -2728,7 +2738,7 @@ eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
-normalize_hw = make_unary_op(ttl.tensor.normalize_hw)
+# eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 transpose_wh = make_unary_op(partial(ttl.tensor.transpose, dim0=-2, dim1=-1))
 transpose_hc = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-2))
 transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
