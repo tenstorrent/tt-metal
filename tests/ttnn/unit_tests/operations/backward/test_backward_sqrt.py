@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+import ttnn
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -22,7 +22,7 @@ def test_bw_sqrt(input_shapes, device):
 
     pyt_y = torch.sqrt(in_data)
 
-    tt_output_tensor_on_device = tt_lib.tensor.sqrt_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = ttnn.sqrt_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
@@ -49,7 +49,7 @@ def test_bw_sqrt_output(input_shapes, device):
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    tt_output_tensor_on_device = tt_lib.tensor.sqrt_bw(
+    tt_output_tensor_on_device = ttnn.sqrt_bw(
         grad_tensor,
         input_tensor,
         are_required_outputs=[True],
