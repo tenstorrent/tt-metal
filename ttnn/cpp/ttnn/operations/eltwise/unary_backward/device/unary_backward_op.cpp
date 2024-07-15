@@ -15,6 +15,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -1415,6 +1416,47 @@ std::vector<Tensor> _gelu_bw(
         grad_tensor.emplace_back(grad_a);
     }
 
+    return grad_tensor;
+}
+
+std::vector<Tensor> _repeat_bw(
+    const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+
+    auto shape_wh = input.get_legacy_shape();
+    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1");
+    // input.get_legacy_shape()[0]
+    // If repeat shape has 0's, it returns zeros of given input
+    if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
+        Tensor zero_tensor = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(zero_tensor);
+        return grad_tensor;
+    } else if (shape[0] > 1) {
+        std::vector<int64_t> dim = {0};
+        TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[1], [2], [3] should be 1");
+        const tt::tt_metal::Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
+        Tensor result = tt::operations::primary::moreh_sum(
+            grad,
+            dim,
+            true,
+            tt::tt_metal::zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_memory_config),
+            output_memory_config);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    } else if (shape[1] > 1) {
+        std::vector<int64_t> dim = {1};
+        TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[0], [2], [3] should be 1");
+        const tt::tt_metal::Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
+        Tensor result = tt::operations::primary::moreh_sum(
+            grad,
+            dim,
+            true,
+            tt::tt_metal::zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_memory_config),
+            output_memory_config);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    }
     return grad_tensor;
 }
 

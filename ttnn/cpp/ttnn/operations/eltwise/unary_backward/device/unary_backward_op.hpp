@@ -98,6 +98,7 @@ enum class UnaryBackwardOpType {
     DEG2RAD_BW,
     POLYGAMMA_BW,
     GELU_BW,
+    REPEAT_BW,
 };
 
 struct UnaryBackwardFunction{
@@ -122,6 +123,9 @@ std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input, floa
 //OpHandler_string_default : get_function_type1_string_default
 std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+//OpHandler_shape : get_function_type1_shape
+std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
+
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 
@@ -142,6 +146,9 @@ struct OpHandler_float_string_default;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_string_default;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_shape;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_unary_optional_float;
@@ -233,6 +240,20 @@ struct OpHandler_string_default<UnaryBackwardOpType::GELU_BW> {
     }
 };
 
+template <>
+struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _repeat_bw(grad, input, shape, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _repeat_bw(grad, input, shape, output_mem_config);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -252,6 +273,11 @@ auto get_function_type1_float_string_default() {
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_string_default() {
     return &OpHandler_string_default<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_shape() {
+    return &OpHandler_shape<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
