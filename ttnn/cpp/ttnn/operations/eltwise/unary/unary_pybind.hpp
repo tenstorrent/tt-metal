@@ -939,6 +939,47 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
 
 
 template <typename unary_operation_t>
+void bind_unary_composite_with_float(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               float param,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, param, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::arg("param"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation_with_scale_and_shift(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, scale, shift, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
@@ -1259,6 +1300,16 @@ void py_module(py::module& module) {
         "k", "k value",
         R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
 
+    // unary composite with float imported into ttnn
+    detail::bind_unary_composite_with_float(module, ttnn::hardshrink);
+    detail::bind_unary_composite_with_float(module, ttnn::softshrink);
+    detail::bind_unary_composite_with_float(module, ttnn::bias_gelu_unary);
+    detail::bind_unary_composite_with_float(module, ttnn::logit);
+    detail::bind_unary_composite_with_float(module, ttnn::logical_xori);
+    detail::bind_unary_composite_with_float(module, ttnn::logical_noti);
+    detail::bind_unary_composite_with_float(module, ttnn::logical_andi);
+    detail::bind_unary_composite_with_float(module, ttnn::logical_ori);
+    detail::bind_unary_composite_with_float(module, ttnn::celu);
 }
 
 }  // namespace unary

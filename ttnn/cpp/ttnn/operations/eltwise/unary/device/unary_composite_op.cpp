@@ -508,7 +508,6 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
 
-
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
     Shape inshape(input_a.get_legacy_shape());
@@ -665,4 +664,105 @@ Tensor _rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const st
     return ttnn::where(ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
 }
 
+// Function: hardshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
+Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(param >= 0);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(ttnn::add(a, param)), a);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::subtract(a, param)), a);
+    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+}
+
+// Function: softshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
+Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(param >= 0);
+    Tensor t_a_plus_param = ttnn::add(a, param, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param);
+    t_a_plus_param.deallocate();
+    Tensor t_a_minus_param = ttnn::subtract(a, param, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param);
+    t_a_minus_param.deallocate();
+    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+}
+
+// Function: bias gelu
+// Ref: http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnxops/onnx_commicrosoft_BiasGelu.html
+Tensor _bias_gelu_unary(const Tensor& a, float bias, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::gelu(ttnn::add(a, bias), true, output_mem_config);
+}
+
+
+// logit(input, eps)=log(input / 1 - input)
+Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_eps = full_like(input_a, eps);
+    Tensor t1m_eps = full_like(input_a, (1 - eps));
+    Tensor logit_input = where(
+        ttnn::ltz(t_eps, output_mem_config),
+        input_a,
+        where(
+            ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
+            t_eps,
+            where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)
+            )
+        );
+    t_eps.deallocate();
+    t1m_eps.deallocate();
+    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
+    Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config));
+    linput_m1.deallocate();
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity());
+    Tensor logit_result = where(
+        ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+        t_inf,
+        where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
+        );
+    return logit_result;
+}
+
+Tensor _logical_andi(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
+    if (std::fpclassify(immediate) == FP_ZERO) {
+        return full_like(input_a, immediate);
+    } else {
+        return ttnn::nez(input_a);
+    }
+}
+
+Tensor _logical_noti(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_imm = full_like(input_a, immediate);
+    Tensor result = ttnn::logical_not(t_imm, output_mem_config);
+    return result;
+}
+
+Tensor _logical_xori(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    if (std::fpclassify(value) == FP_ZERO) {
+        return ttnn::nez(input_a);
+    } else {
+        return ttnn::eqz(input_a);  // eqz( input_a ) = not( nez( input_a ) )
+    }
+}
+
+Tensor _logical_ori(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
+    if (std::fpclassify(immediate) == FP_ZERO) {
+        return ttnn::nez(input_a, output_mem_config);
+    } else {
+        return full_like(input_a, 1);
+    }
+}
+
+// Celu
+// torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
+Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    float recip_val = 1.0f / alpha;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, recip_val},
+    UnaryWithParam{UnaryOpType::EXP, 1.0f},
+    UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f}, UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
+
+    Tensor result = ttnn::unary_chain(input_a, ops_chain, output_mem_config);
+    result = where(ttnn::gtz(input_a, output_mem_config), input_a, result);
+    return result;
+}
 }  // namespace ttnn::operations::unary
