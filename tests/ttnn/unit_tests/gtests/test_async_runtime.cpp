@@ -128,7 +128,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             using ttnn::operations::unary::UnaryOpType;
             auto op0 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::SQRT}}};
             auto op1 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::NEG}}};
-
             // Run operation on cq 0
             Tensor output_tensor = ttnn::run_operation(workload_dispatch_cq, op0, {input_tensor}).at(0);
             auto dummy_buffer_0 = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);

@@ -25,8 +25,9 @@ import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-UnaryWithParam = ttnn._ttnn.deprecated.tensor.FusibleActivationWithParam
-UnaryOpType = ttnn._ttnn.deprecated.tensor.FusibleActivation
+
+UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
+UnaryOpType = ttnn._ttnn.activation.UnaryOpType
 
 
 @dataclasses.dataclass

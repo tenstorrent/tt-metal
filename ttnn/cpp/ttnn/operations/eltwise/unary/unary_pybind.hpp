@@ -20,6 +20,8 @@ namespace unary {
 
 namespace detail {
 
+using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
+
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
@@ -363,7 +365,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const std::vector<UnaryWithParam>& ops_chain,
+               const FusedActivations& ops_chain,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
                const uint8_t queue_id) {
