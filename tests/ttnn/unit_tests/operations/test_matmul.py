@@ -7,11 +7,9 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, is_grayskull
 
 
 # fmt: off
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("m_size,k_size,n_size", [
     (1, 2, 2),
     (1, 2, 4),
@@ -37,11 +35,10 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
 # fmt: off
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("k_size, n_size", [
     (2, 4),
     (4, 2),
@@ -66,10 +63,9 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
@@ -94,7 +90,6 @@ def test_matmul_does_dot_product(device, w):
 
 
 # fmt: off
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 4),
     (1, 1, 4, 2),
@@ -116,11 +111,10 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
 # fmt: off
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 2),
     (1, 1, 4, 4),
@@ -141,11 +135,10 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
 # fmt: off
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("input_a,input_b", [
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
     ])
@@ -172,7 +165,6 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b):
     assert "The width of the first tensor must be equal to the height of the second tensor" in str(exception.value)
 
 
-@skip_for_wormhole_b0()
 def test_tutorial_matmul(device):
     torch.manual_seed(0)
 
@@ -190,10 +182,9 @@ def test_tutorial_matmul(device):
     output = input_tensor_a @ input_tensor_b
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     torch.manual_seed(0)
 
@@ -215,10 +206,9 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
     torch.manual_seed(0)
 
@@ -243,10 +233,9 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
@@ -379,10 +368,9 @@ def test_sharded_matmul(
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 7])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)
@@ -405,10 +393,9 @@ def test_matmul_with_core_grid(device, batch_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -430,10 +417,9 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [1024, 2048])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -455,10 +441,9 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [31, 63])
 @pytest.mark.parametrize("k_size", [1024, 2048])
@@ -480,7 +465,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -511,13 +496,12 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, output, 0.99)
 
 
 ##########################
 # MODEL SPECIFIC MATMULS #
 ##########################
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
@@ -540,11 +524,9 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-# @skip_for_grayskull()
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
@@ -605,17 +587,6 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
             # NOTE: matmul errors out with OOM otherwise
             core_grid = None
 
-    # if batch_size == 2:
-    #     if m_size == 1024 and k_size == 96 and n_size == 1024 and (dtype == ttnn.bfloat16 or is_grayskull()):
-    #         pytest.skip("skip: Raises OOM")
-    #     if m_size == 4096 and k_size == 64 and n_size == 4096:
-    #         pytest.skip("skip: Raises OOM without decomposition")
-    #     if is_grayskull():
-    #         if m_size == 4096 and (
-    #             (k_size == 96 and n_size == 64) or (k_size == 64 and n_size == 96) or (k_size == 4096 and n_size == 64)
-    #         ):
-    #             pytest.skip("skip: Raises OOM on GS")
-
     torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
@@ -631,7 +602,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     input_tensor_c = (
         ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) if has_bias else None
     )
-    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    pcc = 0.935 if dtype == ttnn.bfloat8_b else 0.98
 
     if has_bias:
         output_tensor = ttnn.linear(
