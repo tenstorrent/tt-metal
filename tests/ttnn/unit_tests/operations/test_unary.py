@@ -23,8 +23,6 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    if ttnn_function == ttnn.acosh:
-        output_tensor = output_tensor.squeeze()
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
