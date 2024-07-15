@@ -448,24 +448,6 @@ def eltwise_prelu(
     return tt2torch_tensor(t1)
 
 
-@setup_host_and_device
-def eltwise_relu_max(
-    x,
-    *args,
-    upper_limit,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.relu_max(t0, upper_limit, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
 # stats ops
 @setup_host_and_device
 def std_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
