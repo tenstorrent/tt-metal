@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
+#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -429,7 +430,7 @@ std::vector<Tensor> _bias_gelu_bw(
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
     Tensor input = ttnn::add(input_a, input_b);
-    grad_tensor = tt::tt_metal::gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    grad_tensor = ttnn::operations::unary_backward::_gelu_bw(grad, input, approximate = approximate, output_mem_config);
     grad_tensor.emplace_back(grad_tensor[0]);
     return grad_tensor;
 }

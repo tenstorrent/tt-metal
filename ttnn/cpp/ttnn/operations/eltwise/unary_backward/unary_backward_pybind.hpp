@@ -200,6 +200,49 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
     );
 }
 
+//OpHandler_float_string_default : get_function_type1_float_string_default
+template <typename unary_backward_operation_t>
+void bind_unary_backward_string_default(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, string parameter_a_value, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        {5}
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
+        Keyword args:
+            * :attr:`{2}` (string): {3} , Default value = {4}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+        Example:
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input, {2} = {4})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               string parameter_a,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(grad_tensor, input_tensor, parameter_a, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg("memory_config") = std::nullopt});
+}
+
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 template <typename unary_backward_operation_t>
 void bind_unary_backward_unary_optional_float(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, const std::string& description) {
@@ -443,6 +486,7 @@ Example:
 
 }
 
+
 }  // namespace detail
 
 
@@ -508,6 +552,13 @@ void py_module(py::module& module) {
         "bias", "Bias value",
         "approximate", "Approximation type", "none",
         R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
+
+    detail::bind_unary_backward_string_default(
+        module,
+        ttnn::gelu_bw,
+        "approximate", "Approximation type", "none",
+        R"doc(Performs backward operations for gelu on :attr:`input_tensor_a` or :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
         :attr:`approximate` mode can be 'none', 'tanh'.)doc");
 
     detail::bind_unary_backward_unary_optional_float(
