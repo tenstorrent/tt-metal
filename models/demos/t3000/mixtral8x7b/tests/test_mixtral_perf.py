@@ -137,10 +137,10 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
     profiler.start(f"torch_embed_initial")
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
-    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
     profiler.end(f"torch_embed_initial")
 
     for i in range(generation_length):
+        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
         start_pos = generation_start_pos + i
         current_pos = start_pos % tt_model.args.sliding_window
 
@@ -176,7 +176,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.start(f"torch_argmax_and_embed_{i}")
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
-        tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
+        # tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
         profiler.end(f"torch_argmax_and_embed_{i}")
 
         profiler.start(f"deallocate_tt_tensors_{i}")
