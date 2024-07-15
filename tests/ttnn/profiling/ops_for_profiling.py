@@ -686,7 +686,7 @@ all_binary_ops = [
     },
     {
         "op": ttnn.log_bw,
-        "name": "tt.log_bw",
+        "name": "ttnn.log_bw",
     },
     {
         "op": ttnn.abs_bw,
@@ -778,8 +778,8 @@ all_binary_ops = [
         "name": "ttnn.asinh_bw",
     },
     {
-        "op": tt_lib.tensor.cosh_bw,
-        "name": "tt_lib.tensor.cosh_bw",
+        "op": ttnn.cosh_bw,
+        "name": "ttnn.cosh_bw",
         "num_repeats": 3,
     },
     {
@@ -811,32 +811,32 @@ all_binary_ops = [
         "name": "tt_lib.tensor.hardtanh_bw",
     },
     {
-        "op": tt_lib.tensor.sin_bw,
-        "name": "tt_lib.tensor.sin_bw",
+        "op": ttnn.sin_bw,
+        "name": "ttnn.sin_bw",
     },
     {
-        "op": tt_lib.tensor.sinh_bw,
-        "name": "tt_lib.tensor.sinh_bw",
+        "op": ttnn.sinh_bw,
+        "name": "ttnn.sinh_bw",
     },
     {
         "op": ttnn.celu_bw,
         "name": "ttnn.celu_bw",
     },
     {
-        "op": tt_lib.tensor.log10_bw,
-        "name": "tt_lib.tensor.log10_bw",
+        "op": ttnn.log10_bw,
+        "name": "ttnn.log10_bw",
     },
     {
-        "op": tt_lib.tensor.log1p_bw,
-        "name": "tt_lib.tensor.log1p_bw",
+        "op": ttnn.log1p_bw,
+        "name": "ttnn.log1p_bw",
     },
     {
         "op": tt_lib.tensor.erf_bw,
         "name": "tt_lib.tensor.erf_bw",
     },
     {
-        "op": tt_lib.tensor.erfc_bw,
-        "name": "tt_lib.tensor.erfc_bw",
+        "op": ttnn.erfc_bw,
+        "name": "ttnn.erfc_bw",
     },
     {
         "op": tt_lib.tensor.digamma_bw,
@@ -912,20 +912,20 @@ all_binary_ops = [
         "name": "tt_lib.tensor.logiteps_bw",
     },
     {
-        "op": tt_lib.tensor.softsign_bw,
-        "name": "tt_lib.tensor.softsign_bw",
+        "op": ttnn.softsign_bw,
+        "name": "ttnn.softsign_bw",
     },
     {
-        "op": tt_lib.tensor.sign_bw,
-        "name": "tt_lib.tensor.sign_bw",
+        "op": ttnn.sign_bw,
+        "name": "ttnn.sign_bw",
     },
     {
-        "op": tt_lib.tensor.ceil_bw,
-        "name": "tt_lib.tensor.ceil_bw",
+        "op": ttnn.ceil_bw,
+        "name": "ttnn.ceil_bw",
     },
     {
-        "op": tt_lib.tensor.log2_bw,
-        "name": "tt_lib.tensor.log2_bw",
+        "op": ttnn.log2_bw,
+        "name": "ttnn.log2_bw",
     },
     {
         "op": unary_fmod_bw,
