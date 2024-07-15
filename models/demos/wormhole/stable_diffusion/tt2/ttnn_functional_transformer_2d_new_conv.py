@@ -241,10 +241,10 @@ class transformer_2d_model:
         hidden_states = ttnn.to_memory_config(
             hidden_states, ttnn.L1_MEMORY_CONFIG
         )  # sharded to interleaved since we can't tilize block sharded
-        hidden_states = ttnn.experimental.tensor.tilize(
+        hidden_states = ttnn.tilize(
             hidden_states,
-            output_mem_config=hidden_states.memory_config(),
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=hidden_states.memory_config(),
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )
 
         conv_config = ttnn.Conv2dConfig(

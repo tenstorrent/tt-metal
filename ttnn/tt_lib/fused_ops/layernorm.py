@@ -121,7 +121,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
 
         scaler = 1 / W
         var_scaler_ = tensor.fill_rm(1, 1, roundup32(H), 32, H_, 1, epsilon_, scaler, 0)
-        var_scaler_ = tensor.tilize(var_scaler_)
+        var_scaler_ = ttnn.tilize(var_scaler_)
 
         var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
@@ -154,7 +154,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         mean = tensor.reduce(redW, RSUM, RH, 1.0)  # -> NC11 (HW reduce doesn't behave well with small scaler)
         x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
         hmasku = tensor.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
-        hmaskt = tensor.tilize(hmasku)  # tilize the mask
+        hmaskt = ttnn.tilize(hmasku)  # tilize the mask
         x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW)  # zero out (x-m) for h>=H_, h<H
 
         var = ttnn.multiply(x_minus_mean, x_minus_mean)  # (x-m)^2

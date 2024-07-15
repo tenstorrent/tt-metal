@@ -149,13 +149,17 @@ def determine_parallel_config(
                 grid_size = [
                     num_cores_nhw,
                     find_closest_common_largest_divisor(
-                        conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[1]
+                        conv_out_2d_matrix_width_ntiles,
+                        _nearest_32(input_channels) // 32,
+                        device_grid_size[1],
                     ),
                 ]
             else:
                 grid_size = [
                     find_closest_common_largest_divisor(
-                        conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[0]
+                        conv_out_2d_matrix_width_ntiles,
+                        _nearest_32(input_channels) // 32,
+                        device_grid_size[0],
                     ),
                     num_cores_nhw,
                 ]
@@ -303,7 +307,11 @@ def determine_per_core_block_config(
 
 
 def determine_1x1conv_as_matmul_config(
-    conv_parallelization_config, conv_blocking_config, use_1d_systolic_array, fuse_relu, transpose_mcast=True
+    conv_parallelization_config,
+    conv_blocking_config,
+    use_1d_systolic_array,
+    fuse_relu,
+    transpose_mcast=True,
 ):
     if use_1d_systolic_array:
         matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -579,7 +587,10 @@ class TTPyCompositeConv(TTPyOp):
                 reader_patterns_cache["halo"],
                 transpose_mcast=self.transpose_mcast,
             )
-        self.grid_size = (self.sliding_window_op_params.num_cores_w, self.sliding_window_op_params.num_cores_h)
+        self.grid_size = (
+            self.sliding_window_op_params.num_cores_w,
+            self.sliding_window_op_params.num_cores_h,
+        )
         self.input_sharded_memory_config = calculate_memory_config(
             self.sliding_window_op_params,
             self.is_1d_systolic,
@@ -657,7 +668,10 @@ class TTPyCompositeConv(TTPyOp):
 
             sliding_window_op_sharded_input_top_left_indices = (
                 generate_sliding_window_op_sharded_input_top_left_indices(
-                    data_top_left_indices, req_conv_input_shard_start_end, pad_tile=True, pad_last_core=True
+                    data_top_left_indices,
+                    req_conv_input_shard_start_end,
+                    pad_tile=True,
+                    pad_last_core=True,
                 )
             )
 
@@ -682,7 +696,8 @@ class TTPyCompositeConv(TTPyOp):
             shard_grid = ttl.tensor.CoreRangeSet(
                 {
                     ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1),
                     )
                 }
             )
@@ -691,7 +706,9 @@ class TTPyCompositeConv(TTPyOp):
             )
             shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, False)
             mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1_SMALL, shard_spec
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1_SMALL,
+                shard_spec,
             )
             conv_reader_indices_sharded_tensor = (
                 conv_reader_indices_tt_tensor.to(device, mem_config)
@@ -908,7 +925,8 @@ class TTPyCompositeConv(TTPyOp):
         num_cores_h = self.sliding_window_op_params.num_cores_h
         input_channels = self.input_tensor_shape[3]
         input_size_to_shard_evenly = _nearest_y(
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
+            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
+            num_cores_nhw * 32,
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         conv_input = conv_input.reshape(
@@ -958,7 +976,8 @@ class TTPyCompositeConv(TTPyOp):
         grid_size = (num_cores_w, num_cores_h)
 
         input_size_to_shard_evenly = _nearest_y(
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
+            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
+            num_cores_nhw * 32,
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
@@ -1041,8 +1060,8 @@ class TTPyCompositeConv(TTPyOp):
                     interleaved_mem_config,
                 )
             else:
-                conv_input_on_device = ttl.tensor.tilize(
-                    conv_input_on_device, interleaved_mem_config, use_multicore=True
+                conv_input_on_device = ttnn.tilize(
+                    conv_input_on_device, memory_config=interleaved_mem_config, use_multicore=True
                 )
         return self.conv_input_interleaved_to_sharded(conv_input_on_device)
 

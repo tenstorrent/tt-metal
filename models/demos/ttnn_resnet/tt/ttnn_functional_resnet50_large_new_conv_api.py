@@ -755,12 +755,12 @@ class resnet50:
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = ttnn.experimental.tensor.tilize_with_val_padding(
+        x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
             0,
-            output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
@@ -787,12 +787,12 @@ class resnet50:
             _nearest_32(unpadded_shape[3]),
         ]
 
-        x = ttnn.experimental.tensor.tilize_with_val_padding(
+        x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
             0,
-            output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         x = self.fc(x)
@@ -975,12 +975,12 @@ class resnet50:
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = ttnn.experimental.tensor.tilize_with_val_padding(
+        x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
             0,
-            output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
@@ -1007,12 +1007,12 @@ class resnet50:
             _nearest_32(unpadded_shape[3]),
         ]
 
-        x = ttnn.experimental.tensor.tilize_with_val_padding(
+        x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
             0,
-            output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         x = self.fc(x)

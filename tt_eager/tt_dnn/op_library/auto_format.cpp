@@ -10,7 +10,7 @@
 #include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/common/constants.hpp"

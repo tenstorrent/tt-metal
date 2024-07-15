@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (this->use_multicore) {
+    if (input_tensor_a.memory_config().is_sharded() || this->use_multicore) {
         return detail::tilize_with_val_padding_multi_core(input_tensor_a, output_tensor, this->pad_value);
     }
     return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);

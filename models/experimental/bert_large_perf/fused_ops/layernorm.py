@@ -35,7 +35,7 @@ def create_var_scaler(H, W, layer_norm_eps, device):
 
     scaler = 1 / W
     var_scaler = tensor.fill_rm(1, 1, roundup32(H), 32, H, 1, epsilon_, scaler, 0)
-    var_scaler = tensor.tilize(var_scaler)
+    var_scaler = ttnn.tilize(var_scaler)
 
     return var_scaler
 
@@ -186,7 +186,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
 
         hmasku = tensor.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
-        hmaskt = tensor.tilize(hmasku)  # tilize the mask
+        hmaskt = ttnn.tilize(hmasku)  # tilize the mask
         x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW)  # zero out (x-m) for h>=H_, h<H
 
         print(f"layernorm_2d_ hmasku shape {hmasku.get_legacy_shape()}")

@@ -291,14 +291,14 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    yt_tilized = ttl.tensor.tilize(
+    yt_tilized = ttnn.tilize(
         yt,
-        output_mem_config=ttl.tensor.MemoryConfig(
+        memory_config=ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             buffer_type=ttl.tensor.BufferType.L1,
         ),
         use_multicore=True,
-        output_dtype=output_dtype,
+        dtype=output_dtype,
     )
 
     zt = ttl.tensor.sharded_to_interleaved(
@@ -1807,12 +1807,12 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.tilize_with_val_padding(
+    yt = ttnn.tilize_with_val_padding(
         xt,
         ttl.tensor.Shape([N, C, roundup32(H), W]),
         1.0,
-        output_mem_config=out_mem_config,
-        output_dtype=output_dtype,
+        memory_config=out_mem_config,
+        dtype=output_dtype,
         use_multicore=True,
     )
 
