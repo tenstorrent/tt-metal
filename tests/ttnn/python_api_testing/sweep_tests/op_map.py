@@ -308,6 +308,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
+    "ttnn-eltwise-relu_min": {
+        "tt_op": ttnn_ops.eltwise_relu_min,
+        "pytorch_op": pytorch_ops.relu_min,
+    },
     "ttnn-eltwise-logical_not": {
         "tt_op": ttnn_ops.eltwise_logical_not,
         "pytorch_op": pytorch_ops.logical_not,

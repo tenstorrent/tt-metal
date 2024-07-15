@@ -460,10 +460,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_relu_max,
         "pytorch_op": pytorch_ops.relu_max,
     },
-    "eltwise-relu_min": {
-        "tt_op": tt_lib_ops.eltwise_relu_min,
-        "pytorch_op": pytorch_ops.relu_min,
-    },
     "eltwise-polyval": {
         "tt_op": tt_lib_ops.eltwise_polyval,
         "pytorch_op": pytorch_ops.polyval,
