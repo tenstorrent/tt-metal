@@ -22,6 +22,7 @@ enum class UnaryBackwardOpType {
     DIV_BW,
     RDIV_BW,
     BIAS_GELU_BW,
+    POW_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -113,6 +114,9 @@ std::vector<Tensor> _div_bw( const Tensor& grad, const Tensor& input, float scal
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input, float bias, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+//OpHandler_unary_optional_float : get_function_unary_optional_float
+std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler_two_float;
@@ -122,6 +126,9 @@ struct OpHandler_two_float_with_default;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_float_string_default;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_unary_optional_float;
 
 template <>
 struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
@@ -172,6 +179,13 @@ struct OpHandler_float_string_default<UnaryBackwardOpType::BIAS_GELU_BW> {
     }
 };
 
+template <>
+struct OpHandler_unary_optional_float<UnaryBackwardOpType::POW_BW> {
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
+        return _pow_bw(queue_id, grad, input, exponent, output_mem_config, are_required_outputs, input_grad);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -186,6 +200,11 @@ auto get_function_type1_w_two_float_with_default() {
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_float_string_default() {
     return &OpHandler_float_string_default<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_unary_optional_float() {
+    return &OpHandler_unary_optional_float<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward
