@@ -83,8 +83,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
-    // constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
-    // constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 

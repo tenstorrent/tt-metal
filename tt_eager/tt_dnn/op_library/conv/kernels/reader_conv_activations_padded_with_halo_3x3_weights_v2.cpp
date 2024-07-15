@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 #include "firmware_common.h"
 
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
@@ -59,8 +58,6 @@ void kernel_main() {
     }
 
     #ifdef SPLIT_READER
-    // constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
-    // constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
     #else
