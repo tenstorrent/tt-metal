@@ -127,12 +127,13 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     std::map<std::string, std::string> defines,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
-    bool math_approx_mode) {
+    bool math_approx_mode,
+    bool preserve_fp32_precision) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id =
-            CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode);
+            CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode, preserve_fp32_precision);
         compute_kernel_ids.push_back(compute_kernel_id);
     }
     return compute_kernel_ids;
@@ -145,7 +146,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     std::map<std::string, std::string> defines,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
-    bool math_approx_mode) {
+    bool math_approx_mode,
+    bool preserve_fp32_precision) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -155,6 +157,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .preserve_fp32_precision = preserve_fp32_precision,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = arg.compile_args,
                 .defines = defines});

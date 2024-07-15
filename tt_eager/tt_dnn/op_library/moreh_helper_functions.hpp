@@ -90,7 +90,8 @@ struct ComputeKernelArg {
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
-    bool math_approx_mode = false);
+    bool math_approx_mode = false,
+    bool preserve_fp32_precision = false);
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -99,7 +100,8 @@ struct ComputeKernelArg {
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
-    bool math_approx_mode = false);
+    bool math_approx_mode = false,
+    bool preserve_fp32_precision = false);
 
 struct CircularBufferArg {
     uint32_t buffer_index;
