@@ -16,38 +16,12 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    filter_indices,
+    filter_indices_with_last_two,
 )
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
-
-
-# For keepdim in torch
-def filter_indices(output_shape, dims):
-    def not_in_dims(index_value_pair):
-        index, value = index_value_pair
-        return index not in dims
-
-    filtered_elements = list(filter(not_in_dims, enumerate(output_shape)))
-    filtered_values = [value for index, value in filtered_elements]
-
-    return filtered_values
-
-
-# For keep_batch_dim in tt
-def filter_indices_with_last_two(output_shape, dims):
-    last_two_elements = output_shape[-2:]
-    remaining_elements = output_shape[:-2]
-
-    def not_in_dims(index_value_pair):
-        index, _ = index_value_pair
-        return index not in dims
-
-    filtered_remaining_elements = list(filter(not_in_dims, enumerate(remaining_elements)))
-    filtered_remaining_values = [value for index, value in filtered_remaining_elements]
-    final_output_shape = filtered_remaining_values + last_two_elements
-
-    return final_output_shape
 
 
 def is_npu_dtype_uint32(data_type):

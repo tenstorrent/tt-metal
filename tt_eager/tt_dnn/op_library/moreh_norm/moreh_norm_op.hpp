@@ -33,6 +33,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
 struct MorehNorm {
     float p;
     int64_t dim;
+    bool keepdim;
     MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
@@ -48,9 +49,9 @@ struct MorehNorm {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("p", "dim", "memory_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("p", "dim", "keepdim", "memory_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
+        return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->keepdim), std::cref(this->memory_config), std::cref(this->compute_kernel_config));
     }
 };
 
@@ -58,12 +59,14 @@ Tensor moreh_norm(
     const Tensor &input,
     float p,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
+    const bool keepdim = false,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
-    const std::optional<const Tensor> output,
+    const bool keepdim = false,
+    const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 

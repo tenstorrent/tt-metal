@@ -295,6 +295,15 @@ uint32_t compute_outer(Shape shape, uint32_t dim) {
     return num_outer;
 }
 
+void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+    const auto rank = shape.rank();
+    for (auto i = 0; i < rank; ++i) {
+        auto idx = rank - 1 - i;
+        dim[i] = shape[idx];
+    }
+}
+
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt

@@ -279,6 +279,8 @@ uint32_t compute_inner(Shape shape, uint32_t dim);
 
 uint32_t compute_outer(Shape shape, uint32_t dim);
 
+void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape);
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt

@@ -4,29 +4,68 @@
 
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
+static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
+
+inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t rank, uint32_t* output_grad_dim, uint32_t* output_grad_stride, uint32_t* input_grad_dim, uint32_t* input_grad_stride, bool* need_bcast_dim) {
+    uint32_t cur_idx[MAX_NUM_DIMENSIONS];
+
+    for (uint32_t i = 0; i < rank; ++i) {
+        cur_idx[i] = (need_bcast_dim[i]) ? (0) : ((idx / input_grad_stride[i]) % input_grad_dim[i]);
+    }
+
+    uint32_t read_tile_id = 0;
+    for (uint32_t i = 0; i < rank; ++i) {
+        read_tile_id += (cur_idx[i] * output_grad_stride[i]);
+    }
+
+    return read_tile_id;
+}
+
 void kernel_main() {
-    int i{0};
-    const auto input_addr = get_arg_val<uint32_t>(i++);
-    const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto output_addr = get_arg_val<uint32_t>(i++);
-    const bool output_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto output_grad_addr = get_arg_val<uint32_t>(i++);
-    const bool output_grad_is_dram = get_arg_val<uint32_t>(i++) == 1;
 
-    const auto decimal = get_arg_val<uint32_t>(i++);
+    // compile time args
+    constexpr bool input_is_dram = (get_compile_time_arg_val(0) == 1);
+    constexpr bool output_is_dram = (get_compile_time_arg_val(1) == 1);
+    constexpr bool output_grad_is_dram = (get_compile_time_arg_val(2) == 1);
+    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(3);
 
-    const auto num_input_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
+    // runtime args
+    ArgFetcher arg_fetcher;
+    const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_addr =arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    const auto input_n = get_arg_val<uint32_t>(i++);
-    const auto input_c = get_arg_val<uint32_t>(i++);
-    const auto input_origin_h = get_arg_val<uint32_t>(i++);
-    const auto input_origin_w = get_arg_val<uint32_t>(i++);
+    const auto decimal = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    const auto output_n = get_arg_val<uint32_t>(i++);
-    const auto output_c = get_arg_val<uint32_t>(i++);
-    const auto output_origin_h = get_arg_val<uint32_t>(i++);
-    const auto output_origin_w = get_arg_val<uint32_t>(i++);
+    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+
+    uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
+        output_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+
+    uint32_t input_grad_dim[MAX_NUM_DIMENSIONS];
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
+        input_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+
+    bool need_bcast_dim[MAX_NUM_DIMENSIONS];
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
+        need_bcast_dim[i] = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+    }
+
+    uint32_t output_grad_stride[MAX_NUM_DIMENSIONS];
+    output_grad_stride[0] = 1;
+    for (uint32_t i = 1; i < input_grad_rank;++i) {
+        output_grad_stride[i] = output_grad_stride[i - 1] * output_grad_dim[i - 1];
+    }
+
+    uint32_t input_grad_stride[MAX_NUM_DIMENSIONS];
+    input_grad_stride[0] = 1;
+    for (uint32_t i = 1; i < input_grad_rank;++i) {
+        input_grad_stride[i] = input_grad_stride[i - 1] * input_grad_dim[i - 1];
+    }
 
     uint32_t cb_id{0};
     const auto cb_id_input = cb_id++;
@@ -38,108 +77,47 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     const auto input_data_format = get_dataformat(cb_id_input);
 
-    const InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
-    const InterleavedAddrGenFast<false> l1_input_addrg = {
+    const InterleavedAddrGenFast<input_is_dram> input_addrg = {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
     const auto output_data_format = get_dataformat(cb_id_output);
 
-    const InterleavedAddrGenFast<true> dram_output_addrg = {
-        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
-
-    const InterleavedAddrGenFast<false> l1_output_addrg = {
+    const InterleavedAddrGenFast<output_is_dram> output_addrg = {
         .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
     // output_grad
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
 
-    const InterleavedAddrGenFast<true> dram_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
-
-    const InterleavedAddrGenFast<false> l1_output_grad_addrg = {
+    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
         .bank_base_address = output_grad_addr,
         .page_size = output_grad_tile_bytes,
         .data_format = output_grad_data_format};
 
     fill_cb_with_value(cb_id_decimal, decimal);
 
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
-    const auto output_l1_write_ptr = get_write_ptr(cb_id_output);
-    const auto output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
 
-    constexpr uint32_t TILE_H = 32;
-    constexpr uint32_t TILE_W = 32;
-
-    const auto N = input_n;
-    const auto C = input_c;
-    const auto Ht = (input_origin_h + TILE_H - 1) / TILE_H;
-    const auto Wt = (input_origin_w + TILE_W - 1) / TILE_H;
-
-    const auto oN = output_n;
-    const auto oC = output_c;
-    const auto oHt = (output_origin_h + TILE_H - 1) / TILE_H;
-    const auto oWt = (output_origin_w + TILE_W - 1) / TILE_W;
-
-    const bool need_to_bcast_n = (N != oN);
-    const bool need_to_bcast_c = (C != oC);
-    const bool need_to_bcast_ht = (Ht != oHt);
-    const bool need_to_bcast_wt = (Wt != oWt);
-
-    for (uint32_t input_tile_idx = tile_offset; input_tile_idx < tile_offset + num_input_tiles_per_core;
-         ++input_tile_idx) {
-        // input
-        // n * C * Ht * Wt + c * Ht * Wt + ht * Wt + wt
-        const auto input_n_idx = input_tile_idx / (C * Ht * Wt);
-        const auto input_c_idx = (input_tile_idx / (Ht * Wt)) % C;
-        const auto input_ht_idx = (input_tile_idx / Wt) % Ht;
-        const auto input_wt_idx = input_tile_idx % Wt;
-
-        // input_grad
-        const auto input_grad_tile_idx = input_tile_idx;
-
-        // output
-        const auto output_n_idx = need_to_bcast_n ? 0 : input_n_idx;
-        const auto output_c_idx = need_to_bcast_c ? 0 : input_c_idx;
-        const auto output_ht_idx = need_to_bcast_ht ? 0 : input_ht_idx;
-        const auto output_wt_idx = need_to_bcast_wt ? 0 : input_wt_idx;
-
-        const auto output_tile_idx =
-            output_n_idx * oC * oHt * oWt + output_c_idx * oHt * oWt + output_ht_idx * oWt + output_wt_idx;
-
-        // output
-        const auto output_grad_tile_idx = output_tile_idx;
+    for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
+        uint32_t input_tile_id = i;
+        auto read_tile_id = get_output_grad_tile(i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
         cb_reserve_back(cb_id_input, 1);
-        if (input_is_dram) {
-            noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
-        } else {
-            noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr);
-        }
+        const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+        noc_async_read_tile(input_tile_id, input_addrg, input_l1_write_ptr);
         noc_async_read_barrier();
         cb_push_back(cb_id_input, 1);
 
         cb_reserve_back(cb_id_output, 1);
-        if (output_is_dram) {
-            noc_async_read_tile(output_tile_idx, dram_output_addrg, output_l1_write_ptr);
-        } else {
-            noc_async_read_tile(output_tile_idx, l1_output_addrg, output_l1_write_ptr);
-        }
+        const auto output_l1_write_ptr = get_write_ptr(cb_id_output);
+        noc_async_read_tile(read_tile_id, output_addrg, output_l1_write_ptr);
         noc_async_read_barrier();
         cb_push_back(cb_id_output, 1);
 
         cb_reserve_back(cb_id_output_grad, 1);
-        if (output_grad_is_dram) {
-            noc_async_read_tile(output_grad_tile_idx, dram_output_grad_addrg, output_grad_l1_write_ptr);
-        } else {
-            noc_async_read_tile(output_grad_tile_idx, l1_output_grad_addrg, output_grad_l1_write_ptr);
-        }
+        const auto output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
+        noc_async_read_tile(read_tile_id, output_grad_addrg, output_grad_l1_write_ptr);
         noc_async_read_barrier();
         cb_push_back(cb_id_output_grad, 1);
     }
