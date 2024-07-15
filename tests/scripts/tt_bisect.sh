@@ -16,7 +16,6 @@ END
 cd $TT_METAL_HOME
 source python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
-unset TT_METAL_SLOW_DISPATCH_MODE
 
 timeout_duration=2m
 while getopts "f:sg:b:t:" opt; do
