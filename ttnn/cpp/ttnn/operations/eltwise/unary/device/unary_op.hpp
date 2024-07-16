@@ -216,3 +216,15 @@ std::map<string, string> get_block_defines(
 }  // namespace utils
 
 }  // namespace ttnn::operations::unary
+
+namespace tt::stl::json {
+
+template <>
+struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
+    auto operator()(const nlohmann::json& json_object) const {
+        return ttnn::operations::unary::UnaryWithParam{
+            from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
+            from_json<std::vector<float>>(json_object["params"])};
+    }
+};
+};  // namespace tt::stl::json
