@@ -637,8 +637,8 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-   
     
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -655,11 +655,10 @@ def test_unary_hardshrink(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.hardshrink(input_tensor, param)
     golden_tensor = torch.nn.functional.hardshrink(in_data, param)
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-
-
+    
+    
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -676,11 +675,10 @@ def test_unary_softshrink(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.softshrink(input_tensor, param)
     golden_tensor = torch.nn.functional.softshrink(in_data, param)
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-
-
+    
+    
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -691,17 +689,16 @@ def test_unary_softshrink(input_shapes, param, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.randint(1, 100) for _ in range(5)},
+    {random.uniform(1, 100) for _ in range(5)},
 )
 def test_unary_bias_gelu_unary(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1e10, 1e10, device)
     output_tensor = ttnn.bias_gelu_unary(input_tensor, param)
     golden_tensor = torch.nn.functional.gelu(in_data + param)
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-
-
+    
+    
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shapes",
@@ -719,11 +716,10 @@ def test_unary_logit(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
     output_tensor = ttnn.logit(input_tensor, param)
     golden_tensor = torch.special.logit(in_data, eps=param)
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-
-
+    
+    
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -740,7 +736,6 @@ def test_unary_logical_andi(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.logical_andi(input_tensor, param)
     golden_tensor = torch.logical_and(in_data, torch.tensor(param, dtype=torch.int32))
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
     
@@ -761,11 +756,10 @@ def test_unary_logical_xori(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.logical_xori(input_tensor, param)
     golden_tensor = torch.logical_xor(in_data, torch.tensor(param, dtype=torch.int32))
-
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
-
-
+    
+    
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -802,6 +796,5 @@ def test_unary_celu(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.celu(input_tensor, param)
     golden_tensor = torch.celu(in_data, alpha=param)
-    
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

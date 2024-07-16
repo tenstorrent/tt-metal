@@ -69,8 +69,21 @@ struct ExecuteUnaryCompositeOpWithFloat
         float param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_type6<unary_comp_op_type>();
+            auto op_type = get_function_type_float<unary_comp_op_type>();
             return op_type(input_tensor, param, memory_config);
+        }
+
+};
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithDim
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        int32_t dim,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type_dim<unary_comp_op_type>();
+            return op_type(input_tensor, dim, memory_config);
         }
 
 };
@@ -302,10 +315,9 @@ constexpr auto logical_noti = ttnn::register_operation<operations::unary::Execut
 constexpr auto logical_andi = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGICAL_ANDI>>("ttnn::logical_andi");
 constexpr auto logical_ori = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGICAL_ORI>>("ttnn::logical_ori");
 constexpr auto celu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>("ttnn::celu");
-
+constexpr auto glu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>("ttnn::glu");
 constexpr auto hardswish= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSWISH>>("ttnn::hardswish");
 constexpr auto hardsigmoid = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>("ttnn::hardsigmoid");
-
 constexpr auto hardtanh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::HARDTANH>>("ttnn::hardtanh");
 constexpr auto clip = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLIP>>("ttnn::clip");
 constexpr auto clamp = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLAMP>>("ttnn::clamp");

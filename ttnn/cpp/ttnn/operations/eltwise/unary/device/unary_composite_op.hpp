@@ -62,6 +62,7 @@ enum class UnaryCompositeOpType {
     LOGICAL_ANDI,
     LOGICAL_ORI,
     CELU,
+    GLU,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -106,13 +107,14 @@ Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>&
 Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& );
+Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _bias_gelu_unary(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_xori(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_noti(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_andi(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_ori(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _celu(const Tensor& a, float param, const std::optional<MemoryConfig>& );
-    
+Tensor _glu(const Tensor& a, int32_t dim, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -132,6 +134,7 @@ struct OpHandler<UnaryCompositeOpType::RAD2DEG> {
     }
 };
 
+template <>
 struct OpHandler<UnaryCompositeOpType::TANHSHRINK> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _tanhshrink(t1, mem_cfg);
@@ -144,6 +147,7 @@ struct OpHandler<UnaryCompositeOpType::ACOSH> {
         return _acosh(t1, mem_cfg);
     }
 };
+
 template <>
 struct OpHandler<UnaryCompositeOpType::ASINH> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
@@ -424,7 +428,7 @@ struct OpHandlerWithFloat<UnaryCompositeOpType::LOGICAL_ORI> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::CELU> {
+struct OpHandlerWithFloat<UnaryCompositeOpType::CELU> {
     static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
         return _celu(t1, param, mem_cfg);
     }
@@ -436,12 +440,4 @@ struct OpHandler<UnaryCompositeOpType::POWER_INT> {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
 };
-
-template <>
-struct OpHandler<UnaryCompositeOpType::RDIV> {
-    static Tensor handle(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor){
-        return _rdiv(queue_id, input_tensor, value,  memory_config, optional_output_tensor);
-    }
-};
-
 }

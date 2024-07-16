@@ -941,7 +941,7 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
 template <typename unary_operation_t>
 void bind_unary_composite_with_float(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor: ttnn.Tensor, param, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
             Applies {0} to :attr:`input_tensor` element-wise.
 
@@ -950,6 +950,7 @@ void bind_unary_composite_with_float(py::module& module, const unary_operation_t
 
             Args:
                 * :attr:`input_tensor`
+                * :attr:`param`
 
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
@@ -975,6 +976,48 @@ void bind_unary_composite_with_float(py::module& module, const unary_operation_t
                 },
             py::arg("input_tensor"),
             py::arg("param"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite_with_dim(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, dim, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`dim`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               int32_t dim,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, dim, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::arg("dim") = -1,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
@@ -1310,6 +1353,10 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_with_float(module, ttnn::logical_andi);
     detail::bind_unary_composite_with_float(module, ttnn::logical_ori);
     detail::bind_unary_composite_with_float(module, ttnn::celu);
+
+    // unary composite with int imported into ttnn
+    detail::bind_unary_composite_with_dim(module, ttnn::glu);
+
 }
 
 }  // namespace unary
