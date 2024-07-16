@@ -665,16 +665,16 @@ all_binary_ops = [
         "name": "tt_lib.tensor.rdiv_bw",
     },
     {
-        "op": tt_lib.tensor.sqrt_bw,
-        "name": "tt_lib.tensor.sqrt_bw",
+        "op": ttnn.sqrt_bw,
+        "name": "ttnn.sqrt_bw",
     },
     {
         "op": ttnn.tan_bw,
         "name": "ttnn.tan_bw",
     },
     {
-        "op": tt_lib.tensor.exp_bw,
-        "name": "tt_lib.tensor.exp_bw",
+        "op": ttnn.exp_bw,
+        "name": "ttnn.exp_bw",
     },
     {
         "op": ttnn.exp2_bw,
@@ -689,8 +689,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.unary_pow_bw",
     },
     {
-        "op": tt_lib.tensor.tanh_bw,
-        "name": "tt_lib.tensor.tanh_bw",
+        "op": ttnn.tanh_bw,
+        "name": "ttnn.tanh_bw",
     },
     {
         "op": ttnn.log_bw,
@@ -1262,17 +1262,17 @@ def pad(x):
     ttnn.pad(x, padding, 1)
 
 
-def unpad(x):
+def ttnn_slice(x):
     shape = x.get_legacy_shape()
 
-    output_tensor_end = [
+    output_tensor_end = (
         shape[0] - 1,
         shape[1] - 1,
         shape[2] - 33,
         shape[3] - 33,
-    ]
+    )
 
-    ttnn.slice(x, output_tensor_start=(0, 0, 0, 0), output_tensor_end=output_tensor_end)
+    ttnn.slice(x, (0, 0, 0, 0), output_tensor_end)
 
 
 def typecast(x):
@@ -1738,10 +1738,6 @@ all_unary_ops = [
         "name": "ttnn.neg",
     },
     {
-        "op": tt_lib.tensor.add1,
-        "name": "tt_lib.tensor.add1",
-    },
-    {
         "op": ttnn.sigmoid,
         "name": "ttnn.sigmoid",
     },
@@ -1972,7 +1968,7 @@ all_unary_ops = [
         "name": "ttnn.pad",
     },
     {
-        "op": unpad,
+        "op": ttnn_slice,
         "name": "ttnn.slice",
     },
     {
@@ -2261,8 +2257,8 @@ all_unary_ops = [
         "name": "tt_lib.tensor.pow_float",
     },
     {
-        "op": tt_lib.tensor.identity,
-        "name": "tt_lib.tensor.identity",
+        "op": ttnn.identity,
+        "name": "ttnn.identity",
     },
     {
         "op": argmax_1,
@@ -2303,26 +2299,6 @@ all_unary_ops = [
         "op": argmin_all,
         "name": "tt_lib.tensor.argmin_all",
         "num_repeats": 2,
-    },
-    {
-        "op": ttnn.lt_bw,
-        "name": "ttnn.lt_bw",
-    },
-    {
-        "op": ttnn.gt_bw,
-        "name": "ttnn.gt_bw",
-    },
-    {
-        "op": ttnn.ne_bw,
-        "name": "ttnn.ne_bw",
-    },
-    {
-        "op": ttnn.ge_bw,
-        "name": "ttnn.ge_bw",
-    },
-    {
-        "op": ttnn.le_bw,
-        "name": "ttnn.le_bw",
     },
     {
         "op": ttnn.softmax_in_place,
@@ -2741,6 +2717,26 @@ all_ternary_ops = [
         "op": fused_linear,
         "name": "ttnn.linear",
         "shape_func": fused_linear_shape_func,
+    },
+    {
+        "op": ttnn.ge_bw,
+        "name": "ttnn.ge_bw",
+    },
+    {
+        "op": ttnn.gt_bw,
+        "name": "ttnn.gt_bw",
+    },
+    {
+        "op": ttnn.le_bw,
+        "name": "ttnn.le_bw",
+    },
+    {
+        "op": ttnn.lt_bw,
+        "name": "ttnn.lt_bw",
+    },
+    {
+        "op": ttnn.ne_bw,
+        "name": "ttnn.ne_bw",
     },
 ]
 
