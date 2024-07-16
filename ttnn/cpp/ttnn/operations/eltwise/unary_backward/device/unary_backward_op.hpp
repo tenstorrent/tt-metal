@@ -247,13 +247,6 @@ struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
     }
 };
 
-template <>
-struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _repeat_bw(grad, input, shape, output_mem_config);
-    }
-};
-
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {

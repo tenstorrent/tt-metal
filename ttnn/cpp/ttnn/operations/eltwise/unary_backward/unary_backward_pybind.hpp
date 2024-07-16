@@ -205,14 +205,19 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_string_default(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, string parameter_a_value, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
         {5}
+
         Args:
             * :attr:`grad_tensor`
             * :attr:`input_tensor`
+
         Keyword args:
             * :attr:`{2}` (string): {3} , Default value = {4}
             * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
         Example:
+
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> output = {1}(grad_tensor, input, {2} = {4})
@@ -305,14 +310,19 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_shape(py::module& module, const unary_backward_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: shape, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
         {4}
+
         Args:
             * :attr:`grad_tensor`
             * :attr:`input_tensor`
+
         Keyword args:
             * :attr:`{2}` (string): {3}
             * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
         Example:
+
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> output = {1}(grad_tensor, input, {2})
