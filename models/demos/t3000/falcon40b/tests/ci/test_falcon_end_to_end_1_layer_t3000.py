@@ -12,10 +12,12 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     disable_compilation_reports,
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_wormhole_b0("See GH Issue #10321")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
