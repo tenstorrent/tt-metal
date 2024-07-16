@@ -19,12 +19,12 @@
 
 namespace ttnn::operations::unary{
 
-Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return ttnn::multiply(input_tensor, (float)(M_PI / 180.0), std::nullopt, memory_config.value_or(input_tensor.memory_config()));
+Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::multiply(input_tensor, (float)(M_PI / 180.0), std::nullopt, output_mem_config.value_or(input_tensor.memory_config()));
 }
 
-Tensor _rad2deg(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return ttnn::multiply(input_tensor, (float)(180.0 / M_PI), std::nullopt, memory_config.value_or(input_tensor.memory_config()));
+Tensor _rad2deg(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::multiply(input_tensor, (float)(180.0 / M_PI), std::nullopt, output_mem_config.value_or(input_tensor.memory_config()));
 }
 
 // // tanhshrink(x) = x - tanh(x)

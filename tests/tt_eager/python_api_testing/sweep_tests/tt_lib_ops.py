@@ -2623,6 +2623,26 @@ def make_unary_op_optional_output(ttl_tensor_unop):
     return unary_op_optional_output
 
 
+def make_unary_op_composite_ttnn(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op_optional_output(
+        x,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+        t2 = ttl_tensor_unop(t0)
+
+        return tt2torch_tensor(t2)
+
+    return unary_op_optional_output
+
+
 def make_unary_op_optional_output_with_scalar(ttl_tensor_unop):
     @setup_host_and_device
     def unary_op_optional_output_with_scalar(
@@ -2708,8 +2728,8 @@ eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
-eltwise_rad2deg = make_unary_op_optional_output(ttnn.rad2deg)
-eltwise_deg2rad = make_unary_op_optional_output(ttnn.deg2rad)
+eltwise_rad2deg = make_unary_op_composite_ttnn(ttnn.rad2deg)
+eltwise_deg2rad = make_unary_op_composite_ttnn(ttnn.deg2rad)
 eltwise_sign = make_unary_op_optional_output(ttnn.sign)
 eltwise_signbit = make_unary_op_optional_output(ttnn.signbit)
 eltwise_abs = make_unary_op_optional_output(ttnn.abs)
