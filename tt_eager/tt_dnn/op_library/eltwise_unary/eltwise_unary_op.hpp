@@ -9,6 +9,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
 
 namespace tt {
@@ -334,3 +335,14 @@ std::map<string, string> get_defines(
 std::map<string, string> get_block_defines(
     const std::vector<UnaryWithParam>& op_chain, string block_id = "0", string idst = "0");
 }  // namespace eltwise_unary_op_utils
+
+namespace tt::stl::json {
+template <>
+struct from_json_t<tt::tt_metal::UnaryWithParam> {
+    auto operator()(const nlohmann::json& json_object) const {
+        return tt::tt_metal::UnaryWithParam{
+            from_json<tt::tt_metal::UnaryOpType>(json_object["op_type"]),
+            from_json<std::vector<float>>(json_object["params"])};
+    }
+};
+}  // namespace tt::stl::json
