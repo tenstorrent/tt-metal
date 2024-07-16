@@ -28,9 +28,27 @@ struct ExecuteComplexUnaryBackward {
 
 };
 
+//OpHandler_tensor_complex : get_function_tensor_complex
+template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
+struct ExecuteComplexUnaryBackwardTensor {
+
+    static std::vector<ComplexTensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_arg,
+        const MemoryConfig& memory_config) {
+
+        auto op_type = get_function_tensor_complex<complex_unary_backward_op_type>();
+        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+        }
+
+};
+
 }
 
 //OpHandler_complex : get_function_complex
 constexpr auto polar_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::POLAR_BW>>("ttnn::polar_bw");
+
+//OpHandler_tensor_complex : get_function_tensor_complex
+constexpr auto imag_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::IMAG_BW>>("ttnn::imag_bw");
 
 }

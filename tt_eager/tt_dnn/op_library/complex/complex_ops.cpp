@@ -236,17 +236,6 @@ std::vector<ComplexTensor> conj_bw(const ComplexTensor& grad, const ComplexTenso
     return grad_tensor;
 }
 
-// complex imag
-// imag: at::imag(grad)
-std::vector<ComplexTensor> imag_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    Tensor r = zeros_like(ttnn::operations::complex_unary::_real(input, output_mem_config), output_mem_config);
-    ComplexTensor grad_result = ComplexTensor({r,grad});
-    r.deallocate();
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-
 // complex real
 // real: at::real(grad)
 std::vector<ComplexTensor> real_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
