@@ -211,6 +211,29 @@ struct ExecuteUnaryBackwardOptional {
 
 };
 
+//OpHandler_prod_bw : get_function_prod_bw
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardProdBW {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        bool all_dimensions = true,
+        int64_t dim = 0,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_prod_bw<unary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_arg, all_dimensions, dim, output_memory_config);
+        }
+
+};
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackward {
 
@@ -275,6 +298,9 @@ constexpr auto pow_bw = ttnn::register_operation<operations::unary_backward::Exe
 constexpr auto exp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptional<operations::unary_backward::UnaryBackwardOpType::EXP_BW>>("ttnn::exp_bw");
 constexpr auto tanh_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptional<operations::unary_backward::UnaryBackwardOpType::TANH_BW>>("ttnn::tanh_bw");
 constexpr auto sqrt_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptional<operations::unary_backward::UnaryBackwardOpType::SQRT_BW>>("ttnn::sqrt_bw");
+
+//OpHandler_prod_bw : get_function_prod_bw
+constexpr auto prod_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>("ttnn::prod_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");
