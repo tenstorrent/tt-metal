@@ -16,8 +16,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace transformer {
+namespace operations::transformer {
 
 namespace detail {
 inline std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
@@ -300,8 +299,7 @@ struct ExecuteAttentionSoftmax {
     }
 };
 
-}  // namespace transformer
-}  // namespace operations
+}  // namespace operations::transformer
 
 namespace transformer {
 

@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
-#include "argmax.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
