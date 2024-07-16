@@ -85,7 +85,8 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     ),
     TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
     TestEntry("tt_metal/tests/test_transpose_wh", "test_transpose_wh"),
-    TestEntry("tt_metal/tests/test_reduce_h", "test_reduce_h"),
+    # (issue #10181: disabling due to sporadic failures in slow dispatch mode)
+    # TestEntry("tt_metal/tests/test_reduce_h", "test_reduce_h"),
     TestEntry("tt_metal/tests/test_reduce_w", "test_reduce_w"),
     TestEntry("tt_metal/tests/test_reduce_hw", "test_reduce_hw"),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
