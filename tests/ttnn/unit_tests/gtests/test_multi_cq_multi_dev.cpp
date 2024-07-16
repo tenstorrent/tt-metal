@@ -7,7 +7,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/cpp/ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"
@@ -24,6 +23,7 @@ Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
     auto op0 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 2}}};
     auto op1 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::NEG}}};
     auto op2 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 500}}};
+
 
     Tensor output_tensor = ttnn::run_operation(cq_id, op0, {input_tensor}).at(0);
     for (int i = 0; i < 3; i++) {

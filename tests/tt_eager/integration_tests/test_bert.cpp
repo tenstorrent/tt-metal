@@ -17,6 +17,8 @@
 #include "ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
 MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
