@@ -27,7 +27,8 @@ template <class T>
 Tensor* get_tensor(T& maybe_tensor) {
     Tensor* output_tensor = nullptr;
     if constexpr (is_optional_v<T>) {
-        return &maybe_tensor.value();
+        if (maybe_tensor.has_value())
+            output_tensor = &maybe_tensor.value();
     } else {
         output_tensor = &maybe_tensor;
     }
