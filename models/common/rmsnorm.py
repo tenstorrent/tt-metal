@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtRMSNorm(LightweightModule):
+class RMSNorm(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -43,7 +41,7 @@ class TtRMSNorm(LightweightModule):
             layout=self.model_config["NORM_W_LAYOUT_TILE"],
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -51,7 +49,7 @@ class TtRMSNorm(LightweightModule):
         return x
 
 
-class TtRMSNormSharded(LightweightModule):
+class RMSNormSharded(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -86,7 +84,7 @@ class TtRMSNormSharded(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:

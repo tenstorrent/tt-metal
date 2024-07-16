@@ -17,7 +17,7 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
+from models.common.rmsnorm import RMSNormSharded
 from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
@@ -27,7 +27,7 @@ from models.utility_functions import (
 )
 
 
-@skip_for_wormhole_b0("See GH Issue #10322")
+# @skip_for_wormhole_b0("See GH Issue #10322")
 def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
@@ -39,7 +39,7 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
     reference_model = RMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtRMSNormSharded(
+    tt_model = RMSNormSharded(
         device_mesh=t3k_device_mesh,
         state_dict=state_dict,
         args=model_args,
