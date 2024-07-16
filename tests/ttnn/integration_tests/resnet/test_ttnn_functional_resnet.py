@@ -27,7 +27,7 @@ from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
 )
 
-from models.experimental.resnet.tt.ttnn_functional_resnet import resnet_basic_block
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet import resnet_basic_block
 
 
 def create_core_range_set_from_ncores(ncores: int, bb_ncores_w: int, bb_ncores_h: int):
