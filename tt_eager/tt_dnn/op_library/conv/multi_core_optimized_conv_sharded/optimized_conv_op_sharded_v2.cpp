@@ -704,6 +704,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         assert(num_blocks_out_h_per_core == num_blocks_out_h);
         assert(num_cores_x == 1);
     }
+    uint32_t act_block_h_datums_last_block = (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
 
     log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
@@ -1014,6 +1015,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)act_mcast_receiver_semaphore,
         (uint32_t)in0_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
+        (uint32_t)act_block_h_datums_last_block
     };
 
     // define for bias
@@ -1100,6 +1102,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             (uint32_t)(conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes,  // window_outer_offset
             (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_split,                          // only used for 1d systolic variant
+            (uint32_t)act_block_h_datums_last_block
         };
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());

@@ -54,6 +54,14 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = get_compile_time_arg_val(36);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(37);
     constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(38);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(39);
+
+    uint32_t act_block_h_datums_read_last_block;
+    if (act_block_h_datums_last_block > act_block_h_datums) {
+        act_block_h_datums_read_last_block = (act_block_h_datums_last_block - act_block_h_datums_first_reader) / 2;
+    } else {
+        act_block_h_datums_read_last_block = 0;
+    }
 
     constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
@@ -145,7 +153,8 @@ void kernel_main() {
                         reader_idx = start_reader_idx;
                         cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_read);
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-                        for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
+                        uint32_t act_block_h_datums_read_curr = bh == out_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
+                        for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
                             // local read from reader_index + reader_offset;
                             uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
@@ -196,7 +205,8 @@ void kernel_main() {
                         // Do the second half of the reads for act
                         cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_read);
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-                        for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
+                        uint32_t act_block_h_datums_read_curr = bh == out_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
+                        for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
                             // local read from reader_index + reader_offset;
                             uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
