@@ -36,36 +36,82 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    uint32_t topk_addr  = get_arg_val<uint32_t>(1);
+    uint32_t expert_addr  = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(1);
-    constexpr bool src_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t cb_topk_mask = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_expert_mask = get_compile_time_arg_val(3);
+    constexpr bool src_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr bool topk_mask_is_dram = get_compile_time_arg_val(5) == 1;
+    constexpr bool expert_mask_is_dram = get_compile_time_arg_val(6) == 1;
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+    constexpr uint32_t Ht = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t K = get_compile_time_arg_val(9);
+    constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
 
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t tile_bytes_input = get_tile_size(cb_id_in0);
+    constexpr DataFormat data_format_input = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
+    const InterleavedAddrGenFast<src_is_dram> s0 = {
         .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
+        .page_size = tile_bytes_input,
+        .data_format = data_format_input
+    };
+
+    constexpr uint32_t tile_bytes_topk = get_tile_size(cb_topk_mask);
+    constexpr DataFormat data_format_topk = get_dataformat(cb_topk_mask);
+
+    const InterleavedAddrGenFast<topk_mask_is_dram> s1 = {
+        .bank_base_address = topk_addr,
+        .page_size = tile_bytes_topk,
+        .data_format = data_format_topk
+    };
+
+    constexpr uint32_t tile_bytes_expert = get_tile_size(cb_expert_mask);
+    constexpr DataFormat data_format_expert = get_dataformat(cb_expert_mask);
+
+    const InterleavedAddrGenFast<expert_mask_is_dram> s2 = {
+        .bank_base_address = expert_addr,
+        .page_size = tile_bytes_expert,
+        .data_format = data_format_expert
     };
 
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute and we need two tiles for the bitonic sort llk
     // We could load in an entire row of tiles at a time but that would require substantially more memory (we would be double buffering four Wt sized CBs)
     for (uint32_t i = 0; i < Ht; ++i) {
+
+        //input
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(cb_id_in0, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(i*Wt + j, s, l1_write_addr);
+            noc_async_read_tile(i*Wt + j, s0, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
             generate_index_tile(cb_intermed_index, j);
+        }
+
+        //topk mask
+        for (uint32_t j = 0; j < Kt; ++j) {
+            cb_reserve_back(cb_topk_mask, onetile);
+            uint32_t l1_write_addr = get_write_ptr(cb_topk_mask);
+            noc_async_read_tile(i*Kt + j, s1, l1_write_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_topk_mask, onetile);
+        }
+
+        //expert mask
+        for (uint32_t j = 0; j < Kt; ++j) {
+            cb_reserve_back(cb_expert_mask, onetile);
+            uint32_t l1_write_addr = get_write_ptr(cb_expert_mask);
+            noc_async_read_tile(i*Kt + j, s2, l1_write_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_expert_mask, onetile);
         }
     }
 }

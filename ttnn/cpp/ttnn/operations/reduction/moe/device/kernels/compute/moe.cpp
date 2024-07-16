@@ -9,7 +9,6 @@
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/unpack.h"
@@ -307,12 +306,14 @@ void MAIN {
     constexpr uint32_t logk = get_compile_time_arg_val(13);
     constexpr uint32_t logWt = get_compile_time_arg_val(14);
 
+    constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
+
     top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
-    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht*Wt);
-    sub_block_inplace(index_cb_index, expert_mask_cb_index, Ht*Wt);
-    eqz_block_inplace(index_cb_index, Ht*Wt);
-    mul_block_inplace(values_cb_index, index_cb_index, Ht*Wt);
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Wt>();
+    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht*Kt);
+    sub_block_inplace(index_cb_index, expert_mask_cb_index, Ht*Kt);
+    eqz_block_inplace(index_cb_index, Ht*Kt);
+    mul_block_inplace(values_cb_index, index_cb_index, Ht*Kt);
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
 
 }
 }

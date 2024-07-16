@@ -17,7 +17,7 @@ namespace py = pybind11;
 
 void bind_reduction_moe_operation(py::module& module) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(moe(input_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the ``k`` largest or ``k`` smallest elements of the given input tensor along a given dimension.
 
@@ -58,6 +58,8 @@ void bind_reduction_moe_operation(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& topk_mask_tensor,
+                const ttnn::Tensor& expert_mask_tensor,
                 const uint16_t k,
                 const int8_t dim,
                 const bool largest,
@@ -65,10 +67,12 @@ void bind_reduction_moe_operation(py::module& module) {
                 std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, k, dim, largest, sorted,
+                    return self(queue_id, input_tensor, topk_mask_tensor, expert_mask_tensor, k, dim, largest, sorted,
                     memory_config, optional_output_tensors);
                 },
                 py::arg("input_tensor").noconvert(),
+                py::arg("topk_mask_tensor").noconvert(),
+                py::arg("expert_mask_tensor").noconvert(),
                 py::arg("k") = 32,
                 py::arg("dim") = -1,
                 py::arg("largest") = true,

@@ -27,6 +27,8 @@ struct ExecuteMoe {
     static inline std::vector<Tensor> execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor &input_tensor,
+        const Tensor &topk_mask_tensor,
+        const Tensor &expert_mask_tensor,
         const uint16_t k,
         const int8_t dim,
         const bool largest,
@@ -34,7 +36,7 @@ struct ExecuteMoe {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
         return operation::run(Moe{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config())},
-        {input_tensor},
+        {input_tensor, topk_mask_tensor, expert_mask_tensor},
         {},
         optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value()) : std::vector<std::optional<Tensor>>{},
         queue_id);
@@ -42,6 +44,8 @@ struct ExecuteMoe {
 
     static inline auto execute_on_worker_thread(
         const Tensor &input_tensor,
+        const Tensor &topk_mask_tensor,
+        const Tensor &expert_mask_tensor,
         const uint16_t k,
         const int8_t dim,
         const bool largest,
@@ -49,15 +53,17 @@ struct ExecuteMoe {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+        return execute_on_worker_thread(DefaultQueueId, input_tensor, topk_mask_tensor, expert_mask_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
 
 
     static inline std::vector<Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
         const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
+        const auto& topk_mask_tensor = input_tensors.at(1);
+        const auto& expert_mask_tensor = input_tensors.at(2);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor, topk_mask_tensor, expert_mask_tensor}))};,
+                                            Tensor(operation::get_workers_for_op_output({input_tensor, topk_mask_tensor, expert_mask_tensor}))};
     }
 };
 
