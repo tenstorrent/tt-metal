@@ -32,9 +32,9 @@
 | [Bloom](.models/demos/grayskull/functional_bloom) (sen/s)  |                     | 70                           |                             |                                     |
 | U-Net                                                      | coming soon         |                              |                             |                                     |
 
-[1] - Observed from the host. Includes dispatch overhead and kernel execution time.
+[1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
 
-[2] - Ignoring host overhead. Kernel execution time only.
+[2] - Ignoring host overhead. Kernel execution time only. For LLMs, token-to-token decode throughput is reported.
 
 ## Wormhole (WH) Models
 
