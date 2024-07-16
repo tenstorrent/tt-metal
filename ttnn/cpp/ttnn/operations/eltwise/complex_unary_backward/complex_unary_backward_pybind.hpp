@@ -118,6 +118,11 @@ void py_module(py::module& module) {
         ttnn::imag_bw,
         R"doc(Performs backward operations for complex imaginary function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_complex_unary_backward_tensor(
+        module,
+        ttnn::real_bw,
+        R"doc(Performs backward operations for complex real function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace complex_unary_backward

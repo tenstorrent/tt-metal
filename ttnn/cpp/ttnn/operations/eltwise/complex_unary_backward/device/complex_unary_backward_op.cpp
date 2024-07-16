@@ -55,4 +55,17 @@ std::vector<ComplexTensor> _imag_bw(const Tensor& grad, const ComplexTensor& inp
     return grad_tensor;
 }
 
+// complex real
+// real: at::real(grad)
+std::vector<ComplexTensor> _real_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor real_input = real(input, output_mem_config);
+    Tensor i = ttnn::operations::creation::zeros_like(real_input, real_input.get_dtype(), real_input.get_layout(), std::nullopt, output_mem_config);
+    ComplexTensor grad_result = ComplexTensor({grad, i});
+    i.deallocate();
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+
 }  // namespace ttnn::operations::complex_unary_backward

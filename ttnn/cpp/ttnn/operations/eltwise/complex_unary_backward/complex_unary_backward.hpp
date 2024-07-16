@@ -50,5 +50,6 @@ constexpr auto polar_bw = ttnn::register_operation<operations::complex_unary_bac
 
 //OpHandler_tensor_complex : get_function_tensor_complex
 constexpr auto imag_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::IMAG_BW>>("ttnn::imag_bw");
+constexpr auto real_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::REAL_BW>>("ttnn::real_bw");
 
 }
