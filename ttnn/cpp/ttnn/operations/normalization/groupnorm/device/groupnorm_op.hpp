@@ -35,7 +35,7 @@ struct GroupNormShardedMultiCoreProgramConfig {
     Layout output_layout;
 };
 
-operation::ProgramWithCallbacks groupnorm_sharded_v2_(
+operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor &a,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,

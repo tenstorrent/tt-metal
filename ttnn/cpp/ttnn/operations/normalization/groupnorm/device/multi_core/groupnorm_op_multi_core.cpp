@@ -112,7 +112,7 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
 }
 
-operation::ProgramWithCallbacks groupnorm_sharded_v2_(
+operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor &a,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
