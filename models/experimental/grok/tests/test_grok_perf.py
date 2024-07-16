@@ -29,15 +29,7 @@ from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, enable_persistent_kernel_cache
-
-
-class Emb(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.emb = torch.nn.Embedding(32000, 4096)
-
-    def forward(self, x):
-        return self.emb(x)
+from transformers import AutoTokenizer
 
 
 @pytest.mark.model_perf_t3000
@@ -75,16 +67,16 @@ def test_grok_model_perf(
     if model_args.dummy_weights:
         encoded_prompts = [[1, 5713]] * len(prompts)  # manual encoding of the "Once" prompt
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = AutoTokenizer.from_pretrained("hpcai-tech/grok-1", trust_remote_code=True)
         encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Embedding on host
-    embd = Emb()
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd = torch.nn.Embedding(model_args.vocab_size, model_args.hidden_size)
+    embd.load_state_dict({"weight": state_dict["model.embed_tokens.weight"]})
 
     generation_length = 1
 
-    profiler.start("Grok_model_setup")
+    profiler.start("model_setup")
 
     # Load TTNN model
     tt_model = TtTransformer(
@@ -100,7 +92,7 @@ def test_grok_model_perf(
         tt_model.args.max_seq_len,
         tt_model.device_mesh,
     )
-    profiler.end("TtMistral_model_setup")
+    profiler.end("model_setup")
 
     # Call the function
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
@@ -147,15 +139,13 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
     profiler.end(f"torch_embed_initial")
 
     for i in range(generation_length):
-        start_pos = generation_start_pos + i
-        current_pos = start_pos % tt_model.args.sliding_window
+        current_pos = generation_start_pos + i
 
         profiler.start(f"prepare_inputs_for_inference_{i}")
         decode_input, attn_mask = prepare_inputs_ttnn(
             pt_decode_input,
             tt_model.args.dim,
-            start_pos,
-            tt_model.args.sliding_window,
+            current_pos,
             tt_model.device_mesh,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
@@ -163,13 +153,13 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
         profiler.start(f"python_dispatch_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
+        tt_multidevice_out = tt_model(decode_input, current_pos, attn_mask, rot_mat)
         profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=-1))
             .squeeze(1)
             .view(batch, seqlen, -1)
             .detach()
@@ -188,5 +178,5 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.start(f"deallocate_tt_tensors_{i}")
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del decode_input, attn_mask, tt_decode_input
-        tt_out.deallocate(force=True)
+        tt_multidevice_out.deallocate(force=True)
         profiler.end(f"deallocate_tt_tensors_{i}")

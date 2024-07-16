@@ -7,6 +7,7 @@ from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
 from models.experimental.grok.tt.grok_common import LightweightModule
+from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
 
 
 class TtTransformerBlock(LightweightModule):
@@ -22,6 +23,7 @@ class TtTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.device_mesh = device_mesh
+        tlog_device_mesh = device_mesh
 
         self.args = args
 
@@ -43,16 +45,16 @@ class TtTransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtypes={
-                    "linear": ttnn.bfloat4_b,
+                    "linear": ttnn.bfloat8_b,
                     "linear_1": ttnn.bfloat8_b,
-                    "linear_v": ttnn.bfloat4_b,
+                    "linear_v": ttnn.bfloat8_b,
                 },
             ),
             args=args,
             layer_num=layer_num,
             dtype=dtype,
         )
-        make_norm = lambda name: TtRMSNorm(
+        make_norm = lambda name: TtRMSNormSharded(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
@@ -80,19 +82,28 @@ class TtTransformerBlock(LightweightModule):
         1: unary dim
         H: hidden dim (6144)
         """
+        # # tlog('our_decoder_input', xs_1SBH)
         hidden_1SBH = self.pre_attn_norm(xs_1SBH)
+        # tlog('our_decoder_pre_attn_norm', hidden_1SBH)
         hidden_1SBH = self.attention(
             hidden_1SBH,
             current_pos,
             attn_masks,
             rot_mats,
         )
+        # tlog('our_decoder_attention', hidden_1SBH)
         hidden_1SBH = self.post_attn_norm(hidden_1SBH)
+        # tlog('our_decoder_post_attn_norm', hidden_1SBH)
         hidden_1SBH = ttnn.add(xs_1SBH, hidden_1SBH)
+        # tlog('our_decoder_add', hidden_1SBH)
         residual_1SBH = hidden_1SBH
 
         hidden_1SBH = self.pre_moe_norm(hidden_1SBH)
+        # tlog('our_decoder_pre_moe_norm', hidden_1SBH)
         hidden_1SBH = self.feed_forward(hidden_1SBH)
+        # tlog('our_decoder_feed_forward', hidden_1SBH)
         hidden_1SBH = self.post_moe_norm(hidden_1SBH)
+        # tlog('our_decoder_post_moe_norm', hidden_1SBH)
         hidden_1SBH = ttnn.add(residual_1SBH, hidden_1SBH)
+        # tlog('our_decoder_output', hidden_1SBH)
         return hidden_1SBH

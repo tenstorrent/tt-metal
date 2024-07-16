@@ -15,6 +15,7 @@ except ImportError:
 
 from .configuration_grok1 import Grok1Config
 from .modeling_grok1_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
+from models.experimental.grok.scripts.tlog import tlog
 
 logger = logging.get_logger(__name__)
 
@@ -324,27 +325,15 @@ class MoeBlock(nn.Module):
         self.experts = nn.ModuleList([MoeMLP(hidden_dim, ffn_dim) for _ in range(num_experts)])
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor]:
-        log = {}
         batch_size, sequence_length, hidden_dim = hidden_states.shape
-        # log['hidden_states'] = hidden_states.clone()
-        # print(f'hidden_states: {hidden_states.shape}, {hidden_states.min()} < {hidden_states.mean()} < {hidden_states.max()}')
         hidden_states = hidden_states.view(-1, hidden_dim)
-        # log['hidden_states_view'] = hidden_states.clone()
-        # print(f'hidden_states_view: {hidden_states.shape}, {hidden_states.min()} < {hidden_states.mean()} < {hidden_states.max()}')
-        # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
-        # log['router_logits'] = router_logits.clone()
-        # print(f'router_logits: {router_logits.shape}, {router_logits.min()} < {router_logits.mean()} < {router_logits.max()}')
+        # tlog('ref_gate_logits', router_logits)
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        # log['routing_weights'] = routing_weights.clone()
-        # print(f'routing_weights: {routing_weights.shape}, {routing_weights.min()} < {routing_weights.mean()} < {routing_weights.max()}')
+        # tlog('ref_gate_probs', routing_weights)
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        # log['routing_weights_topk'] = routing_weights.clone()
-        # log['selected_experts'] = selected_experts.clone()
-        # print(f'routing_weights_topk: {routing_weights.shape}, {routing_weights.min()} < {routing_weights.mean()} < {routing_weights.max()}')
-        # print(f'selected_experts: {selected_experts.shape}, {selected_experts}')
-        # torch.save(log, 'ref_log.pt')
+        # tlog('ref_topk_indices', selected_experts)
 
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
@@ -359,6 +348,8 @@ class MoeBlock(nn.Module):
         expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
         # Loop over all available experts in the model and perform the computation on each expert
+        expert_outputs = []
+        weighted_outputs = []
         for expert_idx in range(self.num_experts):
             expert_layer = self.experts[expert_idx]
             idx, top_x = torch.where(expert_mask[expert_idx])
@@ -374,11 +365,16 @@ class MoeBlock(nn.Module):
             # the current expert. We need to make sure to multiply the output hidden
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x_list].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x_list, idx_list, None]
+            expert_output = expert_layer(current_state)
+            expert_outputs.append(expert_output)
+            current_hidden_states = expert_output * routing_weights[top_x_list, idx_list, None]
+            weighted_outputs.append(current_hidden_states)
 
             # However `index_add_` only support torch tensors for indexing so we'll use
             # the `top_x` tensor here.
             final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+        # tlog('ref_expert_output', torch.stack(expert_outputs, dim=0))
+        # tlog('ref_weighted_output', torch.stack(weighted_outputs, dim=0))
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         return final_hidden_states, router_logits
 
@@ -424,7 +420,9 @@ class DecoderLayer(nn.Module):
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
+        # tlog('ref_decoder_input', hidden_states)
         hidden_states = self.pre_attn_norm(hidden_states)
+        # tlog('ref_decoder_pre_attn_norm', hidden_states)
         hidden_states, attention_weights, present_key_value = self.attn(
             hidden_states,
             attention_mask=attention_mask,
@@ -433,14 +431,21 @@ class DecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
+        # tlog('ref_decoder_attention', hidden_states)
         hidden_states = self.post_attn_norm(hidden_states)
+        # tlog('ref_decoder_post_attn_norm', hidden_states)
         hidden_states = residual + hidden_states
+        # tlog('ref_decoder_add', hidden_states)
 
         residual = hidden_states
         hidden_states = self.pre_moe_norm(hidden_states)
+        # tlog('ref_decoder_pre_moe_norm', hidden_states)
         hidden_states, router_logits = self.moe_block(hidden_states)
+        # tlog('ref_decoder_feed_forward', hidden_states)
         hidden_states = self.post_moe_norm(hidden_states)
+        # tlog('ref_decoder_post_moe_norm', hidden_states)
         hidden_states = residual + hidden_states
+        # tlog('ref_decoder_output', hidden_states)
 
         outputs = (hidden_states,)
         if output_attentions:
@@ -703,6 +708,7 @@ class Grok1Model(Grok1PretrainedModel):
                 all_router_logits += (layer_outputs[-1],)
 
         hidden_states = self.norm(hidden_states)
+        # tlog('ref_model_norm', hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
@@ -802,7 +808,9 @@ class Grok1ModelForCausalLM(Grok1PretrainedModel):
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
+        # tlog('ref_model_lm_head', logits)
         logits = logits * self.output_multiplier_scale
+        # tlog('ref_model_scale', logits)
         logits = logits.float()
 
         loss = None

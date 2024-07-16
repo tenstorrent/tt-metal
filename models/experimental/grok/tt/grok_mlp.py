@@ -59,7 +59,7 @@ class TtGrokMLP(LightweightModule):
             program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # GELU activation fused in the op
             output_mem_config=self.model_config["FF1_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=ttnn.bfloat16,
         )
         w3_out = ttnn.experimental.operations.primary.matmul_1d(
             x,
@@ -67,7 +67,7 @@ class TtGrokMLP(LightweightModule):
             program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
             output_mem_config=self.model_config["FF3_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=ttnn.bfloat16,
         )
         w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
 
@@ -77,7 +77,7 @@ class TtGrokMLP(LightweightModule):
             program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
             output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=ttnn.bfloat16,
         )
 
         return w2_out

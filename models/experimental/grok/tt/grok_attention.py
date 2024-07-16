@@ -261,24 +261,12 @@ class TtGrokAttention(LightweightModule):
         keys_1BDP.deallocate(True)
 
         # Softmax and scaling
-        # FIXME: ttnn.mul does not seem to respect sharding even when it is manually specified
-        # FIXME: LOLLLL and it produces bad PCC on some rows (here row 8 for input 10) but not others (row 0)
-        # hence the interleaved_to_sharded workaround here
-
+        # FIXME: Maintain sharded memory layout when #9773 is fixed
         attn_1B4P = ttnn.experimental.tensor.sharded_to_interleaved(attn_1B4P, output_mem_config=ttnn.L1_MEMORY_CONFIG)
-
-        # pre_scale = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
-        # OK HERE
-
         attn_1B4P = attn_1B4P * self.attn_output_multiplier
-
-        # pre_tanh = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
-
         attn_1B4P = self.max_attn_value * ttnn.tanh(attn_1B4P * (1.0 / self.max_attn_value))
-
-        # BAD HERE - looks like maybe tanh is doing something bad on step 10, batch index 8
-        # pre_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
         attn_1B4P = ttnn.experimental.tensor.interleaved_to_sharded(attn_1B4P, sharded_mem_config=attn_1B4P_memconfig)
+
         attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
             attn_1B4P,
             1.0,

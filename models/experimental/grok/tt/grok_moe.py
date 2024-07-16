@@ -6,12 +6,14 @@ import torch
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
+from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
 
 
 class TtMoeLayer(LightweightModule):
     def __init__(self, device_mesh, state_dict, experts, args, layer_num, dtype):
         super().__init__()
         self.device_mesh = device_mesh
+        tlog_device_mesh = device_mesh
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -102,14 +104,23 @@ class TtMoeLayer(LightweightModule):
 
         # get weights for top-2 experts
         gate_logits_1SB_64 = ttnn.add(gate_logits_1SB_64, self.top8_mask_11B_64)
+        # tlog('our_gate_logits', gate_logits_1SB_64)
 
         # Grok does softmax before top-k, seems wrong but ¯\_(ツ)_/¯
-        gate_probs_1SB_64 = ttnn.softmax(gate_logits_1SB_64, dim=-1)
-        del gate_logits_1SB_64
+        # gate_probs_1SB_64 = ttnn.softmax(gate_logits_1SB_64, dim=-1)
+        # del gate_logits_1SB_64
+
+        gate_probs_1SB_64 = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            gate_logits_1SB_64,
+            program_config=self.softmax_program_config,
+            compute_kernel_config=self.softmax_compute_config,
+        )
+        # tlog('our_gate_probs', gate_probs_1SB_64)
 
         ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(
             gate_probs_1SB_64, 32
         )  # selects 6, 5 as 8.1, 1.8
+        # tlog('our_topk_indices', ttl_topk_indices)
         ttl_topk_values = ttl_topk_values * self.top2_mask_11BB  # masked unwanted ones to 0
         mask_B2 = ttnn.eq(  # FIXME: revert dtype when merging main https://github.com/tenstorrent/tt-metal/issues/9480
             self.expert_mask_11BB, ttl_topk_indices, dtype=ttnn.bfloat16
@@ -118,7 +129,9 @@ class TtMoeLayer(LightweightModule):
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH)
+        # tlog('our_expert_output', weights)
         results_11BH = ttnn.mul(weights, weights_1SB1)
+        # tlog('our_weighted_expert_output', weights)
 
         # all gather
         output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)

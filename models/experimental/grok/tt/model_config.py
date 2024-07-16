@@ -348,13 +348,19 @@ class TtModelArgs:
             )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # LoFi
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
         self.compute_kernel_attn_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,  # HiFi2
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        self.compute_kernel_output_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # HiFi2?
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -397,7 +403,10 @@ class TtModelArgs:
     def get_compute_kernel_attn_config(self):
         return self.compute_kernel_attn_config
 
-    def load_state_dict(self):
+    def get_compute_kernel_output_config(self):
+        return self.compute_kernel_output_config
+
+    def load_state_dict(self, start_layer=0):
         """Generate or load state_dict for the first n_layers of the model"""
         # FIXME: PretrainedConfig is from the devil
         grok1_config = Grok1Config.from_json_file("models/experimental/grok/reference/config.json")
@@ -413,7 +422,7 @@ class TtModelArgs:
             required_files = set()
             for layer, file in index["weight_map"].items():
                 layer_number = int(layer.split(".")[2]) if layer.startswith("model.layers.") else 0
-                if layer_number < self.n_layers:
+                if start_layer <= layer_number < self.n_layers + start_layer:
                     required_files.add(file)
 
             state_dict = {}
@@ -422,7 +431,9 @@ class TtModelArgs:
                 state_dict.update(torch.load(self.model_base_path / file))
 
         keys_dict = list(state_dict.keys())[:]
-        remv = [f"model.layers.{i}" for i in range(self.n_layers, 64)]
+        remv = [
+            f"model.layers.{i}." for i in list(range(0, start_layer)) + list(range(self.n_layers + start_layer, 64))
+        ]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)

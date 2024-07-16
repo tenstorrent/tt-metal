@@ -6,6 +6,7 @@ import ttnn
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.experimental.grok.tt.grok_common import LightweightModule
+from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
 
 
 class TtTransformer(LightweightModule):
@@ -22,6 +23,7 @@ class TtTransformer(LightweightModule):
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
         self.device_mesh = device_mesh
+        tlog_device_mesh = device_mesh
         self.model_config = args.get_model_config()
         self.output_multiplier_scale = args.output_multiplier_scale
         assert self.vocab_size > 0
@@ -36,7 +38,7 @@ class TtTransformer(LightweightModule):
             )
             for i in layers
         ]
-        self.norm = TtRMSNorm(
+        self.norm = TtRMSNormSharded(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
@@ -56,13 +58,13 @@ class TtTransformer(LightweightModule):
             self.state_dict["lm_head.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
             device=device_mesh,
             layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
         )
 
-        self.compute_kernel = self.args.get_compute_kernel_config()
+        self.compute_kernel = self.args.get_compute_kernel_output_config()
 
     def forward(
         self,
@@ -76,6 +78,7 @@ class TtTransformer(LightweightModule):
         attn_masks.deallocate(True)
 
         x_norm = self.norm(x)
+        # tlog('our_model_norm', x_norm)
         multidevice_outputs = ttnn.experimental.operations.primary.matmul(
             x_norm,
             self.output_weight,
@@ -84,7 +87,10 @@ class TtTransformer(LightweightModule):
             output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
+        # tlog('our_model_lm_head', multidevice_outputs, gather_dim=-1)
 
+        assert not multidevice_outputs.is_sharded(), "#9773: sharded inputs not supported by mul"
         multidevice_outputs = multidevice_outputs * self.output_multiplier_scale
+        # tlog('our_model_scale', multidevice_outputs, gather_dim=-1)
 
         return multidevice_outputs
