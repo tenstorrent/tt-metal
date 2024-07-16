@@ -93,6 +93,9 @@ void py_module(py::module& module) {
         py::arg("use_shallow_conv_variant").noconvert() = false,
         py::arg("transpose_mcast").noconvert() = true,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("enable_act_double_buffer").noconvert() = false,
+        py::arg("enable_split_reader").noconvert() = false,
+        py::arg("enable_subblock_padding").noconvert() = false,
         R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
