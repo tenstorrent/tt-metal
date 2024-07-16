@@ -5,14 +5,9 @@
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ReplicateTensorToMesh
 from models.utility_functions import nearest_32
 import json
-
-
-class LightweightModule:
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
 
 
 # load from json, return as a list

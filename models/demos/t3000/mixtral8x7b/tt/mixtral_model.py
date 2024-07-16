@@ -6,7 +6,7 @@ import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from ttnn import ReplicateTensorToMesh
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule, get_single_rot_mat
+from models.common.lightweightmodule import LightweightModule, get_single_rot_mat
 
 
 class TtTransformer(LightweightModule):

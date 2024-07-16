@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtMixtralMLP(LightweightModule):

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtMixtralEmbedding(LightweightModule):
