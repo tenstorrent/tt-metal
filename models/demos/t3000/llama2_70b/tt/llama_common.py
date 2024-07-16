@@ -83,39 +83,6 @@ class ConcatMesh2DToTensor(MeshToTensor):
         return all_concat
 
 
-class ReplicateShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.Tensor):
-        result = []
-
-        if self.dims[0] is None and self.dims[1] is not None:
-            # Replicate along rows, shard along columns
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1]))
-            for shard in sharded_tensors:
-                result.extend([shard.clone() for _ in range(self.cluster_shape[0])])
-        elif self.dims[0] is not None and self.dims[1] is None:
-            # Replicate along columns, shard along rows
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[0], dim=self.dims[0]))
-            for _ in range(self.cluster_shape[1]):
-                result.extend([shard.clone() for shard in sharded_tensors])
-        else:
-            raise ValueError(
-                "One dimension must be None (for replication) and the other must be specified (for sharding)"
-            )
-
-        return result
-
-    def config(self):
-        return {
-            "strategy": "shard",
-            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
-        }
-
-
 def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
     checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
     assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"

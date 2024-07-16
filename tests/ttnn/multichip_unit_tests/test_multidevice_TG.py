@@ -410,38 +410,6 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
     assert out_pass
 
 
-class ReplicateShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.Tensor):
-        result = []
-
-        if self.dims[0] is None and self.dims[1] is not None:
-            # Replicate along rows, shard along columns
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1]))
-            for shard in sharded_tensors:
-                result.extend([shard.clone() for _ in range(self.cluster_shape[0])])
-        elif self.dims[0] is not None and self.dims[1] is None:
-            # Replicate along columns, shard along rows
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[0], dim=self.dims[0]))
-            for _ in range(self.cluster_shape[1]):
-                result.extend([shard.clone() for shard in sharded_tensors])
-        else:
-            raise ValueError(
-                "One dimension must be None (for replication) and the other must be specified (for sharding)"
-            )
-
-        return result
-
-    def config(self):
-        return {
-            "strategy": "replicate",
-        }
-
-
 @pytest.mark.parametrize(
     "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
@@ -470,7 +438,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ReplicateShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
     )
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(

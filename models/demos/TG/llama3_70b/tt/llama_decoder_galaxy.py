@@ -74,8 +74,56 @@ class TtLlamaDecoder_galaxy:
             read_cache=read_cache,
         )
 
+        self.get_decoder_config()
         self.get_mlp_slice_mat()
         self.load_weights()
+
+    def get_decoder_config(self):
+        self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        self.LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=32 // 32,
+            block_w=8,
+            inplace=False,
+        )
+
+        shard_spec_32_cores_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 3),
+                ),
+            }
+        )
+
+        self.LN_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    32,
+                    8192 // 32,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        self.ACT_MEMCFG = ttnn.create_sharded_memory_config(
+            shape=(32, 2048 // 8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     def set_model_config(self, model_config):
         self.model_config = model_config
@@ -157,64 +205,14 @@ class TtLlamaDecoder_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
     ) -> List[ttnn.Tensor]:
-        LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
-        LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            subblock_w=8,
-            block_h=32 // 32,
-            block_w=8,
-            inplace=False,
-        )
-
-        shard_spec_32_cores_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 3),
-                ),
-            }
-        )
-
-        LN_OUTPUT_MEMCFG = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    32,
-                    8192 // 32,
-                ],
-                ttnn.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
-
-        # ACT_MEMCFG = ttnn.create_sharded_memory_config(
-        #     shape=(xs.shape[2], xs.shape[3] // 32),
-        #     core_grid=ttnn.CoreGrid(y=4, x=8),
-        #     strategy=ttnn.ShardStrategy.WIDTH,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-
-        # xs_replicated = ttnn.clone(xs,
-        #                            memory_config=ACT_MEMCFG,
-        #                            dtype=ttnn.bfloat16)
-
         # Not in-place RMSNorm
         attn_norm_out = ttnn.rms_norm(
             xs,
             epsilon=self.norm_eps,
             weight=self.attn_norm,
-            program_config=LN_PROGCFG,
-            memory_config=LN_OUTPUT_MEMCFG,
-            compute_kernel_config=LN_COMPUTE_KERNEL_CONFIG,
+            program_config=self.LN_PROGCFG,
+            memory_config=self.LN_OUTPUT_MEMCFG,
+            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
         )
 
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks)
@@ -233,30 +231,20 @@ class TtLlamaDecoder_galaxy:
             output,
             epsilon=self.norm_eps,
             weight=self.ffn_norm,
-            program_config=LN_PROGCFG,
-            memory_config=LN_OUTPUT_MEMCFG,  # TODO: Modify slice op
-            compute_kernel_config=LN_COMPUTE_KERNEL_CONFIG,
+            program_config=self.LN_PROGCFG,
+            memory_config=self.LN_OUTPUT_MEMCFG,
+            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
         )
 
-        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         # TODO: Slice the ffn_norm_out tensor get [1, 1, 32, 2048] per chip
+        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ffn_norm_out = ttnn.matmul(
             ffn_norm_out,
             self.mlp_slice_mat,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(ffn_norm_out.shape[2], ffn_norm_out.shape[3] // 8),
-            core_grid=ttnn.CoreGrid(y=1, x=8),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=ACT_MEMCFG)
+        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.ACT_MEMCFG)
 
         ffn_out = self.mlp(ffn_norm_out)
 

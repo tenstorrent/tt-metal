@@ -10,7 +10,6 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
     ConcatMesh2DToTensor,
-    ReplicateShardTensor2dMesh,
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_flash_decode_chunk_size,
@@ -265,8 +264,8 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
-            # cache_file_name=self.cache_path / wqkv_cache_str, # TODO: Support cache for ReplicateShardTensor2dMesh
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
+            cache_file_name=self.cache_path / wqkv_cache_str,
         )
 
         self.wo = ttnn.as_tensor(
@@ -275,8 +274,8 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
-            # cache_file_name=self.cache_path / wo_cache_str, # TODO: Support cache for ReplicateShardTensor2dMesh
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
+            cache_file_name=self.cache_path / wo_cache_str,
         )
 
     def __call__(
