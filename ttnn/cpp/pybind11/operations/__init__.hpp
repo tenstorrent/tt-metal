@@ -51,7 +51,7 @@ void py_module(py::module& module) {
 
     auto m_ternary_backward = module.def_submodule("ternary_backward", "ternary_backward operations");
     ternary_backward::py_module(m_ternary_backward);
-    
+
     auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
     unary_backward::py_module(m_unary_backward);
 
