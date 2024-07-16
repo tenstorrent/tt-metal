@@ -1444,12 +1444,6 @@ Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, 
 }
 
 
-Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, true, false, true, false);
-}
-
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
     return conv_as_large_bmm_single_core_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, fuse_relu, math_fidelity, output);

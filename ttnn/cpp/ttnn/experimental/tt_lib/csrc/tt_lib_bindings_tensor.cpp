@@ -388,23 +388,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
 
-
-    // m_tensor.def("conv_with_address_map", &conv_with_address_map, R"doc(
-    //     Perform a conv ``A x B`` with two tensors
-    //     This op tilizes tensor A and untilizes the output
-    //     Reader kernel uses an address map which pre-computed on the host to read activations and weights
-
-    //     +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    //     | Argument     | Description                                                                                | Data type | Valid range | Required |
-    //     +==============+============================================================================================+===========+=============+==========+
-    //     | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-    //     +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    //     | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-    //     +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    //     | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-    //     +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    // )doc");
-
     m_tensor.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,
