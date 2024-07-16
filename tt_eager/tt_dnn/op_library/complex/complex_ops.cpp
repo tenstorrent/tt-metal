@@ -340,24 +340,6 @@ std::vector<ComplexTensor> complex_recip_bw(const ComplexTensor& grad, const Com
     return grad_tensor;
 }
 
-// angle at::where(self == 0.0, at::zeros({}, self.options()), grad * self / self.abs().pow(2)
-std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& input, bool is_complextensor, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    const Tensor &inp_r = input.real();
-    const Tensor &inp_i = input.imag();
-    Tensor condition_zero = ttnn::logical_and(ttnn::eqz(input.real(),output_mem_config), ttnn::eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
-    Tensor abs_squared = ttnn::reciprocal(ttnn::add(ttnn::square(inp_r, output_mem_config), ttnn::square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
-    Tensor res_real = where(condition_zero, zeros_like(inp_r, output_mem_config), ttnn::multiply(grad, ttnn::multiply(ttnn::neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
-    Tensor res_imag = where(condition_zero, zeros_like(inp_i, output_mem_config), ttnn::multiply(grad, ttnn::multiply(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
-    condition_zero.deallocate();
-    abs_squared.deallocate();
-    ComplexTensor grad_result = ComplexTensor({res_real, res_imag});
-    res_real.deallocate();
-    res_imag.deallocate();
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-
 }//namespace tt_metal
 
 }//namespace tt
