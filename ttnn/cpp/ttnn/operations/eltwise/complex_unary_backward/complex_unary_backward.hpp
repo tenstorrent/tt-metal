@@ -1,0 +1,36 @@
+
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "device/complex_unary_backward_op.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement.hpp"
+
+namespace ttnn {
+
+namespace operations::complex_unary_backward {
+
+//OpHandler_complex : get_function_complex
+template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
+struct ExecuteComplexUnaryBackward {
+
+    static std::vector<ComplexTensor> execute_on_main_thread(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_arg,
+        const MemoryConfig& memory_config) {
+
+        auto op_type = get_function_complex<complex_unary_backward_op_type>();
+        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+        }
+
+};
+
+}
+
+//OpHandler_complex : get_function_complex
+constexpr auto polar_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::POLAR_BW>>("ttnn::polar_bw");
+
+}

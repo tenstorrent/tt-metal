@@ -1825,26 +1825,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
-    m_tensor.def(
-        "polar_bw",
-        py::overload_cast<const ComplexTensor&, const ComplexTensor&, const MemoryConfig&>(&polar_bw),
-        py::arg("grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Performs backward operations for polar ``input`` with given ``grad``
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "input", "Input complex tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
     // loss functions
     m_tensor.def(
         "mseloss",
