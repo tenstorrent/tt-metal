@@ -48,11 +48,20 @@ def run(test_module, input_queue, output_queue):
         exit(0)
 
 
+def get_timeout(test_module):
+    try:
+        timeout = test_module.TIMEOUT
+    except:
+        timeout = 30
+    return timeout
+
+
 def execute_batch(test_module, test_vectors):
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
+    timeout = get_timeout(test_module)
     for test_vector in test_vectors:
         result = dict()
         if deserialize(test_vector["status"]) == VectorStatus.INVALID:
@@ -70,9 +79,9 @@ def execute_batch(test_module, test_vectors):
             if MEASURE_PERF:
                 # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                 input_queue.put(test_vector)
-                output_queue.get(block=True, timeout=30)
+                output_queue.get(block=True, timeout=timeout)
             input_queue.put(test_vector)
-            response = output_queue.get(block=True, timeout=30)
+            response = output_queue.get(block=True, timeout=timeout)
             status, message, e2e_perf = response[0], response[1], response[2]
             if status:
                 result["status"] = TestStatus.PASS
