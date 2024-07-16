@@ -50,32 +50,32 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
 
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
     if (cur_pos_in_tile == 31 || partial_val == 0) {
-        DPRINT << "Fill entire tile to 0 and exit" << ENDL();
+        // DPRINT << "Fill entire tile to 0 and exit" << ENDL();
         return;
     }
-    DPRINT << "Fill partial tile" << ENDL();
+    // DPRINT << "Fill partial tile" << ENDL();
     const uint16_t scalar_val = partial_val>>16;
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
     int phase_start = (cur_pos_in_tile < 15) ? 0:1;
     uint32_t fill_pos_in_phase = (cur_pos_in_tile+1) % 16;
-    DPRINT << "phase_start: " << phase_start << ENDL();
-    DPRINT << "fill_pos_in_phase: " << fill_pos_in_phase << ENDL();
+    // DPRINT << "phase_start: " << phase_start << ENDL();
+    // DPRINT << "fill_pos_in_phase: " << fill_pos_in_phase << ENDL();
     if (phase_start == 0) {
-        DPRINT << "Fill second and fourth phase" << ENDL();
+        // DPRINT << "Fill second and fourth phase" << ENDL();
         for (int k = 1; k < 4; k+=2) {
             uint32_t idx = k << 8;
-            DPRINT << "k: " << k << ENDL();
-            DPRINT << "idx: " << idx << ENDL();
+            // DPRINT << "k: " << k << ENDL();
+            // DPRINT << "idx: " << idx << ENDL();
             for (int j = 0; j < 256; j++) {
                 ptr[idx + j] = scalar_val;
             }
         }
     }
-    DPRINT << "Fill phase" << ENDL();
+    // DPRINT << "Fill phase" << ENDL();
     for (int k = phase_start; k < 4; k+=2) {
         uint32_t idx = k << 8;
-        DPRINT << "k: " << k << ENDL();
-        DPRINT << "idx: " << idx << ENDL();
+        // DPRINT << "k: " << k << ENDL();
+        // DPRINT << "idx: " << idx << ENDL();
         for (int j_start_pos = fill_pos_in_phase; j_start_pos < 16; j_start_pos++) {
             for (int j = j_start_pos; j < 256; j+=16) {
                 ptr[idx + j] = scalar_val;
@@ -139,18 +139,18 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
-    DPRINT << "[Writer Reducer] Generate Attention Mask" << ENDL();
-    DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
-    DPRINT << "cur_pos: " << cur_pos << ENDL();
-    DPRINT << "Sk_chunk_t: " << Sk_chunk_t << ENDL();
-    DPRINT << "cur_pos_in_chunk: " << cur_pos_in_chunk << ENDL();
-    DPRINT << "cur_pos_in_chunk_t: " << cur_pos_in_chunk_t << ENDL();
-    DPRINT << "cur_pos_in_tile: " << cur_pos_in_tile << ENDL();
+    // DPRINT << "[Writer Reducer] Generate Attention Mask" << ENDL();
+    // DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
+    // DPRINT << "cur_pos: " << cur_pos << ENDL();
+    // DPRINT << "Sk_chunk_t: " << Sk_chunk_t << ENDL();
+    // DPRINT << "cur_pos_in_chunk: " << cur_pos_in_chunk << ENDL();
+    // DPRINT << "cur_pos_in_chunk_t: " << cur_pos_in_chunk_t << ENDL();
+    // DPRINT << "cur_pos_in_tile: " << cur_pos_in_tile << ENDL();
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
-        DPRINT << "iteration " << i << ENDL();
+        // DPRINT << "iteration " << i << ENDL();
         if (i < cur_pos_in_chunk_t) {
-            DPRINT << "fill with zero" << ENDL();
+            // DPRINT << "fill with zero" << ENDL();
             // fill with zero
             if (i == 0) {
                 fill_tile<tile_bytes>(cb_mask_in, i, 0);
@@ -163,12 +163,12 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
             }
         }
         else if (i == cur_pos_in_chunk_t) {
-            DPRINT << "fill with partial zero/-inf" << ENDL();
+            // DPRINT << "fill with partial zero/-inf" << ENDL();
             // fill with partial zero/-inf
             fill_tile_partial<tile_bytes>(cb_mask_in, i, cur_pos_in_tile, NEG_INF);
         }
         else {
-            DPRINT << "fill with -inf" << ENDL();
+            // DPRINT << "fill with -inf" << ENDL();
             // fill with -inf
             if (i == cur_pos_in_chunk_t+1){
                 fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
@@ -181,7 +181,7 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
             }
         }
         for (uint32_t j = 1; j < PNHt; ++j) {
-            DPRINT << "Should not reach" << ENDL();
+            // DPRINT << "Should not reach" << ENDL();
             // copy from cb_mask_in[i] to cb_mask_in[j*Sk_chunk_t + i]
             copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j*Sk_chunk_t + i);
             if (j == PNHt-1){
