@@ -93,7 +93,6 @@ std::vector<ComplexTensor> complex_mul_bw(const ComplexTensor& grad, const Compl
 std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 std::vector<ComplexTensor> complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 std::vector<ComplexTensor> complex_recip_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& input, bool is_complextensor = true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 
