@@ -27,6 +27,14 @@ void kernel_main() {
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t weight_size_h= get_compile_time_arg_val(13);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(23);
+
+    uint32_t act_block_h_datums_read_last_block;
+    if (act_block_h_datums_last_block > act_block_h_datums) {
+        act_block_h_datums_read_last_block = act_block_h_datums / 2;
+    } else {
+        act_block_h_datums_read_last_block = act_block_h_datums_last_block / 2;
+    }
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
@@ -111,7 +119,8 @@ void kernel_main() {
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             uint32_t reader_offset = act_l1_read_addr + (reader_offsets[reader_offset_idx] * conv_act_c_read_bytes);
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
-            for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
+            uint32_t act_block_h_datums_read_curr = bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
+            for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
                 // local read from reader_index + reader_offset;
                 #ifdef SPLIT_READER
                 uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
