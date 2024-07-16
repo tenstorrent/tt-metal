@@ -17,8 +17,10 @@ on:
         type: string
       description:
         type: string
+        default: "Custom test dispatch"
         required: false
 
+run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -33,7 +35,6 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
     environment: dev
     runs-on: ${{ inputs.runner-label }}
-    name: Custom test command ${{ inputs.description }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dyanmic env vars for build
