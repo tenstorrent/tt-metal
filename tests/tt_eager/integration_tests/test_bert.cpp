@@ -15,6 +15,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/transformer/transformer.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
 using ttnn::operations::unary::UnaryWithParam;
@@ -97,7 +98,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     value.deallocate();
 
 
-    auto concat_heads_output = tt::operations::primary::transformers::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto concat_heads_output = ttnn::experimental::transformer::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
 

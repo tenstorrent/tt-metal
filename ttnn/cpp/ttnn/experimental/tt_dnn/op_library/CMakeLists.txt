@@ -158,7 +158,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/loss/loss_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/transformer_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_split_query_key_value_and_split_heads/multi_core_split_query_key_value_and_split_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_concatenate_heads/multi_core_concatenate_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp

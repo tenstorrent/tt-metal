@@ -22,7 +22,6 @@ namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
 
 // TODO: Group attention matmul will support sharding, mcasting, and should be faster; we should make attn_matmul (ie. KV heads = 1) a special case of group_attn_matmul and run the same op
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config);
@@ -56,25 +55,6 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             return operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, input_tensors);
         }, {input_tensor}, output_tensors);
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
-}
-
-struct ConcatenateHeads {
-    CoreCoord compute_with_storage_grid_size;
-    MemoryConfig output_mem_config;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-};
-
-inline Tensor concatenate_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [compute_with_storage_grid_size, mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(ConcatenateHeads{compute_with_storage_grid_size, mem_config}, input_tensors);
-        }, {input_tensor}, output_tensors);
-    return output_tensors.at(0);
 }
 
 struct AttnMatmul {

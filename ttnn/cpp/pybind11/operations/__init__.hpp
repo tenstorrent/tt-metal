@@ -31,6 +31,7 @@
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
+#include "ttnn/operations/experimental/experimental_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -108,6 +109,9 @@ void py_module(py::module& module) {
 
     auto m_copy = module.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);
+
+    auto m_experimental = module.def_submodule("experimental", "experimental operations");
+    experimental::py_module(m_experimental);
 }
 
 }  // namespace operations
