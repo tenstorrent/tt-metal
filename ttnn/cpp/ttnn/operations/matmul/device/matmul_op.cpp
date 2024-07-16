@@ -346,10 +346,18 @@ tt::operations::primary::MatmulProgramConfig get_reuse_matmul_program_config(
     uint32_t K = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / TILE_WIDTH;
 
-    auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
-    uint32_t per_core_M = in0_shard_shape[0] / TILE_HEIGHT;
+    auto a_shard_spec = input_tensor_a.shard_spec();
+    uint32_t per_core_M;
     uint32_t per_core_N = N;
-    uint32_t in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
+    uint32_t in0_block_w;
+    if (a_shard_spec.has_value()) {
+        auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
+        per_core_M = in0_shard_shape[0] / TILE_HEIGHT;
+        in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
+    } else {
+        per_core_M = M;
+        in0_block_w = 1;
+    }
 
     auto subblock_hw = get_matmul_subblock_params(
             per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
@@ -638,7 +646,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
         }
     }
     bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
-    auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
     return bmm_op_utils::get_reuse_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, fp32_dest_acc_en, grid_size);
 }
 
