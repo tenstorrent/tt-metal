@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::ternary{
 
-// addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
+// addcmul(input,tensor1,tensor2,value)=input value×tensor1×tensor2
 Tensor _addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -32,7 +32,7 @@ Tensor _addcmul(
     return result;
 }
 
-// addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
+// addcdiv(input,tensor1,tensor2,value)=input value×tensor1/tensor2
 Tensor _addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -59,4 +59,21 @@ Tensor _addcdiv(
         output_mem_config);
 }
 
-} // namespace ttnn::operations::binary
+// lerp(input, end, weight) = start   weight * (end - start)
+Tensor _lerp_overload(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config) {
+    Tensor t_value =
+        ttnn::operations::creation::create_scalar(value, input_a.get_dtype(), Layout::TILE, input_a.device());
+    Tensor t_diff = ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config);
+    Tensor t_mul = ttnn::multiply(t_diff, t_value, std::nullopt, output_mem_config);
+    Tensor result = ttnn::add(input_a, t_mul, std::nullopt, output_mem_config);
+    return result;
+}
+
+Tensor _lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, const MemoryConfig& output_mem_config) {
+    Tensor t_diff = ttnn::multiply(
+        ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config), input_c, std::nullopt, output_mem_config);
+    Tensor result = ttnn::add(input_a, t_diff, std::nullopt, output_mem_config);
+    return result;
+}
+
+} // namespace ttnn::operations::ternary

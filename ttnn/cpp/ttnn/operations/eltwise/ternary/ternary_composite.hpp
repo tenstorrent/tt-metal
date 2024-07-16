@@ -24,10 +24,35 @@ struct ExecuteTernaryCompositeOps
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_type0<ternary_comp_op_type>();
+            auto op_type = get_function_type_ternary_with_float<ternary_comp_op_type>();
             return op_type(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
         }
 };
+
+struct ExecuteLerp
+{
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const Tensor& input_tensor_c,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type_lerp<ternary_comp_op_type>();
+            return op_type(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
+        }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        float value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type_lerp<ternary_comp_op_type>();
+            return op_type(input_tensor_a, input_tensor_b, value, memory_config);
+        }
+};
+
+
 
 }  // namespace ternary
 }  // namespace operations
@@ -35,6 +60,6 @@ struct ExecuteTernaryCompositeOps
 // newly imported
 constexpr auto addcmul = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>("ttnn::addcmul");
 constexpr auto addcdiv = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>("ttnn::addcdiv");
-
+constexpr auto lerp = ttnn::register_operation<operations::ternary::ExecuteLerp<operations::ternary::TernaryCompositeOpType::LERP>>("ttnn::lerp");
 
 }  // namespace ttnn
