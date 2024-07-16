@@ -660,10 +660,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_rdiv,
         "pytorch_op": pytorch_ops.eltwise_rdiv,
     },
-    "eltwise-rsub": {
-        "tt_op": tt_lib_ops.eltwise_rsub,
-        "pytorch_op": pytorch_ops.eltwise_rsub,
-    },
     "eltwise-identity": {
         "tt_op": tt_lib_ops.eltwise_identity,
         "pytorch_op": pytorch_ops.eltwise_identity,

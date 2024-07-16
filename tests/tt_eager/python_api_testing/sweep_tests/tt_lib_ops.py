@@ -2453,24 +2453,6 @@ def eltwise_rdiv(
 
 
 @setup_host_and_device
-def eltwise_rsub(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    factor = kwargs["factor"]
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rsub(t0, factor, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_identity(
     x,
     *args,

@@ -1210,6 +1210,23 @@ def eltwise_relu6(
     return ttnn_tensor_to_torch(t1)
 
 
+def eltwise_rsub(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    factor = kwargs["factor"]
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.rsub(t0, factor, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def eltwise_rsqrt(
     x,
     *args,
@@ -1220,10 +1237,10 @@ def eltwise_rsqrt(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.rsqrt(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return tt2torch_tensor(t1)
 
 
 def eltwise_sigmoid(

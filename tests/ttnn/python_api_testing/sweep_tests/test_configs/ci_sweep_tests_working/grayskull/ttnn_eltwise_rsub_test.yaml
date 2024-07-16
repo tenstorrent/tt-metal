@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-rsub:
+  - ttnn-eltwise-rsub:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]
@@ -21,11 +21,11 @@ test-list:
           - input-1:
             data-layout: ["TILE"]
             data-type: ["BFLOAT16"]
-            buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+            buffer-type: ["DRAM", "L1"]
           - input-2:
             data-layout: ["TILE"]
             data-type: ["BFLOAT16"]
-            buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+            buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
       output-file: eltwise_rsub_sweep.csv
       env:
