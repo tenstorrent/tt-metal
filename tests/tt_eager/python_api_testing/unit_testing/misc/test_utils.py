@@ -6,6 +6,11 @@ import tt_lib as ttl
 from models.utility_functions import is_wormhole_b0
 import copy
 
+
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+
+
 compute_kernel_options = [
     False,  # for grayskull
 ]

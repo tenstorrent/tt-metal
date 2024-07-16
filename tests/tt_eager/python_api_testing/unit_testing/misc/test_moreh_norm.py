@@ -16,10 +16,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     to_cpu,
     to_npu,
     compute_output_shape,
+    TILE_HEIGHT,
+    TILE_WIDTH,
 )
-
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
 
 def check_dim(input_shape, dim):

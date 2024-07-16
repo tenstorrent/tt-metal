@@ -18,10 +18,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     compute_kernel_ids,
     filter_indices,
     filter_indices_with_last_two,
+    TILE_HEIGHT,
+    TILE_WIDTH,
 )
-
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
 
 def is_npu_dtype_uint32(data_type):
