@@ -71,6 +71,7 @@ def run_test_update_cache_decode(
     assert eq_cache and eq_update
 
 
+@pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("check_memory", [False])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
@@ -269,6 +270,7 @@ def run_test_tensor_index_update_cache_decode(
     assert eq_cache and eq_update
 
 
+@pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
@@ -418,6 +420,7 @@ def run_test_paged_update_cache_decode(
     assert eq_cache and eq_update
 
 
+@pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
@@ -441,3 +444,66 @@ def test_paged_update_cache_decode(
     run_test_paged_update_cache_decode(
         cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
     )
+
+
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
+@pytest.mark.parametrize("cache_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_paged_update_cache_decode_program_caching(
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    device,
+    use_program_cache,
+):
+    dummy_tensors = []
+    for i in range(2):
+        # Create dram tensors to check for overflow
+        cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+        dram_low = ttl.tensor.Tensor(torch.zeros(cache_shape), cache_dtype).to(ttl.tensor.Layout.TILE).to(device)
+        dummy_tensors.append(dram_low)
+
+        # Create sharded tensors to check for overflow
+        input_shape = [1, num_users, num_heads, head_dim]
+        x = torch.zeros(input_shape)
+        x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+
+        xt = ttl.tensor.Tensor(x_pad, input_dtype).to(ttl.tensor.Layout.TILE)
+        # Input is sharded
+        compute_grid_size = device.compute_with_storage_grid_size()
+        num_cores = num_users
+        shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        input_shard_spec = ttl.tensor.ShardSpec(
+            shard_grid,
+            [
+                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
+                xt.get_legacy_shape()[-1],
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        input_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+        )
+        sharded_low = xt.to(device, input_mem_config)
+        dummy_tensors.append(sharded_low)
+
+        run_test_paged_update_cache_decode(
+            cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+        )
+
+        run_test_paged_update_cache_decode(
+            cache_idx + 10, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+        )
+
+    assert device.num_program_cache_entries() == 1
