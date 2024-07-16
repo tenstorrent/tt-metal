@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -569,6 +570,18 @@ Example:
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
 
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const Tensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                using ComplexUnaryBackwardOp = ttnn::operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<complex_unary_backward::ComplexUnaryBackwardOpType::COMPLEX_ABS_BW>;
+                return ComplexUnaryBackwardOp::execute_on_main_thread(grad_tensor, input_tensor_a, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::kw_only(),
+            py::arg("memory_config")},
 
         ttnn::pybind_overload_t{
             [](const unary_backward_operation_t& self,
