@@ -35,6 +35,4 @@ auto get_function_complex() {
     return &OpHandler_complex<OpType>::handle;
 }
 
-}
-
 }  // namespace ttnn::operations::complex_unary_backward

@@ -11,6 +11,7 @@ import torch
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
 import pytest
+import ttnn
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
@@ -827,7 +828,7 @@ def test_level2_polar_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.polar_bw(grad_tensor, input_tensor, memcfg)
+    tt_dev = ttnn.polar_bw(grad_tensor, input_tensor, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)
