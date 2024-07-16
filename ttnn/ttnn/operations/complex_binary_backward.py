@@ -47,10 +47,10 @@ def register_ttnn_cpp_complex_binary_function(complex_binary_function):
         return golden_tensor
 
     name_to_golden_function = {
-        "complex_add_bw": lambda x, y, grad_data: torch_complex_with_float(torch.add, x, y, grad_data),
-        "complex_sub_bw": lambda x, y, grad_data: torch_complex_with_float(torch.sub, x, y, grad_data),
-        "complex_mul_bw": lambda x, y, grad_data: torch_complex(torch.mul, x, y, grad_data),
-        "complex_div_bw": lambda x, y, grad_data: torch_complex(torch.div, x, y, grad_data),
+        "add_bw": lambda x, y, grad_data: torch_complex_with_float(torch.add, x, y, grad_data),
+        "sub_bw": lambda x, y, grad_data: torch_complex_with_float(torch.sub, x, y, grad_data),
+        "mul_bw": lambda x, y, grad_data: torch_complex(torch.mul, x, y, grad_data),
+        "div_bw": lambda x, y, grad_data: torch_complex(torch.div, x, y, grad_data),
     }
 
     golden_keys = set(name_to_golden_function.keys())
@@ -66,10 +66,10 @@ def register_ttnn_cpp_complex_binary_function(complex_binary_function):
 
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
-    ttnn.complex_add_bw,
-    ttnn.complex_sub_bw,
-    ttnn.complex_mul_bw,
-    ttnn.complex_div_bw,
+    ttnn.add_bw,
+    ttnn.sub_bw,
+    ttnn.mul_bw,
+    ttnn.div_bw,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_complex_binary_function(unary_function)
