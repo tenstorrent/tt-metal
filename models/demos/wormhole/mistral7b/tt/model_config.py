@@ -71,7 +71,7 @@ class TtModelArgs:
         ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MISTRAL_CACHE_PATH=..."
         # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         assert os.path.isfile(
-            self.DEFAULT_CACHE_PATH + "/consolidated.00.pth"
+            self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
         ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/mistral7b/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")

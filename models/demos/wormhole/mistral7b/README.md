@@ -66,6 +66,8 @@ The largest context length supported is 4096 tokens.
 
 Mistral-7B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 
+Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warning.
+
 ```
 # Run the demo with a pre-written batch of 32 user prompts:
 pytest models/demos/wormhole/mistral7b/demo/demo.py::test_demo[general_weights]
