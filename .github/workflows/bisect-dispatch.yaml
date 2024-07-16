@@ -28,6 +28,8 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '[ "${{ inputs.arch }}" ]'
     secrets: inherit
   test-dispatch:
     needs: build-artifact
@@ -54,4 +56,4 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/tt_bisect.sh -f ${{ inputs.command }} -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
+          ./tests/scripts/tt_bisect.sh -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
