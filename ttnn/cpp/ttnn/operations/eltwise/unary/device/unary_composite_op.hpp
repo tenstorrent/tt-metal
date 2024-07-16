@@ -34,29 +34,29 @@ enum class UnaryCompositeOpType {
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _acosh(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _asinh(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _atanh(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& );
-Tensor _cosh(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _digamma(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& );
-Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& );
-Tensor _mish(const Tensor& x, const std::optional<MemoryConfig>& );
-Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& );
-Tensor _sinh(const Tensor& , const std::optional<MemoryConfig>& );
-Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& );
-Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& );
-Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& );
-Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& );
-Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& );
-Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& );
-Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& );
-Tensor _std(const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& );
-Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  );
-Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& );
-Tensor _deg2rad(const Tensor& y, const std::optional<MemoryConfig>& );
-Tensor _rad2deg(const Tensor& y, const std::optional<MemoryConfig>& );
+Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _lgamma(const Tensor&,  const std::optional<MemoryConfig>&);
+Tensor _log1p(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mish(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _softsign(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _swish(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _trunc(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _variance_impl(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
+Tensor _variance_impl(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _variance(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
+Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _deg2rad(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _rad2deg(const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
