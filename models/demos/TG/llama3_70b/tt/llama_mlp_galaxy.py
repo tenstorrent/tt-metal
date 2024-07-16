@@ -27,6 +27,7 @@ class TtLlamaMLP_galaxy:
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
+        assert self.num_devices == 32, "Only 32 devices supported for TG"
         self.model_config = model_config
         self.read_cache = read_cache
         self.cluster_shape = cluster_shape
@@ -128,7 +129,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w1_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
-            # cache_file_name=self.cache_path / w1_cache_str,
+            cache_file_name=self.cache_path / w1_cache_str,
         )
 
         self.w3 = ttnn.as_tensor(
@@ -138,7 +139,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w1_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
-            # cache_file_name=self.cache_path / w3_cache_str,
+            cache_file_name=self.cache_path / w3_cache_str,
         )
 
         self.w2 = ttnn.as_tensor(
@@ -148,7 +149,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w2_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
-            # cache_file_name=self.cache_path / w2_cache_str,
+            cache_file_name=self.cache_path / w2_cache_str,
         )
 
     def __call__(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
@@ -203,6 +204,7 @@ class TtLlamaMLP_galaxy:
         gather of a multi-device tensor
         """
         concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
+        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
 
         out = ttnn.to_torch(
             tensors,
@@ -229,7 +231,7 @@ class TtLlamaMLP_galaxy:
             layout=ttnn.TILE_LAYOUT,
             memory_config=act_mem_config,
             device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
         )
 
         return out_tt

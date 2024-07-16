@@ -36,7 +36,7 @@ class TtLlamaAttention_galaxy:
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
-        assert self.num_devices == 32, "Only 32 devices supported for galaxy"
+        assert self.num_devices == 32, "Only 32 devices supported for TG"
         self.model_config = model_config
         self.read_cache = read_cache
         self.cluster_shape = cluster_shape
