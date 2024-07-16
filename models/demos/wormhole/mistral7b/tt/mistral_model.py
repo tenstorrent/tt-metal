@@ -6,7 +6,7 @@ import ttnn
 import torch
 import torch.nn as nn
 from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
-from models.demos.wormhole.mistral7b.tt.mistral_rms_norm import TtRMSNorm
+from models.common.rmsnorm import RMSNorm
 import ttnn
 from typing import Optional
 
@@ -46,19 +46,18 @@ class TtTransformer(nn.Module):
                 for i in layers
             ]
         )
-        self.norm = TtRMSNorm(
+        self.norm = RMSNorm(
             device=device,
+            dim=args.dim,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            dtype=dtype,
             layer_num=None,
+            weight_cache_path=weight_cache_path,
+            weight_dtype=dtype,
             weight_key="norm",
-            model_config=self.args.get_model_config(),
         )
-        self.state_dict = state_dict
 
         self.output_weight = ttnn.as_tensor(
-            self.state_dict["output.weight"].permute(1, 0),
+            state_dict["output.weight"].permute(1, 0),
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
