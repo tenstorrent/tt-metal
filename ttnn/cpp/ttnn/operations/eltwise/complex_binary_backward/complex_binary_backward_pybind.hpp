@@ -117,29 +117,6 @@ Example:
 }  // namespace detail
 
 
-void py_module(py::module& module) {
-    detail::bind_complex_binary_backward_w_float(
-        module,
-        ttnn::complex_add_bw,
-        R"doc(Performs backward operations for addition of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_complex_binary_backward_w_float(
-        module,
-        ttnn::complex_sub_bw,
-        R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_complex_binary_backward_wo_float(
-        module,
-        ttnn::complex_mul_bw,
-        R"doc(Performs backward operations for multiplication of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_complex_binary_backward_wo_float(
-        module,
-        ttnn::complex_div_bw,
-        R"doc(Performs backward operations for division of :attr:`input_tensor_a` and :attr:`input_tensor_b` complex tensors with given :attr:`grad_tensor`.)doc");
-
-}
-
 }  // namespace complex_binary_backward
 }  // namespace operations
 }  // namespace ttnn
