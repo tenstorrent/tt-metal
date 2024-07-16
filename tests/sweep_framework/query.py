@@ -65,6 +65,8 @@ def summary(ctx):
         colored("PASS", "light_green"),
         colored("FAIL (ASSERT/EXCEPTION)", "light_red"),
         colored("FAIL (CRASH/HANG)", "light_red"),
+        colored("FAIL (L1 Out of Mem)", "light_red"),
+        colored("FAIL (Watcher)", "light_red"),
         colored("NOT RUN", "light_grey"),
     ]
 
@@ -116,11 +118,17 @@ def summary(ctx):
                 fail_ch = client.count(
                     index=results_index, query={"match": {"status": str(TestStatus.FAIL_CRASH_HANG)}}
                 )["count"]
+                fail_l1 = client.count(
+                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_L1_OUT_OF_MEM)}}
+                )["count"]
+                fail_watcher = client.count(
+                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_WATCHER)}}
+                )["count"]
                 not_run = client.count(index=results_index, query={"match": {"status": str(TestStatus.NOT_RUN)}})[
                     "count"
                 ]
 
-            table.rows.append([passes, fail_ae, fail_ch, not_run], module_name)
+            table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], module_name)
     elif ctx.obj["batch_name"] is None:
         results_index = ctx.obj["module_name"] + "_test_results"
         if not ctx.obj["all"]:
@@ -158,11 +166,20 @@ def summary(ctx):
                     == str(TestStatus.FAIL_CRASH_HANG)
                     for bucket in bucket["group_by_vector_id"]["buckets"]
                 )
+                fail_l1 = sum(
+                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
+                    == str(TestStatus.FAIL_L1_OUT_OF_MEM)
+                    for bucket in bucket["group_by_vector_id"]["buckets"]
+                )
+                fail_watcher = sum(
+                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.FAIL_WATCHER)
+                    for bucket in bucket["group_by_vector_id"]["buckets"]
+                )
                 not_run = sum(
                     bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.NOT_RUN)
                     for bucket in bucket["group_by_vector_id"]["buckets"]
                 )
-                table.rows.append([passes, fail_ae, fail_ch, not_run], bucket["key"])
+                table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], bucket["key"])
         else:
             response = client.search(
                 index=results_index,
@@ -201,6 +218,28 @@ def summary(ctx):
                         }
                     },
                 )["count"]
+                fail_l1 = client.count(
+                    index=results_index,
+                    query={
+                        "bool": {
+                            "must": [
+                                {"match": {"status": str(TestStatus.FAIL_L1_OUT_OF_MEM)}},
+                                {"match": {"batch_name": batch}},
+                            ]
+                        }
+                    },
+                )["count"]
+                fail_watcher = client.count(
+                    index=results_index,
+                    query={
+                        "bool": {
+                            "must": [
+                                {"match": {"status": str(TestStatus.FAIL_WATCHER)}},
+                                {"match": {"batch_name": batch}},
+                            ]
+                        }
+                    },
+                )["count"]
                 not_run = client.count(
                     index=results_index,
                     query={
@@ -209,7 +248,7 @@ def summary(ctx):
                         }
                     },
                 )["count"]
-                table.rows.append([passes, fail_ae, fail_ch, not_run], batch)
+                table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], batch)
 
     elif ctx.obj["vector_id"] is None:
         results_index = ctx.obj["module_name"] + "_test_results"
@@ -236,8 +275,12 @@ def summary(ctx):
             fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(
                 TestStatus.FAIL_CRASH_HANG
             )
+            fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(
+                TestStatus.FAIL_L1_OUT_OF_MEM
+            )
+            fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.FAIL_WATCHER)
             not_run = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.NOT_RUN)
-            table.rows.append([passes, fail_ae, fail_ch, not_run], bucket["key"])
+            table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], bucket["key"])
 
     print(table)
     client.close()
