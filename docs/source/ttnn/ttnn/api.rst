@@ -261,6 +261,7 @@ Pointwise Unary
    ttnn/is_real
    ttnn/polar_bw
    ttnn/imag_bw
+   ttnn/real_bw
 
 Pointwise Binary
 ================
