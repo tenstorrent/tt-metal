@@ -11,6 +11,7 @@ run_t3000_ethernet_tests() {
 
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py ; fail+=$?
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_ring_latency_microbenchmark.py ; fail+=$?
+  pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_link_ping_latency.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -124,7 +125,7 @@ run_t3000_falcon40b_tests() {
 
 run_t3000_tests() {
   # Run ethernet tests
-  #run_t3000_ethernet_tests
+  run_t3000_ethernet_tests
 
   # Run tteager tests
   run_t3000_tteager_tests
