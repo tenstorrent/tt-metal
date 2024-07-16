@@ -8,13 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/transformer.hpp"
 
+#include "ttnn/operations/transformer/transformer.hpp"
+
+
+namespace ttnn::operations::transformer {
 namespace py = pybind11;
-
-namespace ttnn {
-namespace operations {
-namespace transformer {
 
 void py_module(py::module& module) {
 
@@ -177,7 +176,7 @@ void py_module(py::module& module) {
             py::arg("num_kv_heads") = std::nullopt,
             py::arg("transpose_key") = true,
             py::arg("memory_config") = std::nullopt});
+
 }
-}  // namespace transformer
-}  // namespace operations
-}  // namespace ttnn
+
+}  // namespace ttnn::operations::transformer
