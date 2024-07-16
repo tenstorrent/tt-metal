@@ -47,7 +47,14 @@ def test_demo_multichip(
     all_devices,
     use_program_cache,
     async_mode,
+    is_ci_env,
 ):
+    if is_ci_env:
+        if num_devices != 8 or (not expected_greedy_output_path and not expected_perf_metrics):
+            pytest.skip("Skipping test in CI since it provides redundant testing")
+    elif expected_greedy_output_path or expected_perf_metrics:
+        assert num_devices == 8, "8 devices are expected for perf and greedy output verification"
+
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     devices = get_devices_for_t3000(all_devices, num_devices)
 

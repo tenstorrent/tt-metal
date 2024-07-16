@@ -37,6 +37,13 @@ def function_level_defaults(reset_seeds):
     yield
 
 
+@pytest.fixture(scope="function")
+def is_ci_env():
+    if os.getenv("CI") == "true":
+        return True
+    return False
+
+
 @pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):
