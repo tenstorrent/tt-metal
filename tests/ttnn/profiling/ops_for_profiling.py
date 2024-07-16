@@ -1417,10 +1417,6 @@ def fill_ones_rm(x):
     )
 
 
-def groupnorm_no_weights(x):
-    tt_lib.tensor.groupnorm(input=x, group_size=32, eps=0.0001)
-
-
 def convert_conv_weight_tensor_to_tiled_layout(x):
     tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout(x, in1_block_h=32, in1_block_w=32)
 
@@ -2438,10 +2434,6 @@ def primary_add_layernorm(x, y, z):
     ttnn.layer_norm(x, residual_input_tensor=x, epsilon=0.0001, weight=y, bias=z)
 
 
-def groupnorm(x, y, z):
-    tt_lib.tensor.groupnorm(input=x, group_size=32, eps=0.0001, gamma=y, beta=z)
-
-
 def primary_moreh_groupnorm(x, y, z):
     tt_lib.operations.primary.moreh_groupnorm(
         input=x, num_groups=4, eps=0.0001, gamma=y, beta=y, are_required_outputs=(True, True, True), mean=z, rstd=z
@@ -2587,10 +2579,6 @@ all_ternary_ops = [
         "op": primary_layernorm,
         "name": "ttnn.layer_norm",
         "shape_func": norm_shapes_func,
-    },
-    {
-        "op": groupnorm,
-        "name": "tt_lib.tensor.groupnorm",
     },
     {
         "op": rmsnorm,

@@ -875,14 +875,6 @@ def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, outpu
 
 
 @setup_host_and_device
-def groupnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, None, None, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def add_layernorm_noweights(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -3184,22 +3176,6 @@ def rmsnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
     t1 = ttnn.rms_norm(t0, epsilon=1e-5, weight=t1, bias=t2, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def groupnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    x_shape = x.shape
-
-    target_y = y.expand(x_shape)
-    target_z = z.expand(x_shape)
-
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(target_y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(target_z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
