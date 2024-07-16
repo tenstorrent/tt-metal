@@ -66,7 +66,7 @@ void MAIN {
         cb_wait_front(cb_correct_xpow, onetile);
         cb_reserve_back(cb_tmp4, onetile);
 
-		tile_regs_acquire();
+        tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_tiles_bcast_scalar_init_short_with_dt(cb_correct_xpow, cb_y);
             mul_tiles_bcast_scalar(cb_correct_xpow, cb_y, 0, 0, dst0);
@@ -80,11 +80,11 @@ void MAIN {
             mul_tiles_init_with_dt(cb_correct_xpow, cb_y);
             mul_tiles(cb_correct_xpow, cb_y, 0, 0, dst0);
         }
-		tile_regs_commit();
+        tile_regs_commit();
 
-		tile_regs_wait();
+        tile_regs_wait();
         pack_tile_with_dt(dst0, cb_tmp4);
-		tile_regs_release();
+        tile_regs_release();
 
         cb_pop_front(cb_correct_xpow, onetile);
         cb_push_back(cb_tmp4, onetile);
@@ -93,7 +93,7 @@ void MAIN {
         cb_wait_front(cb_tmp4, onetile);
         cb_reserve_back(cb_tmp5, onetile);
 
-		tile_regs_acquire();
+        tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp4, cb_dy);
             mul_tiles_bcast_scalar(cb_tmp4, cb_dy, 0, 0, dst0);
@@ -107,11 +107,11 @@ void MAIN {
             mul_tiles_init_with_dt(cb_tmp4, cb_dy);
             mul_tiles(cb_tmp4, cb_dy, 0, 0, dst0);
         }
-		tile_regs_commit();
+        tile_regs_commit();
 
-		tile_regs_wait();
+        tile_regs_wait();
         pack_tile_with_dt(dst0, cb_tmp5);
-		tile_regs_release();
+        tile_regs_release();
 
         cb_pop_front(cb_tmp4, onetile);
         cb_push_back(cb_tmp5, onetile);
@@ -124,7 +124,7 @@ void MAIN {
         cb_wait_front(cb_recip_ypow, onetile);
         cb_reserve_back(cb_tmp4, onetile);
 
-		tile_regs_acquire();
+        tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp5, cb_recip_ypow);
             mul_tiles_bcast_scalar(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
@@ -138,11 +138,11 @@ void MAIN {
             mul_tiles_init_with_dt(cb_tmp5, cb_recip_ypow);
             mul_tiles(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
         }
-		tile_regs_commit();
+        tile_regs_commit();
 
-		tile_regs_wait();
+        tile_regs_wait();
         pack_tile_with_dt(dst0, cb_tmp4);
-		tile_regs_release();
+        tile_regs_release();
 
         cb_pop_front(cb_tmp5, onetile);
         cb_pop_front(cb_recip_ypow, onetile);
@@ -152,7 +152,6 @@ void MAIN {
 
         // muliply abs sign
         mul_tiles_to_cb(cb_sign, cb_tmp4, cb_dx, 0, 0);
-
     }
 
     cb_pop_front(cb_decimal, onetile);

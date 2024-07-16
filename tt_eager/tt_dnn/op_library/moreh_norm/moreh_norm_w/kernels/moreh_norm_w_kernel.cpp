@@ -93,33 +93,33 @@ void MAIN {
 
             // Add(|x|^p)
             if (col_idx == 0) {
-		        tile_regs_acquire();
+                tile_regs_acquire();
                 cb_wait_front(cb_correct_xpow, onetile);
                 cb_reserve_back(cb_xpowadd, onetile);
 
                 copy_tile_init_with_dt(cb_correct_xpow);
                 copy_tile(cb_correct_xpow, 0, dst0);
-				tile_regs_commit();
+                tile_regs_commit();
 
-				tile_regs_wait();
+                tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_xpowadd);
-				tile_regs_release();
+                tile_regs_release();
 
                 cb_pop_front(cb_correct_xpow, onetile);
                 cb_push_back(cb_xpowadd, onetile);
             } else {
-		        tile_regs_acquire();
+                tile_regs_acquire();
                 cb_wait_front(cb_correct_xpow, onetile);
                 cb_wait_front(cb_xpowadd, onetile);
                 cb_reserve_back(cb_xpowadd, onetile);
 
                 add_tiles_init_with_dt(cb_correct_xpow, cb_xpowadd);
                 add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
-				tile_regs_commit();
+                tile_regs_commit();
 
-				tile_regs_wait();
+                tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_xpowadd);
-				tile_regs_release();
+                tile_regs_release();
 
                 cb_pop_front(cb_correct_xpow, onetile);
                 cb_pop_front(cb_xpowadd, onetile);
@@ -127,18 +127,18 @@ void MAIN {
             }
         }
         // Sum(|x|^p)
-		tile_regs_acquire();
+        tile_regs_acquire();
         cb_wait_front(cb_xpowadd, onetile);
         cb_reserve_back(cb_xpowsum, onetile);
 
         reduce_init_delta_with_dt<false>(cb_xpowsum, cb_xpowadd, cb_one);
         reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
         reduce_revert_delta(cb_xpowsum);
-		tile_regs_commit();
+        tile_regs_commit();
 
-		tile_regs_wait();
+        tile_regs_wait();
         pack_tile_with_dt(dst0, cb_xpowsum);
-		tile_regs_release();
+        tile_regs_release();
 
         cb_pop_front(cb_xpowadd, onetile);
         cb_push_back(cb_xpowsum, onetile);
