@@ -1096,9 +1096,8 @@ struct from_json_t<T> {
             [&object, &json_object](auto I) {
                 const auto& attribute_name = reflect::member_name<I>(object);
                 const auto& attribute = reflect::get<I>(object);
-                if (json_object.contains(attribute_name)) {
-                    reflect::get<I>(object) = from_json<std::decay_t<decltype(attribute)>>(json_object[attribute_name]);
-                }
+                reflect::get<I>(object) =
+                    from_json<std::decay_t<decltype(attribute)>>(json_object[std::string{attribute_name}]);
             },
             object);
         return object;
