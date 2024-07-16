@@ -349,10 +349,11 @@ inline auto run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
 }
 
+template<class F, class OutputType=Tensors>
 void launch_op(
-    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
+    F&& op_func,
     const Tensors input_tensors,
-    Tensors& output_tensors,
+    OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
     const OptionalTensors optional_output_tensors = {},
     bool enable_autoformat_device = true
@@ -378,3 +379,5 @@ namespace detail{
 } //namespace operation
 
 } //namespace tt::tt_metal
+
+#include"run_operation_inl.hpp"
