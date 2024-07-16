@@ -153,6 +153,10 @@ class resnet50Bottleneck:
         reshard_if_not_optimal=False,
         height_sharding=None,
         transpose_shards=True,
+        packer_l1_accum_enabled=True if is_wormhole_b0() else False,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
     ):
         if self.downsample:
             logger.debug(f"Running downsample")
@@ -178,6 +182,10 @@ class resnet50Bottleneck:
                     reallocate_halo_output=not (is_wormhole_b0() and batch_size == 16),
                     reshard_if_not_optimal=reshard_if_not_optimal,
                     transpose_shards=transpose_shards,
+                    packer_l1_accum_enabled=packer_l1_accum_enabled,
+                    enable_act_double_buffer=enable_act_double_buffer,
+                    enable_split_reader=enable_split_reader,
+                    enable_subblock_padding=enable_subblock_padding,
                 ),
                 conv_op_cache=conv_op_cache,
             )
@@ -199,6 +207,10 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
         transpose_shards=True,
+        packer_l1_acc=True if is_wormhole_b0() else False,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
     ):
         logger.debug(
             f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
@@ -248,6 +260,7 @@ class resnet50Bottleneck:
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
+                packer_l1_accum_enabled=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -297,6 +310,10 @@ class resnet50Bottleneck:
                 reshard_if_not_optimal,
                 height_sharding,
                 transpose_shards=transpose_shards,
+                packer_l1_accum_enabled=packer_l1_acc,
+                enable_act_double_buffer=False,
+                enable_split_reader=enable_split_reader,
+                enable_subblock_padding=enable_subblock_padding,
             )
 
         reallocate_halo_output = batch_size == 20
@@ -325,6 +342,10 @@ class resnet50Bottleneck:
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
+                packer_l1_accum_enabled=packer_l1_acc,
+                enable_act_double_buffer=enable_act_double_buffer,
+                enable_split_reader=enable_split_reader,
+                enable_subblock_padding=enable_subblock_padding,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -365,6 +386,7 @@ class resnet50Bottleneck:
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
+                packer_l1_accum_enabled=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -392,6 +414,10 @@ class resnet50Bottleneck:
                 ds_reshard,
                 height_sharding,
                 transpose_shards=transpose_shards,
+                packer_l1_accum_enabled=packer_l1_acc,
+                enable_act_double_buffer=enable_act_double_buffer,
+                enable_split_reader=enable_split_reader,
+                enable_subblock_padding=enable_subblock_padding,
             )
 
         assert ttnn.get_memory_config(out) == ttnn.get_memory_config(
@@ -450,7 +476,7 @@ class resnet50:
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,
             )
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
@@ -550,7 +576,14 @@ class resnet50:
                 act_block_h_override = 640
         else:
             act_block_h_override = 0
-        input_channels_alignment = 16 if not is_wormhole_b0() else 32
+        # input_channels_alignment = 16 if not is_wormhole_b0() else 32
+        whb0_and_b16 = is_wormhole_b0() and self.batch_size == 16
+        if not is_wormhole_b0():
+            input_channels_alignment = 16
+        elif whb0_and_b16:
+            input_channels_alignment = 16
+        else:
+            input_channels_alignment = 32
         self.conv1_config = ttnn.Conv2dConfig(
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -560,7 +593,13 @@ class resnet50:
             input_channels_alignment=input_channels_alignment,
             act_block_h_override=act_block_h_override,
             transpose_shards=self.transpose_shards,
+            packer_l1_accum_enabled=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=True if whb0_and_b16 else False,
+            enable_subblock_padding=False,
         )
+        if whb0_and_b16:
+            self.conv1_config.act_block_h_override = 256
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -653,7 +692,6 @@ class resnet50:
             conv_op_cache=conv_op_cache,
         )
         # Relu is fused with conv1
-
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
 
@@ -694,6 +732,8 @@ class resnet50:
             else:
                 x = ttnn.to_memory_config(x, ops_parallel_config["layer1_module1_input"])
 
+        whb0_and_b16 = is_wormhole_b0() and self.batch_size == 16
+
         x, x_height, x_width = self.layer1_module1(
             x,
             device,
@@ -704,6 +744,9 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=True if whb0_and_b16 else False,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         if is_first_run:
@@ -718,12 +761,30 @@ class resnet50:
 
         logger.debug(f"==== Running layer 1 module 2")
         x, x_height, x_width = self.layer1_module2(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=False,
+            enable_split_reader=True if whb0_and_b16 else False,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         logger.debug(f"==== Running layer 1 module 3")
         x, x_height, x_width = self.layer1_module3(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=False,
+            enable_split_reader=True if whb0_and_b16 else False,
+            enable_subblock_padding=True if whb0_and_b16 else False,
         )
 
         if self.batch_size == 20 and is_wormhole_b0():
@@ -751,6 +812,9 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         if is_first_run:
@@ -765,17 +829,44 @@ class resnet50:
 
         logger.debug(f"==== Running layer 2 module 2")
         x, x_height, x_width = self.layer2_module2(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 2 module 3")
         x, x_height, x_width = self.layer2_module3(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 2 module 4")
         x, x_height, x_width = self.layer2_module4(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         layer3_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
@@ -799,6 +890,9 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         if is_first_run:
@@ -813,22 +907,58 @@ class resnet50:
 
         logger.debug(f"==== Running layer 3 module 2")
         x, x_height, x_width = self.layer3_module2(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 3 module 3")
         x, x_height, x_width = self.layer3_module3(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 3 module 4")
         x, x_height, x_width = self.layer3_module4(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 3 module 5")
         x, x_height, x_width = self.layer3_module5(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 3 module 6")
@@ -841,6 +971,9 @@ class resnet50:
             conv_op_cache,
             eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         if is_wormhole_b0() and self.batch_size == 16:
@@ -878,6 +1011,9 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         if is_first_run:
@@ -892,12 +1028,30 @@ class resnet50:
 
         logger.debug(f"==== Running layer 4 module 2")
         x, x_height, x_width = self.layer4_module2(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         logger.debug(f"==== Running layer 4 module 3")
         x, x_height, x_width = self.layer4_module3(
-            x, device, self.batch_size, x_height, x_width, conv_op_cache, transpose_shards=self.transpose_shards
+            x,
+            device,
+            self.batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            transpose_shards=self.transpose_shards,
+            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
         )
 
         grid_size = (8, 4)

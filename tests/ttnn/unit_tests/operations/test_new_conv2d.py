@@ -71,8 +71,10 @@ def run_conv(
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -107,10 +109,15 @@ def run_conv(
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
         height_sharding=use_1d_systolic_array,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
+        input_channels_alignment=(
+            16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
+        ),
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -142,6 +149,7 @@ def run_conv(
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
     # if enable_auto_formatting:
     #     torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
     #     torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
@@ -405,7 +413,7 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
         # rn50 layer1
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),

@@ -42,7 +42,7 @@ struct OptimizedConvBlockConfig {
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
     vector<int> conv_params,
     uint32_t output_channels,
@@ -53,7 +53,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    Tensor& output);
+    Tensor& output,
+    bool enable_act_double_buffer,
+    bool enable_split_reader,
+    bool enable_subblock_padding);
 
 struct OptimizedConv {
     OptimizedConvParallelizationConfig parallelization_config;
@@ -70,13 +73,16 @@ struct OptimizedConv {
     bool use_shallow_conv_variant;
     bool transpose_mcast;   // default for GS = true, WH = false
     const DeviceComputeKernelConfig compute_kernel_config;
+    bool enable_act_double_buffer;
+    bool enable_split_reader;
+    bool enable_subblock_padding;
     OptimizedConv(const std::vector<int>&c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment,
-        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, bool transpose_mcast, const DeviceComputeKernelConfig compute_kernel_config) :
+        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, bool transpose_mcast, const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -89,7 +95,10 @@ struct OptimizedConv {
             output_mem_config(output_mem_config), output_dtype(output_dtype), input_tensor_shape(input_tensor_shape),
             use_shallow_conv_variant(use_shallow_conv_variant),
             transpose_mcast(transpose_mcast),
-            compute_kernel_config(compute_kernel_config) {}
+            compute_kernel_config(compute_kernel_config),
+            enable_act_double_buffer(enable_act_double_buffer),
+            enable_split_reader(enable_split_reader),
+            enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -111,7 +120,10 @@ struct OptimizedConv {
         "output_mem_config",
         "output_dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant");
+        "use_shallow_conv_variant",
+        "enable_act_double_buffer",
+        "enable_split_reader",
+        "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -126,7 +138,10 @@ struct OptimizedConv {
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant));
+            std::cref(this->use_shallow_conv_variant),
+            std::cref(this->enable_act_double_buffer),
+            std::cref(this->enable_split_reader),
+            std::cref(this->enable_subblock_padding));
     }
 };
 
@@ -140,7 +155,10 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
     std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
     bool use_shallow_conv_variant = false,
     bool tranpose_mcast = true,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool enable_act_double_buffer = false,
+    bool enable_split_reader = false,
+    bool enable_subblock_padding = false
 );
 
 // new micro op
@@ -157,6 +175,9 @@ struct OptimizedConvNew {
     std::array<std::uint32_t, 4> input_tensor_shape; // For sharded input, input tensor shape is nonsense
     bool use_shallow_conv_variant;
     const DeviceComputeKernelConfig compute_kernel_config;
+    bool enable_act_double_buffer;
+    bool enable_split_reader;
+    bool enable_subblock_padding;
     OptimizedConvNew(const vector<int>& c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
@@ -165,7 +186,7 @@ struct OptimizedConvNew {
         uint32_t e_padding_for_32B_alignment, MemoryConfig out_mem_config,
         DataType output_dtype,
         std::array<std::uint32_t, 4> input_tensor_shape, bool use_shallow_conv_variant,
-        const DeviceComputeKernelConfig compute_kernel_config) :
+        const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -178,7 +199,10 @@ struct OptimizedConvNew {
             output_mem_config(out_mem_config),
             output_dtype(output_dtype), input_tensor_shape(input_tensor_shape),
             use_shallow_conv_variant(use_shallow_conv_variant),
-            compute_kernel_config(compute_kernel_config) {}
+            compute_kernel_config(compute_kernel_config),
+            enable_act_double_buffer(enable_act_double_buffer),
+            enable_split_reader(enable_split_reader),
+            enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -199,7 +223,10 @@ struct OptimizedConvNew {
         "extra_padding_for_32B_alignment",
         "output_dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant");
+        "use_shallow_conv_variant",
+        "enable_act_double_buffer",
+        "enable_split_reader",
+        "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -213,7 +240,10 @@ struct OptimizedConvNew {
             std::cref(this->extra_padding_for_32B_alignment),
             std::cref(this->output_dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant));
+            std::cref(this->use_shallow_conv_variant),
+            std::cref(this->enable_act_double_buffer),
+            std::cref(this->enable_split_reader),
+            std::cref(this->enable_subblock_padding));
     }
 };
 
@@ -227,7 +257,10 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool enable_act_double_buffer = false,
+    bool enable_split_reader = false,
+    bool enable_subblock_padding = false
 );
 
 }  // namespace tt_metal

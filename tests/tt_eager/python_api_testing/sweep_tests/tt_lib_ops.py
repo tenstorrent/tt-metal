@@ -403,12 +403,18 @@ def eltwise_rsqrt(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    input_shape = t0.shape
-    t0 = t0.cpu().pad_to_tile(0)
-    t0 = t0.to(ttl.tensor.Layout.TILE)
-    t0 = t0.to(device)
-    t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
-    t1 = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(input_shape)
+
+    if t0.layout == ttnn.TILE_LAYOUT:
+        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+    else:
+        # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
+        # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
+        input_shape = t0.shape
+        t0 = t0.cpu().pad_to_tile(0)
+        t0 = t0.to(ttl.tensor.Layout.TILE)
+        t0 = t0.to(device)
+        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(input_shape)
 
     return tt2torch_tensor(t1)
 
@@ -835,7 +841,7 @@ def conv(
 @setup_host_and_device
 def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.operations.primary.layernorm(t0, 1e-5, None, None, output_mem_config=output_mem_config)
+    t1 = ttnn.layer_norm(t0, epsilon=1e-5, weight=None, bias=None, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -852,7 +858,9 @@ def groupnorm_noweights(x, *args, device, dtype, layout, input_mem_config, outpu
 def add_layernorm_noweights(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, None, None, output_mem_config=output_mem_config)
+    t2 = ttnn.layer_norm(
+        t0, residual_input_tensor=t1, epsilon=1e-5, weight=None, bias=None, memory_config=output_mem_config
+    )
 
     return tt2torch_tensor(t2)
 
@@ -868,7 +876,7 @@ def layernorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_me
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
+    t3 = ttnn.layer_norm(t0, epsilon=1e-5, weight=t1, bias=t2, memory_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
@@ -891,7 +899,9 @@ def add_layernorm(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = setup_tt_tensor(w, device, layout[2], input_mem_config[2], dtype[2])
-    t4 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, t2, t3, output_mem_config=output_mem_config)
+    t4 = ttnn.layer_norm(
+        t0, residual_input_tensor=t1, epsilon=1e-5, weight=t2, bias=t3, memory_config=output_mem_config
+    )
 
     return tt2torch_tensor(t4)
 
@@ -2670,8 +2680,8 @@ eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
-eltwise_rad2deg = make_unary_op(ttl.tensor.rad2deg)
-eltwise_deg2rad = make_unary_op(ttl.tensor.deg2rad)
+eltwise_rad2deg = make_unary_op_optional_output(ttnn.rad2deg)
+eltwise_deg2rad = make_unary_op_optional_output(ttnn.deg2rad)
 eltwise_sign = make_unary_op_optional_output(ttnn.sign)
 eltwise_signbit = make_unary_op_optional_output(ttnn.signbit)
 eltwise_abs = make_unary_op_optional_output(ttnn.abs)
@@ -3108,7 +3118,7 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
 @setup_host_and_device
 def rmsnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.rmsnorm(t0, 1e-5, None, None, output_mem_config=output_mem_config)
+    t1 = ttnn.rms_norm(t0, epsilon=1e-5, weight=None, bias=None, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -3125,7 +3135,7 @@ def rmsnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t1 = ttl.tensor.rmsnorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
+    t1 = ttnn.rms_norm(t0, epsilon=1e-5, weight=t1, bias=t2, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

@@ -9,7 +9,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-//#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -130,10 +130,12 @@ void MAIN {
     constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
 
     #ifdef SPLIT_READER
-    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks / 2;
+    constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
+    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks - in0_num_subblocks_read_last;
     #else
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
     #endif
+
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
     #ifdef SFPU_OP_INIT_ACTIVATION
@@ -179,7 +181,7 @@ void MAIN {
 
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                     #ifdef SPLIT_READER
-                    tilize_in(in0_cb_second_reader_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                    tilize_in(in0_cb_second_reader_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
                     #endif
 
                     mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);

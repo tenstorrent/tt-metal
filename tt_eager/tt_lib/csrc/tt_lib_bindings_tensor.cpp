@@ -12,12 +12,10 @@
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/downsample/downsample_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "tt_dnn/op_library/pool/average_pool.hpp"
@@ -410,24 +408,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
 
-    m_tensor.def(
-        "downsample",
-        &downsample,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        R"doc(
-        Performs a downsample on the input of a conv with a stride > 1 and a kernel window 1x1
-        This op can be followed by a regular matmul to perform the conv1x1 with stride=1 operation
-
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-        | Argument          | Description                                                                       | Data type     | Valid range | Required |
-        +===================+===================================================================================+===============+=============+==========+
-        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
-        | downsample_params | Params list: batch size, conv input H, conv input W, conv stride H, conv stride W | uint32_t      |             | Yes      |
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-    )doc");
-
     m_tensor.def("conv", &conv, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
@@ -500,6 +480,9 @@ void TensorModule(py::module& m_tensor) {
         py::arg("use_shallow_conv_variant").noconvert() = false,
         py::arg("transpose_mcast").noconvert() = true,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("enable_act_double_buffer").noconvert() = false,
+        py::arg("enable_split_reader").noconvert() = false,
+        py::arg("enable_subblock_padding").noconvert() = false,
         R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
@@ -577,57 +560,6 @@ void TensorModule(py::module& m_tensor) {
         "Performs a groupnorm operation on the channel dimension grouped per group_size, with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
-    // layernorm
-    m_tensor.def(
-        "layernorm",
-        layernorm,
-        py::arg("input").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-    )doc");
-    m_tensor.def(
-        "add_layernorm",
-        add_layernorm,
-        py::arg("a").noconvert(),
-        py::arg("b").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a layernorm(a+b)*gamma + beta operation."
-    )doc");
-    m_tensor.def(
-        "rmsnorm",
-        rmsnorm,
-        py::arg("input").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-    )doc");
-    m_tensor.def(
-        "add_rmsnorm",
-        add_rmsnorm,
-        py::arg("a").noconvert(),
-        py::arg("b").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a rmsnorm(a+b)*gamma + beta operation.
-    )doc");
     m_tensor.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,

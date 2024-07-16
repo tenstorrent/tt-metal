@@ -9,7 +9,6 @@
 
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
@@ -53,78 +52,6 @@ namespace primary {
 void py_module(py::module& m_primary) {
     auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
     transformers::py_module(m_transformers);
-
-    py::class_<LayerNormDefaultProgramConfig>(m_primary, "LayerNormDefaultProgramConfig").def(py::init<>());
-
-    py::class_<LayerNormShardedMultiCoreProgramConfig>(m_primary, "LayerNormShardedMultiCoreProgramConfig")
-        .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool>(),
-            py::kw_only(),
-            py::arg("compute_with_storage_grid_size"),
-            py::arg("subblock_w").noconvert(),
-            py::arg("block_h").noconvert(),
-            py::arg("block_w").noconvert(),
-            py::arg("inplace").noconvert())
-        .def(
-            "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
-
-    m_primary.def(
-        "layernorm",
-        tt::operations::primary::layernorm,
-        py::arg("input").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-        )doc");
-
-    m_primary.def(
-        "add_layernorm",
-        tt::operations::primary::add_layernorm,
-        py::arg("a").noconvert(),
-        py::arg("b").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs a layernorm(a+b)*gamma + beta operation.
-        )doc");
-
-    m_primary.def(
-        "rmsnorm",
-        tt::operations::primary::rmsnorm,
-        py::arg("input").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-        )doc");
-
-    m_primary.def(
-        "add_rmsnorm",
-        tt::operations::primary::add_rmsnorm,
-        py::arg("a").noconvert(),
-        py::arg("b").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs a rmsnorm(a+b)*gamma + beta operation.
-        )doc");
 
     m_primary.def(
         "layernorm_pre_allgather",
@@ -448,23 +375,6 @@ void py_module(py::module& m_primary) {
         py::arg("memory_config").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm_backward operation.");
-
-    m_primary.def(
-        "relu",
-        &tt::operations::primary::relu,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``input``.
-
-        Input tensor must have TILE layout. Output tensor will have TILE layout.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Tensor RELU is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
 
     m_primary.def(
         "bcast",

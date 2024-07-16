@@ -81,6 +81,7 @@ class MambaTT(torch.nn.Module):
         self.device = device
         self.tt_cache_path = tt_cache_path
         self.configs = configs
+        self.return_logits = True
 
         if num_layers is None:
             self.num_layers = len(reference_model.layers)
@@ -112,6 +113,15 @@ class MambaTT(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
 
+    def to_prefill(self):
+        self.return_logits = False
+
+    def to_decode(self, decode_config):
+        self.configs = decode_config
+        self.return_logits = True
+        for i in range(self.num_layers):
+            self.layers[i].to_decode(decode_config)
+
     def forward(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
 
@@ -132,26 +142,25 @@ class MambaTT(torch.nn.Module):
             # print(f"Running layer {i}")
             x = layer(x)
 
-        x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
-        x = ttnn.experimental.operations.primary.rmsnorm(
-            x,
-            self.args.eps,
-            self.norm_f_weights,
-            program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
-            output_mem_config=self.configs["sharded_h"],
-        )
-        x = ttnn.experimental.tensor.sharded_to_interleaved(x)
-        x = ttnn.linear(
-            x,
-            self.lm_head_weights,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=x.device().core_grid,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=self.configs["dtype"]["activations"],
-        )
+        if self.return_logits or self.configs["mode"] == ModelMode.DECODE:
+            x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+            x = ttnn.rms_norm(
+                x,
+                epsilon=self.args.eps,
+                weight=self.norm_f_weights,
+                program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
+                memory_config=self.configs["sharded_h"],
+            )
+            x = ttnn.experimental.tensor.sharded_to_interleaved(x)
+            x = ttnn.linear(
+                x,
+                self.lm_head_weights,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=x.device().core_grid,
+                compute_kernel_config=self.compute_kernel_config,
+                dtype=self.configs["dtype"]["activations"],
+            )
+            x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
+            x = x.view((self.configs["batch_size"], self.configs["seq_len"], -1))
 
-        x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
-
-        x = x.view((self.args.batch_size, self.configs["seq_len"], -1))
-
-        return x
+            return x

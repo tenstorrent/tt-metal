@@ -30,7 +30,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-perf"]
+    runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "pipeline-perf"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Enable performance mode

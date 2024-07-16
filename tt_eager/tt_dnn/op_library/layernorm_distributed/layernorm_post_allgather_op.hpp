@@ -8,7 +8,7 @@
 
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_eager/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "ttnn/operations/core.hpp"
 

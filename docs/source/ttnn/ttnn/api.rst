@@ -174,6 +174,13 @@ Pointwise Unary
    ttnn/hardtanh_bw
    ttnn/threshold_bw
    ttnn/softplus_bw
+   ttnn/div_bw
+   ttnn/rdiv_bw
+   ttnn/bias_gelu_bw
+   ttnn/pow_bw
+   ttnn/exp_bw
+   ttnn/tanh_bw
+   ttnn/sqrt_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
@@ -292,10 +299,8 @@ Pointwise Binary
    ttnn/squared_difference_bw
    ttnn/concat_bw
    ttnn/rsub_bw
-   ttnn/bias_gelu_bw
    ttnn/min_bw
    ttnn/max_bw
-   ttnn/div_bw
    ttnn/lerp_bw
 
 Pointwise Ternary
@@ -395,6 +400,7 @@ Vision
    :maxdepth: 1
 
    ttnn/upsample
+   ttnn/downsample
 
 KV Cache
 ========

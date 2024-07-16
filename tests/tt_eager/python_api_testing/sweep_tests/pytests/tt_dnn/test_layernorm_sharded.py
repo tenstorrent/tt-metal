@@ -9,6 +9,8 @@ import torch
 
 import tt_lib as ttl
 
+import ttnn
+
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -62,7 +64,7 @@ per_core_ks = [32, 64, 128]
 )
 @pytest.mark.parametrize(
     "tt_lib_fn, ref_fn",
-    [(ttl.operations.primary.layernorm, torch.nn.functional.layer_norm), (ttl.operations.primary.rmsnorm, rmsnorm)],
+    [(ttnn.layer_norm, torch.nn.functional.layer_norm), (ttnn.rms_norm, rmsnorm)],
     ids=["LayerNorm", "RMSNorm"],
 )
 def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, tt_lib_fn, ref_fn):
@@ -131,7 +133,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(device, gamma_beta_mem_config)
 
-    program_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=per_core_k // 32,
         block_h=seq_len // 32,
@@ -143,27 +145,27 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
         logger.info("Running LN")
         ttz = tt_lib_fn(
             in0_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
     if test_id == 1:
         logger.info("Running LN_G")
         ttz = tt_lib_fn(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
     if test_id == 2:
         logger.info("Running LN_GB")
         ttz = tt_lib_fn(
             in0_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
 
@@ -215,8 +217,8 @@ per_core_ks = [32, 64, 128]
 @pytest.mark.parametrize(
     "tt_lib_fn, ref_fn",
     [
-        (ttl.operations.primary.add_layernorm, torch.nn.functional.layer_norm),
-        (ttl.operations.primary.add_rmsnorm, rmsnorm),
+        (ttnn.layer_norm, torch.nn.functional.layer_norm),
+        (ttnn.rms_norm, rmsnorm),
     ],
     ids=["LayerNorm", "RMSNorm"],
 )
@@ -286,7 +288,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(device, gamma_beta_mem_config)
 
-    program_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=per_core_k // 32,
         block_h=seq_len // 32,
@@ -298,30 +300,30 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         logger.info("Running add_LN")
         ttz = tt_lib_fn(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
     if test_id == 1:
         logger.info("Running add_LN_G")
         ttz = tt_lib_fn(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
     if test_id == 2:
         logger.info("Running add_LN_GB")
         ttz = tt_lib_fn(
             in0_t_shard,
-            in1_t_shard,
-            epsf,
-            gamma_t,
-            beta_t,
-            output_mem_config=out_mem_config,
+            residual_input_tensor=in1_t_shard,
+            epsilon=epsf,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=out_mem_config,
             program_config=program_config,
         )
 

@@ -51,7 +51,7 @@ class TtTrOCRDecoderLayer(nn.Module):
             put_on_device=True,
         )
 
-        self.self_attn_layer_norm = tt_lib.tensor.layernorm
+        self.self_attn_layer_norm = ttnn.layer_norm
 
         if config.is_decoder:
             self.encoder_attn = TtTrOCRAttention(
@@ -80,7 +80,7 @@ class TtTrOCRDecoderLayer(nn.Module):
                 put_on_device=True,
             )
 
-            self.encoder_attn_layer_norm = tt_lib.tensor.layernorm
+            self.encoder_attn_layer_norm = ttnn.layer_norm
 
         self.fc1_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.fc1.weight"], self.device, put_on_device=False
@@ -104,7 +104,7 @@ class TtTrOCRDecoderLayer(nn.Module):
             self.device,
             put_on_device=True,
         )
-        self.final_layer_norm = tt_lib.tensor.layernorm
+        self.final_layer_norm = ttnn.layer_norm
 
     def forward(
         self,
@@ -136,9 +136,9 @@ class TtTrOCRDecoderLayer(nn.Module):
         hidden_states = ttnn.add(residual, hidden_states)
         hidden_states = self.self_attn_layer_norm(
             hidden_states,
-            eps=1e-05,
-            gamma=self.self_attn_layer_norm_weight,
-            beta=self.self_attn_layer_norm_bias,
+            epsilon=1e-05,
+            weight=self.self_attn_layer_norm_weight,
+            bias=self.self_attn_layer_norm_bias,
         )
 
         # Cross-Attention Block
@@ -166,9 +166,9 @@ class TtTrOCRDecoderLayer(nn.Module):
             hidden_states = residual + hidden_states
             hidden_states = self.encoder_attn_layer_norm(
                 hidden_states,
-                eps=1e-05,
-                gamma=self.encoder_attn_layer_norm_weight,
-                beta=self.encoder_attn_layer_norm_bias,
+                epsilon=1e-05,
+                weight=self.encoder_attn_layer_norm_weight,
+                bias=self.encoder_attn_layer_norm_bias,
             )
 
             # add cross-attn to positions 3,4 of present_key_value tuple
@@ -182,9 +182,9 @@ class TtTrOCRDecoderLayer(nn.Module):
         hidden_states = ttnn.add(residual, hidden_states)
         hidden_states = self.final_layer_norm(
             hidden_states,
-            eps=1e-05,
-            gamma=self.final_layer_norm_weight,
-            beta=self.final_layer_norm_bias,
+            epsilon=1e-05,
+            weight=self.final_layer_norm_weight,
+            bias=self.final_layer_norm_bias,
         )
 
         outputs = (hidden_states,)

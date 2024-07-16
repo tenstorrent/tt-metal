@@ -43,6 +43,9 @@ struct Conv2dConfig {
     std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
+    bool enable_act_double_buffer = false;
+    bool enable_split_reader = false;
+    bool enable_subblock_padding = false;
     static constexpr auto attribute_names = std::make_tuple(
         "math_fidelity",
         "dtype",
@@ -60,7 +63,10 @@ struct Conv2dConfig {
         "height_sharding",
         "core_grid",
         "transpose_shards",
-        "output_layout");
+        "output_layout",
+        "enable_act_double_buffer",
+        "enable_split_reader",
+        "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->math_fidelity),
@@ -79,7 +85,10 @@ struct Conv2dConfig {
             std::cref(this->height_sharding),
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
-            std::cref(this->output_layout));
+            std::cref(this->output_layout),
+            std::cref(this->enable_act_double_buffer),
+            std::cref(this->enable_split_reader),
+            std::cref(this->enable_subblock_padding));
     }
 };
 

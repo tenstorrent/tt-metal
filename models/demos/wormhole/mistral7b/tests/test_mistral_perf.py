@@ -162,12 +162,11 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
-    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-    tt_decode_input = pt_decode_input
 
     for i in range(generation_length):
         current_pos = generation_start_pos + i
-
+        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
+        tt_decode_input = pt_decode_input
         decode_input, pos = prepare_inputs_ttnn(
             tt_decode_input,
             current_pos,
@@ -189,10 +188,6 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
-        tt_out_tok = ttnn.from_torch(
-            tt_out_tok, device=tt_model.device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        tt_decode_input = tt_embd(tt_out_tok)  # Embedding on device
 
 
 @skip_for_grayskull("Requires eth connected devices to run")

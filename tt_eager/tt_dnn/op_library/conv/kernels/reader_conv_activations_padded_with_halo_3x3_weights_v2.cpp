@@ -58,12 +58,13 @@ void kernel_main() {
     }
 
     #ifdef SPLIT_READER
-    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
-    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
+    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // Extra /2 because of packed uint16 reads
+    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
     #else
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
     #endif
+
 
     // LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
@@ -88,6 +89,7 @@ void kernel_main() {
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
@@ -130,6 +132,7 @@ void kernel_main() {
                 reader_idx++;
             }
             noc_async_read_barrier();
+
             cb_push_back(cb_id_act, act_block_num_tiles_read);
 
             reader_offset_idx += window_inner;

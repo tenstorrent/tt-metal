@@ -51,7 +51,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/downsample/downsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/optimized_conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv/optimized_conv_op.cpp
@@ -117,8 +116,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm/multi_core/layernorm_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layernorm/layernorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_pre_allgather_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_pre_allgather_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layernorm_distributed/layernorm_post_allgather_op_multi_core.cpp

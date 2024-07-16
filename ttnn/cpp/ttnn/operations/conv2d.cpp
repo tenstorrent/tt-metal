@@ -4,7 +4,7 @@
 
 #include "conv2d.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
@@ -678,7 +678,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.dtype,
             {batch_size, input_height, input_width, in_channels},
             conv_config.input_channels_alignment == 16,
-            compute_kernel_config);
+            compute_kernel_config,
+            conv_config.enable_act_double_buffer,
+            conv_config.enable_split_reader,
+            conv_config.enable_subblock_padding);
         // halo_output.deallocate();
         ttnn::operations::core::deallocate(halo_output);
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
@@ -695,7 +698,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         Tensor matmul_input = input_tensor_post_tm;
         if (stride[0] > 1) {
             // run downsample
-            matmul_input = tt::tt_metal::downsample(
+            matmul_input = ttnn::operations::data_movement::downsample(
                 input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
             if (conv_config.deallocate_activation) {
                 // input_tensor_post_tm.deallocate();
