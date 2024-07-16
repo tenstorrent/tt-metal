@@ -109,4 +109,24 @@ std::vector<ComplexTensor> _complex_abs_bw(const Tensor& grad, const ComplexTens
     return grad_tensor;
 }
 
+// complex reciprocal
+// self: -grad * (result * result).conj()
+std::vector<ComplexTensor> _complex_recip_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor condition_nan = ttnn::logical_and(ttnn::eqz(input.real(),output_mem_config), ttnn::eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
+    ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
+    ComplexTensor inp_recip = complex_recip(input, output_mem_config);
+    ComplexTensor grad_inp = complex_mul(neg_grad, conj(complex_mul(inp_recip, inp_recip, output_mem_config), output_mem_config), output_mem_config) ;
+    neg_grad.deallocate();
+    inp_recip.deallocate();
+    Tensor grad_inp_r = where(condition_nan, ttnn::operations::creation::full_like(input.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), grad_inp.real(), output_mem_config);
+    Tensor grad_inp_i = where(condition_nan, ttnn::operations::creation::full_like(input.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), grad_inp.imag(), output_mem_config);
+    condition_nan.deallocate();
+    grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
+    grad_inp_r.deallocate();
+    grad_inp_i.deallocate();
+    grad_tensor.emplace_back(grad_inp);
+    return grad_tensor;
+}
+
 }  // namespace ttnn::operations::complex_unary_backward
