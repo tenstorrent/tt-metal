@@ -21,83 +21,6 @@ std::vector<Tensor> unary_mul_bw(
     float scalar,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<std::optional<Tensor>> unary_pow_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> unary_pow_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> exp_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> exp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> sqrt_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> sqrt_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<Tensor> unary_div_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float scalar,
-    string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> rdiv_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float scalar,
-    string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// bw = grad(1 - tanh(x) ** 2)
-std::vector<std::optional<Tensor>> tanh_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> tanh_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
-    std::optional<Tensor> input_grad = std::nullopt);
-
 std::vector<Tensor> binary_le_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -106,19 +29,6 @@ std::vector<Tensor> binary_le_bw(
 std::vector<Tensor> complex_abs_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> gelu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> bias_gelu_unary_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    float bias,
-    string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> angle_bw(
@@ -185,9 +95,6 @@ std::vector<Tensor> complex_sub_bw(
     const Tensor& other,
     float alpha = 1.0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config);
 
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 }  // namespace tt_metal

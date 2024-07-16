@@ -150,10 +150,8 @@ constexpr auto logaddexp2_bw = ttnn::register_operation<operations::binary_backw
 constexpr auto squared_difference_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>("ttnn::squared_difference_bw");
 constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>("ttnn::concat_bw");
 constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
-constexpr auto bias_gelu_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
 constexpr auto min_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>("ttnn::min_bw");
 constexpr auto max_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>("ttnn::max_bw");
-constexpr auto div_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::DIV_BW>>("ttnn::div_bw");
 constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>("ttnn::lerp_bw");
 
 //type 2

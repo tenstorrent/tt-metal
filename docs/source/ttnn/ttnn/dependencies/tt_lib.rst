@@ -276,73 +276,21 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div_no_nan
 
-.. autofunction:: tt_lib.tensor.add_unary
-
-.. autofunction:: tt_lib.tensor.sub_unary
-
-.. autofunction:: tt_lib.tensor.mul_unary
-
-.. autofunction:: tt_lib.tensor.div_unary
-
-.. autofunction:: tt_lib.tensor.gelu
-
-.. autofunction:: tt_lib.tensor.relu
-
-.. autofunction:: tt_lib.tensor.relu6
-
-.. autofunction:: tt_lib.tensor.relu_min
-
-.. autofunction:: tt_lib.tensor.relu_max
-
-.. autofunction:: tt_lib.tensor.exp
-
-.. autofunction:: tt_lib.tensor.recip
-
-.. autofunction:: tt_lib.tensor.sqrt
-
-.. autofunction:: tt_lib.tensor.log
-
-.. autofunction:: tt_lib.tensor.log2
-
-.. autofunction:: tt_lib.tensor.log10
-
 .. autofunction:: tt_lib.tensor.log1p
-
-.. autofunction:: tt_lib.tensor.tanh
 
 .. autofunction:: tt_lib.tensor.clip
 
 .. autofunction:: tt_lib.tensor.hardtanh
 
-.. autofunction:: tt_lib.tensor.deg2rad
-
-.. autofunction:: tt_lib.tensor.rad2deg
-
 .. autofunction:: tt_lib.tensor.cbrt
 
 .. autofunction:: tt_lib.tensor.hypot
-
-.. autofunction:: tt_lib.tensor.softplus
 
 .. autofunction:: tt_lib.tensor.mish
 
 .. autofunction:: tt_lib.tensor.polyval
 
-.. autofunction:: tt_lib.tensor.sign
-
-.. autofunction:: tt_lib.tensor.abs
-
-.. autofunction:: tt_lib.tensor.silu
-
-.. autofunction:: tt_lib.tensor.neg
-
-.. autofunction:: tt_lib.tensor.add1
-
 .. autofunction:: tt_lib.tensor.mac
-
-.. autofunction:: tt_lib.tensor.sigmoid
-
-.. autofunction:: tt_lib.tensor.sigmoid_accurate
 
 .. autofunction:: tt_lib.tensor.hardsigmoid
 
@@ -350,55 +298,21 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.hardswish
 
-.. autofunction:: tt_lib.tensor.leaky_relu
-
 .. autofunction:: tt_lib.tensor.softsign
 
 .. autofunction:: tt_lib.tensor.softshrink
 
 .. autofunction:: tt_lib.tensor.hardshrink
 
-.. autofunction:: tt_lib.tensor.cos
-
-.. autofunction:: tt_lib.tensor.sin
-
 .. autofunction:: tt_lib.tensor.cosh
 
 .. autofunction:: tt_lib.tensor.sinh
 
-.. autofunction:: tt_lib.tensor.acos
-
-.. autofunction:: tt_lib.tensor.asin
-
-.. autofunction:: tt_lib.tensor.elu
-
-.. autofunction:: tt_lib.tensor.exp2
-
 .. autofunction:: tt_lib.tensor.tanhshrink
-
-.. autofunction:: tt_lib.tensor.heaviside
-
-.. autofunction:: tt_lib.tensor.bitwise_xor
-
-.. autofunction:: tt_lib.tensor.bitwise_not
-
-.. autofunction:: tt_lib.tensor.bitwise_and
-
-.. autofunction:: tt_lib.tensor.bitwise_or
-
-.. autofunction:: tt_lib.tensor.right_shift
-
-.. autofunction:: tt_lib.tensor.left_shift
-
-.. autofunction:: tt_lib.tensor.unary_remainder
 
 .. autofunction:: tt_lib.tensor.remainder
 
-.. autofunction:: tt_lib.tensor.unary_fmod
-
 .. autofunction:: tt_lib.tensor.fmod
-
-.. autofunction:: tt_lib.tensor.atan
 
 .. autofunction:: tt_lib.tensor.atanh
 
@@ -408,8 +322,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_xori
 
-.. autofunction:: tt_lib.tensor.logical_not_unary
-
 .. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.celu
@@ -418,23 +330,11 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary
 
-.. autofunction:: tt_lib.tensor.isfinite
-
-.. autofunction:: tt_lib.tensor.isinf
-
-.. autofunction:: tt_lib.tensor.isposinf
-
-.. autofunction:: tt_lib.tensor.isneginf
-
-.. autofunction:: tt_lib.tensor.isnan
-
 .. autofunction:: tt_lib.tensor.logit
 
 .. autofunction:: tt_lib.tensor.lgamma
 
 .. autofunction:: tt_lib.tensor.logical_andi
-
-.. autofunction:: tt_lib.tensor.erfinv
 
 .. autofunction:: tt_lib.tensor.multigammaln
 
@@ -442,17 +342,11 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.isclose
 
-.. autofunction:: tt_lib.tensor.i0
-
 .. autofunction:: tt_lib.tensor.digamma
-
-.. autofunction:: tt_lib.tensor.tan
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
 .. autofunction:: tt_lib.tensor.polygamma
-
-.. autofunction:: tt_lib.tensor.floor
 
 .. autofunction:: tt_lib.tensor.trunc
 
@@ -466,23 +360,7 @@ Tensor elementwise operations
 
 Tensor relational operations
 ============================
-.. autofunction:: tt_lib.tensor.gtz
 
-.. autofunction:: tt_lib.tensor.gez
-
-.. autofunction:: tt_lib.tensor.ltz
-
-.. autofunction:: tt_lib.tensor.lez
-
-.. autofunction:: tt_lib.tensor.eqz
-
-.. autofunction:: tt_lib.tensor.nez
-
-.. autofunction:: tt_lib.tensor.unary_ne
-
-.. autofunction:: tt_lib.tensor.unary_gt
-
-.. autofunction:: tt_lib.tensor.unary_lt
 
 Tensor ternary operations
 =========================
@@ -560,9 +438,6 @@ Broadcast and Reduce
 
 .. autofunction:: tt_lib.tensor.rpow
 
-.. autofunction:: tt_lib.tensor.rsub
-
-.. autofunction:: tt_lib.tensor.rdiv
 
 Fallback Operations
 *******************
@@ -709,23 +584,11 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.log_sigmoid
-
-.. autofunction:: tt_lib.tensor.expm1
-
 .. autofunction:: tt_lib.tensor.asinh
 
 .. autofunction:: tt_lib.tensor.acosh
 
-.. autofunction:: tt_lib.tensor.erf
-
-.. autofunction:: tt_lib.tensor.erfc
-
-.. autofunction:: tt_lib.tensor.rsqrt
-
 .. autofunction:: tt_lib.tensor.lerp
-
-.. autofunction:: tt_lib.tensor.signbit
 
 .. autofunction:: tt_lib.tensor.fill_rm
 
@@ -740,8 +603,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.xlogy
 
 .. autofunction:: tt_lib.tensor.prod
-
-.. autofunction:: tt_lib.tensor.tiled_prod
 
 .. autofunction:: tt_lib.tensor.addcmul
 
@@ -779,8 +640,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.pow
 
-.. autofunction:: tt_lib.tensor.identity
-
 .. autofunction:: tt_lib.tensor.argmax
 
 .. autofunction:: tt_lib.tensor.argmin
@@ -792,23 +651,7 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.conj_bw
 
-.. autofunction:: tt_lib.tensor.unary_div_bw
-
-.. autofunction:: tt_lib.tensor.rdiv_bw
-
-.. autofunction:: tt_lib.tensor.sqrt_bw
-
-.. autofunction:: tt_lib.tensor.exp_bw
-
-.. autofunction:: tt_lib.tensor.unary_pow_bw
-
-.. autofunction:: tt_lib.tensor.tanh_bw
-
 .. autofunction:: tt_lib.tensor.complex_abs_bw
-
-.. autofunction:: tt_lib.tensor.gelu_bw
-
-.. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
@@ -827,8 +670,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.complex_add_bw
 
 .. autofunction:: tt_lib.tensor.complex_sub_bw
-
-.. autofunction:: tt_lib.tensor.repeat_bw
 
 Loss Functions
 ==============

@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
+#include "ttnn/operations/data_movement/downsample/downsample_op_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -123,6 +124,7 @@ void py_module(py::module& module) {
     bind_upsample(module);
     detail::bind_pad(module);
     detail::bind_slice(module);
+    detail::bind_downsample(module);
     bind_repeat(module);
     bind_repeat_interleave(module);
 }

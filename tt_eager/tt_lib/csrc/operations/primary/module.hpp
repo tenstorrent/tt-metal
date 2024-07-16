@@ -377,23 +377,6 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_layernorm_backward operation.");
 
     m_primary.def(
-        "relu",
-        &tt::operations::primary::relu,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``input``.
-
-        Input tensor must have TILE layout. Output tensor will have TILE layout.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Tensor RELU is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
-    m_primary.def(
         "bcast",
         &tt::operations::primary::bcast,
         py::arg("input_a").noconvert(),

@@ -23,9 +23,11 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    skip_for_wormhole_b0,
 )
 
 
+@skip_for_wormhole_b0("See GH Issue #10322")
 def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b

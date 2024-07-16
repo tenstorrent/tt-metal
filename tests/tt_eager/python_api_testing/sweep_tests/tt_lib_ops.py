@@ -403,12 +403,18 @@ def eltwise_rsqrt(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    input_shape = t0.shape
-    t0 = t0.cpu().pad_to_tile(0)
-    t0 = t0.to(ttl.tensor.Layout.TILE)
-    t0 = t0.to(device)
-    t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
-    t1 = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(input_shape)
+
+    if t0.layout == ttnn.TILE_LAYOUT:
+        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+    else:
+        # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
+        # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
+        input_shape = t0.shape
+        t0 = t0.cpu().pad_to_tile(0)
+        t0 = t0.to(ttl.tensor.Layout.TILE)
+        t0 = t0.to(device)
+        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(input_shape)
 
     return tt2torch_tensor(t1)
 
@@ -2692,8 +2698,8 @@ eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
-eltwise_rad2deg = make_unary_op(ttl.tensor.rad2deg)
-eltwise_deg2rad = make_unary_op(ttl.tensor.deg2rad)
+eltwise_rad2deg = make_unary_op_optional_output(ttnn.rad2deg)
+eltwise_deg2rad = make_unary_op_optional_output(ttnn.deg2rad)
 eltwise_sign = make_unary_op_optional_output(ttnn.sign)
 eltwise_signbit = make_unary_op_optional_output(ttnn.signbit)
 eltwise_abs = make_unary_op_optional_output(ttnn.abs)

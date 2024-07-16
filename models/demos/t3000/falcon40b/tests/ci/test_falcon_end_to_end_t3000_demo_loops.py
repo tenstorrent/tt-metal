@@ -9,10 +9,12 @@ from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model
 from models.utility_functions import (
     disable_compilation_reports,
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_wormhole_b0("See GH Issue #10320")
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "num_loops",
