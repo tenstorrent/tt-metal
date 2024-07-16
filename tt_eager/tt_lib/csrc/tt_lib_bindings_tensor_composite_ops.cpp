@@ -1602,27 +1602,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         );
 
     m_tensor.def(
-        "conj_bw",
-        py::overload_cast<const ComplexTensor&, const ComplexTensor&, const MemoryConfig&>(&conj_bw),
-        py::arg("grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs backward operations for conjugate for complex tensor ``input`` with given ``grad``
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "input", "Input Tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
         "complex_add_bw",
         py::overload_cast<const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, float, const MemoryConfig&>(
             &complex_add_bw),

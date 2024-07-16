@@ -85,4 +85,13 @@ std::vector<ComplexTensor> _angle_bw(const Tensor& grad, const ComplexTensor& in
     return grad_tensor;
 }
 
+// complex conj
+// self: grad.conj()
+std::vector<ComplexTensor> _conj_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_result = conj(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 }  // namespace ttnn::operations::complex_unary_backward
