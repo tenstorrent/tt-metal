@@ -395,7 +395,6 @@ class TtLlamaAttention_galaxy:
         value_layer.deallocate(True)
 
         k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-        padded_layer_past_len = get_padded_layer_len(start_pos + 1, k_chunk_size)
 
         program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
@@ -407,10 +406,9 @@ class TtLlamaAttention_galaxy:
             query_layer,
             keys,
             values,
-            attn_masks,
+            [start_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
             program_config=program_config,
-            valid_seq_len=padded_layer_past_len,
             compute_kernel_config=self.COMPUTE_KERNEL_SDPA,
             output_mem_config=self.SDPA_HEIGHT_SHARDED_MEMCFG,
         )

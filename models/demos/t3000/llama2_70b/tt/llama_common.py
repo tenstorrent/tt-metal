@@ -111,7 +111,8 @@ class ReplicateShardTensor2dMesh(TensorToMesh):
 
     def config(self):
         return {
-            "strategy": "replicate",
+            "strategy": "shard",
+            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
         }
 
 

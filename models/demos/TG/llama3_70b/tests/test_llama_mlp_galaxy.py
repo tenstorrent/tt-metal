@@ -40,10 +40,9 @@ class PytorchLlamaMLPModel(torch.nn.Module):
 
 def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
     if llama_mlp_model.model_config["LLM_MODE"] == "decode":
-        M, K, N = 32, 8192, 32768
+        M, K = 32, 8192
 
         K = K // llama_mlp_model.cluster_shape[0]
-        N = N // llama_mlp_model.cluster_shape[1]
         act_mem_config = ttnn.create_sharded_memory_config(
             shape=(M, K // 8),
             core_grid=ttnn.CoreGrid(y=1, x=8),
@@ -52,16 +51,16 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
             use_height_and_width_as_shard_shape=True,
         )
 
-    x_multichip = ttnn.from_torch(
-        x,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=llama_mlp_model.device_mesh,
-        memory_config=act_mem_config,
-        mesh_mapper=ShardTensor2dMesh(
-            llama_mlp_model.device_mesh, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
-        ),
-    )
+        x_multichip = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=llama_mlp_model.device_mesh,
+            memory_config=act_mem_config,
+            mesh_mapper=ShardTensor2dMesh(
+                llama_mlp_model.device_mesh, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            ),
+        )
 
     return x_multichip
 

@@ -210,8 +210,6 @@ class TtLlamaMLP_galaxy:
             tensors,
             mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
         )
-        out = out[:, 0:1, :, :]
-
         shape = (out.shape[2], out.shape[3] // 32)
 
         if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
