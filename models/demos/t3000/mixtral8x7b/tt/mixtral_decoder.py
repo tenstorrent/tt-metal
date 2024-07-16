@@ -6,7 +6,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttenti
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtTransformerBlock(LightweightModule):
