@@ -117,49 +117,6 @@ operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(
     }
 }
 
-void ConcatenateHeads::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto batch_size = input_tensor.get_legacy_shape()[0];
-    // TODO: See issue #1744
-    TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
-
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
-        "Unsupported data format");
-
-    TT_FATAL((input_tensor.get_legacy_shape() == Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
-}
-
-std::vector<Shape> ConcatenateHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto batch_size = input_tensor.get_legacy_shape()[0];
-    return {Shape{batch_size, 1, 384, 1024}};
-}
-
-std::vector<Tensor> ConcatenateHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
-}
-
-operation::ProgramWithCallbacks ConcatenateHeads::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-    const auto batch_size = input_tensor.get_legacy_shape()[0];
-
-    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    TT_ASSERT(
-        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
-         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
-        "Unsupported grid shape");
-
-    return multi_core_concat_heads(input_tensor, output_tensor, this->compute_with_storage_grid_size);
-}
-
 void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]

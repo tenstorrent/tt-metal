@@ -4,7 +4,6 @@
 
 #pragma once
 
-// This is a place holder for when the cpp/ttnn folder structure and ttnn namespace is moved over to tt_eager.
 #include "tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
