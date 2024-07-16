@@ -41,6 +41,8 @@ NUM_REPEATS = 5
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
+    tt_lib.device.Synchronize(device)
+
     if not is_warmup:
         signpost(header=f"start {op_name}")
 
