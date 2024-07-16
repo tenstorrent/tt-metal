@@ -475,6 +475,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )

@@ -9,7 +9,7 @@ import ttnn
 from ttnn import ListMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
+from models.demos.TG.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,

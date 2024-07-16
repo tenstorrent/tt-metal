@@ -128,7 +128,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w1_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
-            cache_file_name=self.cache_path / w1_cache_str,
+            # cache_file_name=self.cache_path / w1_cache_str,
         )
 
         self.w3 = ttnn.as_tensor(
@@ -138,7 +138,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w1_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
-            cache_file_name=self.cache_path / w3_cache_str,
+            # cache_file_name=self.cache_path / w3_cache_str,
         )
 
         self.w2 = ttnn.as_tensor(
@@ -148,7 +148,7 @@ class TtLlamaMLP_galaxy:
             device=self.device_mesh,
             memory_config=self.w2_mem_config,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
-            cache_file_name=self.cache_path / w2_cache_str,
+            # cache_file_name=self.cache_path / w2_cache_str,
         )
 
     def __call__(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:

@@ -7,7 +7,8 @@ run_tg_tests() {
   echo "LOG_METAL: running run_tg_frequent_tests"
 
   pytest tests/ttnn/multichip_unit_tests/test_multidevice_TG.py
-  pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_galaxy.py
+  pytest models/demos/TG/llama3_70b/tests/test_llama_mlp_galaxy.py
+  pytest models/demos/TG/llama3_70b/tests/test_llama_attention_galaxy.py
 }
 
 main() {
