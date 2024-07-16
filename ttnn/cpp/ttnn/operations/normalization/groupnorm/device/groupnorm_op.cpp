@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
     uint32_t batch = a.get_legacy_shape()[0];
 
-    return groupnorm_sharded_v2_(
+    return groupnorm_multi_core_sharded(
                                 a, gamma, beta, input_mask, output_tensor, this->eps,
                                 this->num_groups, batch,
                                 fidelity,
