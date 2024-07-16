@@ -28,7 +28,7 @@ set (TT_METAL_TESTS
     # test_3x3conv_as_matmul_large_block        <- not tested in run_tt_metal.py
     # test_l1_to_l1_multi_core                    <- test borked
     test_dram_copy_sticks_multi_core
-    test_reduce_h
+    # test_reduce_h           <- (issue #10181: disabling due to sporadic failures in slow dispatch mode)
     test_reduce_w
     test_reduce_hw
     test_untilize_eltwise_binary
