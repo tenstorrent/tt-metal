@@ -911,14 +911,14 @@ def run_test_sdpa_decode_single_iter(
     start_idx = s // 2
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(start_idx)
+    k_chunk_size = get_chunk_size(start_idx + 1)
     program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
     )
 
-    padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+    padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
     # Test various sequence lengths
     logger.debug(f"Testing with sequence length: {start_idx}")
@@ -941,23 +941,13 @@ def run_test_sdpa_decode_single_iter(
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    tt_attn_mask = ttnn.from_torch(
-        attn_mask,
-        device=device_mesh,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=dram_memcfg,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
-    )
-
     tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
-        tt_attn_mask,
+        [start_idx for _ in range(b)],
         scale=scale,
         program_config=program_config,
-        valid_seq_len=padded_layer_len,
         compute_kernel_config=compute_kernel_config,
         output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
