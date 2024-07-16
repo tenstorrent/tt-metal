@@ -42,7 +42,7 @@
 >
 > All model demos in this table function on both N150 and N300 Wormhole cards, unless otherwise stated.
 
-| Model                                                                                | Gen. Token [3]     |  Batch               | End-to-end decode throughput [1]    | Device decode throughput [2]       | Target         |
+| Model                                                                                | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
 |--------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
 | [Falcon7B](./models/demos/wormhole/falcon7b)                                  | 129th              | 32                   | 13.3 t/s/u - 425 t/s         | 15.4 t/s/u - 493 t/s        | 26             |
 | [Mistral-7B](./models/demos/wormhole/mistral7b)                               | 129th              | 32                   | 9.9 t/s/u - 317 t/s          | 11.0 t/s/u - 352 t/s        | 25             |
@@ -51,9 +51,9 @@
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 6                            | 5                           |                |
 | [ResNet-50](./models/demos/ttnn_resnet) (fps)                                        |                    | 16                   | 4,300                        | 5,550                       | 7,000          |
 
-[1] - Observed from the host. Includes dispatch overhead and kernel execution time.
+[1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
 
-[2] - Ignoring host overhead. Kernel execution time only.
+[2] - Ignoring host overhead. Kernel execution time only. For LLMs, token-to-token decode throughput is reported.
 
 [3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
 
@@ -61,7 +61,7 @@
 
 ## T3000 (2x4 mesh of WHs) Models
 
-| Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end decode throughput [1]    | Device decode throughput [2]        | Target          |
+| Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
 |-----------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
 | [Falcon7B](./models/demos/t3000/falcon7b)          | Data Parallel      | 129th               |  256                  |  7.4 t/s/u - 1901 t/s        |  15.5 t/s/u - 3968 t/s       |   26 t/s/u      |
 | [LLaMA-2-70B](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  16.6 t/s/u - 532 t/s        |   20 t/s/u      |
