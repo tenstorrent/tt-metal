@@ -151,6 +151,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
 models/demos/resnet @mywoodstock @tt-aho
+models/demos/ttnn_resnet @mywoodstock @tt-aho
 models/perf/ @boris-drazic @tt-rkim
 
 # docs

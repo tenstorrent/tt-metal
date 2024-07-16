@@ -21,12 +21,12 @@ from models.utility_functions import (
 
 from models.perf.perf_utils import prep_perf_report
 
-from models.experimental.resnet.tests.test_ttnn_resnet50_performant import (
+from models.demos.ttnn_resnet.tests.test_ttnn_resnet50_performant import (
     setup_l1_sharded_input,
     setup_dram_sharded_input,
 )
-from models.experimental.resnet.tt.custom_preprocessing import custom_preprocessor
-from models.experimental.resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tt.custom_preprocessing import custom_preprocessor
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
 
 try:
     from tracy import signpost

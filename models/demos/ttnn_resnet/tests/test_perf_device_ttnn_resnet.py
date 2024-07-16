@@ -20,7 +20,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     num_iterations = 4
     margin = 0.03
     command = (
-        f"pytest models/experimental/resnet/tests/test_ttnn_resnet50_performant.py::test_run_resnet50_inference[{test}]"
+        f"pytest models/demos/ttnn_resnet/tests/test_ttnn_resnet50_performant.py::test_run_resnet50_inference[{test}]"
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
