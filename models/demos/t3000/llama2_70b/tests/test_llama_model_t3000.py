@@ -10,7 +10,7 @@ from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaM
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@skip_for_wormhole_b0("See GH Issue #10317")
+# @skip_for_wormhole_b0("See GH Issue #10317")
 @pytest.mark.parametrize(
     "llama_version",
     (

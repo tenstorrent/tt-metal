@@ -484,10 +484,6 @@ def get_flash_decode_chunk_size(s):
     return 512
 
 
-def get_padded_layer_len(token_idx, chunk_size):
-    return ((token_idx + chunk_size - 1) // chunk_size) * chunk_size
-
-
 def num_to_corerange(x):
     assert x < 8 or x % 8 == 0
     num_x = min(x, 8)
