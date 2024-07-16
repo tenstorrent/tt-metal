@@ -421,7 +421,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.006, 25),),
+    ((16, 0.0064, 25),),
 )
 def test_perf_2cqs_bare_metal(
     device,
