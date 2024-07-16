@@ -259,6 +259,7 @@ Pointwise Unary
    ttnn/angle
    ttnn/is_imag
    ttnn/is_real
+   ttnn/polar_bw
 
 Pointwise Binary
 ================

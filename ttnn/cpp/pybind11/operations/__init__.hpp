@@ -29,6 +29,7 @@
 #include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -43,6 +44,9 @@ void py_module(py::module& module) {
 
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
+
+    auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
+    complex_unary_backward::py_module(m_complex_unary_backward);
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);

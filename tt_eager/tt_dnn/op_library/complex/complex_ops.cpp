@@ -380,35 +380,6 @@ std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& inp
     return grad_tensor;
 }
 
-
-// polar
-// grad_abs = torch.real(grad_conj * torch.sgn(result))
-// result_mul_1_j = result * torch.tensor(0.0 + 1.0j)
-// grad_angle = torch.real(grad_conj * result_mul_1_j)
-// polar fwd op uses sin and cos hence input_b range is (0, 2*pi)
-std::vector<ComplexTensor> polar_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor result = polar(input, output_mem_config);
-    Tensor abs_result = ttnn::operations::complex_unary::_abs(result, output_mem_config);
-    Tensor sgn_result_r = where(ttnn::eqz(abs_result, output_mem_config), zeros_like(result.real(), output_mem_config), ttnn::multiply(result.real(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
-    Tensor sgn_result_i = where(ttnn::eqz(abs_result, output_mem_config), zeros_like(result.imag(), output_mem_config), ttnn::multiply(result.imag(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
-    abs_result.deallocate();
-    ComplexTensor sgn_result = ComplexTensor({ sgn_result_r, sgn_result_i });
-    sgn_result_r.deallocate();
-    sgn_result_i.deallocate();
-    Tensor grad_abs = ttnn::operations::complex_unary::_real(complex_mul(conj(grad, output_mem_config), sgn_result, output_mem_config), output_mem_config);
-    sgn_result.deallocate();
-    ComplexTensor flip_tensor = ComplexTensor({zeros_like(input.real(), output_mem_config), full_like(input.imag(), 1.0, output_mem_config) });
-    Tensor grad_angle = ttnn::operations::complex_unary::_real(complex_mul(conj(grad, output_mem_config), complex_mul(result, flip_tensor, output_mem_config), output_mem_config), output_mem_config);
-    result.deallocate();
-    flip_tensor.deallocate();
-    ComplexTensor grad_result = ComplexTensor({grad_abs, grad_angle});
-    grad_abs.deallocate();
-    grad_angle.deallocate();
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-
 }//namespace tt_metal
 
 }//namespace tt
