@@ -227,14 +227,6 @@ ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_c
 }
 
 // backward ops for type2 complex tensor
-// complex conj
-// self: grad.conj()
-std::vector<ComplexTensor> conj_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_result = conj(grad, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
 
 // complex add
 // self: grad, other: grad * alpha

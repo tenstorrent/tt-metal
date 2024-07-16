@@ -47,6 +47,7 @@ struct ExecuteComplexUnaryBackwardTensor {
 
 //OpHandler_complex : get_function_complex
 constexpr auto polar_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::POLAR_BW>>("ttnn::polar_bw");
+constexpr auto conj_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::CONJ_BW>>("ttnn::conj_bw");
 
 //OpHandler_tensor_complex : get_function_tensor_complex
 constexpr auto imag_bw = ttnn::register_operation<operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::IMAG_BW>>("ttnn::imag_bw");

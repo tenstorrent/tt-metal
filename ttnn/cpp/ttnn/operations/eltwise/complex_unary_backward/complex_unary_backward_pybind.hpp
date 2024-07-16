@@ -113,6 +113,11 @@ void py_module(py::module& module) {
         ttnn::polar_bw,
         R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_complex_unary_backward(
+        module,
+        ttnn::conj_bw,
+        R"doc(Performs backward operations for complex conj function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+
     detail::bind_complex_unary_backward_tensor(
         module,
         ttnn::imag_bw,
