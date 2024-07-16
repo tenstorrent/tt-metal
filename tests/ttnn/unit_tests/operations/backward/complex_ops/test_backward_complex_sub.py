@@ -53,7 +53,7 @@ def test_level2_complex_sub_bw(bs, hw, alpha, memcfg, dtype, device, function_le
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttnn.complex_sub_bw(grad_tensor, input_tensor, other_tensor, alpha, memory_config=memcfg)
+    tt_dev = ttnn.sub_bw(grad_tensor, input_tensor, other_tensor, alpha, memory_config=memcfg)
     in_data.retain_grad()
 
     tt_dev = convert_to_torch_tensor(tt_dev)

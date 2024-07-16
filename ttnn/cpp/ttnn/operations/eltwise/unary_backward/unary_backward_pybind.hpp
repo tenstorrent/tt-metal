@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
+#include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -177,7 +178,7 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
             py::arg("memory_config") = std::nullopt},
 
-    ttnn::pybind_overload_t{
+        ttnn::pybind_overload_t{
             [operation](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
@@ -197,7 +198,22 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
-            py::arg("memory_config") = std::nullopt}
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               const MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                using ComplexBinaryBackwardOp = ttnn::operations::complex_binary_backward::ExecuteComplexBinaryBackwardWoFloat<complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_DIV_BW>;
+                return ComplexBinaryBackwardOp::execute_on_main_thread(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config")}
     );
 }
 
@@ -526,6 +542,42 @@ Example:
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               float alpha,
+               const MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                using ComplexBinaryBackwardOp = ttnn::operations::complex_binary_backward::ExecuteComplexBinaryBackwardWFloat<complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_SUB_BW>;
+                if(operation.base_name()=="add_bw"){
+                    using ComplexBinaryBackwardOp = ttnn::operations::complex_binary_backward::ExecuteComplexBinaryBackwardWFloat<complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_ADD_BW>;
+                    return ComplexBinaryBackwardOp::execute_on_main_thread(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+                }
+                return ComplexBinaryBackwardOp::execute_on_main_thread(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("alpha"),
+            py::kw_only(),
+            py::arg("memory_config")},
+
+        ttnn::pybind_overload_t{
+            [operation](const unary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               const MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                using ComplexBinaryBackwardOp = ttnn::operations::complex_binary_backward::ExecuteComplexBinaryBackwardWoFloat<complex_binary_backward::ComplexBinaryBackwardOpType::COMPLEX_MUL_BW>;
+                return ComplexBinaryBackwardOp::execute_on_main_thread(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config")},
 
         ttnn::pybind_overload_t{
             [operation](const unary_backward_operation_t& self,
