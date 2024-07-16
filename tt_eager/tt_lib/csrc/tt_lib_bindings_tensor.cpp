@@ -15,7 +15,6 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
-#include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "tt_dnn/op_library/pool/average_pool.hpp"
@@ -544,20 +543,6 @@ void TensorModule(py::module& m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
-    // groupnorm
-    m_tensor.def(
-        "groupnorm",
-        &groupnorm,
-        py::arg("input").noconvert(),
-        py::arg("group_size").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a groupnorm operation on the channel dimension grouped per group_size, with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
     m_tensor.def(

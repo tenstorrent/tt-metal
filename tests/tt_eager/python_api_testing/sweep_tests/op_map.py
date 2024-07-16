@@ -1134,10 +1134,6 @@ op_map = {
         "tt_op": tt_lib_ops.activation_swiglu,
         "pytorch_op": pytorch_ops.activation_swiglu,
     },
-    "groupnorm-noweights": {
-        "tt_op": tt_lib_ops.groupnorm_noweights,
-        "pytorch_op": pytorch_ops.groupnorm_noweights,
-    },
     "bert-large-pre-softmax-bmm": {
         "tt_op": tt_lib_ops.bert_large_pre_softmax_bmm,
         "pytorch_op": pytorch_ops.bert_large_pre_softmax_bmm,
@@ -1173,10 +1169,6 @@ op_map = {
     "rmsnorm": {
         "tt_op": tt_lib_ops.rmsnorm,
         "pytorch_op": pytorch_ops.rmsnorm,
-    },
-    "groupnorm": {
-        "tt_op": tt_lib_ops.groupnorm,
-        "pytorch_op": pytorch_ops.groupnorm,
     },
     "complex-real": {
         "tt_op": tt_lib_ops.complex_real,

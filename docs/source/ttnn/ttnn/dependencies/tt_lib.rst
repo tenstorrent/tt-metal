@@ -596,8 +596,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.conv
 
-.. autofunction:: tt_lib.tensor.groupnorm
-
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.xlogy

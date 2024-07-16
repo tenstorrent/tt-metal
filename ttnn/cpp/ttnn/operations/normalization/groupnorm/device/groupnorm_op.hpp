@@ -11,9 +11,7 @@
 
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::normalization {
 
 /**
 Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
@@ -28,22 +26,6 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 >>> output = m(input)
 */
 
-// FIXME: special case for group_size = 1 is only supported at this time
-Tensor groupnorm(
-    const Tensor& a,
-    uint32_t group_size,
-    float eps,
-    std::optional<const Tensor> gamma = std::nullopt,
-    std::optional<const Tensor> beta = std::nullopt,
-    const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-}  // namespace tt_metal
-
-
-namespace operations {
-
-    using namespace tt_metal;
-namespace primary {
 struct GroupNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     MathFidelity math_fidelity;
@@ -53,14 +35,29 @@ struct GroupNormShardedMultiCoreProgramConfig {
     Layout output_layout;
 };
 
+operation::ProgramWithCallbacks groupnorm_sharded_v2_(
+    const Tensor &a,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> input_mask,
+    Tensor& output,
+    float eps,
+    const uint32_t num_groups,
+    const uint32_t num_batches,
+    MathFidelity fidelity,
+    DataType im_data_format,
+    CoreCoord grid_size,
+    bool inplace
+);
+
 struct GroupNorm {
     float eps;
     uint32_t num_groups;
     MemoryConfig output_mem_config;
-    tt::operations::primary::GroupNormShardedMultiCoreProgramConfig program_config;
+    GroupNormShardedMultiCoreProgramConfig program_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
@@ -69,11 +66,5 @@ struct GroupNorm {
     ) const;
 };
 
-inline Tensor groupnorm(const Tensor &a, const uint32_t num_groups, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, std::optional<const Tensor> input_mask = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const GroupNormShardedMultiCoreProgramConfig& program_config = GroupNormShardedMultiCoreProgramConfig{}) {
-    return operation::run(GroupNorm{.eps=eps, .num_groups=num_groups, .output_mem_config=output_mem_config, .program_config=program_config}, {a}, {gamma, beta, input_mask}).at(0);
-}
 
-
-}   // namespace primary
-}   // namespace operations
-}  // namespace tt
+}   // namespace operations::normalization
