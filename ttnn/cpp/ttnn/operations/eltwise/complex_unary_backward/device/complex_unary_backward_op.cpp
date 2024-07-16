@@ -94,4 +94,19 @@ std::vector<ComplexTensor> _conj_bw(const ComplexTensor& grad, const ComplexTens
     return grad_tensor;
 }
 
+// complex abs
+// self: grad * self.sgn()
+std::vector<ComplexTensor> _complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor result = complex_abs(input, output_mem_config);
+    Tensor grad_inp_r = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    Tensor grad_inp_i = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
+    result.deallocate();
+    grad_inp_r.deallocate();
+    grad_inp_i.deallocate();
+    grad_tensor.emplace_back(grad_inp);
+    return grad_tensor;
+}
+
 }  // namespace ttnn::operations::complex_unary_backward

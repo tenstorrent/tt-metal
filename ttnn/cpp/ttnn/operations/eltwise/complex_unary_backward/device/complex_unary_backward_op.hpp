@@ -19,6 +19,7 @@ enum class ComplexUnaryBackwardOpType {
     REAL_BW,
     ANGLE_BW,
     CONJ_BW,
+    COMPLEX_ABS_BW,
 };
 
 //OpHandler_complex : get_function_complex
@@ -29,6 +30,7 @@ std::vector<ComplexTensor> _conj_bw(const ComplexTensor& grad, const ComplexTens
 std::vector<ComplexTensor> _imag_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _real_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _angle_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
+std::vector<ComplexTensor> _complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryBackwardOpType OpType>
 struct OpHandler_complex;
@@ -68,6 +70,13 @@ template <>
 struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::ANGLE_BW> {
     static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _angle_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::COMPLEX_ABS_BW> {
+    static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
+        return _complex_abs_bw(grad, input, output_mem_config);
     }
 };
 
