@@ -11,7 +11,7 @@ from typing import Callable
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.reference.args import ModelMode
 from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
-from models.demos.mamba.tt.cache import TensorCache, TorchTensorCache
+from models.demos.mamba.tt.cache import TensorCache
 
 
 class TtMambaBlock(torch.nn.Module):
@@ -205,9 +205,9 @@ class TtMambaBlock(torch.nn.Module):
                     slice_end = (0, 0, x_ssm.shape[2] - (4 - i), self.args.d_inner - 1)
                     entry = ttnn.slice(x_ssm, ttnn.Shape(slice_start), ttnn.Shape(slice_end))
                     self.convolution_cache.set(self.configs["current_user"], i, entry)
+                    ttnn.deallocate(entry)
 
                 x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)  # 1, 1, 35, 2E
-
                 ttnn.deallocate(x_ssm)
 
                 x_ssm_torch = x_ssm_torch.squeeze(0).permute(0, 2, 1)

@@ -8,8 +8,8 @@ import ttnn
 import tt_lib as ttl
 from typing import Callable
 
-from models.demos.mamba.reference.args import ModelArgs
-from models.demos.mamba.reference.args import ModelMode
+from models.demos.mamba.reference.args import ModelArgs, ModelMode
+from models.demos.mamba.tt.cache import TensorCache
 
 
 class TtMambaSSM(torch.nn.Module):
@@ -108,19 +108,12 @@ class TtMambaSSM(torch.nn.Module):
             postfix=f"D_{self.configs['num_users']}",
         )
 
-        # hidden state
-
+        self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
         if self.configs["mode"] == ModelMode.DECODE:
             prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
             self.tt_hidden_states = load_fn(
                 f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
             )
-        else:
-            prev_hidden_states = torch.zeros((1, 1, 1, self.hidden_size * self.n))
-            self.prev_hidden_state = load_fn(
-                f"tt_hidden_state_{1}", torch_tensor=prev_hidden_states, tt_layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            self.tt_hidden_states = []
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
@@ -133,18 +126,17 @@ class TtMambaSSM(torch.nn.Module):
 
     def to_decode(self, decode_config):
         self.configs = decode_config
-        # deallocate prefill A and D, need to reinitialize when back in prefill mode
+
+        # Deallocate prefill A and D, need to reinitialize when back in prefill mode
         ttnn.deallocate(self.A)
         ttnn.deallocate(self.D)
         self.A = self.A_decode
         self.D = self.D_decode
-        self.tt_hidden_states = torch.cat(self.tt_hidden_states, dim=2)
-        self.tt_hidden_states = ttnn.from_torch(
-            self.tt_hidden_states,
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.configs["dtype"]["activations"],
+
+        # The initial decode hidden state is stored in the cache
+        self.tt_hidden_states = ttnn.typecast(
+            self.hidden_state_cache.concat_users(0),
+            self.configs["dtype"]["activations"],
         )
 
     def forward(self, x):
@@ -257,18 +249,22 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(bmulx0)
 
             ttnn.deallocate(self.tt_hidden_states)
+
             self.tt_hidden_states = ttnn.to_memory_config(
                 hidden_state0, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
             )
 
         elif self.configs["mode"] == ModelMode.PREFILL:
             prev_hidden_state = ttnn.to_memory_config(
-                self.prev_hidden_state, memory_config=self.configs["sharded_prev_hidden"]
+                self.hidden_state_cache.get(self.configs["current_user"], 0),
+                memory_config=self.configs["sharded_prev_hidden"],
             )
             abar2_sharded = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
             ttnn.deallocate(abar2)
+
             bmulx0_sharded = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
             ttnn.deallocate(bmulx0)
+
             hidden_states_sharded = ttl.operations.primary.transformers.ssm_prefix_scan(
                 abar2_sharded,
                 bmulx0_sharded,
@@ -279,14 +275,15 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(abar2_sharded)
             ttnn.deallocate(bmulx0_sharded)
 
-            # TODO Need to update when chunkimg is supported, however, this also need to be reset to zeros for next user
-            # self.prev_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # We have to move hidden states results to DRAM or else we don't have enough room for the prev_hidden_state copy
+            hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_states_sharded)
 
-            self.tt_hidden_states.append(ttnn.to_torch(prev_hidden_state))
+            prev_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.hidden_state_cache.set(self.configs["current_user"], 0, prev_hidden_state)
             ttnn.deallocate(prev_hidden_state)
 
-            hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(hidden_states_sharded)
+            hidden_state0 = ttnn.to_memory_config(hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # compute C
         C0 = ttnn.linear(
