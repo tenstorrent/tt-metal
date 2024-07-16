@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from loguru import logger
 from transformers import AutoTokenizer
@@ -19,7 +18,7 @@ from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     verify_acc_metrics,
 )
-from models.utility_functions import is_wormhole_b0, tt_tensors_to_torch_tensors
+from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, use_hf_model=False):
@@ -192,98 +191,3 @@ def run_test_perplexity(
     # Verify metrics against targets
     calculated_acc_metrics = {"ppl": ppl, "top1_acc": top1_acc, "top5_acc": top5_acc}
     verify_acc_metrics(calculated_acc_metrics, expected_acc_metrics)
-
-
-@pytest.mark.parametrize(
-    "llm_mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
-    (
-        ("prefill", 32, 128, 64, 19.67, 0.41, 0.66),
-        ("prefill", 32, 1024, 64, 11.19, 0.48, 0.72),
-        ("prefill", 32, 2048, 64, 9.81, 0.50, 0.74),
-        ("decode", 64, 128, 64, 19.67, 0.41, 0.66),
-        ("decode", 64, 1024, 64, 11.19, 0.48, 0.72),
-        ("decode", 64, 2048, 64, 9.81, 0.50, 0.74),
-    ),
-    ids=[
-        "prefill_seq128",
-        "prefill_seq1024",
-        "prefill_seq2048",
-        "decode_128",
-        "decode_1024",
-        "decode_2048",
-    ],
-)
-def test_perplexity_huggingface(
-    llm_mode,
-    batch_size,
-    max_seq_len,
-    num_samples,  # Total number of prompts to evaluate (all if None)
-    expected_ppl,
-    expected_top1,
-    expected_top5,
-    model_location_generator,
-):
-    run_test_perplexity(
-        llm_mode,
-        batch_size,
-        max_seq_len,
-        None,
-        model_location_generator,
-        None,
-        None,
-        num_samples,
-        {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
-        use_hf_model=True,
-    )
-
-
-@pytest.mark.parametrize(
-    "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl, expected_top1, expected_top5",
-    (
-        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 19.93, 0.41, 0.66),
-        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.41, 0.49, 0.72),
-        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 9.96, 0.50, 0.74),
-        ("decode", 32, 128, "BFLOAT16-L1_SHARDED", 64, 20.25, 0.40, 0.66),
-        ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 11.63, 0.48, 0.72),
-        ("decode", 32, 2048, "BFLOAT16-L1_SHARDED", 64, 10.18, 0.50, 0.74),
-    ),
-    ids=[
-        "prefill_seq128_dram",
-        "prefill_seq1024_dram",
-        "prefill_seq2048_dram",
-        "decode_128_l1_sharded",
-        "decode_1024_l1_sharded",
-        "decode_2048_l1_sharded",
-    ],
-)
-@pytest.mark.parametrize("async_mode", (True,))  # Option to run Falcon in Async mode
-def test_perplexity(
-    llm_mode,
-    batch_size,
-    max_seq_len,
-    model_config_str,
-    num_samples,  # Total number of prompts to evaluate (all if None)
-    expected_ppl,
-    expected_top1,
-    expected_top5,
-    async_mode,
-    model_location_generator,
-    get_tt_cache_path,
-    device,
-    use_program_cache,
-):
-    assert is_wormhole_b0(), "This test is only for Wormhole B0"
-
-    device.enable_async(async_mode)
-
-    run_test_perplexity(
-        llm_mode,
-        batch_size,
-        max_seq_len,
-        model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
-        [device],
-        num_samples,
-        {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
-    )

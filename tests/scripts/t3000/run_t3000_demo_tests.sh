@@ -50,10 +50,6 @@ run_t3000_falcon7b_tests(){
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
 
-  # Falcon7B perplexity test (prefill and decode)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-prefill_seq1024_dram] --timeout=1800 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[True-decode_1024_l1_sharded] --timeout=1800 ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
