@@ -37,13 +37,6 @@ std::vector<Tensor> angle_bw(
     bool is_complextensor = true,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> prod_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    bool all_dimensions,
-    int64_t dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> conj_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -96,7 +89,6 @@ std::vector<Tensor> complex_sub_bw(
     float alpha = 1.0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 }  // namespace tt_metal
 
 }  // namespace tt

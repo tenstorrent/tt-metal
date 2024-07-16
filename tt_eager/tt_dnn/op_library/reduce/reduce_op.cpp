@@ -13,6 +13,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 
 #include <limits>
@@ -143,7 +144,7 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
 Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     Tensor input = input_tensor;
     if(input.get_layout()==Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE){
-        input = change_layout_to_tile(input, output_mem_config);
+        input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
         }
     Tensor n_input_tensor = ttnn::neg(input,output_mem_config);
     Tensor max_reduce = reduce(n_input_tensor,ReduceOpMath::MAX,reduce_dim,scaler,output_mem_config);

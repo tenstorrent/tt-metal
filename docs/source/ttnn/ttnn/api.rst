@@ -224,6 +224,7 @@ Pointwise Unary
    ttnn/silu_bw
    ttnn/selu_bw
    ttnn/square_bw
+   ttnn/prod_bw
    ttnn/hardswish_bw
    ttnn/tanhshrink_bw
    ttnn/atanh_bw

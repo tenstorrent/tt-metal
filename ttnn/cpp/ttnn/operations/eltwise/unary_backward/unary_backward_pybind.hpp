@@ -404,6 +404,54 @@ void bind_unary_backward_unary_optional(py::module& module, const unary_backward
     );
 }
 
+//OpHandler_prod_bw : get_function_prod_bw
+template <typename unary_backward_operation_t>
+void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, all_dimensions: bool, dim: int64_t, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        Performs backward operations for prod on input along `all_dimensions` or a particular `dim`.
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
+
+        Keyword args:
+            * :attr:`all_dimensions` :Can be true (perform prod backward along all dimensions ,ignores dim param) or false (Default value = true)
+            * :attr:`dim` : Dimension to perform prod backward, if :attr:`all_dimensions` = false (Default dimension = 0)
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input, all_dimensions, dim)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               bool all_dimensions,
+               int64_t dim,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(grad_tensor, input_tensor, all_dimensions, dim, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("all_dimensions") = true,
+            py::arg("dim") = 0,
+            py::arg("memory_config") = std::nullopt}
+    );
+}
+
 template <typename unary_backward_operation_t>
 void bind_unary_backward(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
@@ -651,6 +699,8 @@ void py_module(py::module& module) {
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for addition on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_unary_backward_prod_bw(module,ttnn::prod_bw);
 
     detail::bind_unary_backward(
         module,
