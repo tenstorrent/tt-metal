@@ -4,8 +4,8 @@
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -52,21 +52,21 @@ class TtTransformerBlock(LightweightModule):
             layer_num=layer_num,
             dtype=dtype,
         )
-        self.attention_norm = TtRMSNorm(
-            device_mesh=device_mesh,
+        self.attention_norm = RMSNorm(
+            device=device_mesh,
+            dim=args.dim,
             state_dict=state_dict,
-            args=args,
-            dtype=ttnn.bfloat16,
             layer_num=layer_num,
+            weight_dtype=ttnn.bfloat16,
             weight_key="attention_norm",
         )
 
-        self.ffn_norm = TtRMSNorm(
-            device_mesh=device_mesh,
+        self.ffn_norm = RMSNorm(
+            device=device_mesh,
+            dim=args.dim,
             state_dict=state_dict,
-            args=args,
-            dtype=ttnn.bfloat16,
             layer_num=layer_num,
+            weight_dtype=ttnn.bfloat16,
             weight_key="ffn_norm",
         )
 
