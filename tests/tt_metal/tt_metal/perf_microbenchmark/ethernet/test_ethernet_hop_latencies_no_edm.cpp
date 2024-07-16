@@ -41,10 +41,7 @@ class T3000TestDevice {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                auto* device = tt::tt_metal::CreateDevice(id);
-                devices_.push_back(device);
-            }
+            devices_ = tt::tt_metal::detail::CreateDevices({0,1,2,3,4,5,6,7});
             tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
@@ -61,12 +58,12 @@ class T3000TestDevice {
     void TearDown() {
         device_open = false;
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
+        for (auto [device_id, device_ptr] : devices_) {
+            tt::tt_metal::CloseDevice(device_ptr);
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::map<chip_id_t, Device *> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -227,9 +224,6 @@ void build_and_run_roundtrip_latency_test(
             num_samples,
             max_concurrent_samples,
             sample_page_size,
-            // device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).x,
-            // device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).y,
-            // receiver_start_semaphore
             device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
             device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
             worker_sem1);
@@ -375,11 +369,11 @@ int main (int argc, char** argv) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices != 8) {
-        log_info(tt::LogTest, "Need at least 2 devices to run this test");
+        log_trace(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest,"Test must be run on WH");
+        log_trace(tt::LogTest,"Test must be run on WH");
         return 0;
     }
 
@@ -430,7 +424,7 @@ int main (int argc, char** argv) {
     // Device setup
     std::vector<chip_id_t> device_ids = std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7};
 
-    auto get_device_list = [](std::vector<Device*> const& all_devices, std::size_t n_hops) {
+    auto get_device_list = [](std::map<chip_id_t, Device*> &all_devices, std::size_t n_hops) {
         switch (n_hops) {
             case 2:
                 return std::vector<Device*>{all_devices[0], all_devices[1]};
@@ -450,35 +444,40 @@ int main (int argc, char** argv) {
         };
     };
 
-    constexpr std::size_t placeholder_arg_value = 1;
-    for (auto n_hops : hop_counts) {
+    try {
+        constexpr std::size_t placeholder_arg_value = 1;
+        for (auto n_hops : hop_counts) {
 
-        auto devices = get_device_list(test_fixture.devices_, n_hops);
-        std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
+            auto devices = get_device_list(test_fixture.devices_, n_hops);
+            std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
 
-        for (auto max_concurrent_samples : max_concurrent_samples) {
-            for (auto num_samples : sample_counts) {
-                for (auto sample_page_size : page_sizes) {
-                    log_trace(tt::LogTest, "Running test with num_devices={}, num_samples={}, sample_page_size={}, max_concurrent_samples={}, n_hops={}",
-                        n_hops, num_samples, sample_page_size, max_concurrent_samples, n_hops);
-                    std::vector<Program> programs = {};
-                    std::vector<KernelHandle> receiver_kernel_ids;
-                    std::vector<KernelHandle> sender_kernel_ids;
-                    tt::tt_metal::build_and_run_roundtrip_latency_test(
-                        devices,
-                        hop_eth_sockets,
-                        num_samples,
-                        sample_page_size,
-                        max_concurrent_samples,
-                        n_hops,
+            for (auto max_concurrent_samples : max_concurrent_samples) {
+                for (auto num_samples : sample_counts) {
+                    for (auto sample_page_size : page_sizes) {
+                        log_trace(tt::LogTest, "Running test with num_devices={}, num_samples={}, sample_page_size={}, max_concurrent_samples={}, n_hops={}",
+                            n_hops, num_samples, sample_page_size, max_concurrent_samples, n_hops);
+                        std::vector<Program> programs = {};
+                        std::vector<KernelHandle> receiver_kernel_ids;
+                        std::vector<KernelHandle> sender_kernel_ids;
+                        tt::tt_metal::build_and_run_roundtrip_latency_test(
+                            devices,
+                            hop_eth_sockets,
+                            num_samples,
+                            sample_page_size,
+                            max_concurrent_samples,
+                            n_hops,
 
-                        programs,
-                        receiver_kernel_ids,
-                        sender_kernel_ids
-                    );
+                            programs,
+                            receiver_kernel_ids,
+                            sender_kernel_ids
+                        );
+                    }
                 }
             }
         }
+    } catch (exception e) {
+        test_fixture.TearDown();
+        return -1;
     }
 
     return 0;
