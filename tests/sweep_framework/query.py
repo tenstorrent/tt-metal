@@ -65,9 +65,9 @@ def summary(ctx):
         colored("PASS", "light_green"),
         colored("FAIL (ASSERT/EXCEPTION)", "light_red"),
         colored("FAIL (CRASH/HANG)", "light_red"),
+        colored("NOT RUN", "light_grey"),
         colored("FAIL (L1 Out of Mem)", "light_red"),
         colored("FAIL (Watcher)", "light_red"),
-        colored("NOT RUN", "light_grey"),
     ]
 
     client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
@@ -92,43 +92,20 @@ def summary(ctx):
                         }
                     },
                 )["aggregations"]["latest_runs"]["buckets"]
-                passes = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.PASS)
-                    for bucket in response
-                )
-                fail_ae = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
-                    == str(TestStatus.FAIL_ASSERT_EXCEPTION)
-                    for bucket in response
-                )
-                fail_ch = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
-                    == str(TestStatus.FAIL_CRASH_HANG)
-                    for bucket in response
-                )
-                not_run = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.NOT_RUN)
-                    for bucket in response
-                )
+                row = []
+                for status in TestStatus:
+                    row.append(
+                        sum(
+                            bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(status)
+                            for bucket in response
+                        )
+                    )
             else:
-                passes = client.count(index=results_index, query={"match": {"status": str(TestStatus.PASS)}})["count"]
-                fail_ae = client.count(
-                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_ASSERT_EXCEPTION)}}
-                )["count"]
-                fail_ch = client.count(
-                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_CRASH_HANG)}}
-                )["count"]
-                fail_l1 = client.count(
-                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_L1_OUT_OF_MEM)}}
-                )["count"]
-                fail_watcher = client.count(
-                    index=results_index, query={"match": {"status": str(TestStatus.FAIL_WATCHER)}}
-                )["count"]
-                not_run = client.count(index=results_index, query={"match": {"status": str(TestStatus.NOT_RUN)}})[
-                    "count"
-                ]
+                row = []
+                for status in TestStatus:
+                    row.append(client.count(index=results_index, query={"match": {"status": str(status)}})["count"])
 
-            table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], module_name)
+            table.rows.append(row, module_name)
     elif ctx.obj["batch_name"] is None:
         results_index = ctx.obj["module_name"] + "_test_results"
         if not ctx.obj["all"]:
@@ -152,34 +129,15 @@ def summary(ctx):
                 },
             )["aggregations"]["group_by_batch_name"]["buckets"]
             for bucket in response:
-                passes = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.PASS)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                fail_ae = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
-                    == str(TestStatus.FAIL_ASSERT_EXCEPTION)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                fail_ch = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
-                    == str(TestStatus.FAIL_CRASH_HANG)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                fail_l1 = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"]
-                    == str(TestStatus.FAIL_L1_OUT_OF_MEM)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                fail_watcher = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.FAIL_WATCHER)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                not_run = sum(
-                    bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.NOT_RUN)
-                    for bucket in bucket["group_by_vector_id"]["buckets"]
-                )
-                table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], bucket["key"])
+                row = []
+                for status in TestStatus:
+                    row.append(
+                        sum(
+                            bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(status)
+                            for bucket in bucket["group_by_vector_id"]["buckets"]
+                        )
+                    )
+                table.rows.append(row, bucket["key"])
         else:
             response = client.search(
                 index=results_index,
@@ -188,100 +146,69 @@ def summary(ctx):
             )
             batches = [bucket["key"] for bucket in response["aggregations"]["group_by_batch_name"]["buckets"]]
             for batch in batches:
-                passes = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [{"match": {"status": str(TestStatus.PASS)}}, {"match": {"batch_name": batch}}]
-                        }
-                    },
-                )["count"]
-                fail_ae = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [
-                                {"match": {"status": str(TestStatus.FAIL_ASSERT_EXCEPTION)}},
-                                {"match": {"batch_name": batch}},
-                            ]
-                        }
-                    },
-                )["count"]
-                fail_ch = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [
-                                {"match": {"status": str(TestStatus.FAIL_CRASH_HANG)}},
-                                {"match": {"batch_name": batch}},
-                            ]
-                        }
-                    },
-                )["count"]
-                fail_l1 = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [
-                                {"match": {"status": str(TestStatus.FAIL_L1_OUT_OF_MEM)}},
-                                {"match": {"batch_name": batch}},
-                            ]
-                        }
-                    },
-                )["count"]
-                fail_watcher = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [
-                                {"match": {"status": str(TestStatus.FAIL_WATCHER)}},
-                                {"match": {"batch_name": batch}},
-                            ]
-                        }
-                    },
-                )["count"]
-                not_run = client.count(
-                    index=results_index,
-                    query={
-                        "bool": {
-                            "must": [{"match": {"status": str(TestStatus.NOT_RUN)}}, {"match": {"batch_name": batch}}]
-                        }
-                    },
-                )["count"]
-                table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], batch)
+                row = []
+                for status in TestStatus:
+                    row.append(
+                        client.count(
+                            index=results_index,
+                            query={
+                                "bool": {"must": [{"match": {"status": str(status)}}, {"match": {"batch_name": batch}}]}
+                            },
+                        )["count"]
+                    )
 
-    elif ctx.obj["vector_id"] is None:
+                table.rows.append(row, batch)
+
+    else:
         results_index = ctx.obj["module_name"] + "_test_results"
-        response = client.search(
-            index=results_index,
-            size=0,
-            query={"match": {"batch_name": ctx.obj["batch_name"]}},
-            aggs={
-                "group_by_vector_id": {
-                    "terms": {"field": "vector_id.keyword", "size": 10000},
-                    "aggs": {
-                        "latest_timestamp": {
-                            "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
-                        }
-                    },
-                }
-            },
-        )["aggregations"]["group_by_vector_id"]["buckets"]
-        for bucket in response:
-            passes = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.PASS)
-            fail_ae = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(
-                TestStatus.FAIL_ASSERT_EXCEPTION
-            )
-            fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(
-                TestStatus.FAIL_CRASH_HANG
-            )
-            fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(
-                TestStatus.FAIL_L1_OUT_OF_MEM
-            )
-            fail_ch = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.FAIL_WATCHER)
-            not_run = bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(TestStatus.NOT_RUN)
-            table.rows.append([passes, fail_ae, fail_ch, fail_l1, fail_watcher, not_run], bucket["key"])
-
+        if not ctx.obj["all"]:
+            response = client.search(
+                index=results_index,
+                size=0,
+                query={"match": {"batch_name": ctx.obj["batch_name"]}},
+                aggs={
+                    "group_by_vector_id": {
+                        "terms": {"field": "vector_id.keyword", "size": 10000},
+                        "aggs": {
+                            "latest_timestamp": {
+                                "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
+                            }
+                        },
+                    }
+                },
+            )["aggregations"]["group_by_vector_id"]["buckets"]
+            for bucket in response:
+                row = []
+                for status in TestStatus:
+                    row.append(bucket["latest_timestamp"]["hits"]["hits"][0]["_source"]["status"] == str(status))
+                table.rows.append(row, bucket["key"])
+        else:
+            response = client.search(
+                index=results_index,
+                size=10000,
+                query={"match": {"batch_name": ctx.obj["batch_name"]}},
+                aggs={
+                    "group_by_vector_id": {
+                        "terms": {"field": "vector_id.keyword", "size": 10000},
+                    }
+                },
+            )["aggregations"]["group_by_vector_id"]["buckets"]
+            for bucket in response:
+                row = []
+                for status in TestStatus:
+                    row.append(
+                        client.count(
+                            query={
+                                "bool": {
+                                    "must": [
+                                        {"match": {"status": str(status)}},
+                                        {"match": {"vector_id": bucket["key"]}},
+                                    ]
+                                }
+                            }
+                        )["count"]
+                    )
+                table.rows.append(row, bucket["key"])
     print(table)
     client.close()
 
