@@ -160,10 +160,6 @@ Tensor is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config
     return ttnn::eqz( input[1], output_mem_config);
 }
 
-Tensor is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::eqz( input[0], output_mem_config);
-}
-
 ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
 }
