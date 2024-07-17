@@ -809,6 +809,35 @@ def test_level2_is_imag(bs, memcfg, dtype, device, function_level_defaults):
 )
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
+def test_level2_angle(bs, memcfg, dtype, device, function_level_defaults):
+    input_shape = torch.Size([bs[0], bs[1], 32, 64])
+    # check imag
+    x = Complex(input_shape)
+    xtt = ttl.tensor.complex_tensor(
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+    )
+    tt_dev = ttnn.angle(xtt, memory_config=memcfg)
+    tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    x_real = torch.tensor(x.real, dtype=torch.bfloat16)
+    x_imag = torch.tensor(x.imag, dtype=torch.bfloat16)
+    x_torch = torch.complex(x_real.float(), x_imag.float())
+    tt_cpu = torch.angle(x_torch).to(torch.bfloat16)
+    passing, output = comp_pcc(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
+@pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
 def test_level1_polar(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 32])
     # check polar function
