@@ -981,11 +981,6 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward(
         module,
-        ttnn::clamp_max_bw,
-        R"doc(Performs backward operations for clamp max value on :attr:`input_tensor`, :attr:`max` with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_unary_backward(
-        module,
         ttnn::hardshrink_bw,
         R"doc(Performs backward operations for hardshrink on :attr:`input_tensor`, :attr:`lambd` with given :attr:`grad_tensor`.)doc");
 

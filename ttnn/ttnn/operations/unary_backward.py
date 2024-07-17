@@ -49,7 +49,6 @@ def register_ttnn_cpp_unary_backward_function(unary_backward_function):
     name_to_golden_function = {
         "mul_bw": lambda x, grad_data: unary_bw_with_float(torch.mul, x, grad_data),
         "clamp_min_bw": lambda x, grad_data: unary_bw_with_float(torch.clamp_min, x, grad_data),
-        "clamp_max_bw": lambda x, grad_data: unary_bw_with_float(torch.clamp_max, x, grad_data),
         "add_bw": lambda x, grad_data: unary_bw_with_float(torch.add, x, grad_data),
         "eq_bw": lambda x, grad_data: unary_bw_with_float(torch.eq, x, grad_data),
         "gt_bw": lambda x, grad_data: unary_bw_with_float(torch.gt, x, grad_data),
@@ -138,7 +137,6 @@ def register_ttnn_cpp_unary_backward_function(unary_backward_function):
 TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS = [
     ttnn.mul_bw,
     ttnn.clamp_min_bw,
-    ttnn.clamp_max_bw,
     ttnn.add_bw,
     ttnn.eq_bw,
     ttnn.gt_bw,
