@@ -254,6 +254,8 @@ Pointwise Unary
    ttnn/polygamma_bw
    ttnn/gelu_bw
    ttnn/repeat_bw
+   ttnn/real
+   ttnn/imag
 
 Pointwise Binary
 ================
