@@ -729,11 +729,6 @@ void py_module(py::module& module) {
         ttnn::mul_bw,
         R"doc(Performs backward operations for multiply on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
-        module,
-        ttnn::clamp_min_bw,
-        R"doc(Performs backward operations for clamp min value on :attr:`input_tensor`, :attr:`alpha` with given :attr:`grad_tensor`.)doc");
-
     detail::bind_unary_backward_optional_float_params_with_default(
         module,
         ttnn::clamp_bw,
