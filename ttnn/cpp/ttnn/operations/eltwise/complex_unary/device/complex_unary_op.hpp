@@ -18,12 +18,14 @@ enum class ComplexUnaryOpType {
     IMAG,
     ANGLE,
     IS_IMAG,
+    IS_REAL,
 };
 
 Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
+Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryOpType OpType>
 struct OpHandler_complex_type1;
@@ -53,6 +55,13 @@ template <>
 struct OpHandler_complex_type1<ComplexUnaryOpType::IS_IMAG> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _is_imag(input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_complex_type1<ComplexUnaryOpType::IS_REAL> {
+    static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
+        return _is_real(input, output_mem_config);
     }
 };
 
