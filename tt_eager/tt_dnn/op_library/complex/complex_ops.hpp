@@ -72,8 +72,6 @@ class ComplexTensor {
         }
 };
 
-Tensor is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 ComplexTensor complex_add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config);

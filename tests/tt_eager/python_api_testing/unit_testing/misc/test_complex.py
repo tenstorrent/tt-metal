@@ -758,7 +758,7 @@ def test_level2_is_real(bs, memcfg, dtype, device, function_level_defaults):
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(0 * x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.is_real(xtt, memcfg)
+    tt_dev = ttnn.is_real(xtt, memory_config=memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = torch.ones(x.real.shape)
     if is_wormhole_b0():

@@ -1555,13 +1555,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
         );
 
-        m_tensor.def("is_real",
-		     py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::is_real),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is real.)doc"
-        );
-
         m_tensor.def("complex_abs",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_abs),
             py::arg("input"),
