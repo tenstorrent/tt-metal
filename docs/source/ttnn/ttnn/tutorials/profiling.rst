@@ -4,7 +4,9 @@ ttnn Profiling
 ##############
 
 .. note::
-   TT-NN tutorials currently work on Grayskull only.
+   This TT-NN tutorial requires a source build for profiling features and is
+   available on Grayskull only. We are working on compatibility on other
+   architectures.
 
 .. toctree::
 

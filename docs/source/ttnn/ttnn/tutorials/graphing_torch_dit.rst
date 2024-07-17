@@ -4,7 +4,8 @@ Graphing Torch DiT_XL_2 With TTNN
 #################################
 
 .. note::
-   TT-NN tutorials currently work on Grayskull only.
+   This TT-NN tutorial is available on Grayskull only. We are working on
+   compatibility on other architectures.
 
 .. toctree::
 

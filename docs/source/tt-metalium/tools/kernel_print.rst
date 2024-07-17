@@ -1,6 +1,9 @@
 Kernel Debug Print
 ==================
 
+.. note::
+   Tools are only fully supported on source builds.
+
 Overview
 --------
 
