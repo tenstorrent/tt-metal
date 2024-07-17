@@ -77,6 +77,10 @@ class TtTransformerBlock(torch.nn.Module):
         x: ttnn.Tensor,
         current_pos: int,
         attn_masks: Optional[ttnn.Tensor] = None,
+        rot_mat=None,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
     ) -> ttnn.Tensor:
         attn_norm = self.attention_norm(x)
         # Attention module expects a list of inputs, attn masks (multi-device support)
@@ -84,11 +88,15 @@ class TtTransformerBlock(torch.nn.Module):
             [attn_norm],
             current_pos,
             [attn_masks],
+            rot_mat,
+            transformation_mats,
+            user_id,
+            mode,
         )
         # Attention also returns multiple outputs (multi-device support)
         assert len(r) == 1, "Multiple devices not yet supported"
         r = r[0]
-        r = ttnn.reshape(r, (1, 1, 32, 4096))
+        # r = ttnn.reshape(r, (1, 1, 32, 4096))
         h = ttnn.add(x, r, memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
         r = self.feed_forward.forward(self.ffn_norm(h))
         out = ttnn.add(h, r, memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])

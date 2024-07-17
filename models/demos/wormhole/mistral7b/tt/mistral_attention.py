@@ -44,7 +44,7 @@ class TtMistralAttention(nn.Module):
         self.dtype = dtype
 
         self.kv_seq_len = configuration.kv_seq_len
-        self.sliding_window = configuration.kv_seq_len
+        self.sliding_window = configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
         self.model_config = configuration.get_model_config()
@@ -114,7 +114,7 @@ class TtMistralAttention(nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.kv_seq_len,  # self.sliding_window,
+                    self.sliding_window,
                     self.head_dim,
                 )
             )
@@ -122,7 +122,7 @@ class TtMistralAttention(nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.kv_seq_len,  # self.sliding_window,
+                    self.sliding_window,
                     self.head_dim,
                 )
             )
@@ -241,8 +241,9 @@ class TtMistralAttention(nn.Module):
             packer_l1_acc=True,
         )
         self.attention_grid = ttnn.experimental.tensor.CoreCoord(8, 4)
+        self.scale = self.head_dim**-0.5
 
-    def forward(
+    def forward_decode(
         self,
         xs: List[ttnn.Tensor],
         current_pos: int,
@@ -493,3 +494,175 @@ class TtMistralAttention(nn.Module):
             return None  # tt_all_reduce(dense_outputs)
         else:
             return dense_outputs
+
+    def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+        seq_len = xs_11SH.shape[-2]
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        wqkv = self.wqkv_list[0]
+        wo = self.wo_list[0]
+        self.layer_past = self.layer_past_list[0]
+        ###
+        # QKV matmuls
+        ###
+
+        xqkv_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_len // (512),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=24,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= 2048,
+        )
+        print("xs_11SH", xs_11SH)
+        if seq_len > 2048:
+            xs_11SH = ttnn.reshape(xs_11SH, [1, 2, seq_len // 2, -1])
+        xqkv_fused = ttnn.linear(
+            xs_11SH,
+            wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=xqkv_mem_config,
+            # core_grid=ttnn.CoreGrid(y=8, x=8),
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc,
+        )
+        if seq_len > 2048:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+        print("xqkv_fused", xqkv_fused)
+
+        xs_11SH.deallocate(True)
+
+        # split qkv into heads
+        (
+            q_heads_1QSD_pre_rot,
+            k_heads_1KSD_pre_rot,
+            v_heads_1VSD,
+        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        xqkv_fused.deallocate(True)
+
+        ###
+        # Rotary embeddings
+        ###
+
+        q_heads_1QSD = ttnn.experimental.tensor.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        q_heads_1QSD_pre_rot.deallocate(True)
+
+        k_heads_1KSD = ttnn.experimental.tensor.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        k_heads_1KSD_pre_rot.deallocate(True)
+
+        mc = ttnn.create_sharded_memory_config(
+            (seq_len // 8, self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # Fill KV-Cache
+        print("keys", k_heads_1KSD)
+        keys_BKSD = self.layer_past[0]
+        values_BKSD = self.layer_past[1]
+        # keys_reshaped = ttnn.reshape(keys_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        # values_reshaped = ttnn.reshape(values_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        ttnn.experimental.tensor.fill_cache(
+            keys_BKSD,
+            ttnn.experimental.tensor.interleaved_to_sharded(
+                ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b), sharded_mem_config=mc
+            ),
+            user_id,
+        )
+        ttnn.experimental.tensor.fill_cache(
+            values_BKSD,
+            ttnn.experimental.tensor.interleaved_to_sharded(
+                ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b), sharded_mem_config=mc
+            ),
+            user_id,
+        )
+        # keys_11SD = ttnn.reshape(keys_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        # values_11SD = ttnn.reshape(values_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        self.layer_past = [keys_BKSD, values_BKSD]
+        print("sdpa", keys_BKSD)
+
+        # SDPA
+        k_heads_K1SD = ttnn.reshape(k_heads_1KSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
+        v_heads_V1SD = ttnn.reshape(v_heads_1VSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
+        q_heads_84SD = ttnn.reshape(
+            q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+        )
+        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+            q_heads_84SD,
+            k_heads_K1SD,
+            v_heads_V1SD,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+        )
+
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+
+        # deallocate keys and values
+        q_heads_84SD.deallocate(True)
+        k_heads_K1SD.deallocate(True)
+        v_heads_V1SD.deallocate(True)
+
+        ###
+        # Output matmul
+        ###
+        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output_1QSD,
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_output_1QSD.deallocate(True)
+
+        # if seq_len >= 1024:  # Specific program config to make better usage of cores and to avoid di/dt ND issues
+        #     wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
+        # else:
+        print("wo", attn_output_11SH)
+        wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_len // (512),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= 2048,
+        )
+        if seq_len > 2048:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 2, seq_len // 2, -1])
+        output_11SH = ttnn.linear(
+            attn_output_11SH,
+            wo,
+            # core_grid=ttnn.CoreGrid(y=8, x=8) if not wo_program_config else None,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=wo_program_config,
+        )
+        if seq_len > 2048:
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+        attn_output_11SH.deallocate(True)
+        return [output_11SH]
+
+    def forward(
+        self, xs, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"
+    ):
+        if mode == "prefill":
+            return self.forward_prefill(xs[0], attn_masks, rot_mats, transformation_mats, user_id)
+        else:
+            return self.forward_decode(xs, current_pos, attn_masks)

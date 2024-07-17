@@ -46,7 +46,7 @@ def test_mistral_mlp_inference(device, use_program_cache, reset_seeds):
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, 17, 4096)
+    torch_input = torch.randn(1, 1, 32, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT

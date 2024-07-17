@@ -124,6 +124,85 @@ class TtModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            # Chunk values based on what works best empirically
+            self.model_config[
+                "SDPA_PROGCFG"
+            ] = lambda seqlen: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
+                k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
+            )
+
+            self.model_config["PREFILL_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=4,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+                fuse_batch=False,
+            )
+
+            self.model_config["PREFILL_MLP_W3_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=4,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=4,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+            self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+                fuse_batch=False,
+            )
+
+            self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
