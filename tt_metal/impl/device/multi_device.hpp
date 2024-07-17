@@ -34,13 +34,20 @@ public:
     DeviceMesh &operator=(DeviceMesh &&) = delete;
 
     std::vector<Device*> get_devices() const;
-    Device* get_device(int queried_device_id);
+    Device *get_device(int logical_device_id) const;
+    Device *get_device(int row_idx, int col_idx) const;
+    std::vector<Device *> get_devices_on_row(int row_idx) const;
+    std::vector<Device *> get_devices_on_column(int col_idx) const;
 
     const DeviceIds get_device_ids() const;
 
     int num_devices() const;
 
     void close_devices();
+
+   private:
+    int num_rows;
+    int num_cols;
 };
 
 
