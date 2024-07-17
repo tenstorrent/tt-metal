@@ -76,6 +76,11 @@ void py_module(py::module& module) {
         ttnn::imag,
         R"doc(Performs complex operations for imag of :attr:`input_tensor_a`.)doc");
 
+    detail::bind_complex_unary_type1(
+        module,
+        ttnn::angle,
+        R"doc(Performs complex operations for angle of :attr:`input_tensor_a`.)doc");
+
 }
 
 }  // namespace complex_unary
