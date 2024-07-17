@@ -88,4 +88,4 @@ def _nop_golden_function(input_tensor, *args, **kwargs):
 
 ttnn.attach_golden_function(ttnn.experimental.tensor.interleaved_to_sharded, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.experimental.tensor.reshard, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.experimental.tensor.tilize, _nop_golden_function)
+ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)
