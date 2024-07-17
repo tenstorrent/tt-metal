@@ -12,14 +12,14 @@
 #include "device/moe_op.hpp"
 #include "ttnn/cpp/ttnn/types.hpp"
 
-template <class Tuple,
-   class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
-std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple)
-{
-    return std::apply([](auto&&... elems){
-        return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...};
-    }, std::forward<Tuple>(tuple));
-}
+// template <class Tuple,
+//    class M = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
+// std::vector<std::optional<M>> tuple_to_vector_optional(Tuple&& tuple)
+// {
+//     return std::apply([](auto&&... elems){
+//         return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...};
+//     }, std::forward<Tuple>(tuple));
+// }
 namespace ttnn {
 namespace operations::reduction {
 
@@ -62,8 +62,7 @@ struct ExecuteMoe {
         const auto& input_tensor = input_tensors.at(0);
         const auto& topk_mask_tensor = input_tensors.at(1);
         const auto& expert_mask_tensor = input_tensors.at(2);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor, topk_mask_tensor, expert_mask_tensor}))};,
-                                            Tensor(operation::get_workers_for_op_output({input_tensor, topk_mask_tensor, expert_mask_tensor}))};
+        return {Tensor(operation::get_workers_for_op_output({input_tensor, topk_mask_tensor, expert_mask_tensor}))};
     }
 };
 

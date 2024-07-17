@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         }
     );
 
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index,
                                                         (std::uint32_t) out_is_dram,
                                                         Ht,
                                                         k};
