@@ -10,6 +10,8 @@
 #include "multi_device.hpp"
 #include "types.hpp"
 #include "reports.hpp"
+#include "activation.hpp"
+#include "export_enum.hpp"
 
 #include "ttnn/experimental/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
@@ -24,6 +26,9 @@ PYBIND11_MODULE(_ttnn, module) {
 
     auto m_types = module.def_submodule("types", "ttnn Types");
     ttnn::types::py_module(m_types);
+
+    auto m_activation = module.def_submodule("activation", "ttnn Activation");
+    ttnn::activation::py_module(m_activation);
 
     auto m_core = module.def_submodule("core", "core functions");
     ttnn::core::py_module(m_core);

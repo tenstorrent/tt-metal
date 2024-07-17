@@ -55,15 +55,15 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
         (True, False, True, 4608, 1024, 1024, None),
         (True, False, False, 4608, 1024, 1024, None),
         # # # in1-L1-ff1
-        (False, True, True, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, True, False, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, True, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, False, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (False, True, True, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, True, False, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, False, True, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, False, False, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # # # in1-dram-ff1
-        (True, True, True, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, True, False, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, True, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, False, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (True, True, True, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, True, False, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, False, True, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, False, False, 4608, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # # # in1-L1-ff1 - no Gelu
         (False, True, True, 4608, 1024, 4096, None),
         (False, True, False, 4608, 1024, 4096, None),
@@ -252,15 +252,15 @@ def test_bert_linear(
         (True, False, True, 2688, 1024, 1024, None),
         (True, False, False, 2688, 1024, 1024, None),
         # # # # in1-L1-ff1
-        (False, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (False, True, True, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, True, False, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, False, True, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (False, False, False, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # # # # in1-dram-ff1
-        (True, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (True, True, True, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, True, False, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, False, True, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
+        (True, False, False, 2688, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # # # # # in1-L1-ff1 - no Gelu
         (False, True, True, 2688, 1024, 4096, None),
         (False, True, False, 2688, 1024, 4096, None),
@@ -579,9 +579,9 @@ def not_fit_l1(M, K, N, fp32):
         # in1-dram-selfout
         (True, True, True, 1536, 1024, 1024, None),
         # in1-L1-ff1
-        (False, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (False, True, True, 1536, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # in1-dram-ff1
-        (True, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (True, True, True, 1536, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # in1-L1-ff1 - no Gelu
         (False, True, True, 1536, 1024, 4096, None),
         # in1-dram-ff1 - no Gelu
@@ -660,7 +660,7 @@ def test_bert_linear_batch4(
         # in1-dram-selfout
         (1536, 1024, 1024, None),
         # in1-dram-ff1
-        (1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        (1536, 1024, 4096, (ttnn.UnaryOpType.GELU, True)),
         # in1-dram-ff1 - no Gelu
         (1536, 1024, 4096, None),
         # in1-dram-ff2

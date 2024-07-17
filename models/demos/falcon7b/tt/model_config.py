@@ -334,7 +334,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         per_core_M=4,
         per_core_N=72,
         transpose_mcast=False,
-        fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+        fused_activation=[ttnn.UnaryOpType.GELU, True],
     )
     model_config["DENSE_H_TO_4H_MM_PROGCFG"] = mm_h_to_4h_prog_cfg
 

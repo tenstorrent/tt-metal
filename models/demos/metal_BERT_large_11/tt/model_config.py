@@ -232,7 +232,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=12,
                 per_core_N=16,
                 transpose_mcast=False,
-                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+                fused_activation=(ttnn.UnaryOpType.GELU, True),
             ),
             "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
@@ -371,7 +371,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=12,
                 per_core_N=16,
                 transpose_mcast=transpose_mm_mcast,
-                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+                fused_activation=(ttnn.UnaryOpType.GELU, True),
             ),
             "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,

@@ -583,7 +583,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             per_core_M=row_height // 32,
             per_core_N=4,
             fuse_batch=True,
-            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
             mcast_in0=True,
         )
         model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

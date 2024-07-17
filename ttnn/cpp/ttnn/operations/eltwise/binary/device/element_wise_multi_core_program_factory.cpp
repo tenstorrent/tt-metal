@@ -5,7 +5,8 @@
 #include <algorithm>
 
 #include "binary_device_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
@@ -252,6 +253,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using ttnn::operations::unary::UnaryWithParam;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;

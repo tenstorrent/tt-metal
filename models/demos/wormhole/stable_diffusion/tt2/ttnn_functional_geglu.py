@@ -141,7 +141,7 @@ class geglu:
             per_core_M=out_block_h,
             per_core_N=out_block_w,
             transpose_mcast=False,
-            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
         gate = ttnn.linear(
             hidden_states,

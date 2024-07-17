@@ -9,6 +9,7 @@ from loguru import logger
 import numpy as np
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     comp_pcc,
 )
@@ -113,7 +114,7 @@ def run_bert_large_ff1_matmul_test(
     if bias_mem_config is not None:
         ref_bmm = ref_bmm + BIAS
     if fused_activation is not None:
-        if fused_activation[0] == ttl.tensor.FusibleActivation.GELU:
+        if fused_activation[0] == ttnn.UnaryOpType.GELU:
             ref_bmm = torch.nn.functional.gelu(ref_bmm)
         else:
             assert False, "Unknown activation"
@@ -126,7 +127,7 @@ def run_bert_large_ff1_matmul_test(
 
 @pytest.mark.parametrize(
     "activation",
-    ((ttl.tensor.FusibleActivation.GELU, True), None),
+    ((ttnn.UnaryOpType.GELU, True), None),
     ids=["gelu_activation", "no_activation"],
 )
 @pytest.mark.parametrize(
@@ -214,7 +215,7 @@ def test_bert_large_ff1_matmul_with_program_cache(device, use_program_cache):
             mem_config,
             mem_config,
             mem_config,
-            fused_activation=(ttl.tensor.FusibleActivation.GELU, True),
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
         )
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
