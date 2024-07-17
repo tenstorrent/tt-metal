@@ -91,24 +91,6 @@ Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
 
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler;
-
 template <>
 struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
@@ -341,39 +323,4 @@ struct OpHandler<UnaryCompositeOpType::POWER_INT> {
     }
 };
 
-// Template functions to get the function pointers
-template <UnaryCompositeOpType OpType>
-auto get_function_type1() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_function_type2() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_function_type3() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_function_type4() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_function_type5() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_glu_fn() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_power_fn() {
-    return &OpHandler<OpType>::handle;
-}
 }

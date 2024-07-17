@@ -332,7 +332,7 @@ def test_unary_hardtanh_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     low = -1
     high = 1
-    output_tensor = ttnn.hardtanh(input_tensor, low, high)
+    output_tensor = ttnn.hardtanh(input_tensor, low=low, high=high)
     golden_tensor = torch.nn.functional.hardtanh(in_data, min_val=low, max_val=high)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
