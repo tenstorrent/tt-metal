@@ -11,8 +11,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/core.hpp"
