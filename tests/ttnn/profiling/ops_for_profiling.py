@@ -137,16 +137,12 @@ def unary_add_bw(x, y):
     ttnn.add_bw(x, y, 3)
 
 
-def unary_div_bw(x, y):
-    tt_lib.tensor.unary_div_bw(x, y, 3)
-
-
 def rdiv_bw(x, y):
-    tt_lib.tensor.rdiv_bw(x, y, 3)
+    ttnn.rdiv_bw(x, y, 3)
 
 
 def unary_pow_bw(x, y):
-    tt_lib.tensor.unary_pow_bw(x, y, 3)
+    ttnn.pow_bw(x, y, 3)
 
 
 def clamp_bw(x, y):
@@ -162,19 +158,19 @@ def clamp_max_bw(x, y):
 
 
 def gelu_bw_none(x, y):
-    tt_lib.tensor.gelu_bw(x, y, approximate="none")
+    ttnn.gelu_bw(x, y, approximate="none")
 
 
 def gelu_bw_tanh(x, y):
-    tt_lib.tensor.gelu_bw(x, y, approximate="tanh")
+    ttnn.gelu_bw(x, y, approximate="tanh")
 
 
 def bias_gelu_unary_bw_none(x, y):
-    tt_lib.tensor.bias_gelu_unary_bw(x, y, bias=3.1, approximate="None")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="none")
 
 
 def bias_gelu_unary_bw_tanh(x, y):
-    tt_lib.tensor.bias_gelu_unary_bw(x, y, bias=3.1, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="tanh")
 
 
 def softplus_bw(x, y):
@@ -218,7 +214,7 @@ def remainder_bw(x, y):
 
 
 def repeat_bw(x, y):
-    tt_lib.tensor.repeat_bw(x, y, shape=(1, 1, 1, 4))
+    ttnn.repeat_bw(x, y, shape=(1, 1, 1, 4))
 
 
 def repeat_bw_shape_func(input_shape):
@@ -430,6 +426,10 @@ def leaky_relu_bw(x, y):
 
 def softshrink_bw(x, y):
     ttnn.softshrink_bw(x, y, 0.5)
+
+
+def unary_div_bw(x, y):
+    ttnn.div_bw(x, y, 3, round_mode="None")
 
 
 all_binary_ops = [
@@ -658,11 +658,11 @@ all_binary_ops = [
     },
     {
         "op": unary_div_bw,
-        "name": "tt_lib.tensor.unary_div_bw",
+        "name": "ttnn.unary_div_bw",
     },
     {
         "op": rdiv_bw,
-        "name": "tt_lib.tensor.rdiv_bw",
+        "name": "ttnn.rdiv_bw",
     },
     {
         "op": ttnn.sqrt_bw,
@@ -686,7 +686,7 @@ all_binary_ops = [
     },
     {
         "op": unary_pow_bw,
-        "name": "tt_lib.tensor.unary_pow_bw",
+        "name": "ttnn.unary_pow_bw",
     },
     {
         "op": ttnn.tanh_bw,
@@ -726,19 +726,19 @@ all_binary_ops = [
     },
     {
         "op": gelu_bw_none,
-        "name": "tt_lib.tensor.gelu_bw_none",
+        "name": "ttnn.gelu_bw_none",
     },
     {
         "op": gelu_bw_tanh,
-        "name": "tt_lib.tensor.gelu_bw_tanh",
+        "name": "ttnn.gelu_bw_tanh",
     },
     {
         "op": bias_gelu_unary_bw_none,
-        "name": "tt_lib.tensor.bias_gelu_unary_bw_none",
+        "name": "ttnn.bias_gelu_unary_bw_none",
     },
     {
         "op": bias_gelu_unary_bw_tanh,
-        "name": "tt_lib.tensor.bias_gelu_unary_bw_tanh",
+        "name": "ttnn.bias_gelu_unary_bw_tanh",
     },
     {
         "op": ttnn.hardsigmoid_bw,
@@ -957,7 +957,7 @@ all_binary_ops = [
     },
     {
         "op": repeat_bw,
-        "name": "tt_lib.tensor.repeat_bw",
+        "name": "ttnn.repeat_bw",
         "shape_func": repeat_bw_shape_func,
     },
     {
@@ -1139,16 +1139,12 @@ def mul_unary(x):
     ttnn.mul(x, 5.0)
 
 
-def div_unary(x):
-    tt_lib.tensor.div_unary(x, 5.0)
-
-
 def relu_min(x):
-    tt_lib.tensor.relu_min(x, 0.1)
+    ttnn.relu_min(x, 0.1)
 
 
 def relu_max(x):
-    tt_lib.tensor.relu_max(x, 0.1)
+    ttnn.relu_max(x, 0.1)
 
 
 def clip(x):
@@ -1441,6 +1437,10 @@ def fill_ones_rm(x):
     )
 
 
+def group_norm_no_weights(x):
+    ttnn.group_norm(x, num_groups=32, epsilon=0.00001, weight=None, bias=None)
+
+
 def convert_conv_weight_tensor_to_tiled_layout(x):
     tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout(x, in1_block_h=32, in1_block_w=32)
 
@@ -1628,10 +1628,6 @@ all_unary_ops = [
     {
         "op": mul_unary,
         "name": "ttnn.mul_unary",
-    },
-    {
-        "op": div_unary,
-        "name": "tt_lib.tensor.div_unary",
     },
     {
         "op": ttnn.gelu,
@@ -2171,10 +2167,6 @@ all_unary_ops = [
         "name": "tt_lib.tensor.fill_ones_rm",
     },
     {
-        "op": groupnorm_no_weights,
-        "name": "tt_lib.tensor.groupnorm_no_weights",
-    },
-    {
         "op": tt_lib.tensor.mean_hw,
         "name": "tt_lib.tensor.mean_hw",
     },
@@ -2374,6 +2366,12 @@ all_unary_ops = [
     },
 ]
 
+# Crashes
+# {
+#     "op": group_norm_no_weights,
+#     "name": "ttnn.group_norm_no_weights",
+# },
+
 #  Unsupported storage type
 # {
 #     "op": convert_conv_weight_tensor_to_tiled_layout,
@@ -2412,6 +2410,10 @@ def add_layernorm(x, y, z):
 
 def primary_add_layernorm(x, y, z):
     ttnn.layer_norm(x, residual_input_tensor=x, epsilon=0.0001, weight=y, bias=z)
+
+
+def group_norm(x, y, z):
+    ttnn.group_norm(x, num_groups=32, epsilon=0.0001, weight=y, bias=x)
 
 
 def primary_moreh_groupnorm(x, y, z):
@@ -2463,11 +2465,11 @@ def where_bw(x, y, z):
 
 
 def bias_gelu_bw_none(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, "none")
+    ttnn.bias_gelu_bw(x, y, z, approximate="none")
 
 
 def bias_gelu_bw_tanh(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, "tanh")
+    ttnn.bias_gelu_bw(x, y, z, approximate="tanh")
 
 
 def lerp_bw_1(x, y, z):
@@ -2519,7 +2521,7 @@ def subalpha_bw(x, y, z):
 
 
 def div_bw(x, y, z):
-    ttnn.div_bw(x, y, z, mode="None")
+    ttnn.div_bw(x, y, z, round_mode="None")
 
 
 def primary_moreh_norm_backward(x, y, z):
@@ -2739,6 +2741,12 @@ all_ternary_ops = [
         "name": "ttnn.ne_bw",
     },
 ]
+
+# Crashes
+# {
+#     "op": group_norm,
+#     "name": "ttnn.group_norm",
+# },
 
 # Gets stuck
 # {
