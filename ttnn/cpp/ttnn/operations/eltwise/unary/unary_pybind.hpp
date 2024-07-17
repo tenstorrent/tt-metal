@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -67,7 +68,18 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ComplexTensor& input_tensor,
+               const ttnn::MemoryConfig& memory_config) -> Tensor {
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType1<complex_unary::ComplexUnaryOpType::COMPLEX_ABS>;
+                return ComplexUnaryOp::execute_on_main_thread(input_tensor, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
 }
 
 
