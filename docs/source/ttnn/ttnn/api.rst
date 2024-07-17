@@ -168,7 +168,6 @@ Pointwise Unary
    ttnn/tanhshrink
    ttnn/threshold
    ttnn/mul_bw
-   ttnn/clamp_min_bw
    ttnn/clamp_bw
    ttnn/hardtanh_bw
    ttnn/threshold_bw
