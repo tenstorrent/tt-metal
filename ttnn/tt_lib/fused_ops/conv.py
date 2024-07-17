@@ -8,7 +8,6 @@ from tt_lib.utils import _nearest_32, _nearest_y
 import torch
 import ttnn
 from loguru import logger
-import ttnn
 
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
@@ -124,12 +123,12 @@ def resnet50_1x1_conv_as_matmul(
             per_core_M=matmul_config["per_core_M"],
             per_core_N=matmul_config["per_core_N"],
             transpose_mcast=False,
-            fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU) if fuse_relu else None,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if fuse_relu else None,
         )
     else:
         matmul_program_config = matmul_config
         if fuse_relu:
-            matmul_program_config.fused_activation = tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU)
+            matmul_program_config.fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     def conv_(activation):
         # conv1x1 stride 1 padding 0, use matmul op

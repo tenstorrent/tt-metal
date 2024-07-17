@@ -13,7 +13,6 @@
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"

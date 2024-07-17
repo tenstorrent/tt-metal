@@ -18,6 +18,7 @@ namespace operations {
 namespace matmul {
 
 using namespace tt::operations::primary;
+using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(py::module& module) {
     py::class_<MatmulProgramConfig>(module, "MatmulProgramConfig")

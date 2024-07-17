@@ -13,7 +13,7 @@
 #include "ttnn/experimental/tensor/host_buffer/functions.hpp"
 #include "ttnn/experimental/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -45,7 +45,7 @@ enum class BinaryOpType {
     DIV_FAST
 };
 
-using FusedActivations = std::vector<tt::tt_metal::UnaryWithParam>;
+using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 namespace utils {
 

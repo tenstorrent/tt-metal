@@ -4,7 +4,6 @@
 
 #include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"

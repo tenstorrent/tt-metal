@@ -39,7 +39,7 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     if (!activation.has_value()) {
         return std::nullopt;
     }
-    return string_to_unary_with_param(activation.value());
+    return ttnn::operations::unary::string_to_unary_with_param(activation.value());
 }
 
 ttnn::Tensor matmul(

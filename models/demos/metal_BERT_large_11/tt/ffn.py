@@ -45,7 +45,7 @@ def feed_forward(
                 activation,
                 ff1_weighta,
                 bias=ff1_biasa,
-                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+                fused_activation=(ttnn.UnaryOpType.GELU, True),
                 output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
                 output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
             )
