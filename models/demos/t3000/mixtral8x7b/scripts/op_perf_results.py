@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--all", help="Show all times for each device", action="store_true")
     parser.add_argument("--signpost", help="Only include data after this signpost and before any others")
     parser.add_argument("--skip-last", help="Do not include timings from the last N ops", type=int, default=0)
+    parser.add_argument("--skip-first", help="Do not include timings from the first N ops", type=int, default=0)
     parser.add_argument("--prefill", help="Prefill mode: will compute tok/s", action="store_true")
     parser.add_argument("--seqlen", help="Sequence length used for prefill statistics.", type=int, default=0)
     parser.add_argument(
@@ -34,17 +35,26 @@ def main():
         return
 
     print(f'{"Op":20} {"Time (us)"}')
+
+    if args.skip_first:
+        print(f"The following ops from the start of the run are not included in summary statistics:")
+        for block in blocks[: args.skip_first] if args.skip_first else blocks:
+            print(block.long_str() if args.all else block.short_str())
+        print(f"Ops included in the summary statistics:")
+        skipped_ops = blocks[: args.skip_first]
+        blocks = blocks[args.skip_first :]
+    else:
+        skipped_ops = []
+
     for block in blocks[: -args.skip_last] if args.skip_last else blocks:
         print(block.long_str() if args.all else block.short_str())
 
     if args.skip_last:
-        print(f"The following ops from the end of the run are not included below:")
+        print(f"The following ops from the end of the run are not included in summary statistics below:")
         for block in blocks[-args.skip_last :]:
             print(block.long_str() if args.all else block.short_str())
-        skipped_ops = blocks[-args.skip_last :]
+        skipped_ops += blocks[-args.skip_last :]
         blocks = blocks[: -args.skip_last]
-    else:
-        skipped_ops = []
 
     total_time_ns = sum(block.time() for block in blocks)
     total_time_s = total_time_ns / 1e9
