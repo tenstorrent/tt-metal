@@ -199,24 +199,29 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackwardGammaBetaGrad::create_o
     Layout layout{Layout::TILE};
     auto device = input_tensors[0].device();
 
-    std::vector<std::optional<Tensor>> result;
+    std::vector<std::optional<Tensor>> result(2);
 
     const auto gamma_requires_grad = this->are_required_outputs[0];
     const auto beta_requires_grad = this->are_required_outputs[1];
 
     // gamma_grad
-    if (output_tensors[0].has_value()) {
-        result.push_back(output_tensors[0].value());
-    } else if (gamma_requires_grad) {
-        result.push_back(create_device_tensor(output_shapes[0], dtype, layout, device, this->gamma_grad_mem_config));
+    if(gamma_requires_grad){
+        if (output_tensors[0].has_value()) {
+            result[0] = output_tensors[0].value();
+        } else  {
+            result[0] = create_device_tensor(output_shapes[0], dtype, layout, device, this->gamma_grad_mem_config);
+        }
     }
 
     // beta_grad
-    if (output_tensors[1].has_value()) {
-        result.push_back(output_tensors[1].value());
-    } else if (beta_requires_grad) {
-        result.push_back(create_device_tensor(output_shapes[1], dtype, layout, device, this->beta_grad_mem_config));
+    if (beta_requires_grad) {
+        if (output_tensors[1].has_value()) {
+            result[1] = output_tensors[1].value();
+        } else {
+            result[1] = create_device_tensor(output_shapes[1], dtype, layout, device, this->beta_grad_mem_config);
+        }
     }
+
 
     return result;
 }
@@ -240,7 +245,7 @@ operation::ProgramWithOptionalOutputTensors MorehGroupNormBackwardGammaBetaGrad:
             beta_grad = output_tensors.at(1);
         }
     } else {
-        beta_grad = output_tensors.at(0);
+        beta_grad = output_tensors.at(1);
     }
 
     return moreh_groupnorm_backward_gamma_beta_grad_impl(
@@ -263,20 +268,19 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
 
     TT_ASSERT(gamma_requires_grad || beta_requires_grad, "At least one of gamma or beta must require grad.");
 
-    std::vector<std::optional<Tensor>> dgamma_dbeta = {};
-
+    std::vector<std::optional<Tensor>> dgamma_dbeta(2);
     uint32_t num_outputs = 0;
     if (gamma_grad.has_value() || gamma_requires_grad) {
+        dgamma_dbeta[0] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
         num_outputs++;
     }
     if (beta_grad.has_value() || beta_requires_grad) {
+        dgamma_dbeta[1] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
         num_outputs++;
     }
-    num_outputs = num_outputs == 0 ? 1 : num_outputs;
-    for (int i = 0; i < num_outputs; ++i) {
-        dgamma_dbeta.push_back(Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd})));
+    if(num_outputs == 0) {
+        dgamma_dbeta[0] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
     }
-
     operation::launch_op(
         [num_groups, are_required_outputs, gamma_grad_mem_config, beta_grad_mem_config](
             const std::vector<Tensor> &input_tensors,
