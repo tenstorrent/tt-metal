@@ -15,9 +15,11 @@ namespace ttnn::operations::complex_unary {
 constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexUnaryOpType {
     REAL,
+    IMAG,
 };
 
 Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
+Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryOpType OpType>
 struct OpHandler_complex_type1;
@@ -26,6 +28,13 @@ template <>
 struct OpHandler_complex_type1<ComplexUnaryOpType::REAL> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _real(input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_complex_type1<ComplexUnaryOpType::IMAG> {
+    static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
+        return _imag(input, output_mem_config);
     }
 };
 
