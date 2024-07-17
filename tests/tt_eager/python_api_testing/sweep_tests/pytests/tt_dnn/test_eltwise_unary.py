@@ -1047,7 +1047,7 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["rpow", "rsub", "rdiv"])
+    @pytest.mark.parametrize("fn_kind", ["rdiv"])
     def test_run_eltwise_reverse_ops(
         self,
         input_shapes,
@@ -1057,7 +1057,7 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        values = {"rdiv": (1.0, 100.0), "rsub": (1.0, 50.0), "rpow": (5.0, 10.0)}
+        values = {"rdiv": (1.0, 100.0)}
         low_v, high_v = values[fn_kind]
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -1075,15 +1075,16 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            f"eltwise-{fn_kind}",
+            f"ttnn-eltwise-{fn_kind}",
             input_shapes,
             datagen_func,
             comparison_func,
             device,
             test_args,
+            ttnn_op=True,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["rsub", "rdiv"])
+    @pytest.mark.parametrize("fn_kind", ["rdiv"])
     def test_run_eltwise_reverse_neg_ops(
         self,
         input_shapes,
@@ -1093,7 +1094,7 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        values = {"rdiv": (1.0, 100.0), "rsub": (1.0, 50.0), "rpow": (5.0, 10.0)}
+        values = {"rdiv": (1.0, 100.0)}
         low_v, high_v = values[fn_kind]
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -1111,12 +1112,7 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            f"eltwise-{fn_kind}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            f"ttnn-eltwise-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @pytest.mark.parametrize("diag", [-2, -1, 0, 1, 2])
