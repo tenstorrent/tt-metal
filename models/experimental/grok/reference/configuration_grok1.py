@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2024 HPC-AI Tech
+
+# SPDX-License-Identifier: Apache-2.0
 from transformers.configuration_utils import PretrainedConfig
 
 
