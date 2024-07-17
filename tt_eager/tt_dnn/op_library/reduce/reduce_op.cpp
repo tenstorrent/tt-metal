@@ -4,7 +4,6 @@
 
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"

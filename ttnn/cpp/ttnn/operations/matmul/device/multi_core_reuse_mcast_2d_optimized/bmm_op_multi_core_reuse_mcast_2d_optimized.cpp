@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-// #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/common/constants.hpp"

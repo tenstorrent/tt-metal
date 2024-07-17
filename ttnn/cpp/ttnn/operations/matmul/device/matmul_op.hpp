@@ -7,7 +7,6 @@
 
 #include "tensor/tensor.hpp"
 
-// #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
