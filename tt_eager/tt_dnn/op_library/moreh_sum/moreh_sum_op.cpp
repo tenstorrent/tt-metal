@@ -21,13 +21,6 @@ namespace primary {
 ////////////////////////////////////////////////////////////////////////////
 namespace {
 
-inline void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
-    const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
-        auto idx = rank - 1 - i;
-        dim[i] = shape[idx];
-    }
-}
 
 inline void validate_input_tensor_with_dim(const Tensor& input, const int64_t &dim) {
     auto input_shape = input.get_legacy_shape();

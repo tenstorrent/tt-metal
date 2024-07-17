@@ -6,6 +6,11 @@ import tt_lib as ttl
 from models.utility_functions import is_wormhole_b0
 import copy
 
+
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+
+
 compute_kernel_options = [
     False,  # for grayskull
 ]
@@ -77,3 +82,53 @@ def to_npu(
 
     npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
+
+
+# For keepdim in torch
+def filter_indices(output_shape, dims):
+    def not_in_dims(index_value_pair):
+        index, value = index_value_pair
+        return index not in dims
+
+    filtered_elements = list(filter(not_in_dims, enumerate(output_shape)))
+    filtered_values = [value for index, value in filtered_elements]
+
+    return filtered_values
+
+
+# For keepdim in tt
+def filter_indices_with_last_two(output_shape, dims):
+    last_two_elements = output_shape[-2:]
+    remaining_elements = output_shape[:-2]
+
+    def not_in_dims(index_value_pair):
+        index, _ = index_value_pair
+        return index not in dims
+
+    filtered_remaining_elements = list(filter(not_in_dims, enumerate(remaining_elements)))
+    filtered_remaining_values = [value for index, value in filtered_remaining_elements]
+    final_output_shape = filtered_remaining_values + last_two_elements
+
+    return final_output_shape
+
+
+def compute_output_shape(input_shape, dim, keepdim=False):
+    if dim is None or dim == []:
+        dim = list(range(len(input_shape)))
+
+    if isinstance(dim, int):
+        dim = [dim]
+
+    output_shape = list(input_shape)
+
+    for d in dim:
+        output_shape[d] = 1
+
+    if keepdim:
+        torch_output_shape = output_shape.copy()
+        tt_output_shape = output_shape.copy()
+    else:
+        torch_output_shape = filter_indices(output_shape, dim)
+        tt_output_shape = filter_indices_with_last_two(output_shape, dim)
+
+    return torch_output_shape, tt_output_shape

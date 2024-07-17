@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "dprint.h"
 
 void kernel_main() {
     uint32_t i = 0;
