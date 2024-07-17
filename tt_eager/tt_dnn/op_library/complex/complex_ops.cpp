@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 
 namespace tt {
 
@@ -163,10 +164,6 @@ Tensor is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config
     return ttnn::eqz( input[0], output_mem_config);
 }
 
-Tensor real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return input[0];
-}
-
 Tensor imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return input[1];
 }
@@ -263,7 +260,7 @@ std::vector<ComplexTensor> conj_bw(const ComplexTensor& grad, const ComplexTenso
 // imag: at::imag(grad)
 std::vector<ComplexTensor> imag_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor r = zeros_like(real(input, output_mem_config), output_mem_config);
+    Tensor r = zeros_like(ttnn::operations::complex_unary::_real(input, output_mem_config), output_mem_config);
     ComplexTensor grad_result = ComplexTensor({r,grad});
     r.deallocate();
     grad_tensor.emplace_back(grad_result);
@@ -274,7 +271,7 @@ std::vector<ComplexTensor> imag_bw(const Tensor& grad, const ComplexTensor& inpu
 // real: at::real(grad)
 std::vector<ComplexTensor> real_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor i = zeros_like(real(input, output_mem_config), output_mem_config);
+    Tensor i = zeros_like(ttnn::operations::complex_unary::_real(input, output_mem_config), output_mem_config);
     ComplexTensor grad_result = ComplexTensor({grad, i});
     i.deallocate();
     grad_tensor.emplace_back(grad_result);
@@ -331,7 +328,7 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
     std::vector<ComplexTensor> grad_tensor;
     Tensor condition_nan = ttnn::logical_and(ttnn::eqz(other.real(),output_mem_config), ttnn::eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor grad_a = complex_div(grad, conj(other,output_mem_config), output_mem_config);
-    Tensor grad_a_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), real(grad_a,output_mem_config),  output_mem_config);
+    Tensor grad_a_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_real(grad_a,output_mem_config),  output_mem_config);
     Tensor grad_a_i = where(condition_nan, full_like(grad.imag(), std::nanf(""), output_mem_config), imag(grad_a,output_mem_config),  output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
     grad_a_r.deallocate();
@@ -340,7 +337,7 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
     ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
     ComplexTensor grad_b = complex_mul(neg_grad, conj(complex_div(complex_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
     neg_grad.deallocate();
-    Tensor grad_b_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), real(grad_b,output_mem_config),  output_mem_config);
+    Tensor grad_b_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_real(grad_b,output_mem_config),  output_mem_config);
     Tensor grad_b_i = where(condition_nan, full_like(grad.imag(), std::nanf(""), output_mem_config), imag(grad_b,output_mem_config),  output_mem_config);
     grad_b = ComplexTensor({grad_b_r, grad_b_i});
     grad_b_r.deallocate();
@@ -419,10 +416,10 @@ std::vector<ComplexTensor> polar_bw(const ComplexTensor& grad, const ComplexTens
     ComplexTensor sgn_result = ComplexTensor({ sgn_result_r, sgn_result_i });
     sgn_result_r.deallocate();
     sgn_result_i.deallocate();
-    Tensor grad_abs = real(complex_mul(conj(grad, output_mem_config), sgn_result, output_mem_config), output_mem_config);
+    Tensor grad_abs = ttnn::operations::complex_unary::_real(complex_mul(conj(grad, output_mem_config), sgn_result, output_mem_config), output_mem_config);
     sgn_result.deallocate();
     ComplexTensor flip_tensor = ComplexTensor({zeros_like(input.real(), output_mem_config), full_like(input.imag(), 1.0, output_mem_config) });
-    Tensor grad_angle = real(complex_mul(conj(grad, output_mem_config), complex_mul(result, flip_tensor, output_mem_config), output_mem_config), output_mem_config);
+    Tensor grad_angle = ttnn::operations::complex_unary::_real(complex_mul(conj(grad, output_mem_config), complex_mul(result, flip_tensor, output_mem_config), output_mem_config), output_mem_config);
     result.deallocate();
     flip_tensor.deallocate();
     ComplexTensor grad_result = ComplexTensor({grad_abs, grad_angle});
