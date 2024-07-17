@@ -200,7 +200,6 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackwardGammaBetaGrad::create_o
     auto device = input_tensors[0].device();
 
     std::vector<std::optional<Tensor>> result(2);
-
     const auto gamma_requires_grad = this->are_required_outputs[0];
     const auto beta_requires_grad = this->are_required_outputs[1];
 
