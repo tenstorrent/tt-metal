@@ -45,12 +45,14 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
 )
 
-### Setup TTNN_LIB as an Object library
-# Save variables to reuse between ttnn_lib and ttnn
-# Have to manually propagate because ttnn_lib is an OBJECT library
-set(ttnn_compile_options -MP -Wno-int-to-pointer-cast -fno-var-tracking)
-set(ttnn_link_libraries compiler_flags metal_header_directories metal_common_libs tt_metal)
-set(ttnn_lib_include_dirs
+### Setup TTNN as a shared library with optional Python bindings
+set(TTNN_FINAL_SRC
+    ${TTNN_SRCS}
+    ${QUEUE_SRCS}
+    ${TENSOR_SRCS}
+    ${TT_DNN_SRCS})
+
+set(TTNN_PUBLIC_INCLUDE_DIRS
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
@@ -59,28 +61,36 @@ set(ttnn_lib_include_dirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tensor
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/queue
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
-)
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt)
+set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_common_libs tt_metal linker_flags) # linker_flags = -rdynamic if tracy enabled
+set(TTNN_PUBLIC_LINK_DIRS "")
 
-add_library(ttnn_lib OBJECT ${TTNN_SRCS})
-target_compile_options(ttnn_lib PUBLIC ${ttnn_compile_options})
-target_link_libraries(ttnn_lib PUBLIC ${ttnn_link_libraries})
-target_include_directories(ttnn_lib PUBLIC ${ttnn_lib_include_dirs})
-target_precompile_headers(ttnn_lib PRIVATE
+set(TTNN_PRECOMPILED_HEADERS
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/format.h
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/tensor.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/types.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/device/device.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/jit_build/build.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/program/program.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/host_api.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/buffers/buffer.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tt_dnn/op_library/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/common/core_coord.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/tt_device.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tt_dnn/op_library/run_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tt_dnn/op_library/auto_format.hpp
     <functional>
     <map>
     <memory>
     <unordered_map>
     <variant>
-    <vector>
-)
+    <vector>)
 
-### Setup TTNN as a shared library with optional Python bindings
-set(TTNN_FINAL_SRC $<TARGET_OBJECTS:ttnn_lib> ${QUEUE_SRCS} ${TENSOR_SRCS} ${TT_DNN_SRCS})
-set(TTNN_PUBLIC_INCLUDE_DIRS ${ttnn_lib_include_dirs})
-set(TTNN_PUBLIC_LINK_LIBRARIES ${ttnn_link_libraries} linker_flags) # linker_flags = -rdynamic if tracy enabled
-set(TTNN_PUBLIC_LINK_DIRS "")
 if(WITH_PYTHON_BINDINGS)
     # TODO: should be using pybind11_add_module, but right now it introduces many build problems
     # pybinds will always be built as a shared library
@@ -99,10 +109,12 @@ if(WITH_PYTHON_BINDINGS)
 endif()
 
 add_library(ttnn SHARED ${TTNN_FINAL_SRC})
-target_compile_options(ttnn PUBLIC ${ttnn_compile_options})
+target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+target_precompile_headers(ttnn PUBLIC ${TTNN_PRECOMPILED_HEADERS})
+
 
 # Make sure library built is _ttnn.so and that it can find all it's linked libraries
 # ttnn breaks if -fvisibility=hidden, so CXX_VISIBILITY_PRESET set to default
