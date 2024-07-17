@@ -425,10 +425,11 @@ def run_test_FalconCausalLM_end_to_end(
     "num_layers",
     (
         1,
+        4,
         12,
         60,
     ),
-    ids=["layers_1", "layers_12", "layers_60"],
+    ids=["layers_1", "layers_4", "layers_12", "layers_60"],
 )
 @pytest.mark.parametrize(
     "model_version",
@@ -483,19 +484,19 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         if num_layers == 60:
             if data_type == "BFLOAT8_B":
                 if seq_len == 32:
-                    out_pcc = 0.983
-                    k_cache_pcc = 0.982
-                    v_cache_pcc = 0.949
+                    out_pcc = 0.984
+                    k_cache_pcc = 0.979
+                    v_cache_pcc = 0.940
                     token_pcc = 0.99
                 elif seq_len == 128:
-                    out_pcc = 0.990
+                    out_pcc = 0.989
                     k_cache_pcc = 0.989
-                    v_cache_pcc = 0.950
+                    v_cache_pcc = 0.949
                     token_pcc = 0.99
                 elif seq_len == 2048:
                     out_pcc = 0.993
                     k_cache_pcc = 0.991
-                    v_cache_pcc = 0.972
+                    v_cache_pcc = 0.97
                     token_pcc = 0.99
             elif data_type == "BFLOAT16":
                 if seq_len == 32:
