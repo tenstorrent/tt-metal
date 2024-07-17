@@ -98,6 +98,7 @@ class MambaTT(torch.nn.Module):
         ]
 
         load_fn = loader.get_tensor_loader()
+
         self.norm_f_weights = load_fn(
             "norm_f.weight",
             tt_dtype=ttnn.bfloat8_b,
@@ -107,6 +108,7 @@ class MambaTT(torch.nn.Module):
             lambda x: x.transpose(-1, -2),
             tt_dtype=ttnn.bfloat8_b,
         )
+        self.embedding_weights = load_fn("embedding.weight", tt_dtype=ttnn.bfloat16, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -122,21 +124,29 @@ class MambaTT(torch.nn.Module):
         for i in range(self.num_layers):
             self.layers[i].to_decode(decode_config)
 
+    def embedding(self, x):
+        assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
+        x = ttnn.embedding(
+            x, self.embedding_weights, output_dtype=ttnn.bfloat16
+        )  # ttnn.embedding always returns (B, L, E)
+        return ttnn.reshape(x, [1, 1, self.configs["outer_dim"], x.shape[2]])
+
     def forward(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
-
-        x = self.embedding(x)  # (B, 1, E)
-        x = x.view(1, 1, self.configs["outer_dim"], self.args.d_model)  # (1, 1, B, E)
-
-        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
 
         x = ttnn.from_torch(
             x,
             device=self.device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.configs["dtype"]["activations"],
+            dtype=ttnn.uint32,
         )
+
+        x = self.embedding(x)
+        x = ttnn.typecast(ttnn.to_layout(x, ttnn.TILE_LAYOUT), self.configs["dtype"]["activations"])
+
+        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
+        assert x.layout == ttnn.TILE_LAYOUT, f"Expected embedding to be tile layout (was {x.layout})"
 
         for i, layer in enumerate(self.layers):
             x = layer(x)

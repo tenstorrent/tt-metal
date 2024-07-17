@@ -125,7 +125,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             128,
             64,
             1,
-            0.96,
+            0.9575,
         ),
         (
             "state-spaces/mamba-2.8b",
