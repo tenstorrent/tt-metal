@@ -86,11 +86,6 @@ void py_module(py::module& module) {
         ttnn::is_real,
         R"doc(Returns boolean tensor if value of :attr:`input_tensor` is real.)doc");
 
-    detail::bind_complex_unary_type1(
-        module,
-        ttnn::complex_abs,
-        R"doc(Returns absolute value of complex :attr:`input_tensor`.)doc");
-
 }
 
 }  // namespace complex_unary
