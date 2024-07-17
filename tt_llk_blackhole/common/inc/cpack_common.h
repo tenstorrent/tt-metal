@@ -10,10 +10,10 @@
 #include "ckernel_globals.h"
 #include "llk_defs.h"
 
-
 namespace ckernel::packer
 {
-   constexpr uint32_t PACK_CNT       = 4;
+   constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
+                                       // fist 16 for sfpu, next 16 for fpu
 
    // Pack config
    typedef struct {
@@ -141,8 +141,8 @@ namespace ckernel::packer
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
    {
-       TTI_SETADCXY(0b100, 0, 0, 0, 0, 0b1011);
-       TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
+      TTI_SETADCXY(0b100, 0, 0, 0, 0, 0b1011);
+      TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
    }
 
    template <bool untilize = false, bool tilize = false>
@@ -419,7 +419,6 @@ namespace ckernel::packer
    }
 
    // Program packer destination addresses from GPRs
-   template <PackSelMask PackSel=PACK_ALL>
    inline void program_packer_destination(uint32_t addr)
    {
       uint32_t new_l1_addr = (1 << 31) | addr;
@@ -432,31 +431,32 @@ namespace ckernel::packer
       TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
    }
 
-   // FIXME MT: Revisit this untilizer operation for BH
-   template <uint32_t block_ct_dim>
+   //RT: If multiple contexts are used, for issue #https://github.com/tenstorrent/tt-llk-bh/issues/20
+   //then this function needs to be re-written
+   template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool diagonal = false>
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
    {
-      // Each packer packs 8 rows of block_ct_dim*TILE_C_DIM datums
-      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
-      constexpr uint32_t offset0 = 0;
-      const uint32_t offset1 = (1*block_size)/16;
-      const uint32_t offset2 = (2*block_size)/16;
-      const uint32_t offset3 = (3*block_size)/16;
+      // const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
+      // constexpr uint32_t offset0 = 0;
+      // const uint32_t offset1 = (1*block_size)/16;
+      // const uint32_t offset2 = (2*block_size)/16;
+      // const uint32_t offset3 = (3*block_size)/16;
 
-      TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset0), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
-      TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset0), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+0));
-      TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset1), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
-      TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset1), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+1));
-      TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset2), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
-      TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset2), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+2));
-      TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset3), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
-      TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset3), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+3));
-      TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+      // TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset0), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
+      // TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset0), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+0));
+      // TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset1), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
+      // TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset1), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+1));
+      // TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset2), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
+      // TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset2), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+2));
+      // TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset3), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
+      // TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset3), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+3));
+      // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
 
-      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1, 0, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
-      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+2, 0, THCON_SEC1_REG1_L1_Dest_addr_ADDR32);
-      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+3, 0, THCON_SEC1_REG8_L1_Dest_addr_ADDR32);
+      // TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+      // TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1, 0, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
+      // TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+2, 0, THCON_SEC1_REG1_L1_Dest_addr_ADDR32);
+      // TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+3, 0, THCON_SEC1_REG8_L1_Dest_addr_ADDR32);
+      // TTI_NOP; TTI_NOP;
 
    }
 

@@ -302,10 +302,9 @@ inline void _llk_pack_init_(const std::uint32_t pack_dst_format, const std::uint
 template <DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address) {
 
-    constexpr uint32_t DEST_NUM_TILES_SHIFT = is_fp32_dest_acc_en ? (1) : (0);
-    constexpr uint32_t DEST_NUM_TILES = DEST_NUM_TILES_FP16 >> DEST_NUM_TILES_SHIFT;
-
     if constexpr (Dst == DstSync::SyncTile16) {
+        constexpr uint32_t DEST_NUM_TILES_SHIFT = is_fp32_dest_acc_en ? (1) : (0);
+        constexpr uint32_t DEST_NUM_TILES = DEST_NUM_TILES_FP16 >> DEST_NUM_TILES_SHIFT;
         // W-counter points to the next tile in dest
         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, pack_sync_tile_dst_ptr);
         pack_sync_tile_dst_ptr += 1;
