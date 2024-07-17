@@ -1,17 +1,19 @@
 name: Package and release
-
 on:
   workflow_dispatch:
   schedule:
-    # Create rc every day at EOD of PST Mon-Wed + night of Sunday to kick off
+    # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1 * * 1,2,3,4"
+    - cron: "0 1 * * 1,2,3,4,5,6"
 
 permissions:
   contents: write
   packages: write
 
 jobs:
+  single-card-demos:
+    uses: ./.github/workflows/single-card-demo-tests.yaml
+    secrets: inherit
   get-params:
     runs-on: ubuntu-latest
     outputs:
