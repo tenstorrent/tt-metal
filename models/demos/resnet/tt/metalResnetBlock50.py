@@ -1326,7 +1326,7 @@ class Bottleneck:
             if self.deallocate:
                 x.deallocate()
 
-        fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+        fused_activations = [ttnn.UnaryOpType.RELU]
 
         # logger.info("Running eltwise add")
         out = ttnn.add(

@@ -322,9 +322,7 @@ def determine_1x1conv_as_matmul_config(
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
             per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
             fuse_batch=True,
-            fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
-            if fuse_relu
-            else None,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if fuse_relu else None,
             mcast_in0=False,
         )
     else:
@@ -343,9 +341,7 @@ def determine_1x1conv_as_matmul_config(
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
             per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
             transpose_mcast=transpose_mcast,
-            fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
-            if fuse_relu
-            else None,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if fuse_relu else None,
         )
     return matmul_config
 

@@ -897,7 +897,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
         per_core_N=per_core_N,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
         fuse_batch=True,
-        fused_activation=ttl.tensor.FusibleActivation.SILU,
+        fused_activation=ttnn.UnaryOpType.SILU,
         mcast_in0=True,
     )
 
@@ -1006,7 +1006,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 8192 for num_device=8
             fuse_batch=True,
-            fused_activation=ttl.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             mcast_in0=True,
         )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1061,7 +1061,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
             fuse_batch=True,
-            fused_activation=ttl.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             mcast_in0=True,
         )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

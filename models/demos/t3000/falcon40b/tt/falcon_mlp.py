@@ -117,7 +117,7 @@ class TtFalconMLP:
             self.model_config["COMPUTE_KERNEL_CONFIG"],
             output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-            act=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            act=[ttnn.UnaryOpType.GELU, True],
             overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
             overwrite_subblock_h=1,
         )
