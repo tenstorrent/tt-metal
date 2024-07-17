@@ -507,3 +507,97 @@ def test_paged_update_cache_decode_program_caching(
         )
 
     assert device.num_program_cache_entries() == 1
+
+
+def run_test_paged_fill_cache(
+    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    max_num_blocks_per_seq = max_seq_len // block_size
+    assert max_num_blocks_per_seq * block_size == max_seq_len
+    max_num_blocks = num_users * max_seq_len // block_size
+    assert max_num_blocks * block_size == num_users * max_seq_len
+
+    input_shape = [1, num_heads, user_seq_len, head_dim]
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    # cachett = ttl.tensor.Tensor(cache, cache_dtype).to(ttl.tensor.Layout.TILE).to(device) # DEBUG
+
+    # Turn cache into paged cache
+    paged_cache = (
+        cache.reshape(num_users, num_heads, max_num_blocks_per_seq, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(max_num_blocks, num_heads, block_size, head_dim)
+    )  # [num_users * max_num_blocks_per_seq, num_heads, block_size, head_dim]
+
+    # Shuffle paged KV cache according to some random page_table
+    permutation = torch.randperm(max_num_blocks)
+    shuffled_page_cache = paged_cache[permutation]
+    reverse_permutation = torch.argsort(permutation)
+    # page_table is the reverse permutation from shuffled -> unshuffled, and is used to map
+    # a virtual block to the physical block id.
+    page_table = reverse_permutation.reshape(num_users, max_num_blocks_per_seq)
+    # logger.info(f"page_table: {page_table}")
+    unshuffled_page_cache = shuffled_page_cache[reverse_permutation]
+
+    paged_cache_back = (
+        unshuffled_page_cache.reshape(num_users, max_num_blocks_per_seq, num_heads, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(num_users, num_heads, max_seq_len, head_dim)
+    )
+    # Check that we can convert from normal to paged to normal
+    assert torch.allclose(paged_cache_back, cache)
+
+    cachett = ttl.tensor.Tensor(shuffled_page_cache, cache_dtype).to(ttl.tensor.Layout.TILE).to(device)
+    page_table_tt = ttl.tensor.Tensor(page_table, ttl.tensor.DataType.INT32).to(device)
+
+    # Update cache for every user
+    # for i in range(num_users):
+    for i in range(2):
+        logger.info(f"Updating cache for user {i}")
+        logger.info(f"User pagetable: [{page_table[i]}]")
+        x = torch.randn(input_shape).bfloat16().float()
+        xt = ttl.tensor.Tensor(x, input_dtype).to(ttl.tensor.Layout.TILE).to(device)
+
+        cachett = ttl.operations.primary.transformers.paged_fill_cache(cachett, xt, page_table_tt, i)
+        cache[i : i + 1, :, : x.shape[-2], :] = x
+
+    # Unshuffle paged cache and review it as unpaged cache
+    tt_got_back_shuffled = cachett.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back_unshuffled = tt_got_back_shuffled[reverse_permutation]
+    tt_got_back = (
+        tt_got_back_unshuffled.reshape(num_users, max_num_blocks_per_seq, num_heads, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(num_users, num_heads, max_seq_len, head_dim)
+    )
+
+    if input_dtype == ttl.tensor.DataType.BFLOAT16 and cache_dtype == input_dtype:
+        eq, output = comp_equal(cache, tt_got_back)
+    else:
+        eq, output = comp_pcc(cache, tt_got_back)
+    logger.info(output)
+    assert eq
+
+
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+# @pytest.mark.parametrize("cache_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_paged_fill_cache(
+    block_size,
+    head_dim,
+    user_seq_len,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    device,  # use_program_cache
+):
+    logger.warning("Forcing cache_dtype to be same as input_dtype. Change test case when this is not required")
+    cache_dtype = input_dtype
+    run_test_paged_fill_cache(
+        block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )

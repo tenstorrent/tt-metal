@@ -99,7 +99,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
-
     uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
     uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
