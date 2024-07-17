@@ -2,10 +2,6 @@
 
 These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
 
-> [!IMPORTANT]
->
-> If you are using a release version of this software, please check the installation instructions packaged with that version. You can find them in either the release assets for that version, or in the source files for that version tag.
-
 ---
 
 ## Installation Steps
@@ -80,7 +76,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 > If you do not want to use the models or follow the tutorials and want to
 > immediately start using the API, you may install just the wheel.
 
-1. Install git and git-lfs.
+1. Install git and git-lfs
 
 ```sh
 sudo apt install git git-lfs
@@ -94,19 +90,29 @@ cd tt-metal
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-3. Install either from source, or from our release wheel.
+3. Set up the environment variables. For Grayskull, use:
+
+```sh
+export ARCH_NAME=grayskull
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+```
+
+For Wormhole boards, use:
+
+```sh
+export ARCH_NAME=wormhole_b0
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+```
+
+4. Install either from source, or from our release wheel.
 
 ### Option 1: From source
 
 We use CMake for our build flows.
 
-Set up the environment variables and invoke our build scripts. Note that for
-source builds, you must set these environment variables every time.
-
 ```sh
-export ARCH_NAME=<ARCH_NAME>
-export TT_METAL_HOME=$(pwd)
-export PYTHONPATH=$(pwd)
 ./build_metal.sh
 
 # If you would like an out-of-the-box virtual environment to use,
@@ -114,11 +120,9 @@ export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 ```
 
-where `ARCH_NAME` is either `grayskull` or `wormhole_b0`, depending on your Tenstorrent device.
-
-> [!NOTE]
->
-> Note about Python environments: You do not have to use `create_venv.sh`. If you are less familiar with Python and its various environment tools, just use `create_venv.sh` as shown above and the pre-built environment.
+Note about Python environments: You do not have to use `create_venv.sh`. If you
+are less familiar with Python and its various environment tools, just use
+`create_venv.sh` as shown above and the pre-built environment.
 
 ### Option 2: From wheel
 
@@ -135,14 +139,13 @@ pip install <wheel_file.whl>
 ```
 
 If you are going to try our pre-built models in `models/`, then you must also
-further install their required dependencies and environment variables:
+further install their requirements:
 
 ```sh
-export PYTHONPATH=$(pwd)
 pip install -r tt_metal/python_env/requirements-dev.txt
 ```
 
-4. Start coding
+5. Start coding
 
 You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
