@@ -1575,13 +1575,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	        R"doc(Returns absolute value of complex tensor ``{0}``.)doc"
         );
 
-        m_tensor.def("angle",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::angle),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns angle of a complex tensor ``{0}``.)doc"
-        );
-
         m_tensor.def("conj",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::conj),
             py::arg("input"),

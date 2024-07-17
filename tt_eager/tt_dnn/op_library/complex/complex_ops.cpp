@@ -168,10 +168,6 @@ ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_co
     return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
 }
 
-Tensor angle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::neg( atan2(input[1],input[0],output_mem_config), output_mem_config );
-}
-
 Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return hypot(input[0],input[1],output_mem_config);
 }
