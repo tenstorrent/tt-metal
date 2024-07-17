@@ -28,10 +28,10 @@ void bind_tilize(py::module &module) {
                 * :attr:`input_tensor`: Input Tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_dtype`: Data type of the output tensor
-                * :attr:`use_multicore`: Whether to use multicore
-                * :attr:`queue_id`: command queue id
+                * :attr:`memory_config`: Memory Config of the output tensor.
+                * :attr:`output_dtype`: Data type of the output tensor.
+                * :attr:`use_multicore`: Whether to use multicore.
+                * :attr:`queue_id`: command queue id.
         )doc";
 
     using OperationType = decltype(ttnn::tilize);

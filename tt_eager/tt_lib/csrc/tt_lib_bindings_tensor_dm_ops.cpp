@@ -5,7 +5,6 @@
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_dnn/op_library/move/move_op.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
@@ -152,54 +151,6 @@ namespace tt::tt_metal::detail{
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "dims", "The desired ordering of dimensions", "List[int]", "All indices within input tensor rank", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        m_tensor.def("tilize", &tilize,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            py::arg("use_multicore").noconvert() = true, R"doc(
-            Changes data layout of input tensor to TILE.
-
-            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
-
-            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "No"
-        )doc");
-
-        m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            py::arg("use_multicore").noconvert() = false, R"doc(
-            Tilizes a given tensor across memory on device. Pads zeroes height-wise and width-wise if required.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
-        )doc");
-
-        m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding,
-            py::arg("input").noconvert(), py::arg("output_tensor_shape"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            py::arg("use_multicore").noconvert() = false, R"doc(
-            Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "", "Yes"
-                "output_tensor_shape", "Shape of output tensor", "List[int[4]]", "Shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "pad_value", "Value to pad input tensor", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
         )doc");
 
         m_tensor.def("untilize", &untilize,
