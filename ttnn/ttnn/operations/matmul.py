@@ -80,7 +80,7 @@ def matmul(
             :math:`(j \\times 1)` and :math:`(1 \\times j)`
 
     - In order to leverage sharded matmul implementations we can shard both input_tensor_a and input_tensor_b. The sharding strategy used will be according
-      to the sharding stategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
+      to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
 
       Note that the broadcasting logic only looks at the batch dimensions when determining if the inputs
       are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
@@ -91,11 +91,11 @@ def matmul(
 
     .. note::
 
-        The 1-dimensional dot product version of this function is currently returning the Tensor with a non-empty shape. This is expected to be fixed in an upcomming release.
+        The 1-dimensional dot product version of this function is currently returning the Tensor with a non-empty shape. This is expected to be fixed in an upcoming release.
 
     Arguments:
-        * :attr:`input_tensor_a` (ttnn.Tensorensor): the first tensor to be multiplied
-        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
+        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
     Keyword Arguments:
         * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
@@ -201,11 +201,11 @@ def linear(
     Returns the linear transformation of the inputs
 
     Arguments:
-        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied
-        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
+        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
     Keyword Arguments:
-        * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. Defaults to None
+        * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. If specified, needs to be on the device. Defaults to None
         * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
         * :attr:`core_grid` (Optional[ttnn.CoreGrid]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
