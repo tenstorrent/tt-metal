@@ -33,6 +33,19 @@ def register_ttnn_cpp_unary_backward_function(unary_backward_function):
 
         return golden_tensor
 
+    def unary_bw_prod(torch_op, x, grad_data, *args, **kwargs):
+        all_dimensions = kwargs.pop("all_dimensions", True)
+        dim = kwargs.pop("dim", 0)
+        if all_dimensions:
+            temp = torch.prod(x)
+            result = temp.view(1, 1, 1, 1)
+        else:
+            result = torch.prod(x, dim, keepdim=True)
+        x.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+        golden_tensor = [in_data.grad]
+        return golden_tensor
+
     name_to_golden_function = {
         "mul_bw": lambda x, grad_data: unary_bw_with_float(torch.mul, x, grad_data),
         "clamp_min_bw": lambda x, grad_data: unary_bw_with_float(torch.clamp_min, x, grad_data),
@@ -63,6 +76,7 @@ def register_ttnn_cpp_unary_backward_function(unary_backward_function):
         "hardsigmoid_bw": lambda x, grad_data: unary_bw(torch.nn.functional.hardsigmoid, x, grad_data),
         "cos_bw": lambda x, grad_data: unary_bw(torch.cos, x, grad_data),
         "acosh_bw": lambda x, grad_data: unary_bw(torch.acosh, x, grad_data),
+        "prod_bw": lambda x, grad_data: unary_bw_prod(torch.prod, x, grad_data),
         "acos_bw": lambda x, grad_data: unary_bw(torch.acos, x, grad_data),
         "atan_bw": lambda x, grad_data: unary_bw(torch.atan, x, grad_data),
         "rad2deg_bw": lambda x, grad_data: unary_bw(torch.rad2deg, x, grad_data),
@@ -195,6 +209,7 @@ TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS = [
     ttnn.erfinv_bw,
     ttnn.erf_bw,
     ttnn.deg2rad_bw,
+    ttnn.prod_bw,
 ]
 for unary_backward_function in TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_backward_function(unary_backward_function)
