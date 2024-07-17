@@ -41,10 +41,10 @@ void MAIN {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
 
             reduce_tile_to_cb<false, PoolType::MAX, REDUCE_DIM>(
-                PoolType::MAX, REDUCE_DIM, cb_tmp, cb_bcast_scaler, cb_max, Wt, /*pop0=*/1, /*pop1=*/0);
+                cb_tmp, cb_bcast_scaler, cb_max, Wt, /*pop0=*/1, /*pop1=*/0);
         } else {
             reduce_tile_to_cb<false, PoolType::MAX, REDUCE_DIM>(
-                PoolType::MAX, REDUCE_DIM, cb_in0, cb_bcast_scaler, cb_max, Wt - 1, /*pop0=*/0, /*pop1=*/0);
+                cb_in0, cb_bcast_scaler, cb_max, Wt - 1, /*pop0=*/0, /*pop1=*/0);
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
 
@@ -56,7 +56,7 @@ void MAIN {
             copy_tile(cb_max, 0, dst0);
 
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_init_delta_with_dt<false, PoolType::MAX, REDUCE_DIM>(PoolType::MAX, REDUCE_DIM, cb_max, cb_tmp, cb_bcast_scaler);
+            reduce_init_delta_with_dt<false, PoolType::MAX, REDUCE_DIM>(cb_max, cb_tmp, cb_bcast_scaler);
             reduce_tile<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, 0, bcast_scaler0, dst0);
             reduce_revert_delta(cb_max);
             tile_regs_commit();
@@ -126,11 +126,11 @@ void MAIN {
 #ifdef LOG
         // log(sum)
         reduce_and_log_tile_to_cb<false, PoolType::SUM, REDUCE_DIM>(
-            PoolType::SUM, REDUCE_DIM, cb_exps, cb_bcast_scaler, cb_recipsumexps, Wt, /*pop0=*/Wt, /*pop1=*/0);
+            cb_exps, cb_bcast_scaler, cb_recipsumexps, Wt, /*pop0=*/Wt, /*pop1=*/0);
 #else
         // 1/sum
         reduce_and_recip_tile_to_cb<false, PoolType::SUM, REDUCE_DIM>(
-            PoolType::SUM, REDUCE_DIM, cb_exps, cb_bcast_scaler, cb_recipsumexps, Wt, /*pop0=*/0, /*pop1=*/0);
+            cb_exps, cb_bcast_scaler, cb_recipsumexps, Wt, /*pop0=*/0, /*pop1=*/0);
 #endif
 
         // compute final result

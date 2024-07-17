@@ -137,7 +137,7 @@ ALWI void mul_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t 
 }
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta_with_dt(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
+ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format(icb0, icb1);
@@ -542,8 +542,6 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile_to_cb(
-    PoolType reduce_op,
-    ReduceDim dim,
     uint32_t icb0,
     uint32_t icb1,
     uint32_t ocb,
@@ -558,7 +556,7 @@ ALWI void reduce_tile_to_cb(
     tile_regs_acquire();
     cb_wait_front(icb1, onetile);
 
-    reduce_init_delta_with_dt<false, reduce_type, reduce_dim>(reduce_op, dim, ocb, icb0, icb1);
+    reduce_init_delta_with_dt<false, reduce_type, reduce_dim>(ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
@@ -876,8 +874,6 @@ ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_and_recip_tile_to_cb(
-    PoolType reduce_op,
-    ReduceDim dim,
     uint32_t icb0,
     uint32_t icb1,
     uint32_t ocb,
@@ -891,7 +887,7 @@ ALWI void reduce_and_recip_tile_to_cb(
     cb_wait_front(icb1, onetile);
 
     tile_regs_acquire();
-    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(reduce_type, reduce_dim, ocb, icb0, icb1);
+    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
@@ -919,8 +915,6 @@ ALWI void reduce_and_recip_tile_to_cb(
 
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_and_log_tile_to_cb(
-    PoolType reduce_op,
-    ReduceDim dim,
     uint32_t icb0,
     uint32_t icb1,
     uint32_t ocb,
@@ -934,7 +928,7 @@ ALWI void reduce_and_log_tile_to_cb(
     cb_wait_front(icb1, onetile);
 
     tile_regs_acquire();
-    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(reduce_type, reduce_dim, ocb, icb0, icb1);
+    reduce_init_delta_with_dt<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
