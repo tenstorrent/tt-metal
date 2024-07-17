@@ -1075,7 +1075,7 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            f"ttnn-eltwise-{fn_kind}",
+            f"eltwise-{fn_kind}",
             input_shapes,
             datagen_func,
             comparison_func,
@@ -1112,7 +1112,7 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            f"ttnn-eltwise-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
+            f"eltwise-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @pytest.mark.parametrize("diag", [-2, -1, 0, 1, 2])
