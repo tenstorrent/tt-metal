@@ -37,7 +37,7 @@ Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_confi
 }
 
 Tensor _complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn.hypot(input[0],input[1],output_mem_config);
+    return tt::tt_metal::hypot(input[0],input[1],output_mem_config);
 }
 
 }  // namespace ttnn::operations::complex_unary
