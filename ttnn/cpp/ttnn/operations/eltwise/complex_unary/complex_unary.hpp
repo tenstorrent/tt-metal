@@ -31,5 +31,6 @@ struct ExecuteComplexUnaryType1 {
 }
 constexpr auto real = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::REAL>>("ttnn::real");
 constexpr auto imag = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::IMAG>>("ttnn::imag");
+constexpr auto angle = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::ANGLE>>("ttnn::angle");
 
 }
