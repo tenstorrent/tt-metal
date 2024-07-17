@@ -97,8 +97,11 @@ void reduce_c() {
         release_dst(tt::DstMode::Half);
     }
 
-   reduce_revert_delta<reduce_dim>(out_cb);
-   UNPACK(tensix_sync());
+    reduce_revert_delta<reduce_dim>(out_cb);
+
+    // UNPACK(TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_RESET_ALL_BANKS);)
+    UNPACK(TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_RESET_ALL_BANKS);)
+    UNPACK(tensix_sync());
 }
 
 void __attribute((noinline)) recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -225,6 +228,43 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
     cb_pop_front(in1_cb, num_tiles);
     UNPACK(tensix_sync());
+}
+
+void add_block_inplace2(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles consumed
+
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+
+
+    add_tiles_init();
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst(tt::DstMode::Half);
+        add_tiles(in0_cb, in1_cb, 0, i, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst(tt::DstMode::Half);
+    }
+
+    cb_pop_front(in1_cb, num_tiles);
+    UNPACK(tensix_sync());
+
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    // TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
 }
 
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -391,24 +431,21 @@ void MAIN {
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(4); // num chunks in valid_seq_len
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(6);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(8);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(13);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(17);
-    constexpr uint32_t do_reduce = get_compile_time_arg_val(18);
-    constexpr uint32_t k_chunk_start = get_compile_time_arg_val(19);
-    constexpr uint32_t k_chunk_end = get_compile_time_arg_val(20);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(4);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(6);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
+    constexpr uint32_t do_reduce = get_compile_time_arg_val(17);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -441,6 +478,10 @@ void MAIN {
     constexpr uint32_t cb_out_l = tt::CB::c_out2;
     constexpr uint32_t cb_out_final = tt::CB::c_out4;
 
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(0);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
+    const uint32_t k_chunk_start = get_arg_val<uint32_t>(1);
+    const uint32_t k_chunk_end = get_arg_val<uint32_t>(2);
+
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
 
@@ -462,14 +503,12 @@ void MAIN {
         /* QK *= SCALE */
         mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
 
-        // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-        // Q-range = [q_low, q_high)
-        // K-range = [k_low, k_high)
-        // does_overlap = not (q_low >= k_high or k_low >= q_high)
-        // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-        /* QK += MASK */
-        unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
-        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+        // For decode, we only apply mask at the last chunk on reducer cor
+        if (k_chunk == k_chunk_end - 1 && do_reduce) {
+            /* QK += MASK */
+            unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+        }
         // DPRINT << "[C] D QK 2"<< ENDL();
 
         unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
@@ -658,7 +697,11 @@ void MAIN {
                 /// O = O_1 + O_2
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
                 // pack_reconfig_data_format(cb_out_accumulate_im);
-                add_block_inplace(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
+                add_block_inplace2(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
+                // cb_pop_front(cb_out_accumulate_im_2, q_chunk_tiles);
+
+                // cb_pop_front(cb_out_accumulate_im, q_chunk_tiles);
+                // copy_block(cb_out_accumulate_im_2, cb_out_accumulate_im, q_chunk_tiles);
 
                 // unpack_reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
                 // pack_reconfig_data_format(cb_cur_max);

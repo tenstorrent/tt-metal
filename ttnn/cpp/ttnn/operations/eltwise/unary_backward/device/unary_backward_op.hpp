@@ -97,6 +97,9 @@ enum class UnaryBackwardOpType {
     ERF_BW,
     DEG2RAD_BW,
     POLYGAMMA_BW,
+    GELU_BW,
+    REPEAT_BW,
+    PROD_BW,
 };
 
 struct UnaryBackwardFunction{
@@ -118,6 +121,12 @@ std::vector<Tensor> _div_bw( const Tensor& grad, const Tensor& input, float scal
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input, float bias, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+//OpHandler_string_default : get_function_type1_string_default
+std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+//OpHandler_shape : get_function_type1_shape
+std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
+
 //OpHandler_unary_optional_float : get_function_unary_optional_float
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 
@@ -125,6 +134,10 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
 std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
 std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+
+//OpHandler_prod_bw : get_function_prod_bw
+std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
@@ -137,10 +150,19 @@ template <UnaryBackwardOpType OpType>
 struct OpHandler_float_string_default;
 
 template <UnaryBackwardOpType OpType>
+struct OpHandler_string_default;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_shape;
+
+template <UnaryBackwardOpType OpType>
 struct OpHandler_unary_optional_float;
 
 template <UnaryBackwardOpType OpType>
 struct OpHandler_unary_optional;
+
+template <UnaryBackwardOpType OpType>
+struct OpHandler_prod_bw;
 
 template <>
 struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
@@ -219,6 +241,27 @@ struct OpHandler_unary_optional<UnaryBackwardOpType::SQRT_BW> {
     }
 };
 
+template <>
+struct OpHandler_string_default<UnaryBackwardOpType::GELU_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _gelu_bw(grad, input, approximate, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _repeat_bw(grad, input, shape, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_prod_bw<UnaryBackwardOpType::PROD_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _prod_bw(grad, input, all_dimensions, dim, output_mem_config);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -236,6 +279,16 @@ auto get_function_type1_float_string_default() {
 }
 
 template <UnaryBackwardOpType OpType>
+auto get_function_type1_string_default() {
+    return &OpHandler_string_default<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_shape() {
+    return &OpHandler_shape<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
 auto get_function_unary_optional_float() {
     return &OpHandler_unary_optional_float<OpType>::handle;
 }
@@ -243,6 +296,11 @@ auto get_function_unary_optional_float() {
 template <UnaryBackwardOpType OpType>
 auto get_function_unary_optional() {
     return &OpHandler_unary_optional<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_prod_bw() {
+    return &OpHandler_prod_bw<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward

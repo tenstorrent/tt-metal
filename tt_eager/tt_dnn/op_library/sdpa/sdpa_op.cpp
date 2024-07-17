@@ -222,12 +222,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->valid_seq_len);
 }
 
-void ScaledDotProductAttentionDecode::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 3 and optional_input_tensors.size() == 1, "Must have 3 input tensors and mask");
-
-
+void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
@@ -239,18 +235,9 @@ void ScaledDotProductAttentionDecode::validate(
 
     }
 
-    auto mask = optional_input_tensors.at(0).value();
-    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
-    TT_FATAL(input_tensors.at(0).device() == mask.device());
-    TT_FATAL(mask.get_layout() == Layout::TILE);
-    TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B || mask.get_dtype() == DataType::BFLOAT4_B);
-
-    TT_FATAL(mask.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-
     const auto q_shape = input_tensors.at(0).get_legacy_shape();
     const auto k_shape = input_tensors.at(1).get_legacy_shape();
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
-    const auto mask_shape = mask.get_legacy_shape();
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
@@ -273,20 +260,17 @@ void ScaledDotProductAttentionDecode::validate(
     // Q: [1, B, NH, D]
     // K: [1, B, S, D]
     // V: [1, B, S, D]
-    // mask: [1, B, NH, VS]
 
     // Batch must match
     const auto B = q_shape[1];
     TT_FATAL(k_shape[1] == B);
     TT_FATAL(v_shape[1] == B);
-    TT_FATAL(mask_shape[1] == B);
     // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
 
     // NKV must be 1 if we are running in this decode mode
     TT_FATAL(q_shape[0] == 1);
     TT_FATAL(k_shape[0] == 1);
     TT_FATAL(v_shape[0] == 1);
-    TT_FATAL(mask_shape[0] == 1);
 
     // Check sequence lengths
     TT_FATAL(k_shape[-2] == v_shape[-2]);
@@ -296,35 +280,10 @@ void ScaledDotProductAttentionDecode::validate(
     TT_FATAL(k_shape[-1] == D);
     TT_FATAL(v_shape[-1] == D);
 
-    // Check NH
-    TT_FATAL(q_shape[2] == mask_shape[2]);
-
     // Check valid seqlen
-    TT_FATAL(valid_seq_len.has_value(), "Non-causal SDPA must set valid_seq_len");
-    TT_FATAL(valid_seq_len.value() == mask_shape[-1], "Mask sequence dim must match valid_seq_len");
-    TT_FATAL(valid_seq_len.value() <= k_shape[-2], "valid_seq_len must be <= K sequence dim");
-
-    // Check program config
-    std::visit(
-        [&](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              tt::operations::primary::transformers::SDPAMultiCoreProgramConfig>) {
-                auto q_chunk_size = program_config.q_chunk_size;
-                auto k_chunk_size = program_config.k_chunk_size;
-
-                TT_FATAL(q_shape[-2] % q_chunk_size == 0);
-                TT_FATAL(k_shape[-2] % k_chunk_size == 0);
-
-                TT_FATAL(q_chunk_size == q_shape[-2], "Non-causal SDPA must have q_chunk_size == q_shape[-2]");
-                TT_FATAL(this->valid_seq_len.value() % k_chunk_size == 0, "valid_seq_len must be divisible by k_chunk_size");
-
-            } else {
-                TT_FATAL(false, "Non-causal SDPA must use multi-core program config");
-            }
-        },
-        this->program_config);
+    for (int i = 0; i < this->cur_pos.size(); i++) {
+        TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+    }
 
     // Check compute kernel config
     std::visit([&](auto&& compute_kernel_config) {
@@ -346,13 +305,11 @@ std::vector<Tensor> ScaledDotProductAttentionDecode::create_output_tensors(const
 
 operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
-    const auto& attn_mask = optional_input_tensors.at(0);
 
     auto scale = this->scale;
     if (not scale.has_value()) {
@@ -382,12 +339,16 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         input_tensor_k,
         input_tensor_v,
         output_tensor,
-        attn_mask,
+        this->cur_pos,
         scale,
-        k_chunk_size,
         this->compute_kernel_config,
         this->program_config,
-        this->valid_seq_len);
+        this->k_chunk_size);
+}
+
+const operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<ScaledDotProductAttentionDecode>(this->scale, this->output_mem_config, this->program_config, this->compute_kernel_config, this->k_chunk_size, input_tensors);
 }
 
 namespace transformers {
@@ -435,44 +396,56 @@ Tensor scaled_dot_product_attention(
     return output_tensors.at(0);
 }
 
+uint32_t get_chunk_size(uint32_t s) {
+    if (s <= 128) {
+        return 32;
+    }
+    if (s <= 256) {
+        return 256;
+    }
+    return 512;
+}
+
 Tensor scaled_dot_product_attention_decode(
     Tensor& input_tensor_q,
     Tensor& input_tensor_k,
     Tensor& input_tensor_v,
-    std::optional<const Tensor> mask,
+    std::vector<uint32_t> cur_pos,
     std::optional<float> scale,
     const MemoryConfig& output_mem_config,
     const SDPAProgramConfig& program_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<const uint32_t> valid_seq_len) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor_q, input_tensor_k, input_tensor_v}))};
     operation::launch_op(
-        [scale, output_mem_config, program_config, compute_kernel_config, valid_seq_len](
+        [cur_pos, scale, output_mem_config, program_config, compute_kernel_config](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_q = input_tensors.at(0);
             const auto& input_tensor_k = input_tensors.at(1);
             const auto& input_tensor_v = input_tensors.at(2);
-            const auto& mask = optional_input_tensors.at(0);
             auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                              : AutoFormat::GetDefaultDevice()->arch();
+            uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
+            uint32_t k_chunk_size = get_chunk_size(max_cur_pos+1);
+            // get chunk size and then pass to sdpa decode as an attribute for prgm cache
             auto kernel_config_val = init_device_compute_kernel_config(
                 input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
             return operation::run(
                 ScaledDotProductAttentionDecode{
+                    .cur_pos=cur_pos,
                     .scale = scale,
                     .output_mem_config = output_mem_config,
                     .program_config = program_config,
                     .compute_kernel_config = kernel_config_val,
-                    .valid_seq_len=valid_seq_len},
-                {input_tensor_q, input_tensor_k, input_tensor_v},
-                {mask});
+                    .k_chunk_size = k_chunk_size},
+                {input_tensor_q, input_tensor_k, input_tensor_v}
+            );
         },
         {input_tensor_q, input_tensor_k, input_tensor_v},
-        output_tensors,
-        {mask});
+        output_tensors
+        );
     return output_tensors.at(0);
 }
 

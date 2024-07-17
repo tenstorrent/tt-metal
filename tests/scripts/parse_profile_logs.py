@@ -314,7 +314,6 @@ def clean_ops(ops):
         "repeat": [],
         "conv2d": [],
         "layernorm": [],
-        "groupnorm": [],
     }
 
     for key, val in ops.items():
@@ -351,10 +350,6 @@ def clean_ops(ops):
                 row = parse_layernorm(key, val)
                 add_to_list(row, cleaned_ops["layernorm"])
                 # cleaned_ops['layernorm'].append(row)
-            elif "GroupNorm" in val[0]["NAME"]:
-                row = parse_groupnorm(key, val)
-                add_to_list(row, cleaned_ops["groupnorm"])
-                # cleaned_ops['groupnorm'].append(row)
     return cleaned_ops
 
 

@@ -16,7 +16,6 @@
 #include "pybind11/operations/maxpool2d.hpp"
 #include "pybind11/operations/pool.hpp"
 #include "pybind11/operations/ternary.hpp"
-#include "pybind11/operations/transformer.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
@@ -28,6 +27,7 @@
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
+#include "ttnn/operations/transformer/transformer_pybind.hpp"
 
 
 namespace py = pybind11;

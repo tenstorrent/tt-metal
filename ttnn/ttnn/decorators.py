@@ -390,8 +390,8 @@ class Operation:
                     ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_JSON
                 )
                 output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
-                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
+                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_json"):
+                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_json()
                 if original_operation_history_json is not None:
                     os.environ["OPERATION_HISTORY_JSON"] = original_operation_history_json
                 else:
@@ -484,6 +484,12 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                if ttnn.CONFIG.report_path is not None:
+                    previous_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
+                    if previous_operation is not None:
+                        operation_id = previous_operation.operation_id + 1
+                        ttnn._ttnn.set_operation_id(operation_id)
+
                 operation_id = ttnn._ttnn.get_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 

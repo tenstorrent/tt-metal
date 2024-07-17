@@ -458,7 +458,7 @@ def eltwise_prelu(
 @setup_host_and_device
 def std_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.std_hw(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.std_hw(t0)
 
     output = tt2torch_tensor(t1)
     output = output.max(2, True)[0].max(3, True)[0]
@@ -469,10 +469,20 @@ def std_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 @setup_host_and_device
 def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.var_hw(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.var_hw(t0)
 
     output = tt2torch_tensor(t1)
     output = output.max(2, True)[0].max(3, True)[0]
+
+    return output
+
+
+@setup_host_and_device
+def normalize_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.normalize_hw(t0)
+
+    output = tt2torch_tensor(t1)
 
     return output
 
@@ -842,14 +852,6 @@ def conv(
 def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.layer_norm(t0, epsilon=1e-5, weight=None, bias=None, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def groupnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, None, None, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2595,6 +2597,26 @@ def make_unary_op_optional_output(ttl_tensor_unop):
     return unary_op_optional_output
 
 
+def make_unary_op_composite_ttnn(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op_optional_output(
+        x,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+        t2 = ttl_tensor_unop(t0)
+
+        return tt2torch_tensor(t2)
+
+    return unary_op_optional_output
+
+
 def make_unary_op_optional_output_with_scalar(ttl_tensor_unop):
     @setup_host_and_device
     def unary_op_optional_output_with_scalar(
@@ -2680,8 +2702,8 @@ eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
-eltwise_rad2deg = make_unary_op_optional_output(ttnn.rad2deg)
-eltwise_deg2rad = make_unary_op_optional_output(ttnn.deg2rad)
+eltwise_rad2deg = make_unary_op_composite_ttnn(ttnn.rad2deg)
+eltwise_deg2rad = make_unary_op_composite_ttnn(ttnn.deg2rad)
 eltwise_sign = make_unary_op_optional_output(ttnn.sign)
 eltwise_signbit = make_unary_op_optional_output(ttnn.signbit)
 eltwise_abs = make_unary_op_optional_output(ttnn.abs)
@@ -2710,7 +2732,7 @@ eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
-normalize_hw = make_unary_op(ttl.tensor.normalize_hw)
+# eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 transpose_wh = make_unary_op(partial(ttl.tensor.transpose, dim0=-2, dim1=-1))
 transpose_hc = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-2))
 transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
@@ -3136,22 +3158,6 @@ def rmsnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
     t1 = ttnn.rms_norm(t0, epsilon=1e-5, weight=t1, bias=t2, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def groupnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    x_shape = x.shape
-
-    target_y = y.expand(x_shape)
-    target_z = z.expand(x_shape)
-
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(target_y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(target_z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

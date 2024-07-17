@@ -20,24 +20,24 @@ void kernel_main() {
     */
     constexpr uint32_t B = get_compile_time_arg_val(0);  // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
-    constexpr uint32_t PSt = get_compile_time_arg_val(2);  // padded layer length in tiles
-    constexpr uint32_t St = get_compile_time_arg_val(3);  // full sequence length of kv cache in tiles
-    constexpr uint32_t DHt = get_compile_time_arg_val(4);  // head dim
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);  // number of tiles in seqlen of a k/v/mask chunk
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
-    constexpr uint32_t num_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t cur_batch =  get_compile_time_arg_val(8);
-    constexpr uint32_t k_chunk_start = get_compile_time_arg_val(9);
-    constexpr uint32_t k_chunk_end = get_compile_time_arg_val(10);
-    constexpr bool is_q_sharded = get_compile_time_arg_val(11);
-    constexpr bool is_worker = get_compile_time_arg_val(12);
-    constexpr uint32_t reduce_core_noc_x          = get_compile_time_arg_val(13);
-    constexpr uint32_t reduce_core_noc_y          = get_compile_time_arg_val(14);
+    constexpr uint32_t St = get_compile_time_arg_val(2);  // full sequence length of kv cache in tiles
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);  // head dim
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
+    constexpr uint32_t num_cores = get_compile_time_arg_val(5);
+    constexpr uint32_t cur_batch =  get_compile_time_arg_val(6);
+    constexpr bool is_q_sharded = get_compile_time_arg_val(7);
+    constexpr bool is_worker = get_compile_time_arg_val(8);
+    constexpr uint32_t reduce_core_noc_x          = get_compile_time_arg_val(9);
+    constexpr uint32_t reduce_core_noc_y          = get_compile_time_arg_val(10);
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
-    const uint32_t v_addr         = get_arg_val<uint32_t>(2);
-    const uint32_t mask_addr         = get_arg_val<uint32_t>(3);
+    const uint32_t v_addr  = get_arg_val<uint32_t>(2);
+
+    const uint32_t PSt = get_arg_val<uint32_t>(3);  // padded layer length in tiles
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(4);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
+    const uint32_t k_chunk_start = get_arg_val<uint32_t>(5);
+    const uint32_t k_chunk_end = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -48,7 +48,6 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CB::c_in0;
     constexpr uint32_t cb_k_in = tt::CB::c_in1;
     constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
 
 
     constexpr uint32_t onetile = 1;
@@ -58,8 +57,6 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
-    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -116,16 +113,9 @@ void kernel_main() {
         .data_format = v_data_format
     };
 
-    const InterleavedAddrGenFast<is_dram> mask_reader = {
-        .bank_base_address = mask_addr,
-        .page_size = mask_tile_bytes,
-        .data_format = mask_data_format
-    };
-
     // Offset for current batch
     const uint32_t k_batch_offset = cur_batch * St * DHt;
     const uint32_t v_batch_offset = cur_batch * St * DHt;
-    const uint32_t mask_batch_offset = cur_batch * PNHt * PSt;
 
     // DPRINT << "[Reader] read Q" << ENDL();
 
@@ -135,7 +125,6 @@ void kernel_main() {
     const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t;
     uint32_t k_start_tile_id = k_batch_offset + k_chunk_offset;
     uint32_t v_start_tile_id = v_batch_offset + v_chunk_offset;
-    uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
 
     // DPRINT << "[Reader] push kvm " << k_chunk_start << " to " << k_chunk_end << ENDL();
 
@@ -162,29 +151,6 @@ void kernel_main() {
         k_start_tile_id += k_chunk_tiles;
 
         // DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
-
-        // Read mask chunk
-        cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-        uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-        barrier_count = 0;
-        for (uint32_t row = 0; row < PNHt; ++row) {
-            uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
-            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                mask_tile_id++;
-                mask_write_ptr += mask_tile_bytes;
-
-                if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
-                    barrier_count = 0;
-                }
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_mask_in, mask_chunk_tiles);
-        mask_start_tile_id += mask_chunk_tiles;
-
-        // DPRINT << "[Reader] Finished Reading Mask at " << k_chunk << ENDL();
 
         // Read V chunk
         cb_reserve_back(cb_v_in, k_chunk_tiles);

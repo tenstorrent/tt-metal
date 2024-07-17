@@ -15,6 +15,9 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -188,7 +191,7 @@ std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input_tenso
     std::vector<Tensor> grad_tensor;
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
     Tensor input = ttnn::add(input_tensor, bias);
-    grad_tensor = tt::tt_metal::gelu_bw(grad, input, approximate = approximate);
+    grad_tensor = _gelu_bw(grad, input, approximate = approximate);
     return grad_tensor;
 }
 
@@ -1367,6 +1370,242 @@ std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const M
     std::vector<Tensor> grad_tensor;
     float M_PI_180 = M_PI / 180;
     Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
+
+std::vector<Tensor> _gelu_bw(
+    const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximate mode (expected 'None', 'tanh')");
+
+    if (approximate == "tanh") {
+        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
+        float kKappa = 0.044715;
+        Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_memory_config);
+        Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_memory_config);
+        Tensor inner = ttnn::multiply(ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_memory_config)), kBeta, std::nullopt, output_mem_config);
+        Tensor tanh_inner = ttnn::tanh(inner, output_memory_config);
+
+        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_memory_config);
+        Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_memory_config);
+
+        Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_memory_config);
+
+        Tensor tanh_derivative =
+            ttnn::neg(ttnn::subtract(ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config),
+                output_memory_config);
+        Tensor inner_derivative = ttnn::multiply(
+            (ttnn::add(
+                ttnn::multiply(ttnn::multiply(x_sq, kKappa, std::nullopt, output_memory_config), 3, std::nullopt, output_memory_config), 1, std::nullopt, output_mem_config)), kBeta);
+        Tensor right_derivative =
+            ttnn::multiply(ttnn::multiply(tanh_derivative, left, std::nullopt, output_memory_config),
+                inner_derivative,
+                std::nullopt,
+                output_memory_config);
+
+        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(grad_a);
+    } else {
+        float kAlpha = M_SQRT1_2;
+        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
+        Tensor cdf =
+            ttnn::multiply((ttnn::add(ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)), 1, std::nullopt, output_memory_config)), 0.5);
+        Tensor pdf = ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config), kBeta, std::nullopt, output_memory_config);
+        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(cdf, ttnn::multiply(input, pdf))));
+        grad_tensor.emplace_back(grad_a);
+    }
+
+    return grad_tensor;
+}
+
+std::vector<Tensor> _repeat_bw(
+    const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+
+    auto shape_wh = input.get_legacy_shape();
+    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1");
+    // input.get_legacy_shape()[0]
+    // If repeat shape has 0's, it returns zeros of given input
+    if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
+        Tensor zero_tensor = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(zero_tensor);
+        return grad_tensor;
+    } else if (shape[0] > 1) {
+        std::vector<int64_t> dim = {0};
+        TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[1], [2], [3] should be 1");
+        const tt::tt_metal::Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
+        Tensor result = tt::operations::primary::moreh_sum(
+            grad,
+            dim,
+            true,
+            tt::tt_metal::zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_memory_config),
+            output_memory_config);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    } else if (shape[1] > 1) {
+        std::vector<int64_t> dim = {1};
+        TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[0], [2], [3] should be 1");
+        const tt::tt_metal::Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
+        Tensor result = tt::operations::primary::moreh_sum(
+            grad,
+            dim,
+            true,
+            tt::tt_metal::zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_memory_config),
+            output_memory_config);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    }
+    return grad_tensor;
+}
+
+// Autoformat support
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    auto formatted_input_tensor = temp;
+    if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+        }
+    }
+    return formatted_input_tensor;
+}
+
+// Prod
+// along a single dimension --> result: grad_data * (y / input )
+std::vector<Tensor> _prod_bw(
+    const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
+    Tensor prod_result = prod(input, all_dimensions, dim, output_memory_config);
+    if(prod_result.get_layout()==Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE){
+        prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
+        }
+    if (all_dimensions == true) {
+        Tensor temp =
+            ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
+        Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<::bfloat16>(
+            temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_memory_config);
+        Tensor all_dimension_result =
+            ttnn::multiply(ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(all_dimension_result);
+        return grad_tensor;
+    }
+    // all_dimensions = False
+    Tensor updated_grad = prod_result;
+    if (prod_result.get_legacy_shape() != grad.get_legacy_shape()) {
+        if (dim == 3 || dim == -1) {
+            std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            Tensor required = permute(grad, after_permute_dims, output_memory_config);
+            std::vector<uint32_t> start_index = {0, 0, 0, 0};
+            std::vector<uint32_t> end_index = {
+                grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
+            Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
+            after_permute_dims = {0, 2, 3, 1};
+            updated_grad = permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
+            Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
+            pad_updated_grad = pad_updated_grad.to(Layout::TILE);
+            pad_prod_result = pad_prod_result.to(Layout::TILE);
+            updated_grad = pad_updated_grad.to(input.device());
+            prod_result = pad_prod_result.to(input.device());
+            pad_updated_grad.deallocate();
+            pad_prod_result.deallocate();
+        } else if (dim == 2 || dim == -2) {
+            std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            Tensor required = permute(grad, after_permute_dims, output_memory_config);
+            std::vector<uint32_t> start_index = {0, 0, 0, 0};
+            std::vector<uint32_t> end_index = {
+                grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
+            Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
+            updated_grad = permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            if(updated_grad.get_layout()==Layout::ROW_MAJOR){
+                updated_grad = ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
+            }
+        }
+    }
+    Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
+    Tensor temp = ttnn::multiply(prod_result, (dim == 1 || dim == 0 || dim == -4 || dim == -3) ? grad : updated_grad, std::nullopt, output_memory_config);
+    if(temp.get_layout()==Layout::ROW_MAJOR){
+        temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
+    }
+    if (dim == 3 || dim == -1) {
+        Tensor grad_result = bcast(reciprocal_input, temp, BcastOpMath::MUL, BcastOpDim::W, output_memory_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    } else if (dim == 2 || dim == -2) {
+        Tensor grad_result = bcast(reciprocal_input, temp, BcastOpMath::MUL, BcastOpDim::H, output_memory_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    } else if (dim == 1 || dim == -3) {
+        Tensor tensor_1_temp = reciprocal_input;
+        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+            std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
+                          {0, 32 - (reciprocal_input.get_legacy_shape()[1] % 32)},
+                          {0, 0},
+                          {0, 0}};
+            tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, true, std::nullopt);
+        }
+        std::vector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_memory_config);
+        Tensor tensor_2 = permute(temp, after_permute_dims, output_memory_config);
+
+        // put the tensor back on device because permute throws it off device
+        // See: Remove auto format within permute_op.cpp #9404
+        tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+
+        after_permute_dims = {0, 3, 1, 2};
+        Tensor result = permute(
+            bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_memory_config),
+            after_permute_dims,
+            output_memory_config);
+        Tensor grad_result = result;
+        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+            std::vector<uint32_t> start_index = {0, 0, 0, 0};
+            std::vector<uint32_t> end_index = {
+                input.get_legacy_shape()[0] - 1,
+                input.get_legacy_shape()[1] - 1,
+                input.get_legacy_shape()[2] - 1,
+                input.get_legacy_shape()[3] - 1};
+            grad_result = ttnn::slice(0, result, start_index, end_index, std::nullopt);
+        }
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    }
+    // dim 0
+    Tensor tensor_1_temp = reciprocal_input;
+    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
+        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, (32 - (reciprocal_input.get_legacy_shape()[0] % 32))},
+                      {0, 0},
+                      {0, 0},
+                      {0, 0}};
+        tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, false, std::nullopt);
+    }
+    std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_memory_config);
+    Tensor tensor_2 = permute(temp, after_permute_dims, output_memory_config);
+
+    // put the tensor back on device because permute throws it off device
+    // See: Remove auto format within permute_op.cpp #9404
+    tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+
+    Tensor result = permute(
+        bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_memory_config),
+        after_permute_dims,
+        output_memory_config);
+    Tensor grad_result = result;
+    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
+        std::vector<uint32_t> start_index = {0, 0, 0, 0};
+        std::vector<uint32_t> end_index = {
+            input.get_legacy_shape()[0] - 1,
+            input.get_legacy_shape()[1] - 1,
+            input.get_legacy_shape()[2] - 1,
+            input.get_legacy_shape()[3] - 1};
+        grad_result = ttnn::slice(0, result, start_index, end_index, std::nullopt);
+    }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }

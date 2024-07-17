@@ -31,23 +31,10 @@ std::vector<Tensor> complex_abs_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> gelu_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> angle_bw(
     const Tensor& grad,
     const Tensor& input,
     bool is_complextensor = true,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> prod_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    bool all_dimensions,
-    int64_t dim,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> conj_bw(
@@ -102,10 +89,6 @@ std::vector<Tensor> complex_sub_bw(
     float alpha = 1.0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config);
-
-Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 }  // namespace tt_metal
 
 }  // namespace tt

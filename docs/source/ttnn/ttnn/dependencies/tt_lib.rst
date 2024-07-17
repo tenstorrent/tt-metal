@@ -596,8 +596,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.conv
 
-.. autofunction:: tt_lib.tensor.groupnorm
-
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.xlogy
@@ -647,13 +645,9 @@ Other Operations
 Backward Operations
 ===================
 
-.. autofunction:: tt_lib.tensor.prod_bw
-
 .. autofunction:: tt_lib.tensor.conj_bw
 
 .. autofunction:: tt_lib.tensor.complex_abs_bw
-
-.. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
@@ -672,8 +666,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.complex_add_bw
 
 .. autofunction:: tt_lib.tensor.complex_sub_bw
-
-.. autofunction:: tt_lib.tensor.repeat_bw
 
 Loss Functions
 ==============

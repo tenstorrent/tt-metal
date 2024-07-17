@@ -429,20 +429,6 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "groupnorm":
-            assert len(start_shape) == 4
-            assert len(end_shape) == 4
-
-            def _gen_groupnorm_shapes(shape):
-                beta = [1, shape[1], 1, 1]
-                gamma = [1, shape[1], 1, 1]
-                return [shape, gamma, beta]
-
-            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_groupnorm_shapes
-            ):
-                yield shapes, datagen_funcs, test_args
-
         elif method == "complex_bin":
             assert len(start_shape) == 4
             assert len(end_shape) == 4
@@ -663,22 +649,6 @@ def shapes_and_datagen(
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
                 start_shape, end_shape, interval, _gen_tt_nn_rmsnorm_shapes
-            ):
-                yield shapes, datagen_funcs, test_args
-
-        elif method == "ttnn-groupnorm":
-            assert len(start_shape) == 2
-            assert len(end_shape) == 2
-
-            def _gen_tt_nn_groupnorm_shapes(shape):
-                input_shape = [shape[0], shape[1]]
-                weights_shape = [shape[1]]
-                bias_shape = [shape[1]]
-
-                return [input_shape, weights_shape, bias_shape]
-
-            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_tt_nn_groupnorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
