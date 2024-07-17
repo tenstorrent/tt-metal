@@ -179,8 +179,6 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
         decode_input_11BH = ttnn.reshape(decode_input_11BH, ttnn.Shape([1, 1, batch_size, model_args.dim]))
 
         decode_input_11BH = ttnn.to_layout(decode_input_11BH, layout=ttnn.TILE_LAYOUT)
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize(decode_input_11BH[i]) for i in range(len(devices))]
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
 
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
     rot_mats = prepare_rotation_mat_ttnn(
@@ -251,7 +249,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
             pt_decode_input = embd(tt_token_batch).view(batch_size, seqlen, -1)
         else:  # Embedding/argmax on device
             # TODO Update argmax to ttnn when OP becomes available
-            tt_out_B11B = ttnn.experimental.tensor.argmax(tt_out_11BH, dim=-1)
+            tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:

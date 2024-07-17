@@ -79,12 +79,12 @@ class TtTransformer(LightweightModule):
 
         x_norm = self.norm(x)
         # tlog('our_model_norm', x_norm)
-        multidevice_outputs = ttnn.experimental.operations.primary.matmul(
+        multidevice_outputs = ttnn.matmul(
             x_norm,
             self.output_weight,
             # compute_with_storage_grid_size=(8, 8), # FIXME: from Mixtral, presumably dI/dT workaround?
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
         # tlog('our_model_lm_head', multidevice_outputs, gather_dim=-1)

@@ -79,7 +79,7 @@ class TtMoeLayer(LightweightModule):
         self.softmax_compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
-        self.softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxDefaultProgramConfig()
+        self.softmax_program_config = ttnn.SoftmaxDefaultProgramConfig()
 
     def forward(self, inputs):
         """
@@ -93,13 +93,13 @@ class TtMoeLayer(LightweightModule):
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
-        gate_logits_1SB_64 = ttnn.experimental.operations.primary.matmul(
+        gate_logits_1SB_64 = ttnn.matmul(
             input_i_1SBH,
             self.gates_H_64,
             program_config=self.model_config["GATE_MM_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
-            output_dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat16,
         )
 
         # get weights for top-2 experts
@@ -110,21 +110,17 @@ class TtMoeLayer(LightweightModule):
         # gate_probs_1SB_64 = ttnn.softmax(gate_logits_1SB_64, dim=-1)
         # del gate_logits_1SB_64
 
-        gate_probs_1SB_64 = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+        gate_probs_1SB_64 = ttnn.scale_mask_softmax_in_place(
             gate_logits_1SB_64,
             program_config=self.softmax_program_config,
             compute_kernel_config=self.softmax_compute_config,
         )
         # tlog('our_gate_probs', gate_probs_1SB_64)
 
-        ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(
-            gate_probs_1SB_64, 32
-        )  # selects 6, 5 as 8.1, 1.8
+        ttl_topk_values, ttl_topk_indices = ttnn.topk(gate_probs_1SB_64, 32)  # selects 6, 5 as 8.1, 1.8
         # tlog('our_topk_indices', ttl_topk_indices)
         ttl_topk_values = ttl_topk_values * self.top2_mask_11BB  # masked unwanted ones to 0
-        mask_B2 = ttnn.eq(  # FIXME: revert dtype when merging main https://github.com/tenstorrent/tt-metal/issues/9480
-            self.expert_mask_11BB, ttl_topk_indices, dtype=ttnn.bfloat16
-        )  # Each device now masks for its own expert index 1-8
+        mask_B2 = ttnn.eq(self.expert_mask_11BB, ttl_topk_indices)  # Each device masks for its own expert index 1-8
         weights_1SB1 = ttnn.sum(ttl_topk_values * mask_B2, dim=3)
 
         # MLP and masking
@@ -136,5 +132,5 @@ class TtMoeLayer(LightweightModule):
         # all gather
         output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
         # sum on each device
-        output_11BH_gathered = ttnn.experimental.operations.primary.matmul(self.reduce_mask, output_11BH_gathered)
+        output_11BH_gathered = ttnn.matmul(self.reduce_mask, output_11BH_gathered)
         return output_11BH_gathered

@@ -168,11 +168,11 @@ class TtGrokAttention(LightweightModule):
         # QKV matmuls
         ###
 
-        xqkv_fused = ttnn.experimental.operations.primary.matmul(
+        xqkv_fused = ttnn.matmul(
             x_11BH,
             self.wqkv,
-            output_dtype=ttnn.bfloat16,
-            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             program_config=self.model_config["QKV_MM_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
         )
@@ -199,19 +199,19 @@ class TtGrokAttention(LightweightModule):
         if self.k_mem_config is None:
             self.k_mem_config = k_heads_1B1D.memory_config()
 
-        q_heads_1B4D = ttnn.experimental.operations.primary.matmul(
+        q_heads_1B4D = ttnn.matmul(
             q_heads_1B4D,
             rot_mat,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.q_mem_config,
+            memory_config=self.q_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
             # [seqlen, bsz, padd_heads, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, bsz, padd_heads, head_dim]
         )
-        k_heads_1B1D = ttnn.experimental.operations.primary.matmul(
+        k_heads_1B1D = ttnn.matmul(
             k_heads_1B1D,
             rot_mat,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.k_mem_config,
+            memory_config=self.k_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
         # rotmat_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
@@ -249,12 +249,12 @@ class TtGrokAttention(LightweightModule):
 
         # scores matmul
         attn_1B4P_memconfig = self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len)
-        attn_1B4P = ttnn.experimental.operations.primary.matmul(
+        attn_1B4P = ttnn.matmul(
             q_heads_1B4D,
             keys_1BDP,
-            output_dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat16,
             program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            output_mem_config=attn_1B4P_memconfig,
+            memory_config=attn_1B4P_memconfig,
             compute_kernel_config=self.compute_kernel_attn,
         )
         q_heads_1B4D.deallocate(True)
@@ -267,7 +267,7 @@ class TtGrokAttention(LightweightModule):
         attn_1B4P = self.max_attn_value * ttnn.tanh(attn_1B4P * (1.0 / self.max_attn_value))
         attn_1B4P = ttnn.experimental.tensor.interleaved_to_sharded(attn_1B4P, sharded_mem_config=attn_1B4P_memconfig)
 
-        attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_1B4P = ttnn.scale_mask_softmax_in_place(
             attn_1B4P,
             1.0,
             attn_mask_1B4P,
@@ -283,11 +283,11 @@ class TtGrokAttention(LightweightModule):
 
         # value_states = ttnn.to_torch(values_1BPD, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
         # x = ttnn.to_torch(x_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
-        attn_output_1B4D = ttnn.experimental.operations.primary.matmul(
+        attn_output_1B4D = ttnn.matmul(
             attn_1B4P,
             values_1BPD,
-            output_dtype=ttnn.bfloat16,
-            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
             program_config=self.model_config["VALUES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
             compute_kernel_config=self.compute_kernel_attn,
         )
@@ -313,14 +313,14 @@ class TtGrokAttention(LightweightModule):
         dense_outputs_11BH_gathered = ttnn.all_gather(attn_output_11BH, dim=3, num_links=1)
 
         # return the sum of the outputs
-        dense_outputs_11BH = ttnn.experimental.operations.primary.matmul(
+        dense_outputs_11BH = ttnn.matmul(
             dense_outputs_11BH_gathered,
             wo,
-            output_mem_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
             # compute_with_storage_grid_size=(8, 8),
             program_config=self.model_config["LM_HEAD_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
-            output_dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b,
         )
 
         # attn_output = ttnn.to_torch(dense_outputs_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
