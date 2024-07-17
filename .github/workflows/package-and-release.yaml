@@ -82,9 +82,9 @@ jobs:
         run: |
           touch RELEASE_NOTES.txt
           cat infra/RELEASE_TOP_NOTE.txt >> RELEASE_NOTES.txt
-          echo >> RELEASE_NOTES.txt
+          echo "" >> RELEASE_NOTES.txt
           cat PIPELINE_NOTE.txt >> RELEASE_NOTES.txt
-          echo >> RELEASE_NOTES.txt
+          echo "" >> RELEASE_NOTES.txt
           cat CHANGELOG.txt >> RELEASE_NOTES.txt
       - name: Output release notes
         run: cat RELEASE_NOTES.txt
@@ -149,6 +149,7 @@ jobs:
           files: |
             VERSION
             CHANGELOG.txt
+            README.md
             INSTALLING.md
             infra/machine_setup/scripts/setup_hugepages.py
             metal_libs-*+*.whl
