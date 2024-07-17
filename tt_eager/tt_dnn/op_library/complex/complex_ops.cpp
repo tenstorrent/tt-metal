@@ -160,10 +160,6 @@ ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_co
     return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
 }
 
-Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return hypot(input[0],input[1],output_mem_config);
-}
-
 ComplexTensor complex_mul(const ComplexTensor& ab, const ComplexTensor& cd,  const MemoryConfig& output_mem_config) {
     // (a + ib)*(c + id) = (ac - bd) + i(bc + ad)
     Tensor re_part = ttnn::subtract(
