@@ -275,8 +275,8 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
-import ttnn.experimental_operations
-import ttnn.experimental_operations.golden_functions
+import ttnn.experimental_loader
+import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
