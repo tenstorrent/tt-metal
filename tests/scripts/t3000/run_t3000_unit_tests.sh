@@ -112,6 +112,29 @@ run_t3000_mixtral_tests() {
   fi
 }
 
+run_t3000_grok_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_grok_tests"
+
+  pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_mlp.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_embedding.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_moe.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_decoder.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_grok_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
@@ -127,6 +150,9 @@ run_t3000_tests() {
 
   # Run mixtral tests
   run_t3000_mixtral_tests
+
+  # Run grok tests
+  run_t3000_grok_tests
 }
 
 fail=0
