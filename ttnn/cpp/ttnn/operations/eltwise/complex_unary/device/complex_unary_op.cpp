@@ -20,4 +20,8 @@ Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config) 
     return input[0];
 }
 
+Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return input[1];
+}
+
 }  // namespace ttnn::operations::complex_unary
