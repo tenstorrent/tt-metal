@@ -176,7 +176,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_threshold,
         "pytorch_op": pytorch_ops.threshold,
     },
-    "ttnn-relu6": {
+    "ttnn-eltwise-relu6": {
         "tt_op": ttnn_ops.eltwise_relu6,
         "pytorch_op": pytorch_ops.relu6,
     },
@@ -235,6 +235,10 @@ op_map = {
     "ttnn-eltwise-i0": {
         "tt_op": ttnn_ops.eltwise_i0,
         "pytorch_op": pytorch_ops.i0,
+    },
+    "ttnn-eltwise-identity": {
+        "tt_op": ttnn_ops.eltwise_identity,
+        "pytorch_op": pytorch_ops.eltwise_identity,
     },
     "ttnn-eltwise-isfinite": {
         "tt_op": ttnn_ops.eltwise_isfinite,
@@ -501,7 +505,7 @@ op_map = {
         "tt_op": ttnn_ops.hardsigmoid,
         "pytorch_op": pytorch_ops.hardsigmoid,
     },
-    "ttnn-deg2rad": {
+    "ttnn-eltwise-deg2rad": {
         "tt_op": ttnn_ops.deg2rad,
         "pytorch_op": pytorch_ops.deg2rad,
     },

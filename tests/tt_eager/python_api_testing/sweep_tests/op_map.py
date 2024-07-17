@@ -668,10 +668,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_rsub,
         "pytorch_op": pytorch_ops.eltwise_rsub,
     },
-    "eltwise-identity": {
-        "tt_op": tt_lib_ops.eltwise_identity,
-        "pytorch_op": pytorch_ops.eltwise_identity,
-    },
     "eltwise-typecast": {
         "tt_op": tt_lib_ops.eltwise_typecast,
         "pytorch_op": pytorch_ops.eltwise_typecast,
