@@ -331,7 +331,7 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
 // self: grad * self.sgn()
 std::vector<ComplexTensor> complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor result = complex_abs(input, output_mem_config);
+    Tensor result = ttnn::operations::complex_unary::_complex_abs(input, output_mem_config);
     Tensor grad_inp_r = where(ttnn::eqz(result, output_mem_config), zeros_like(result, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     Tensor grad_inp_i = where(ttnn::eqz(result, output_mem_config), zeros_like(result, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
@@ -389,7 +389,7 @@ std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& inp
 std::vector<ComplexTensor> polar_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor result = polar(input, output_mem_config);
-    Tensor abs_result = complex_abs(result, output_mem_config);
+    Tensor abs_result = ttnn::operations::complex_unary::_complex_abs(result, output_mem_config);
     Tensor sgn_result_r = where(ttnn::eqz(abs_result, output_mem_config), zeros_like(result.real(), output_mem_config), ttnn::multiply(result.real(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     Tensor sgn_result_i = where(ttnn::eqz(abs_result, output_mem_config), zeros_like(result.imag(), output_mem_config), ttnn::multiply(result.imag(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     abs_result.deallocate();
