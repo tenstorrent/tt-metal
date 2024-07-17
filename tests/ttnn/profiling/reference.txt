@@ -84,9 +84,11 @@ tt_lib.tensor.bcast_sub_w,40,0.87,0.98,1.2,1.0
 ttnn.bias_gelu,40,0.92,1.0,1.25,1.02
 ttnn.bias_gelu_bw_none,40,10.59,10.98,11.45,10.86
 ttnn.bias_gelu_bw_tanh,40,19.81,21.36,21.2,20.61
+ttnn.groupnorm,40,7.53,8.57,9.35,8.51
+ttnn.group_norm_no_weights,40,5.93,7.46,8.25,7.3
 tt_lib.tensor.bias_gelu_unary,40,1.72,2.67,2.95,2.36
-tt_lib.tensor.bias_gelu_unary_bw_none,40,10.01,10.61,10.88,10.38
-tt_lib.tensor.bias_gelu_unary_bw_tanh,40,18.02,20.17,20.11,19.0
+ttnn.bias_gelu_unary_bw_none,40,10.01,10.61,10.88,10.38
+ttnn.bias_gelu_unary_bw_tanh,40,18.02,20.17,20.11,19.0
 ttnn.eq_bw,40,1.78,2.54,2.95,2.38
 ttnn.cbrt,40,4.93,5.56,5.86,5.32
 ttnn.ceil_bw,40,0.96,1.06,1.35,1.09
@@ -123,7 +125,6 @@ ttnn.digamma,40,22.17,23.69,25.36,23.74
 ttnn.digamma_bw,40,55.5,58.8,61.32,57.51
 ttnn.divide,40,0.8,0.86,1.13,0.9
 ttnn.div_bw,40,38.51,42.44,43.96,42.3
-tt_lib.tensor.div_unary,40,0.96,1.04,1.3,1.06
 ttnn.elu,40,0.85,0.92,1.17,0.95
 ttnn.elu_bw,40,7.16,8.07,9.05,7.78
 tt_lib.tensor.embeddings,40,0.66,0.74,1.01,0.79
@@ -142,7 +143,7 @@ ttnn.erfinv_bw,40,29.23,30.73,31.9,30.12
 ttnn.exp,40,0.82,0.89,1.14,0.92
 ttnn.exp2,40,0.77,0.81,1.08,0.85
 ttnn.exp2_bw,80,2.53,2.81,2.8,2.74
-tt_lib.tensor.exp_bw,40,21.52,23.13,25.86,23.33
+ttnn.exp_bw,40,21.52,23.13,25.86,23.33
 ttnn.expm1,40,0.82,0.89,1.12,0.92
 ttnn.expm1_bw,40,2.72,3.11,3.53,3.0
 ttnn.fill_bw,40,12.07,12.89,15.06,13.0
@@ -153,12 +154,12 @@ ttnn.floor_bw,40,0.99,1.04,1.31,1.07
 ttnn.frac_bw,200,0.015,0.003,0.006,
 ttnn.full,40,0.86,0.88,1.84,0.0
 ttnn.full_like,40,1.94,2.43,2.62,2.24
-ttnn.ge_bw,40,0.98,1.06,1.35,1.09
+ttnn.ge_bw,200,1.666,1.669,1.688,
 tt_lib.tensor.geglu_dim_2,40,2.95,3.11,3.17,3.02
 tt_lib.tensor.geglu_dim_3,40,2.86,3.24,3.58,3.31
 ttnn.gelu,40,0.85,0.91,1.16,0.95
-tt_lib.tensor.gelu_bw_none,40,9.69,9.95,10.42,9.74
-tt_lib.tensor.gelu_bw_tanh,40,17.0,19.16,20.59,19.39
+ttnn.gelu_bw_none,40,9.69,9.95,10.42,9.74
+ttnn.gelu_bw_tanh,40,17.0,19.16,20.59,19.39
 ttnn.gez,40,0.86,1.24,1.47,1.11
 tt_lib.tensor.global_max,40,10.85,11.98,12.72,11.76
 tt_lib.tensor.global_mean,40,12.12,13.01,13.44,12.67
@@ -167,7 +168,7 @@ tt_lib.tensor.global_sum,40,10.65,11.23,11.92,10.92
 tt_lib.tensor.glu_dim_2,40,2.97,3.59,3.6,3.41
 tt_lib.tensor.glu_dim_3,40,2.72,2.97,3.32,3.03
 ttnn.gt,40,0.9,0.93,1.23,0.99
-ttnn.gt_bw,40,0.98,1.07,1.36,1.11
+ttnn.gt_bw,200,1.674,1.887,1.783,
 ttnn.ge,40,0.89,0.94,1.21,0.99
 ttnn.gtz,40,0.69,0.78,1.03,0.8
 ttnn.hardshrink,40,5.94,6.07,6.42,5.98
@@ -195,7 +196,7 @@ ttnn.isposinf,40,0.72,0.8,1.09,0.85
 tt_lib.tensor.lamb_optimizer,40,69.6,72.44,72.11,69.25
 ttnn.ldexp,40,0.86,0.97,1.22,1.0
 ttnn.ldexp_bw,40,4.43,4.88,5.12,4.82
-ttnn.le_bw,40,0.99,1.03,1.33,1.08
+ttnn.le_bw,200,1.638,1.649,1.658,
 ttnn.leaky_relu,40,0.87,0.91,1.19,0.96
 ttnn.leaky_relu_bw,40,6.08,6.41,6.27,6.15
 ttnn.lerp,40,2.6,2.97,3.12,2.92
@@ -231,7 +232,7 @@ ttnn.logit,40,33.09,35.34,35.69,34.29
 ttnn.logit_bw,40,24.44,26.0,25.6,24.79
 ttnn.logiteps_bw,40,32.45,34.68,35.53,34.45
 ttnn.lt,40,0.88,0.97,1.2,0.99
-ttnn.lt_bw,40,0.99,1.08,1.36,1.11
+ttnn.lt_bw,200,1.643,1.65,1.678,
 ttnn.lt,40,0.9,1.19,1.24,1.12
 ttnn.ltz,40,0.81,0.9,1.12,0.93
 tt_lib.tensor.mac,40,1.69,1.79,2.13,1.83
@@ -247,7 +248,7 @@ ttnn.mul,40,0.88,1.04,1.3,1.07
 ttnn.mul_bw,40,1.56,1.8,2.15,1.88
 ttnn.mul_unary,40,0.95,1.39,1.59,1.26
 ttnn.ne,40,0.84,0.91,1.18,0.96
-ttnn.ne_bw,40,0.94,1.05,1.41,1.16
+ttnn.ne_bw,200,1.631,1.651,1.685,
 ttnn.neg,40,0.87,1.34,1.5,1.19
 ttnn.neg_bw,40,0.86,0.91,1.18,0.95
 ttnn.nextafter,40,11.29,12.07,12.39,11.65
@@ -267,7 +268,7 @@ tt_lib.tensor.pow_int,40,0.78,0.89,1.17,0.94
 ttnn.rad2deg,40,0.98,1.57,1.83,1.54
 ttnn.rad2deg_bw,40,0.98,1.07,1.34,1.09
 ttnn.rdiv,40,6.5,6.9,7.97,7.0
-tt_lib.tensor.rdiv_bw,40,21.62,23.61,23.79,22.61
+ttnn.rdiv_bw,40,21.62,23.61,23.79,22.61
 tt_lib.tensor.real,40,0.7,0.75,1.02,0.8
 tt_lib.tensor.real_bw,40,2.15,2.24,2.62,2.27
 ttnn.reciprocal,40,0.85,1.29,1.55,1.18
@@ -290,7 +291,7 @@ ttnn.relu_bw,40,1.58,1.91,2.16,1.85
 ttnn.relu_max,40,0.85,1.37,1.64,1.2
 ttnn.relu_min,40,0.8,0.89,1.2,0.95
 tt_lib.tensor.repeat,40,0.69,0.75,1.11,0.78
-tt_lib.tensor.repeat_bw,40,0.01,0.01,0.09,0.0
+ttnn.repeat_bw,40,0.01,0.01,0.09,0.0
 tt_lib.tensor.repeat_interleave_dim_0,40,0.72,0.78,1.17,0.82
 tt_lib.tensor.repeat_interleave_dim_1,16,8.24,11.44,322.86,10.31
 tt_lib.tensor.repeat_interleave_dim_2,16,2.73,2.79,151.6,2.95
@@ -344,7 +345,7 @@ ttnn.swish,40,0.81,1.05,1.36,1.02
 ttnn.tan,40,0.82,0.88,0.93,0.85
 ttnn.tan_bw,40,2.99,3.27,3.7,3.29
 ttnn.tanh,40,0.83,0.99,1.13,0.93
-tt_lib.tensor.tanh_bw,40,3.0,3.84,4.31,3.59
+ttnn.tanh_bw,40,3.0,3.84,4.31,3.59
 ttnn.tanhshrink,40,1.8,1.95,2.27,2.01
 ttnn.tanhshrink_bw,40,2.37,2.94,3.1,2.76
 ttnn.threshold,40,4.85,4.93,5.5,5.0
@@ -359,10 +360,10 @@ ttnn.trunc_bw,40,0.94,1.41,1.73,1.49
 tt_lib.tensor.typecast,40,0.76,0.81,1.32,0.92
 ttnn.assign_bw,200,0.016,0.016,0.006,
 ttnn.unary_add_bw,200,0.02,0.022,0.027,
-tt_lib.tensor.unary_div_bw,40,2.86,3.1,3.43,3.01
+ttnn.unary_div_bw,40,2.86,3.1,3.43,3.01
 ttnn.div_no_nan_bw,40,8.79,9.99,10.69,9.93
 ttnn.fmod_bw,200,0.019,0.023,0.024,
-tt_lib.tensor.unary_pow_bw,40,13.79,14.6,15.44,14.3
+ttnn.unary_pow_bw,40,13.79,14.6,15.44,14.3
 ttnn.remainder_bw,200,0.006,0.006,0.007,
 ttnn.slice,40,0.66,0.74,1.02,0.77
 tt_lib.tensor.untilize,40,0.79,0.85,1.13,0.9
