@@ -1,6 +1,9 @@
 Tools
 =====
 
+.. note::
+   Tools are only fully supported on source builds.
+
 .. toctree::
     :maxdepth: 1
 

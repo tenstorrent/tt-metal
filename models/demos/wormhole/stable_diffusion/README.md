@@ -1,5 +1,9 @@
 # Stable_diffusion Model
 
+> [!CAUTION]
+>
+> This model does not currently work on N300 Wormhole cards. We have an active [issue](https://github.com/tenstorrent/tt-metal/issues/7560) to resolve this.
+
 ## Introduction
 Stable Diffusion is a latent text-to-image diffusion model capable of generating photo-realistic images given any text input.
 
