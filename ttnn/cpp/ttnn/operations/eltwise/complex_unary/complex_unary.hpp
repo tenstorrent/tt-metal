@@ -33,5 +33,6 @@ constexpr auto imag = ttnn::register_operation<operations::complex_unary::Execut
 constexpr auto angle = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::ANGLE>>("ttnn::angle");
 constexpr auto is_imag = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::IS_IMAG>>("ttnn::is_imag");
 constexpr auto is_real = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::IS_REAL>>("ttnn::is_real");
+constexpr auto complex_abs = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType1<operations::complex_unary::ComplexUnaryOpType::COMPLEX_ABS>>("ttnn::complex_abs");
 
 }
