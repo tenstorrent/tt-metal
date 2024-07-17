@@ -85,6 +85,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
             TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i]);
         }
     } else {
+        TT_FATAL(!is_tile_dim);
         std::vector<uint32_t> expected_output_shape;
         std::vector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape.rank(); ++i) {

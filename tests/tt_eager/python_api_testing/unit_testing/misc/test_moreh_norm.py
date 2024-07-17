@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 )
 
 
-def check_dim(input_shape, dim):
+def check_dim(input_shape, dim, keepdim):
     if type(dim) == int and dim >= len(input_shape):
         pytest.skip("dim bigger than input rank")
 
@@ -29,6 +29,18 @@ def check_dim(input_shape, dim):
         for i in dim:
             if i >= len(input_shape):
                 pytest.skip("dim bigger than input rank")
+
+    if keepdim == False:
+        if dim in [None, []]:
+            pytest.skip("`keepdim == false` don't support last 2-dim")
+
+        if type(dim) == int and len(input_shape) - 2 <= dim:
+            pytest.skip("`keepdim == false` don't support last 2-dim")
+
+        if type(dim) == list:
+            for i in dim:
+                if len(input_shape) - 2 <= i:
+                    pytest.skip("`keepdim == false` don't support last 2-dim")
 
 
 def make_cpu_tensors(input_shape, dim, keepdim=False):
@@ -107,7 +119,7 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
     if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
         pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
 
-    check_dim(input_shape, dim)
+    check_dim(input_shape, dim, keepdim)
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim, keepdim=keepdim)
 
@@ -135,7 +147,7 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
 
 
 def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=False, compute_kernel_options=None):
-    check_dim(input_shape, dim)
+    check_dim(input_shape, dim, keepdim)
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim, keepdim=keepdim)
 
@@ -254,7 +266,7 @@ def test_moreh_norm_compute_kernel_options(input_shape, p, dim_rtol_atol, comput
         [10, TILE_HEIGHT, TILE_WIDTH],
     ],
 )
-def test_moreh_callback(input_shape, p, dim_rtol_atol, device, use_program_cache):
+def test_moreh_norm_callback(input_shape, p, dim_rtol_atol, device, use_program_cache):
     torch.manual_seed(2024)
 
     dim, rtol, atol = dim_rtol_atol
