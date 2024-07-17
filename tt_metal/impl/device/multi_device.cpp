@@ -52,11 +52,16 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
         }
+        this->num_rows = num_rows;
+        this->num_cols = num_cols;
     } else {
         managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size);
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
         }
+        // TODO: support concept of rows/cols in other systems
+        this->num_rows = 0;
+        this->num_cols = 0;
     }
 
     for (const auto& [dev_id, dev]: mesh_devices) {
@@ -71,17 +76,14 @@ DeviceMesh::~DeviceMesh() {
     }
 }
 
-
-Device* DeviceMesh::get_device(int queried_device_id)
-{
+Device* DeviceMesh::get_device(int logical_device_id) const {
     for (const auto& [device_id, device] : mesh_devices) {
-        if (device_id == queried_device_id) {
+        if (device_id == logical_device_id) {
             return device;
         }
     }
     TT_THROW("User has provided an invalid device index");
 }
-
 
 std::vector<Device*> DeviceMesh::get_devices() const
 {
@@ -92,6 +94,31 @@ std::vector<Device*> DeviceMesh::get_devices() const
     return devices;
 }
 
+Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
+    TT_FATAL(
+        this->num_rows != 0 and this->num_cols != 0,
+        "#10419, Current device mesh does not support indexing by row or col indices.");
+    TT_FATAL(row_idx >= 0 and row_idx < this->num_rows, "Invalid row index.");
+    TT_FATAL(col_idx >= 0 and col_idx < this->num_cols, "Invalid col index.");
+    int idx = row_idx * this->num_cols + col_idx;
+    return this->mesh_devices[idx].second;
+}
+
+std::vector<Device*> DeviceMesh::get_devices_on_row(int row_idx) const {
+    std::vector<Device*> devices;
+    for (int col_idx = 0; col_idx < this->num_cols; ++col_idx) {
+        devices.push_back(this->get_device(row_idx, col_idx));
+    }
+    return devices;
+}
+
+std::vector<Device*> DeviceMesh::get_devices_on_column(int col_idx) const {
+    std::vector<Device*> devices;
+    for (int row_idx = 0; row_idx < this->num_rows; ++row_idx) {
+        devices.push_back(this->get_device(row_idx, col_idx));
+    }
+    return devices;
+}
 
 const DeviceIds DeviceMesh::get_device_ids() const
 {
