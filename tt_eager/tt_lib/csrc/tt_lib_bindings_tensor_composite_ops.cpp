@@ -1497,6 +1497,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
         // *** complex operations ***
         detail::bind_unary_op(m_tensor, "angle", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::angle), R"doc(Returns elementwise angle of complex tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "real", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::real), R"doc(Returns real portion of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "imag", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::imag), R"doc(Returns imag portion of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "is_real", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::is_real), R"doc(Returns true if complex tensor ``{0}``  is real.)doc");
         detail::bind_unary_op(m_tensor, "is_imag", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::is_imag), R"doc(Returns true if complex tensor ``{0}``  is imaginary.)doc");
