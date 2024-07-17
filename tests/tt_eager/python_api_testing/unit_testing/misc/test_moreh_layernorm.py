@@ -15,11 +15,10 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    TILE_HEIGHT,
+    TILE_WIDTH,
 )
 from models.utility_functions import skip_for_grayskull
-
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
 
 def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):

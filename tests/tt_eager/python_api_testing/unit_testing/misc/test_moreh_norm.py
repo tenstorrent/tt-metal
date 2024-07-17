@@ -9,8 +9,7 @@ import tt_lib as ttl
 from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
 def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):

@@ -13,10 +13,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    TILE_HEIGHT,
+    TILE_WIDTH,
 )
-
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
 
 def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True, dataformat=ttnn.bfloat16):

@@ -9,8 +9,7 @@ from loguru import logger
 import tt_lib as ttl
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
 def get_tensors(input_shape, output_shape, use_randint, device):
