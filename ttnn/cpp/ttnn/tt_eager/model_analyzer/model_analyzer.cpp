@@ -170,13 +170,13 @@ void analyze_op(OperationSpec& op_spec, OperationAnalysis& op_analysis, const Ex
     op_analysis.measured_nano_sec -= exec_config.fw_launch_latency_nano_sec;
 
     // compute the amout of data that needs to be consumed on in0 (Bytes)
-    if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool" || op_spec.op_code == "Downsample") { 
+    if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool" || op_spec.op_code == "Downsample") {
         // filter window is only relevant for maxpool/convs, it's 1x1, s1 for all ohter OPs
         // for each output we gather a filter window of data from input0
         // for strided OPs, the output is smaller than input, so we need to read less data (eg, downsample)
         op_analysis.in0_read_bytes = op_spec.output_height * op_spec.output_width * op_spec.in0_channels * op_spec.batch_size * exec_config.row_major_act_bytes_per_datum;
         op_analysis.in0_read_bytes *= op_spec.filter_height * op_spec.filter_width;
-    } else { 
+    } else {
         // other OPs modeled as reading full input
         // for eltwise binary OPs, we read both inputs but the each input and output is limited to 32 B/c because unpacker's 64 B/c is split across in0/in1, so each input and output get 32 B/c
         op_analysis.in0_read_bytes = op_spec.in0_height * op_spec.in0_width * op_spec.in0_channels * op_spec.batch_size * exec_config.tile_act_bytes_per_datum;
@@ -208,7 +208,7 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
 
     std::unordered_set<std::string> supported_OP_CODE {
         "EltwiseBinary",
-        
+
         "InterleavedToSharded",
         "Untilize",
         "Unpad",
@@ -217,10 +217,10 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
         "UntilizeWithUnpadding",
         "UntilizeWithHalo",
         "Downsample",
-        
+
         "Reduce",
         "MaxPool",
-        
+
         "OptimizedConv",
         "tt::operations::primary::Matmul"
     };
