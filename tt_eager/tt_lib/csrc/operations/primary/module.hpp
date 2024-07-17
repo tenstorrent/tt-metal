@@ -323,11 +323,13 @@ void py_module(py::module& m_primary) {
         "moreh_norm",
         &moreh_norm,
         py::arg("input").noconvert(),
+        py::kw_only(),
         py::arg("p").noconvert() = 2.0f,
         py::arg("dim").noconvert() = std::nullopt,
-        py::kw_only(),
+        py::arg("keepdim").noconvert() = false,
         py::arg("output").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_norm operation.");
 
     // moreh_norm_backward
@@ -337,10 +339,13 @@ void py_module(py::module& m_primary) {
         py::arg("input").noconvert(),
         py::arg("output").noconvert(),
         py::arg("output_grad").noconvert(),
-        py::arg("p").noconvert() = 2.0f,
         py::kw_only(),
+        py::arg("p").noconvert() = 2.0f,
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keepdim").noconvert() = false,
         py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_norm_backward operation.");
 
     m_primary.def(

@@ -308,7 +308,7 @@ void MAIN {
         cb_wait_front(cb_dyadd, onetile);
         cb_reserve_back(cb_dysum, onetile);
 
-        reduce_init_delta_with_dt<false>(REDUCE_OP, REDUCE_DIM, cb_dysum, cb_dyadd, cb_scaler);
+        reduce_init_delta_with_dt<false>(cb_dysum, cb_dyadd, cb_scaler);
         reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
         reduce_revert_delta(cb_dysum);
         tile_regs_commit();
@@ -326,7 +326,7 @@ void MAIN {
         cb_wait_front(cb_ydyadd, onetile);
         cb_reserve_back(cb_ydysum, onetile);
 
-        reduce_init_delta_with_dt<false>(REDUCE_OP, REDUCE_DIM, cb_ydysum, cb_ydyadd, cb_scaler);
+        reduce_init_delta_with_dt<false>(cb_ydysum, cb_ydyadd, cb_scaler);
         reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
         reduce_revert_delta(cb_ydysum);
         tile_regs_commit();

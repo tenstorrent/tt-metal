@@ -34,10 +34,54 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
+
+
+void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+    const auto rank = shape.rank();
+    for (auto i = 0; i < rank; ++i) {
+        auto idx = rank - 1 - i;
+
+        // last 2-dim
+        if (idx == rank - 1 || idx == rank - 2) {
+            dim[i] = shape[idx] / TILE_HEIGHT;
+        }
+        else {
+            dim[i] = shape[idx];
+        }
+    }
+
+    log_debug(LogOp, "rank {}", rank);
+    for (auto i = 0; i < rank; ++i) {
+        log_debug(LogOp, "dim[{}] = {}", i, dim[i]);
+    }
+}
+
+Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+    if (keep_batch_dim) {
+        return output_grad.get_legacy_shape();
+    }
+
+    auto shape = input_grad.get_legacy_shape();
+    auto rank = shape.rank();
+    auto padding = shape.padding();
+    for (auto dim : dims) {
+        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
+        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        if (is_tile_dim) {
+            shape[dim] = TILE_HEIGHT;
+            padding[dim] = Padding::PadDimension{0, 31};
+        } else {
+            shape[dim] = 1;
+        }
+    }
+
+    return Shape(shape, padding);
+}
+
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_norm_backward_(
-    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const Tensor &input_grad) {
+    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -47,50 +91,52 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // input
-    const auto input_shape = input.get_legacy_shape();
-    const auto input_rank = static_cast<int64_t>(input_shape.rank());
+    const auto &input_grad_shape = input_grad.get_legacy_shape();
+    const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto input_grad_rank = input_grad_shape.rank();
 
-    const auto input_n = input_shape[0];
-    const auto input_c = input_shape[1];
-    const auto input_h = input_shape[2];
-    const auto input_w = input_shape[3];
-    const auto input_ht = input_h / TILE_HEIGHT;
-    const auto input_wt = input_w / TILE_WIDTH;
+    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    log_debug(LogOp, "input_grad");
+    get_tensor_dim(input_grad_dim, input_grad_shape);
+    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keep_batch_dim);
+    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
-    const auto input_origin_shape = input_shape.without_padding();
+    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    log_debug(LogOp, "output_grad");
+    get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    const auto input_origin_h = input_origin_shape[2];
-    const auto input_origin_w = input_origin_shape[3];
+    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    for (auto i = 0; i < input_grad_rank; ++i) {
+        auto idx = input_grad_rank - 1 - i;
+        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
-    // output
-    const auto output_shape = output.get_legacy_shape();
-    const auto output_rank = static_cast<int64_t>(output_shape.rank());
+        if (is_tile_dim) {
+            need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
+        } else {
+            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+        }
+    }
 
-    const auto output_n = output_shape[0];
-    const auto output_c = output_shape[1];
-    const auto output_h = output_shape[2];
-    const auto output_w = output_shape[3];
-    const auto output_ht = output_h / TILE_HEIGHT;
-    const auto output_wt = output_w / TILE_WIDTH;
-
-    const auto output_origin_shape = output_shape.without_padding();
-
-    const auto output_origin_h = output_origin_shape[2];
-    const auto output_origin_w = output_origin_shape[3];
-
-    const auto need_to_bcast_n = static_cast<uint32_t>(output_n != input_n);
-    const auto need_to_bcast_c = static_cast<uint32_t>(output_c != input_c);
-    const auto need_to_bcast_ht = static_cast<uint32_t>(output_origin_h != input_origin_h);
-    const auto need_to_bcast_wt = static_cast<uint32_t>(output_origin_w != input_origin_w);
-
-    const auto num_input_tiles = input.volume() / TILE_HW;
+    const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
         get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
     TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
+
+    for (auto i = 0; i < input_grad_rank; ++i) {
+        log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
+    }
+    log_debug(LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -103,13 +149,14 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
          all_cores,
          core_group_1,
          core_group_2,
-         num_input_tiles_per_core_group_1,
-         num_input_tiles_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_input_tiles);
+         num_cols_per_core_group_1,
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input(==x)
     const uint32_t in1_t{1};  // output(==y)
@@ -126,6 +173,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     const uint32_t im4_t{1};
     const uint32_t im5_t{1};
     const uint32_t im6_t{1};
+    const uint32_t im7_t{1};
 
     CreateCircularBuffer(
         program,
@@ -137,14 +185,20 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
             {CB::c_in2, in2_t},    // output_grad
             {CB::c_in3, in3_t},    // decimal
             {CB::c_out0, out0_t},  // input_grad
-            {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
-            {CB::c_intermed2, im2_t},
-            {CB::c_intermed3, im3_t},
-            {CB::c_intermed4, im4_t},
-            {CB::c_intermed5, im5_t},
-            {CB::c_intermed6, im6_t},
+            {CB::c_intermed0, im0_t, intermed_data_format},
+            {CB::c_intermed1, im1_t, intermed_data_format},
+            {CB::c_intermed2, im2_t, intermed_data_format},
+            {CB::c_intermed3, im3_t, intermed_data_format},
+            {CB::c_intermed4, im4_t, intermed_data_format},
+            {CB::c_intermed5, im5_t, intermed_data_format},
+            {CB::c_intermed6, im6_t, intermed_data_format},
+            {CB::c_intermed7, im7_t, intermed_data_format},
         });
+
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Core Setup
+    ////////////////////////////////////////////////////////////////////////////
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -156,8 +210,12 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "writer_moreh_norm_backward.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
+    std::vector<uint32_t> reader_compile_time_args =
+    { static_cast<uint32_t>(is_dram(input)), static_cast<uint32_t>(is_dram(output)), static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
+    std::vector<uint32_t> writer_compile_time_args =
+    { static_cast<uint32_t>(is_dram(input_grad)) };
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -165,14 +223,28 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "moreh_norm_backward_kernel.cpp";
+    std::map<std::string, std::string> compute_defines{};
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
 
+    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     const auto compute_kernels_id_1 =
-        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_input_tiles_per_core_group_1});
+        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     KernelHandle compute_kernels_id_2{0};
     if (!core_group_2.ranges().empty()) {
+        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
         compute_kernels_id_2 =
-            CreateComputeKernel(program, compute_kernel_file, {core_group_2, num_input_tiles_per_core_group_2});
+            CreateComputeKernel(program, compute_kernel_file, {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -186,124 +258,56 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_input_tiles_per_core;
         KernelHandle compute_kernel_id;
+        uint32_t num_tiles_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            num_input_tiles_per_core = num_input_tiles_per_core_group_1;
+            num_tiles_per_core = num_cols_per_core_group_1;
             compute_kernel_id = compute_kernels_id_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            num_input_tiles_per_core = num_input_tiles_per_core_group_2;
+            num_tiles_per_core = num_cols_per_core_group_2;
             compute_kernel_id = compute_kernels_id_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
 
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
+        std::vector<uint32_t> reader_rt_args{
             input_addr,
-            static_cast<uint32_t>(is_dram(input)),
             output_addr,
-            static_cast<uint32_t>(is_dram(output)),
             output_grad_addr,
-            static_cast<uint32_t>(is_dram(output_grad)),
             *reinterpret_cast<uint32_t *>(&decimal),
-            num_input_tiles_per_core,
-            tile_offset,
-            input_n,
-            input_c,
-            input_origin_h,
-            input_origin_w,
-            output_n,
-            output_c,
-            output_origin_h,
-            output_origin_w};
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
+            num_tiles_per_core,
+            tile_offset};
+        reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
+        reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
+        reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+
+        SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
 
         // writer
-        const std::vector<uint32_t> writer_runtime_args{
-            input_grad_addr, static_cast<uint32_t>(is_dram(input_grad)), num_input_tiles_per_core, tile_offset};
+        std::vector<uint32_t> writer_runtime_args{
+            input_grad_addr,
+            num_tiles_per_core,
+            tile_offset,
+            };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
         const std::vector<uint32_t> compute_runtime_args{
-            num_input_tiles_per_core,
-            need_to_bcast_n,
-            need_to_bcast_c,
-            need_to_bcast_ht,
-            need_to_bcast_wt,
+            num_tiles_per_core,
             floored_p,
             static_cast<uint32_t>(p_is_negative),
             floored_p_minus_one,
             static_cast<uint32_t>(p_minus_one_is_negative)};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        tile_offset += num_input_tiles_per_core;
+        tile_offset += num_tiles_per_core;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           compute_kernels_id_1 = compute_kernels_id_1,
-                                           compute_kernels_id_2 = compute_kernels_id_2,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y,
-                                           core_group_1 = core_group_1,
-                                           core_group_2 = core_group_2](
-                                              const void *operation,
-                                              Program &program,
-                                              const std::vector<Tensor> &input_tensors,
-                                              const std::vector<std::optional<const Tensor>> &,
-                                              const std::vector<Tensor> &) {
-        const auto p = static_cast<const MorehNormBackward *>(operation)->p;
-
-        auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
-        auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
-            get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
-
-        TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
-
-        auto input_buffer = input_tensors.at(0).buffer();
-        auto output_buffer = input_tensors.at(1).buffer();
-        auto output_grad_buffer = input_tensors.at(2).buffer();
-        auto input_grad_buffer = input_tensors.at(3).buffer();
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = input_buffer->address();
-                runtime_args[2] = output_buffer->address();
-                runtime_args[4] = output_grad_buffer->address();
-                runtime_args[6] = *reinterpret_cast<uint32_t *>(&decimal);
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                runtime_args[0] = input_grad_buffer->address();
-            }
-
-            {
-                KernelHandle compute_kernel_id;
-                if (core_group_1.core_coord_in_core_ranges(core)) {
-                    compute_kernel_id = compute_kernels_id_1;
-                } else if (core_group_2.core_coord_in_core_ranges(core)) {
-                    compute_kernel_id = compute_kernels_id_2;
-                } else {
-                    TT_THROW("Core not in specified core ranges.");
-                }
-                auto &runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
-                runtime_args[5] = floored_p;
-                runtime_args[6] = static_cast<uint32_t>(p_is_negative);
-                runtime_args[7] = floored_p_minus_one;
-                runtime_args[8] = static_cast<uint32_t>(p_minus_one_is_negative);
-            }
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y)};
 }
 
 }  // namespace primary
