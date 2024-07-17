@@ -170,7 +170,7 @@ class TtFalconLayernorm:
             #     self.layernorm_eps,
             #     self.ln_attn_gamma[0],
             #     self.ln_attn_beta[0],
-            #     program_config=ttnn.experimental.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
+            #     program_config=ttnn.LayerNormInterleavedMultiCoreProgramConfig(
             #         math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
             #         im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
             #         out_data_format=ttnn.experimental.tensor.DataType.BFLOAT8_B,

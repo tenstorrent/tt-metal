@@ -750,7 +750,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     layernorm_num_cores_x = 8
     layernorm_max_num_cores_y = 8
 
-    layernorm_slice_size = 512
+    layernorm_slice_size = 1024
     attention_max_slice_size = 1024
     attention_slice_size = min(attention_max_slice_size, row_height)
     assert row_height % attention_slice_size == 0
