@@ -32,4 +32,8 @@ Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_confi
     return ttnn::eqz( input[0], output_mem_config);
 }
 
+Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return ttnn::eqz( input[1], output_mem_config);
+}
+
 }  // namespace ttnn::operations::complex_unary
