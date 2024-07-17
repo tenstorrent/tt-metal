@@ -553,8 +553,6 @@ Complex arithmetic can be carried out for multiply, divide, add and subtract as 
 
 and then unary operations for,
 
-.. autofunction:: tt_lib.tensor.complex_abs
-
 .. autofunction:: tt_lib.tensor.conj
 
 .. autofunction:: tt_lib.tensor.complex_recip

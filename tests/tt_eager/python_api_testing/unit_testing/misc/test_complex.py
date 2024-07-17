@@ -518,7 +518,7 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.complex_abs(xtt, memcfg)
+    tt_dev = ttnn.complex_abs(xtt, memory_config=memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.abs().real
     if is_wormhole_b0():
