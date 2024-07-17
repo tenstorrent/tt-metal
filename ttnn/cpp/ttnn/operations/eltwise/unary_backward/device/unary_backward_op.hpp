@@ -55,7 +55,6 @@ enum class UnaryBackwardOpType {
     NEG_BW,
     RELU_BW,
     LOGIT_BW,
-    CLAMP_MAX_BW,
     HARDSHRINK_BW,
     SOFTSHRINK_BW,
     LEAKY_RELU_BW,
