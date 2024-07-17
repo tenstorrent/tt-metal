@@ -61,6 +61,30 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
 
 };
 
+//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 1 inputs, 1 grad tensor, 2 float
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        std::optional<float> parameter_a,
+        std::optional<float> parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_optional_float_params_with_default<unary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        }
+
+};
+
 //OpHandler_float_string_default : get_function_type1_float_string_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloatStringDefault {
@@ -273,8 +297,10 @@ struct ExecuteUnaryBackward {
 }  // operations::unary
 
 //ExecuteUnaryBackwardTwoFloat : get_function_type1_w_two_float
-constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 constexpr auto threshold_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>("ttnn::threshold_bw");
+
+//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
+constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptionalFloatParamsWithDefault<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 
 //ExecuteUnaryBackwardTwoFloatWithDefault : get_function_type1_w_two_float_with_default
 constexpr auto softplus_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>("ttnn::softplus_bw");

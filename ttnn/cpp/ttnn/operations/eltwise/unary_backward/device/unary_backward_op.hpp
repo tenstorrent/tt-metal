@@ -109,12 +109,14 @@ struct UnaryBackwardFunction{
 };
 
 //OpHandler_two_float : get_function_type1_w_two_float
-std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
 //OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
+std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 //OpHandler_float_string_default : get_function_type1_float_string_default
 std::vector<Tensor> _div_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -164,9 +166,12 @@ struct OpHandler_unary_optional;
 template <UnaryBackwardOpType OpType>
 struct OpHandler_prod_bw;
 
+template <UnaryBackwardOpType OpType>
+struct OpHandler_optional_float_params_with_default;
+
 template <>
-struct OpHandler_two_float<UnaryBackwardOpType::CLAMP_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
+struct OpHandler_optional_float_params_with_default<UnaryBackwardOpType::CLAMP_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config ) {
         return _clamp_bw(grad, input, min, max, output_mem_config);
     }
 };
@@ -301,6 +306,11 @@ auto get_function_unary_optional() {
 template <UnaryBackwardOpType OpType>
 auto get_function_prod_bw() {
     return &OpHandler_prod_bw<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_optional_float_params_with_default() {
+    return &OpHandler_optional_float_params_with_default<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward
