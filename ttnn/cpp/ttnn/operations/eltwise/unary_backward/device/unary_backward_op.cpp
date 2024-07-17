@@ -48,11 +48,17 @@ std::vector<Tensor> _clamp_max_bw(
 }
 
 std::vector<Tensor> _clamp_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
-    Tensor minT = ttnn::ge(input, min, std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::le(input, max, std::nullopt, output_memory_config);
+    TT_FATAL((max.has_value() || min.has_value()) && "Only one of 'min' or 'max' can be None. Please provided atleast one value");
+    if (!max.has_value()) {
+        return _clamp_min_bw( grad, input, min.value(), output_memory_config);
+    }else if(!min.has_value()) {
+        return _clamp_max_bw( grad, input, max.value(), output_memory_config);
+    }
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
     result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);
