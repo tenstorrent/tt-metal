@@ -72,22 +72,13 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
         GTEST_SKIP();
     }
 
-    //see issue #9594
-    if (arch == tt::ARCH::WORMHOLE_B0 && num_devices > 1) {
-        GTEST_SKIP();
-    }
-
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices;
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
-    devices = tt::DevicePool::instance().get_all_active_devices();
-    for (auto device : devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-    }
+    auto devices = tt::tt_metal::detail::CreateDevices(ids);
+    tt::tt_metal::detail::CloseDevices(devices);
 }
 
 TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
@@ -97,17 +88,13 @@ TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices;
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
-    devices = tt::DevicePool::instance().get_all_active_devices();
-    for (auto device : devices) {
+    auto devices = tt::tt_metal::detail::CreateDevices(ids);
+    for (auto [dev_id, device] : devices) {
         ASSERT_TRUE(unit_tests_common::basic::test_device_init::load_all_blank_kernels(device));
     }
-    for (auto device : devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-    }
+    tt::tt_metal::detail::CloseDevices(devices);
 }
