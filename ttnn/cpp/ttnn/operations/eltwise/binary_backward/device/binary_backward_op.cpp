@@ -382,8 +382,8 @@ std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
-std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor = _subalpha_bw(grad, input, other, 1.0f, output_mem_config);
+std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor = ttnn::operations::binary_backward::_subalpha_bw(grad, input, other, 1.0f, output_mem_config.value_or(input.memory_config()));
     std::swap(grad_tensor[0], grad_tensor[1]);
     return grad_tensor;
 }
@@ -616,8 +616,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _assign_bw;
         case BinaryBackwardOpType::LE_BW:
             return _le_bw;
-        case BinaryBackwardOpType::RSUB_BW:
-            return _rsub_bw;
         case BinaryBackwardOpType::GT_BW:
             return _gt_bw;
         case BinaryBackwardOpType::LT_BW:
