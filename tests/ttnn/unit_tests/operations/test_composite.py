@@ -96,6 +96,24 @@ def test_unary_triu_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_round_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.round(input_tensor)
+    golden_tensor = torch.triu(in_data, 0)
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (

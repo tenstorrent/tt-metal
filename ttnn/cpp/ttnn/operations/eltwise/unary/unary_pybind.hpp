@@ -1199,13 +1199,18 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_int_with_default(
         module,
         ttnn::tril,
-        "dim", "dim value", 0,
-        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`dim`.)doc");
+        "diag", "diag value", 0,
+        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`diag`.)doc");
     detail::bind_unary_composite_int_with_default(
         module,
         ttnn::triu,
-        "dim", "dim value", 0,
-        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`dim`.)doc");
+        "diag", "diag value", 0,
+        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diag`.)doc");
+    detail::bind_unary_composite_int_with_default(
+        module,
+        ttnn::round,
+        "decimals", "decimals value", 0,
+        R"doc(Performs round function on :attr:`input_tensor`, :attr:`decimals`.)doc");
 
 }
 

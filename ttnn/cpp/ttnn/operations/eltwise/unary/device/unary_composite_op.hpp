@@ -49,6 +49,7 @@ enum class UnaryCompositeOpType {
     POWER_INT,
     TRIL,
     TRIU,
+    ROUND,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -90,6 +91,7 @@ Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&,
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _tril(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _triu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _round(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -306,6 +308,12 @@ struct OpHandler<UnaryCompositeOpType::TRIU> {
     }
 };
 
+template <>
+struct OpHandler<UnaryCompositeOpType::ROUND> {
+    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _round(t1, param1, mem_cfg);
+    }
+};
 
 template <>
 struct OpHandler<UnaryCompositeOpType::REGLU> {

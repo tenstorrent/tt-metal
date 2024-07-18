@@ -614,4 +614,39 @@ Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
+
+Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor result = ttnn::multiply(input, (1.0f/2.0f));
+    Tensor floor_res = ttnn::floor(result);
+    return ttnn::ne(result, floor_res);
+}
+
+Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryConfig>&  output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor floor_res = ttnn::floor(input, output_mem_config.value());
+    if (decimals != 0) {  // TODO: For decimal value!=0
+        Tensor power_10 =
+            ttnn::power(ttnn::full_like(input, 10.0f), decimals, output_mem_config.value());
+        Tensor rounded_non_half = ttnn::floor(
+            ttnn::add(ttnn::multiply(input, power_10, std::nullopt), 0.5, std::nullopt, output_mem_config.value()),
+            output_mem_config.value());
+        rounded_non_half = div(rounded_non_half, power_10);
+        return rounded_non_half;
+    } else {  // Bankers' Rounding
+        Tensor rounded_non_half = ttnn::floor(
+            ttnn::add(
+                input,
+                where(ttnn::logical_and(ttnn::ge(input, 0.4), ttnn::le(input, 0.5)), 0.4f, 0.5f, output_mem_config.value()),
+                std::nullopt,
+                output_mem_config.value()),
+            output_mem_config.value());
+        Tensor fractional_part = ttnn::subtract(input, floor_res, std::nullopt, output_mem_config.value());
+        Tensor is_half = ttnn::eq(fractional_part, 0.5);
+        Tensor rounded_half =
+            ttnn::add(floor_res, is_odd(floor_res, output_mem_config.value()), std::nullopt, output_mem_config.value());
+        return where(is_half, rounded_half, rounded_non_half, output_mem_config.value());
+    }
+}
+
 }  // namespace ttnn::operations::unary

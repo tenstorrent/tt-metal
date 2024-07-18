@@ -274,8 +274,13 @@ constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::TRIL>>();
 
-constexpr auto TRIU = ttnn::register_operation_with_auto_launch_op<
+constexpr auto triu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::triu",
     operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::TRIU>>();
+
+
+constexpr auto round = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::round",
+    operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::ROUND>>();
 
 }  // namespace ttnn
