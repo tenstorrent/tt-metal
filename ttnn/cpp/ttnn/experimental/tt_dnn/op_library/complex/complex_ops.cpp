@@ -238,10 +238,6 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
     return grad_tensor;
 }
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/complex/complex_ops.cpp
-=======
-<<<<<<< HEAD
-=======
 // complex abs
 // self: grad * self.sgn()
 std::vector<ComplexTensor> complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
@@ -326,6 +322,8 @@ std::vector<ComplexTensor> polar_bw(const ComplexTensor& grad, const ComplexTens
 
 >>>>>>> #10382: Migrate conj to TTNN with generalized structure
 >>>>>>> 6023a929db... #10382: Migrate complex_Recip to TTNN:tt_eager/tt_dnn/op_library/complex/complex_ops.cpp
+=======
+>>>>>>> 51aa63370e... #10382: Update ops implementation:tt_eager/tt_dnn/op_library/complex/complex_ops.cpp
 }//namespace tt_metal
 
 }//namespace tt
