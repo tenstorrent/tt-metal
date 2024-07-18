@@ -419,7 +419,7 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            f"ttnn-eltwise-relu_{relu_type}",
+            f"eltwise-relu_{relu_type}",
             input_shapes,
             datagen_func,
             comparison_func,

@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-relu_min:
+  - eltwise-relu_min:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
