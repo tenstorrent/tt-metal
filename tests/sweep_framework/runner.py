@@ -8,6 +8,7 @@ import pathlib
 import importlib
 import datetime
 import os
+import enlighten
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
@@ -56,12 +57,13 @@ def get_timeout(test_module):
     return timeout
 
 
-def execute_batch(test_module, test_vectors):
+def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
     timeout = get_timeout(test_module)
+    batch_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Batch: {batch_name}", leave=False)
     for test_vector in test_vectors:
         result = dict()
         if deserialize(test_vector["status"]) == VectorStatus.INVALID:
@@ -69,6 +71,7 @@ def execute_batch(test_module, test_vectors):
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             results.append(result)
+            batch_pbar.update()
             continue
         else:
             test_vector.pop("status")
@@ -107,10 +110,12 @@ def execute_batch(test_module, test_vectors):
             result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
+        batch_pbar.update()
         results.append(result)
     if p is not None:
         p.join()
 
+    batch_pbar.close()
     return results
 
 
@@ -138,6 +143,7 @@ def get_batch_vectors(client, vector_index, batch):
 
 def run_sweeps(module_name, batch_name, vector_id):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
@@ -155,13 +161,16 @@ def run_sweeps(module_name, batch_name, vector_id):
                 if len(batches) == 0:
                     continue
 
+                module_pbar = pbar_manager.counter(total=len(batches), desc=f"Module: {sweep_name}", leave=False)
                 for batch in batches:
                     print(f"SWEEPS: Executing tests for module {sweep_name}, batch {batch}.")
                     header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
-                    results = execute_batch(test_module, test_vectors)
+                    results = execute_batch(test_module, test_vectors, pbar_manager, batch)
                     print(f"SWEEPS: Completed tests for module {sweep_name}, batch {batch}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
+                    module_pbar.update()
+                module_pbar.close()
             except NotFoundError as e:
                 print(f"SWEEPS: No test vectors found for module {sweep_name}. Skipping...")
                 continue
@@ -196,14 +205,14 @@ def run_sweeps(module_name, batch_name, vector_id):
                     for batch in batches:
                         print(f"SWEEPS: Executing tests for module {module_name}, batch {batch}.")
                         header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
-                        results = execute_batch(test_module, test_vectors)
+                        results = execute_batch(test_module, test_vectors, pbar_manager, batch)
                         print(f"SWEEPS: Completed tests for module {module_name}, batch {batch}.")
                         print(f"SWEEPS: Tests Executed - {len(results)}")
                         export_test_results(header_info, results)
                 else:
                     print(f"SWEEPS: Executing tests for module {module_name}, batch {batch_name}.")
                     header_info, test_vectors = get_batch_vectors(client, vector_index, batch_name)
-                    results = execute_batch(test_module, test_vectors)
+                    results = execute_batch(test_module, test_vectors, pbar_manager, batch_name)
                     print(f"SWEEPS: Completed tests for module {module_name}, batch {batch_name}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
