@@ -24,12 +24,12 @@ namespace detail {
 template <typename complex_unary_operation_t>
 void bind_complex_unary_type1(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> Tensor
+R"doc({0}(input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> Tensor
 
 {2}
 
 Args:
-    * :attr:`input_tensor`
+    * :attr:`input_tensor` (ComplexTensor)
 
 Keyword args:
     * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
@@ -62,12 +62,12 @@ Example:
 template <typename complex_unary_operation_t>
 void bind_complex_unary_type2(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> Tensor
+R"doc({0}(input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> ComplexTensor
 
 {2}
 
 Args:
-    * :attr:`input_tensor`
+    * :attr:`input_tensor` (ComplexTensor)
 
 Keyword args:
     * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
