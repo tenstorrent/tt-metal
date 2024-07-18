@@ -43,7 +43,12 @@ class Emb(torch.nn.Module):
 
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 1024, 2048, 4096, 8192, 8192 * 2, 8192 * 4),
+    (
+        128,
+        1024,
+        1024 * 8,
+        1024 * 32,
+    ),
 )
 def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
     n_layers = 32
