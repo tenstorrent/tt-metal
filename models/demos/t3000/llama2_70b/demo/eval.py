@@ -93,6 +93,9 @@ def main(args, eval_data_args):
     # Get current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    path = "models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/"
+    os.makedirs(path, exist_ok=True)
+
     # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
     filename = f"models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/perplexity_{model_args.llama_version}_{model_args.implementation}_{model_args.num_layers}L_{eval_data_args.sample_len}_{data_args.max_output_tokens}_{timestamp}.json"
     result = {
