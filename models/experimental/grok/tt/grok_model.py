@@ -82,7 +82,7 @@ class TtTransformer(LightweightModule):
         multidevice_outputs = ttnn.matmul(
             x_norm,
             self.output_weight,
-            # compute_with_storage_grid_size=(8, 8), # FIXME: from Mixtral, presumably dI/dT workaround?
+            # compute_with_storage_grid_size=(8, 8), # TODO: can we re-enable this here and in Mixtral?
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
