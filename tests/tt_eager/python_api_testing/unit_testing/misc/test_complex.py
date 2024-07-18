@@ -691,7 +691,7 @@ def test_level2_mul(bs, memcfg, dtype, device, function_level_defaults):
         ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
-    tt_dev = ttl.tensor.complex_mul(xtt, ytt, memcfg)
+    tt_dev = ttnn.multiply(xtt, ytt, memory_config=memcfg)
     tt_dev_r = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_dev_i = tt_dev.imag.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_dev = Complex(re=tt_dev_r, im=tt_dev_i).metal

@@ -543,8 +543,6 @@ The following functions are available,
 
 Complex arithmetic can be carried out for multiply, divide, add and subtract as follows:
 
-.. autofunction:: tt_lib.tensor.complex_mul
-
 .. autofunction:: tt_lib.tensor.complex_div
 
 Complex Operations (Type 2)

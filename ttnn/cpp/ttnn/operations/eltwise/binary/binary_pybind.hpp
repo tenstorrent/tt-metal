@@ -108,6 +108,10 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                     using ComplexBinaryOp = ttnn::operations::complex_binary::ExecuteComplexBinaryType1<complex_binary::ComplexBinaryOpType::SUB>;
                     return ComplexBinaryOp::execute_on_main_thread(input_tensor_a, input_tensor_b, memory_config);
                 }
+                else if(operation.base_name() == "multiply"){
+                    using ComplexBinaryOp = ttnn::operations::complex_binary::ExecuteComplexBinaryType1<complex_binary::ComplexBinaryOpType::MUL>;
+                    return ComplexBinaryOp::execute_on_main_thread(input_tensor_a, input_tensor_b, memory_config);
+                }
                 return ComplexBinaryOp::execute_on_main_thread(input_tensor_a, input_tensor_b, memory_config);
             },
             py::arg("input_tensor_a"),
