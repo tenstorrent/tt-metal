@@ -274,48 +274,24 @@ struct operation_t {
     }
 };
 
-template <auto id, typename lambda_t>
-struct lambda_operation_t {
-    const char* cpp_fully_qualified_name;  // TODO: move this to template args when C++20 is available
-    const lambda_t lambda;
-
-    constexpr lambda_operation_t(const char* cpp_fully_qualified_name, const lambda_t& lambda) :
-        cpp_fully_qualified_name{cpp_fully_qualified_name}, lambda{lambda} {}
-
-    template <typename... args_t>
-    auto operator()(args_t&&... args) const {
-        ZoneScopedN("Run ttnn operation (lambda-based)");
-        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-        auto output = this->lambda(std::forward<decltype(args)>(args)...);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-        return output;
-    }
-
-    // Get "add" from "ttnn::add"
-    const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }
-
-    // Convert "ttnn::add" to "add_t"
-    const std::string class_name() const { return detail::class_name(this->cpp_fully_qualified_name); }
-
-    // Convert "ttnn::add" to "ttnn.add"
-    const std::string python_fully_qualified_name() const {
-        return detail::python_fully_qualified_name(this->cpp_fully_qualified_name);
-    }
-};
-
 template <typename concrete_operation_t>
 constexpr auto register_operation(const char* cpp_fully_qualified_name) {
     return operation_t<__COUNTER__, concrete_operation_t>{cpp_fully_qualified_name};
 }
 
-template <typename lambda_t>
-constexpr auto register_operation(const char* cpp_fully_qualified_name, const lambda_t& lambda) {
-    return lambda_operation_t<__COUNTER__, lambda_t>{cpp_fully_qualified_name, lambda};
-}
+namespace detail {
+template <auto lambda_t>
+struct lambda_operation_t {
+    static auto execute_on_main_thread(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
+};
+}  // namespace detail
 
-#define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
-
+// If you are feeling lazy, you can use this macro to create an operation struct from a lambda
+// You  will have to implement async manually
+#define REGISTER_OPERATION_FROM_FUNCTION(name, function)                                                        \
+    (::ttnn::decorators::register_operation<::ttnn::decorators::detail::lambda_operation_t<[](auto&&... args) { \
+        return function(std::forward<decltype(args)>(args)...);                                                 \
+    }>>(name))
 
 }  // namespace decorators
 

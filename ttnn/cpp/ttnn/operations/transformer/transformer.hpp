@@ -303,9 +303,9 @@ struct ExecuteAttentionSoftmax {
 
 namespace transformer {
 
-constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation(
+constexpr auto split_query_key_value_and_split_heads = REGISTER_OPERATION_FROM_FUNCTION(
     "ttnn::transformer::split_query_key_value_and_split_heads",
-    TO_LAMBDA(ttnn::operations::transformer::split_query_key_value_and_split_heads));
+    ttnn::operations::transformer::split_query_key_value_and_split_heads);
 
 constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
     "ttnn::transformer::concatenate_heads");

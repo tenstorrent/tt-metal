@@ -232,7 +232,7 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
         return transform_first_matching_arg<T>(lambda, std::forward<Rest>(rest)...);
     }
 }
-#define TO_LAMBDA_WITH_RESHAPE(function)                                                               \
+#define WRAP_WITH_RESHAPE(function)                                                                    \
     ([](auto&&... args) {                                                                              \
         const auto original_shape = transform_first_matching_arg<Tensor>(                              \
             [&](auto&& tensor) { return tensor.get_shape(); }, std::forward<decltype(args)>(args)...); \
@@ -242,11 +242,10 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
             original_shape);                                                                           \
     })
 
-constexpr auto rdiv = ttnn::register_operation("ttnn::rdiv", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::rdiv));
+constexpr auto rdiv = REGISTER_OPERATION_FROM_FUNCTION("ttnn::rdiv", WRAP_WITH_RESHAPE(ttnn::operations::unary::rdiv));
 
-
-constexpr auto tril = ttnn::register_operation("ttnn::tril", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::tril));
-constexpr auto triu = ttnn::register_operation("ttnn::triu", TO_LAMBDA_WITH_RESHAPE(ttnn::operations::unary::triu));
+constexpr auto tril = REGISTER_OPERATION_FROM_FUNCTION("ttnn::tril", WRAP_WITH_RESHAPE(ttnn::operations::unary::tril));
+constexpr auto triu = REGISTER_OPERATION_FROM_FUNCTION("ttnn::triu", WRAP_WITH_RESHAPE(ttnn::operations::unary::triu));
 
 // newly imported
 constexpr auto tanhshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>("ttnn::tanhshrink");

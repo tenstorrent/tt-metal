@@ -69,6 +69,6 @@ Tensor where(
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto where = ttnn::register_operation("ttnn::where", TO_LAMBDA(ttnn::operations::ternary::where));
+constexpr auto where = REGISTER_OPERATION_FROM_FUNCTION("ttnn::where", ttnn::operations::ternary::where);
 
 }  // namespace ttnn
