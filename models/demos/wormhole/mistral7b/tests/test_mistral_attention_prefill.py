@@ -32,9 +32,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        2048 * 2,
-        # 1024//2,
-        # 1024 * 2,
+        128,
+        512,
+        1024,
+        2048,
+        4096,
     ),
 )
 @pytest.mark.parametrize(
@@ -46,14 +48,10 @@ def test_mistral_attention_inference(iterations, seq_len, device, use_program_ca
     pcc = 0.99
 
     model_args = TtModelArgs(device)
-    model_args.max_batch_size = 8
-    # model_args.max_seq_len = 1024
     state_dict = torch.load(model_args.consolidated_weights_path)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
-
-    model_args.max_batch_size = 32
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -92,7 +90,7 @@ def test_mistral_attention_inference(iterations, seq_len, device, use_program_ca
             device,
         )
 
-        tt_out = tt_model([attention_input], 0, 0, attn_mask, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model([attention_input], 0, [attn_mask], rot_mats, transformation_mats, user_id=0, mode="prefill")
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]

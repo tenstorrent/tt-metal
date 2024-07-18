@@ -40,9 +40,6 @@ class TtMistralMLP(torch.nn.Module):
         self.w2 = as_tensor("w2", ttnn.bfloat8_b)
         self.w3 = as_tensor("w3", ttnn.bfloat4_b)
 
-        x_shape = ttnn.Shape([1, 1, args.max_batch_size, args.dim])
-        h_shape = ttnn.Shape([1, 1, args.max_batch_size, args.hidden_dim])
-
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -51,12 +48,7 @@ class TtMistralMLP(torch.nn.Module):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        compute_kernel_config = self.model_config["MLP_KERNEL_CONFIG"]
         if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
@@ -80,6 +72,7 @@ class TtMistralMLP(torch.nn.Module):
             activation="silu" if not pc_1 else None,
             program_config=pc_1,
         )
+
         w3_out = ttnn.linear(
             x,
             self.w3,

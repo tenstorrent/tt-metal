@@ -505,33 +505,19 @@ class TtMistralAttention(nn.Module):
         # QKV matmuls
         ###
 
-        xqkv_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,  # how much inner dim you take each time
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_len // (512),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=24,  # N / TILE_WIDTH / Grid_Size
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=seq_len <= 2048,
-        )
-        print("xs_11SH", xs_11SH)
+        # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
             xs_11SH = ttnn.reshape(xs_11SH, [1, 2, seq_len // 2, -1])
         xqkv_fused = ttnn.linear(
             xs_11SH,
             wqkv,
             dtype=ttnn.bfloat16,
-            memory_config=xqkv_mem_config,
-            # core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=pc,
+            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-        print("xqkv_fused", xqkv_fused)
 
         xs_11SH.deallocate(True)
 
@@ -564,39 +550,38 @@ class TtMistralAttention(nn.Module):
         )
         k_heads_1KSD_pre_rot.deallocate(True)
 
-        mc = ttnn.create_sharded_memory_config(
-            (seq_len // 8, self.head_dim),
-            ttnn.CoreGrid(y=8, x=8),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
         # Fill KV-Cache
-        print("keys", k_heads_1KSD)
         keys_BKSD = self.layer_past[0]
         values_BKSD = self.layer_past[1]
-        # keys_reshaped = ttnn.reshape(keys_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        # values_reshaped = ttnn.reshape(values_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+
+        k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        # sharding k_fill to deal with update_cache memory limitation
+        if seq_len > 128:
+            k_fill = ttnn.experimental.tensor.interleaved_to_sharded(
+                k_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
+            )
+        v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        # sharding v_fill to deal with update_cache memory limitation
+        if seq_len > 128:
+            v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
+                v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
+            )
         ttnn.experimental.tensor.fill_cache(
             keys_BKSD,
-            ttnn.experimental.tensor.interleaved_to_sharded(
-                ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b), sharded_mem_config=mc
-            ),
+            k_fill,
             user_id,
         )
         ttnn.experimental.tensor.fill_cache(
             values_BKSD,
-            ttnn.experimental.tensor.interleaved_to_sharded(
-                ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b), sharded_mem_config=mc
-            ),
+            v_fill,
             user_id,
         )
-        # keys_11SD = ttnn.reshape(keys_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-        # values_11SD = ttnn.reshape(values_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+
         self.layer_past = [keys_BKSD, values_BKSD]
-        print("sdpa", keys_BKSD)
 
         # SDPA
+
+        # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
         k_heads_K1SD = ttnn.reshape(k_heads_1KSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
         v_heads_V1SD = ttnn.reshape(v_heads_1VSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
         q_heads_84SD = ttnn.reshape(
@@ -628,31 +613,16 @@ class TtMistralAttention(nn.Module):
         )
         attn_output_1QSD.deallocate(True)
 
-        # if seq_len >= 1024:  # Specific program config to make better usage of cores and to avoid di/dt ND issues
-        #     wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
-        # else:
-        print("wo", attn_output_11SH)
-        wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,  # how much inner dim you take each time
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_len // (512),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=seq_len <= 2048,
-        )
+        # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 2, seq_len // 2, -1])
         output_11SH = ttnn.linear(
             attn_output_11SH,
             wo,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not wo_program_config else None,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=wo_program_config,
+            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
         if seq_len > 2048:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
@@ -660,9 +630,9 @@ class TtMistralAttention(nn.Module):
         return [output_11SH]
 
     def forward(
-        self, xs, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"
+        self, xs, current_pos, attn_masks=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
     ):
         if mode == "prefill":
-            return self.forward_prefill(xs[0], attn_masks, rot_mats, transformation_mats, user_id)
+            return self.forward_prefill(xs[0], attn_masks[0], rot_mats, transformation_mats, user_id)
         else:
             return self.forward_decode(xs, current_pos, attn_masks)
