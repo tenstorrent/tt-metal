@@ -1222,10 +1222,6 @@ op_map = {
         "tt_op": tt_lib_ops.addcdiv_bw,
         "pytorch_op": pytorch_ops.addcdiv_bw,
     },
-    "addcmul-bw": {
-        "tt_op": tt_lib_ops.addcmul_bw,
-        "pytorch_op": pytorch_ops.addcmul_bw,
-    },
     "addalpha-bw": {
         "tt_op": tt_lib_ops.addalpha_bw,
         "pytorch_op": pytorch_ops.addalpha_bw,
