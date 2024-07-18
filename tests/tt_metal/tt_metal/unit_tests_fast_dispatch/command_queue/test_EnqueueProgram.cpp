@@ -158,7 +158,8 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     Program program;
 
     for (uint32_t sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
-        CreateSemaphore(program, program_config.cr_set, sem_id);
+        uint32_t allocated_sem_id  = CreateSemaphore(program, program_config.cr_set, sem_id);
+        pass &= (allocated_sem_id == sem_id);
     }
 
     EnqueueProgram(cq, program, false);

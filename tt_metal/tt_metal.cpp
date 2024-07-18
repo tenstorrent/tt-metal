@@ -37,8 +37,8 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address = nullopt;
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange &core_range) {
+    std::optional<uint32_t> semaphore_id = nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -65,12 +65,12 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
     }
 
     if (uninitialized_sem_id.has_value()) {
-        address = SEMAPHORE_BASE + (L1_ALIGNMENT * uninitialized_sem_id.value());
+        semaphore_id =  uninitialized_sem_id.value();
     } else {
         TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
     }
 
-    return address;
+    return semaphore_id;
 }
 
 inline void SetRuntimeArgs(
@@ -828,23 +828,23 @@ uint32_t CreateSemaphore(
             } else {
                 crs = c;
             }
-            std::optional<uint32_t> address;
+            std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto &core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start;
                 CoreCoord end_core = core_range.end;
-                std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
-                if (!address.has_value()) {
-                    address = addr_candidate;
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                if (!semaphore_id.has_value()) {
+                    semaphore_id = semaphore_id_candidate;
                 } else {
-                    address = std::max(address.value(), addr_candidate.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
                 }
             }
-            TT_FATAL(address.has_value(), "Unable to initialize Semaphore!");
+            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
 
-            program.add_semaphore(crs, address.value(), initial_value, core_type);
+            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
-            return address.value();
+            return semaphore_id.value();
         },
         core_spec);
 }
