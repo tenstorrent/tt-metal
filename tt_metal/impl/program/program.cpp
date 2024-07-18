@@ -512,9 +512,9 @@ void Program::init_semaphores(const Device &device, const CoreCoord &logical_cor
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet &crs, uint32_t address, uint32_t init_value, CoreType core_type) {
+void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore(crs, address, init_value, core_type));
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
 void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
