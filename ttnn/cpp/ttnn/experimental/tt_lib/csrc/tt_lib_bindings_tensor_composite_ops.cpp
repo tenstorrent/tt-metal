@@ -1551,14 +1551,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
         );
 
-        m_tensor.def("complex_sub",
-            py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_sub),
-            py::arg("input_a"),
-            py::arg("input_b"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns subtraction of a complex tensor ``{1}`` from ``{0}``.)doc"
-        );
-
         m_tensor.def("complex_mul",
 		    py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_mul),
             py::arg("input_a"),
