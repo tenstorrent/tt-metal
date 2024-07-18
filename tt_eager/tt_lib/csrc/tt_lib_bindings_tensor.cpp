@@ -24,7 +24,6 @@
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
-#include "tt_dnn/op_library/scan/scan_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
@@ -966,21 +965,6 @@ void TensorModule(py::module& m_tensor) {
         R"doc(
             Copy a host tensor to its equivalent tensor on a device.
         )doc");
-
-    m_tensor.def(
-        "scan",
-        &scan,
-        py::arg().noconvert(),
-        R"doc(
-        Performs an inclusive prefix scan on the input tensor along the column axis, bottom to top,
-        using multiplication as reduction operation.
-
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-        | Argument          | Description                                                                       | Data type     | Valid range | Required |
-        +===================+===================================================================================+===============+=============+==========+
-        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
-        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
-    )doc");
 
     detail::TensorModuleCompositeOPs(m_tensor);
     detail::TensorModuleBackwardOPs(m_tensor);
