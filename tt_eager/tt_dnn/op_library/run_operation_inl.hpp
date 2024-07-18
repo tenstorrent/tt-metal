@@ -212,7 +212,8 @@ void launch_op(
                         auto output_tensor = get_tensor(outputs[i]);
                         auto local_tensor = get_tensor(local_tensors[i]);
                         // not sure if it the case but in my opinion it should not happen
-                        TT_ASSERT((output_tensor ! = nullptr && local_tensor) || (local_tensor ! = nullptr && output_tensor));
+                        // both output and local tensor should be presented or absent
+                        TT_ASSERT((output_tensor != nullptr && local_tensor != nullptr) || (local_tensor == nullptr && output_tensor == nullptr));
                         if (!output_tensor || !local_tensor) {
                             continue;
                         }
