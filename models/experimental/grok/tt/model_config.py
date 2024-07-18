@@ -271,7 +271,7 @@ class TtModelArgs:
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 32768
             fuse_batch=True,
-            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),  # FIXME: GET THIS DOCUMENTED
+            fused_activation=(ttnn.UnaryOpType.GELU, True),  # FIXME: GET THIS DOCUMENTED
             mcast_in0=True,
         )
 
