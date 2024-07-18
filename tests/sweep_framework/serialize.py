@@ -4,7 +4,7 @@
 
 from ttnn import *
 import tt_lib
-from statuses import VectorStatus
+from statuses import VectorValidity
 
 
 def serialize(object):
