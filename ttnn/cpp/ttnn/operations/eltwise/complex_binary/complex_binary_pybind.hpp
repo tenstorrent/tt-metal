@@ -63,14 +63,6 @@ Example:
 
 }  // namespace detail
 
-void py_module(py::module& module) {
-    // detail::bind_complex_binary_type1(
-    //     module,
-    //     ttnn::complex_mul,
-    //     R"doc(Performs complex operations for real of :attr:`input_tensor`.)doc");
-
-}
-
 }  // namespace complex_binary
 }  // namespace operations
 }  // namespace ttnn

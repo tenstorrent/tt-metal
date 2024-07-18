@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/complex_binary/complex_binary.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -95,7 +96,20 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
+                using ComplexBinaryOp = ttnn::operations::complex_binary::ExecuteComplexBinaryType1<complex_binary::ComplexBinaryOpType::ADD>;
+                return ComplexBinaryOp::execute_on_main_thread(input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config")});
 }
 
 template <typename binary_operation_t>

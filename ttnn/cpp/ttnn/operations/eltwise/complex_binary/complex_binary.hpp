@@ -11,10 +11,10 @@
 
 namespace ttnn {
 
-namespace operations::complex_unary {
+namespace operations::complex_binary {
 
 //OpHandler_complex_binary_type1 = get_function_complex_binary
-template <ComplexUnaryOpType complex_unary_op_type>
+template <ComplexBinaryOpType complex_binary_op_type>
 struct ExecuteComplexBinaryType1 {
 
     //Type 1: 1 input tensor
@@ -23,7 +23,7 @@ struct ExecuteComplexBinaryType1 {
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config) {
 
-        auto op_type = get_function_complex_unary<complex_unary_op_type>();
+        auto op_type = get_function_complex_binary<complex_binary_op_type>();
         return op_type(input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
 
