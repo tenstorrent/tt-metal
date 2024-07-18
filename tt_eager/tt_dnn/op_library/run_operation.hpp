@@ -349,9 +349,9 @@ inline auto run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
 }
 
-template<class F, class OutputType=Tensors>
+template<class Callable, class OutputType=Tensors>
 void launch_op(
-    F&& op_func,
+    Callable&& op_func,
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},

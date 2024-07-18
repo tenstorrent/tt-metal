@@ -66,9 +66,9 @@ auto& get_workers(auto& output_tensors) {
 }
 
 
-template<class F, class OutputType>
+template<class Callable, class OutputType>
 void launch_op(
-    F&& op_func,
+    Callable&& op_func,
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors,
