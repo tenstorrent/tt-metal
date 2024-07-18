@@ -248,7 +248,11 @@ void test_bert() {
         parameters.emplace(fmt::format("feedforward_layernorm_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
     };
     parameters.emplace("qa_head_weight", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
-    parameters.emplace("qa_head_bias", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
+    parameters.emplace(
+        "qa_head_bias",
+        ttnn::reshape(
+            tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config),
+            ttnn::Shape{tt::tt_metal::Shape{{1, 1, 1, TILE_WIDTH}, {1, 1, TILE_HEIGHT, TILE_WIDTH}}}));
 
     auto run_bert = [&]() {
         tt::log_debug(tt::LogTest, "run_bert started");
