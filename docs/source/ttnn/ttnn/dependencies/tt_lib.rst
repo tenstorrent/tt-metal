@@ -630,16 +630,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.argmin
 
-Backward Operations
-===================
-
-.. autofunction:: tt_lib.tensor.complex_mul_bw
-
-.. autofunction:: tt_lib.tensor.complex_div_bw
-
-.. autofunction:: tt_lib.tensor.complex_add_bw
-
-.. autofunction:: tt_lib.tensor.complex_sub_bw
 
 Loss Functions
 ==============
