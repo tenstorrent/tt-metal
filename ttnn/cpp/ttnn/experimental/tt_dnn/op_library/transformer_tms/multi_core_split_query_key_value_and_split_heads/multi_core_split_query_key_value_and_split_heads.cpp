@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/transpose_wh.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/transpose_wh.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );

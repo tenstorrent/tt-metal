@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         auto compute_kernel_id_group_1 = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/compute/transpose_wh.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/transpose_wh.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1}
         );
@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
             auto compute_kernel_id_group_2 = tt_metal::CreateKernel(
                 program,
-                "tt_eager/tt_dnn/kernels/compute/transpose_wh.cpp",
+                "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/transpose_wh.cpp",
                 core_group_2,
                 tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2}
             );

@@ -438,7 +438,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }

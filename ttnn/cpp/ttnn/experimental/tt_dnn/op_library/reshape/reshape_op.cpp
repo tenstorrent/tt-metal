@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/eltwise_copy.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );

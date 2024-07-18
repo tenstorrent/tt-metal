@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks fold_single_core(
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         core,
         ReaderDataMovementConfig(reader_compile_time_args));
 

@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
             unary_writer_kernel_id = CreateKernel(
                 program,
-                "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+                "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
                 all_cores,
                 WriterDataMovementConfig(writer_ct_args));
         } else {
@@ -710,7 +710,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
         unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     }
