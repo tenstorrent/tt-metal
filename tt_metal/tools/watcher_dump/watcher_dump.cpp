@@ -19,6 +19,10 @@ void dump_data(vector<unsigned>& device_ids, bool dump_watcher, bool dump_cqs, b
     // Don't clear L1, this way we can dump the state.
     llrt::OptionsG.set_clear_l1(false);
 
+    // Watcher should be disabled for this, so we don't (1) overwrite the kernel_names.txt and (2) do any other dumping
+    // than the one we want.
+    llrt::OptionsG.set_watcher_enabled(false);
+
     std::filesystem::path parent_dir(tt::llrt::OptionsG.get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
