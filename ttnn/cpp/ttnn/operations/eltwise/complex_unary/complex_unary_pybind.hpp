@@ -131,11 +131,6 @@ void py_module(py::module& module) {
 
     detail::bind_complex_unary_type2(
         module,
-        ttnn::complex_recip,
-        R"doc(Returns complex reciprocal value of complex tensor :attr:`input_tensor`.)doc");
-
-    detail::bind_complex_unary_type2(
-        module,
         ttnn::polar,
         R"doc(Perform an polar to Cartesian transformation on :attr:`input_tensor`, input_tensor.real(r), input_tensor.imag(theta) into x + i*y generating a complex tensor.)doc");
 
