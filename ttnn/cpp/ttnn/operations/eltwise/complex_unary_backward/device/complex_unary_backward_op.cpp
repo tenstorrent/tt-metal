@@ -22,7 +22,7 @@ namespace ttnn::operations::complex_unary_backward {
 // polar fwd op uses sin and cos hence input_b range is (0, 2*pi)
 std::vector<ComplexTensor> _polar_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor result = polar(input, output_mem_config);
+    ComplexTensor result = ttnn::operations::complex_unary::_polar(input, output_mem_config);
     Tensor abs_result = ttnn::operations::complex_unary::_abs(result, output_mem_config);
     Tensor sgn_result_r = where(ttnn::eqz(abs_result, output_mem_config), ttnn::operations::creation::zeros_like(result.real(), result.real().get_dtype(), result.real().get_layout(), std::nullopt, output_mem_config), ttnn::multiply(result.real(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     Tensor sgn_result_i = where(ttnn::eqz(abs_result, output_mem_config), ttnn::operations::creation::zeros_like(result.imag(), result.imag().get_dtype(), result.imag().get_layout(), std::nullopt, output_mem_config), ttnn::multiply(result.imag(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );

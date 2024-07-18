@@ -264,6 +264,7 @@ Pointwise Unary
    ttnn/conj_bw
    ttnn/conj
    ttnn/complex_recip
+   ttmm/polar
 
 Pointwise Binary
 ================

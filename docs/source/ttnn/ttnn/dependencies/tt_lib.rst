@@ -551,10 +551,6 @@ Complex arithmetic can be carried out for multiply, divide, add and subtract as 
 
 .. autofunction:: tt_lib.tensor.complex_div
 
-and then unary operations for,
-
-.. autofunction:: tt_lib.tensor.polar
-
 Complex Operations (Type 2)
 ===========================
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of

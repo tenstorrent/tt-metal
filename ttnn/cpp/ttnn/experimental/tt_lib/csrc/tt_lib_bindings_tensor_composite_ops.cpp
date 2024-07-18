@@ -1521,10 +1521,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary subtraction ``input_a - input_b`` on two complex tensors.)doc");
 
-        m_tensor.def("polar", py::overload_cast<const ComplexTensor&, const MemoryConfig&>(&tt::tt_metal::polar),
-	    py::arg("input_a"),
-            py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input.real(r), input.imag(theta) into x + i*y generating a type-2 complex tensor.)doc");
-
         m_tensor.def("polar", py::overload_cast<const Tensor&,const Tensor&, const MemoryConfig&>(&tt::tt_metal::polar),
 	    py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input_a (r), input_b(theta) into x + i*y generating a type-2 complex tensor.)doc");

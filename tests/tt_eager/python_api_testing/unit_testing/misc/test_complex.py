@@ -882,7 +882,7 @@ def test_level2_polar(bs, memcfg, dtype, device, function_level_defaults):
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    tt_dev = ttl.tensor.polar(xtt, memcfg)
+    tt_dev = ttnn.polar(xtt, memory_config=memcfg)
     tt_dev_real = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_dev_imag = tt_dev.imag.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = torch.polar(x.real, x.imag)
