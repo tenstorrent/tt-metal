@@ -276,6 +276,37 @@ static Tensor conv_group_weight_zero_pad_helper(
 }
 
 /*
+Helper function to aid in converting depthwise weight tensor to broadcasted weight tensor with repeated input channels
+*/
+template <typename T>
+static Tensor conv_depthwise_weight_bcast_helper(
+    Tensor& conv_weight_tensor,
+    Shape& original_weight_shape,
+    Shape& output_weight_shape,
+    DataType output_dtype) {
+    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
+    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    // Copy the original weight tensor to the output tensor
+    for (int i = 0; i < output_weight_shape[0]; i++) {
+        for (int j = 0; j < output_weight_shape[1]; j++) {
+            for (int k = 0; k < output_weight_shape[2]; k++) {
+                for (int l = 0; l < output_weight_shape[3]; l++) {
+                    auto value_flat_input_index =
+                        compute_flat_indices({i, 0, k, l}, compute_strides(original_weight_shape));
+                    auto value = conv_weight_tensor_buffer[value_flat_input_index];
+                    auto output_flat_input_index = compute_flat_indices({i, j, k, l}, compute_strides(output_weight_shape));
+                    output_buffer[output_flat_input_index] = value;
+                }
+            }
+        }
+    }
+
+    auto output_tensor =
+        Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
+    return output_tensor;
+}
+
+/*
 Converts convolution weights to grouped layout with padded zeros
 This function will take in a weight tensor with shape [out_channels, in_channels // groups, H, W] and return a newly
 allocated output tensor with shape [out_channels, in_channels, H, W] The extra channels in shape[1] will be padded with
@@ -331,6 +362,13 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
             output_conv_weight_tensor_shape,
             num_groups,
             output_dtype);
+    } else if (output_dtype == DataType::BFLOAT8_B) {
+        return conv_group_weight_zero_pad_helper<float>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            DataType::FLOAT32);
     } else {
         return conv_group_weight_zero_pad_helper<uint32_t>(
             conv_weight_tensor,
@@ -338,6 +376,72 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
             output_conv_weight_tensor_shape,
             num_groups,
             output_dtype);
+    }
+
+    TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
+}
+
+/*
+Converts convolution weights to depthwise layout
+This function will take in a weight tensor with shape [out_channels, 1, H, W] and return a newly
+allocated output tensor with shape [out_channels, act_block_h, H, W] The extra channels in shape[1] are repeated
+from the original weight tensor - it would be convolving act_block in conv_matrix in one go
+*/
+Tensor convert_conv_weight_tensor_to_depthwise_layout(
+    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype) {
+    TT_ASSERT(
+        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
+        "Convolution weights should be in row major layout for repeating the required dimensions");
+    auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
+    uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
+    Shape original_conv_weight_tensor_shape = {
+        original_conv_weight_tensor_shape_test[0],
+        original_conv_weight_tensor_shape_test[1],
+        original_conv_weight_tensor_shape_test[2],
+        original_conv_weight_tensor_shape_test[3]};
+    Shape output_conv_weight_tensor_shape = {
+        original_conv_weight_tensor_shape[0],
+        num_input_channels_to_repeat,
+        original_conv_weight_tensor_shape[2],
+        original_conv_weight_tensor_shape[3]};
+
+    // Create newly allocated buffer all initialized to 0 depending on the datatype of the weight tensor
+    if (output_dtype == DataType::INT32) {
+        return conv_depthwise_weight_bcast_helper<int32_t>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            output_dtype);
+    } else if (output_dtype == DataType::FLOAT32) {
+        return conv_depthwise_weight_bcast_helper<float>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            output_dtype);
+    } else if (output_dtype == DataType::BFLOAT16) {
+        return conv_depthwise_weight_bcast_helper<bfloat16>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            output_dtype);
+    } else if (output_dtype == DataType::UINT16) {
+        return conv_depthwise_weight_bcast_helper<uint16_t>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            output_dtype);
+    } else if (output_dtype == DataType::BFLOAT8_B) {
+        return conv_depthwise_weight_bcast_helper<float>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            DataType::FLOAT32);
+    } else {
+        return conv_depthwise_weight_bcast_helper<float>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            DataType::FLOAT32);
     }
 
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
