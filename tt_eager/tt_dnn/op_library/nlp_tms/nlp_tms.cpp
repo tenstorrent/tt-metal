@@ -72,7 +72,7 @@ void NlpCreateHeadsDecode::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.is_sharded(), "Input must be sharded");
     TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1]);
     TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
-    // we either put everything in one shard or split it into minimum tile width accross as many cores as possible
+    // we either put everything in one shard or split it into minimum tile width across as many cores as possible
     TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads + this->num_kv_heads * 2) * this->head_dim || input_tensor.shard_spec().value().shape[1] == 32);
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
 
