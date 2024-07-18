@@ -151,13 +151,13 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/paged_update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/paged_update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/paged_update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/paged_update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -173,7 +173,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/paged_update_cache/kernels/compute/update_cache.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/paged_update_cache/kernels/compute/update_cache.cpp",
         all_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
