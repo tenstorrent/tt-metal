@@ -26,11 +26,13 @@ def generate_vectors(test_module):
 
     vectors = []
     for batch in parameters:
+        print(f"SWEEPS: Generating test vectors for batch {batch}.")
         batch_vectors = list(permutations(parameters[batch]))
         for v in batch_vectors:
             v["batch_name"] = batch
             v["status"] = VectorStatus.VALID
         vectors += batch_vectors
+        print(f"SWEEPS: Generated {len(batch_vectors)} test vectors for batch {batch}.")
     return vectors
 
 
@@ -70,12 +72,15 @@ def generate_tests(module_name):
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
+            print(f"SWEEPS: Generating test vectors for module {module_name}.")
             test_module = importlib.import_module("sweeps." + module_name)
             vectors = generate_vectors(test_module)
             invalidate_vectors(test_module, vectors)
             export_test_vectors(module_name, vectors)
+            print(f"SWEEPS: Finished generating test vectors for module {module_name}.\n\n")
     else:
         test_module = importlib.import_module("sweeps." + module_name)
+        print(f"SWEEPS: Generating test vectors for module {module_name}.")
         vectors = generate_vectors(test_module)
         invalidate_vectors(test_module, vectors)
         export_test_vectors(module_name, vectors)
@@ -89,7 +94,6 @@ if __name__ == "__main__":
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
     parser.add_argument("--elastic", required=False, help="Elastic Connection String for vector database.")
-    parser.add_argument("--seed", required=False, default=0, help="Seed for random value generation")
 
     args = parser.parse_args(sys.argv[1:])
 

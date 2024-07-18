@@ -60,7 +60,7 @@ def result(ctx):
 @cli.command()
 @click.pass_context
 def summary(ctx):
-    table = BeautifulTable(maxwidth=200)
+    table = BeautifulTable(maxwidth=os.get_terminal_size().columns)
     table.columns.header = [
         colored("PASS", "light_green"),
         colored("FAIL (ASSERT/EXCEPTION)", "light_red"),
