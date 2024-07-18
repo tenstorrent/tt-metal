@@ -438,6 +438,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     DataType weights_bias_dtype,
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
+    uint32_t act_block_h_ntiles,
     const ParallelConfig& parallel_config,
     Device& device,
     uint32_t groups) {
@@ -445,10 +446,29 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
 
-    // Convert weight tensor to 0 padded shape if groups > 1
+    auto original_weights_shape = weight_tensor.get_shape();
+    uint32_t original_weights_out_channels = original_weights_shape[0];
+    uint32_t original_weights_in_channels = original_weights_shape[1];
+    uint32_t original_weights_window_h = original_weights_shape[2];
+    uint32_t original_weights_window_w = original_weights_shape[3];
+
+    bool is_conv1d = original_weights_window_w == 1 || original_weights_window_h == 1;
+    bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
+
     weight_tensor_ = weight_tensor;
-    if (groups > 1) {
+
+    // Convert weight tensor to 0 padded shape if groups > 1
+    if (!is_conv1d and groups > 1) {
         weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+    }
+    else if (is_conv1d and groups > 1) {
+        if (is_depthwise_conv) {
+            weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles, weights_bias_dtype);
+            weight_block_h_ntiles = act_block_h_ntiles;
+        }
+        else{
+           weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+        }
     }
 
     auto weights_shape = weight_tensor_.get_shape();
@@ -592,6 +612,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
+            opt_conv_op_block_config.act_block_h_ntiles,
             parallel_config,
             device,
             groups);
@@ -661,7 +682,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         }
         // call conv micro op
         std::vector<int> conv_params = {
-            (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1]};
+            (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1], (int)groups};
         auto conv_output = tt::tt_metal::optimized_conv_new(
             halo_output,
             weight_tensor_on_device,
