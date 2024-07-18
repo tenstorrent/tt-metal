@@ -94,17 +94,16 @@ class TtMoeLayer(LightweightModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             ),
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
 
         # get weights for top-2 experts
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
-        topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
-        topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
-        mask_B2 = ttnn.eq(self.expert_mask_11BB, topk_indices)
-        weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
+        ttl_topk_values, ttl_topk_indices = ttnn.topk(gate_logits_1SB8, 32)
+        ttl_topk_values = ttnn.add(ttl_topk_values, self.top2_mask_11BB)
+        mask_B2 = ttnn.eqz(ttl_topk_indices - self.expert_mask_11BB)
+        weights_1SB1 = ttnn.sum(ttnn.softmax(ttl_topk_values, dim=-1) * mask_B2, dim=3)
 
         ttl_topk_values.deallocate(True)
         ttl_topk_indices.deallocate(True)
@@ -132,6 +131,6 @@ class TtMoeLayer(LightweightModule):
         else:
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
             results_11BH.deallocate(True)
-            output_11BH_reduced = ttnn.experimental.operations.primary.matmul(self.reduce_mask, output_11BH_gathered)
+            output_11BH_reduced = ttnn.matmul(self.reduce_mask, output_11BH_gathered)
 
         return output_11BH_reduced

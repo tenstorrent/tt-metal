@@ -6,17 +6,23 @@ import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from ttnn import ReplicateTensorToMesh
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule, get_single_rot_mat
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    LightweightModule,
+    get_single_rot_mat,
+    get_single_rot_mat_torch,
+)
+import torch
 
 
 class TtTransformer(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos=0):
+    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos=0, rotary_on_host=False):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
         self.device_mesh = device_mesh
         self.model_config = args.get_model_config()
+        self.rotary_on_host = rotary_on_host
         assert self.vocab_size > 0
 
         self.layers = [
@@ -57,16 +63,38 @@ class TtTransformer(LightweightModule):
 
         self.compute_kernel = self.args.get_compute_kernel_config()
 
-        self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh, start_pos)
+        if self.rotary_on_host:
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos)
+        else:
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh, start_pos)
 
     def forward(
-        self, x, start_pos, current_pos, attn_masks, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
+        self,
+        x,
+        start_pos,
+        current_pos,
+        attn_masks=None,
+        rot_mats=None,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
     ):
         for i, layer in enumerate(self.layers):
             if mode == "decode":
-                rot_mats = self.current_rot_mat
+                if self.rotary_on_host:
+                    rot_mats = ttnn.from_torch(
+                        self.current_rot_mat,  # 1,1,head_dim,head_dim
+                        device=self.device_mesh,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device_mesh),
+                    )
+                else:
+                    rot_mats = self.current_rot_mat
+
             x = layer(x, start_pos, current_pos, attn_masks, rot_mats, transformation_mats, user_id, mode)
-        attn_masks.deallocate(True)
+        if attn_masks is not None:
+            attn_masks.deallocate(True)
 
         if mode == "prefill":
             return x
@@ -80,9 +108,20 @@ class TtTransformer(LightweightModule):
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
-        # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
-        prev_rot_mat = self.current_rot_mat
-        self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
-        prev_rot_mat.deallocate(True)
+
+        if self.rotary_on_host:
+            prev_rot_mat = self.current_rot_mat
+            self.current_rot_mat = torch.matmul(self.rot_matrix, prev_rot_mat)
+        else:
+            if (start_pos + 1) % 32 == 0:
+                # generate new rotmat to avoid numerical instability every 64 tokens
+                self.current_rot_mat, self.rot_matrix = get_single_rot_mat(
+                    self.args.head_dim, self.device_mesh, start_pos + 1
+                )
+            else:
+                # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
+                prev_rot_mat = self.current_rot_mat
+                self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
+                prev_rot_mat.deallocate(True)
 
         return outputs

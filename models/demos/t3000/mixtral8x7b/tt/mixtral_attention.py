@@ -155,14 +155,12 @@ class TtMixtralAttention(LightweightModule):
         xs,
         start_pos,
         current_pos,
-        attn_masks,
         rot_mat,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
         current_pos: start_pos
-        attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
         rot_mats: list of rotation matrices for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -171,14 +169,11 @@ class TtMixtralAttention(LightweightModule):
         D : head_dim (128)
         P : padded_layer_past_len
         """
-        k_chunk_size = get_chunk_size(current_pos + 1)
-        padded_layer_past_len = nearest_n(current_pos + 1, k_chunk_size)
 
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
         rot_mat = rot_mat
-        attn_mask_1B4P = attn_masks
         ###
         # QKV matmuls
         ###
@@ -250,10 +245,9 @@ class TtMixtralAttention(LightweightModule):
             q_heads_1B4D,
             keys_1BPD,
             values_1BPD,
-            attn_mask_1B4P,
+            [current_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
-            program_config=self.model_config["SDPA_DECODE_PROGCFG"](k_chunk_size),
-            valid_seq_len=padded_layer_past_len,
+            program_config=self.model_config["SDPA_DECODE_PROGCFG"],
             compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
             output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
@@ -418,4 +412,5 @@ class TtMixtralAttention(LightweightModule):
         if mode == "prefill":
             return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
         else:
-            return self.forward_decode(xs, start_pos, current_pos, attn_masks, rot_mats)
+            assert attn_masks is None, "attn_masks should be None for decode mode"
+            return self.forward_decode(xs, start_pos, current_pos, rot_mats)

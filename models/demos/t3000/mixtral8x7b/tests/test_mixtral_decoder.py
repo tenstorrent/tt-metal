@@ -81,7 +81,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         start_pos = generation_start_pos + i
         current_pos = start_pos
 
-        decode_input_b1sh, attn_mask = prepare_inputs_ttnn(
+        decode_input_b1sh = prepare_inputs_ttnn(
             pt_decode_input_bsh,
             model_args.dim,
             start_pos,
@@ -89,15 +89,13 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             tt_model.device_mesh,
         )
         # Run TT model
-        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, current_rot_mat)
+        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, None, current_rot_mat)
 
         tt_output_torch_b1h = (
             ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
             .view(32, 1, -1)
         )[:batch, ...]
-
-        attn_mask.deallocate(True)
 
         # Reference model
         positions = torch.LongTensor([start_pos])

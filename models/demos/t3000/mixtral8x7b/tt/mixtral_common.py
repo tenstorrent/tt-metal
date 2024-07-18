@@ -223,30 +223,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    # Attention mask
-    k_chunk_size = get_chunk_size(current_pos + 1)
-    padded_layer_past_len = nearest_n(current_pos + 1, k_chunk_size)
-    attn_mask = torch.zeros(seq_len, batch, 32, padded_layer_past_len)  # [SB4P]
-    attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-
-    if model_args.dummy_weights:
-        cache_name = None
-    else:
-        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (
-            f"attention_mask_interleaved.batch{batch}.{padded_layer_past_len}.{current_pos}"
-        )
-
-    attn_mask = ttnn.as_tensor(
-        attn_mask,
-        device=device_mesh,
-        dtype=ttnn.bfloat4_b,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        cache_file_name=cache_name,
-    )
-
-    return xs_1SBH, attn_mask
+    return xs_1SBH
 
 
 # Sample logits from a distribution
@@ -294,46 +271,43 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
         dtype=dtype,
     )
 
-    for iter in range(seq_start, seq_start + seq_len):
+    for iter in [32, 200, 1024]:  # corresponds to chunk size 32, 256, 512
         logger.info(f"Caching iteration {iter}...")
         if iter > 0:
             current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         pos = iter
 
-        k_chunk_size = get_chunk_size(pos + 1)
-        padded_layer_past_len = nearest_n(pos + 1, k_chunk_size)
-
-        if model_args.dummy_weights:
-            cache_name = None
-        else:
-            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (
-                f"attention_mask_interleaved.batch{model_args.max_batch_size}.{padded_layer_past_len}.{pos}"
-            )
-
-        # 32 on dim 2 for 1 tile (padded n_heads)
-        attn_mask = torch.zeros(1, model_args.max_batch_size, 32, padded_layer_past_len)
-        attn_mask[:, :, :, pos + 1 :] = torch.finfo(attn_mask.dtype).min
-
-        attn_mask = ttnn.as_tensor(
-            # torch.zeros(1, 1, 32, padded_layer_past_len),
-            attn_mask,
-            device=device_mesh,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-            cache_file_name=cache_name,
-        )
         _ = tt_attn(
             attention_inputs,
             pos,
             pos,
-            attn_mask,
+            None,
             current_rot_mat,
         )
         # ttnn.deallocate(tt_out[0])
 
     logger.info("Attention ops cached")
+
+
+def get_single_rot_mat_torch(dhead, start_pos=0, theta: float = 1000000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    rot_matrix = torch.zeros(dhead, dhead)
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    rot_matrix = rot_matrix.transpose(-1, -2)
+
+    freqs = start_pos * freqs
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    current_rot_mat = torch.zeros(dhead, dhead)
+    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    return current_rot_mat.unsqueeze(0).unsqueeze(0), rot_matrix.unsqueeze(0).unsqueeze(0)
 
 
 def get_single_rot_mat(dhead, device_mesh, start_pos=0, theta: float = 1000000.0):
