@@ -36,7 +36,7 @@ Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_confi
     return ttnn::eqz( input[1], output_mem_config);
 }
 
-Tensor _complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return tt::tt_metal::hypot(input[0],input[1],output_mem_config);
 }
 
