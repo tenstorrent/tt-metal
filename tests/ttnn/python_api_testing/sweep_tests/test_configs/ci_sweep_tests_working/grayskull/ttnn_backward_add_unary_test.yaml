@@ -18,8 +18,8 @@ test-list:
       args-gen: gen_scalar_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: backward_unary_add_sweep.csv
       env:
@@ -42,8 +42,8 @@ test-list:
       args-gen: gen_scalar_args
       args:
         data-layout: ["ROW_MAJOR"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: backward_unary_add_sweep.csv
       env:
