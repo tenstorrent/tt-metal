@@ -10,6 +10,7 @@ from models.demos.mamba.reference.args import ModelMode
 def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=1):
     configs = {}
     latent = 32
+    configs["max_seq_length"] = 128
     configs["core_grid_row"] = 5
     configs["core_grid_col"] = 8
     configs["latent_size"] = latent
@@ -26,7 +27,6 @@ def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=
         outer_dim = seq_len
         assert batch_size == 1, "Batch size must be 1 for prefill model"
         assert seq_len % 32 == 0, "Sequence length must be a multiple of 32 for prefill model"
-        assert seq_len <= 128, "Sequence length must be less than 128 for prefill model"
     else:
         raise ValueError(f"Invalid model mode: {mode}")
 

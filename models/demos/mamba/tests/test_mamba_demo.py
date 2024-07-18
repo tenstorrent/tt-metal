@@ -31,7 +31,14 @@ def test_demo(user_input, model_version, device, use_program_cache, get_tt_cache
                 "Climate change refers to long-term shifts in temperatures and weather patterns. Such shifts can be natural due to changes in the sun's activity or volcanic eruptions."
             ],
             "state-spaces/mamba-2.8b-slimpj",
-            2,
+            4,
+        ),
+        (
+            [
+                "The city of Sarnia is located on the eastern shore of Lake Huron at its extreme southern point where it flows into the St. Clair River . Most of the surrounding area is flat , and the elevation ranges from 169 metres ( 554 ft ) and 281 metres ( 922 ft ) above sea level . The soil mostly comprises clay . Despite this high percentage of clay , the soil is remarkably rich for cultivation . Prior to the Ice Age , glaciers covered most of the area , as can be seen not only by the existence of the Great Lakes themselves but also of alluvial sand deposits, terminal moraines, and rich oil reserves."
+            ],
+            "state-spaces/mamba-2.8b-slimpj",
+            4,
         ),
     ),
 )
