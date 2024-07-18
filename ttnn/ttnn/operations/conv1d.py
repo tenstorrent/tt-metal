@@ -33,7 +33,8 @@ def Conv1d(
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     # Reshape input and weight tensors to 4D
     if len(input_tensor.shape) != 4:
-        input_tensor = ttnn.reshape(input_tensor, [batch_size, 1, input_length, in_channels])
+        # should be no-op as input_tensor is in RM layout
+        input_tensor = ttnn.reshape(input_tensor, [batch_size, input_length, 1, in_channels])
     if len(weight_tensor.shape) != 4:
         weight_tensor = ttnn.reshape(weight_tensor, [out_channels, in_channels // groups, kernel_size, 1])
     (
@@ -42,7 +43,7 @@ def Conv1d(
         _,
         weight_tensor_on_dev_new,
         bias_tensor_on_dev_new,
-    ) = ttnn.Conv2d(
+    ) = ttnn._ttnn.operations.conv2d.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
