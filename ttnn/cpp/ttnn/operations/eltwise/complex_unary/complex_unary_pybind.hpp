@@ -20,6 +20,7 @@ namespace complex_unary {
 
 namespace detail {
 
+//OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 template <typename complex_unary_operation_t>
 void bind_complex_unary_type1(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
@@ -57,6 +58,43 @@ Example:
             py::arg("memory_config")});
 }
 
+//OpHandler_complex_type2 = get_function_complex_unary_type2 --> ComplexTensor return type
+template <typename complex_unary_operation_t>
+void bind_complex_unary_type2(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> Tensor
+
+{2}
+
+Args:
+    * :attr:`input_tensor`
+
+Keyword args:
+    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+
+Example:
+
+    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+    >>> output = {1}(tensor)
+)doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const complex_unary_operation_t& self,
+               const ComplexTensor& input_tensor,
+               const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
+                return self(input_tensor, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
+}
 
 }  // namespace detail
 
@@ -85,6 +123,11 @@ void py_module(py::module& module) {
         module,
         ttnn::is_real,
         R"doc(Returns boolean tensor if value of :attr:`input_tensor` is real.)doc");
+
+    detail::bind_complex_unary_type2(
+        module,
+        ttnn::conj,
+        R"doc(Returns complex conjugate value of complex tensor :attr:`input_tensor`.)doc");
 
 }
 

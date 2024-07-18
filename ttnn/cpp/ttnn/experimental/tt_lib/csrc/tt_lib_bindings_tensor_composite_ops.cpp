@@ -1553,16 +1553,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             py::arg("real"),
             py::arg("imag"),
 	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
-        );
-
-        m_tensor.def("conj",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::conj),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns complex conjugate value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("complex_recip",
+        );m_tensor.def("complex_recip",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_recip),
             py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,

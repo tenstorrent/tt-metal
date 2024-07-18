@@ -39,4 +39,8 @@ Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return tt::tt_metal::hypot(input[0],input[1],output_mem_config);
 }
 
+ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
+}
+
 }  // namespace ttnn::operations::complex_unary

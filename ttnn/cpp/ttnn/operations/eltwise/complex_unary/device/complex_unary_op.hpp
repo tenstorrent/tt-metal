@@ -20,8 +20,10 @@ enum class ComplexUnaryOpType {
     IS_IMAG,
     IS_REAL,
     ABS,
+    CONJ,
 };
 
+//OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config);
@@ -29,8 +31,14 @@ Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_confi
 Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
+//OpHandler_complex_type2 = get_function_complex_unary_type2 --> ComplexTensor return type
+ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config);
+
 template <ComplexUnaryOpType OpType>
 struct OpHandler_complex_type1;
+
+template <ComplexUnaryOpType OpType>
+struct OpHandler_complex_type2;
 
 template <>
 struct OpHandler_complex_type1<ComplexUnaryOpType::REAL> {
@@ -74,9 +82,21 @@ struct OpHandler_complex_type1<ComplexUnaryOpType::ABS> {
     }
 };
 
+template <>
+struct OpHandler_complex_type2<ComplexUnaryOpType::CONJ> {
+    static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
+        return _conj(input, output_mem_config);
+    }
+};
+
 template <ComplexUnaryOpType OpType>
 auto get_function_complex_unary() {
     return &OpHandler_complex_type1<OpType>::handle;
+}
+
+template <ComplexUnaryOpType OpType>
+auto get_function_complex_unary_type2() {
+    return &OpHandler_complex_type2<OpType>::handle;
 }
 
 
