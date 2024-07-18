@@ -22,8 +22,6 @@
 
 namespace ttnn {
 
-namespace utils {
-
 namespace all_gather_op {
 using ccl::Topology;
 }; // namespace all_gather_op
@@ -47,20 +45,6 @@ struct LineAllGather {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-// All Gather Variants
-std::vector<Tensor> line_all_gather_impl(
-    const std::vector<Tensor>& input_tensors,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const MemoryConfig& output_mem_config,
-    const all_gather_op::Topology topology);
-std::vector<Tensor> line_all_gather(
-    const std::vector<Tensor> &input_tensors,
-    const uint32_t dim,
-    const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-}  // namespace utils
 
 namespace operations {
 namespace ccl {

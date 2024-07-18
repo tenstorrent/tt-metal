@@ -14,7 +14,6 @@
 #include <limits>
 
 namespace ttnn {
-namespace utils {
 namespace ccl {
 
 enum Topology { Ring = 0, Linear = 1, Meash = 2 };
@@ -337,5 +336,4 @@ class EriscDatamoverBuilder {
 };
 
 };  // namespace ccl
-};  // namespace utils
 };  // namespace ttnn

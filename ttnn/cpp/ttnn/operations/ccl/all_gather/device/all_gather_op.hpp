@@ -22,8 +22,6 @@
 
 namespace ttnn {
 
-namespace utils {
-
 enum AllGatherMode {
     RING_INTERLEAVED,
     FULL_WORKER_GRID_SHARDED,
@@ -241,19 +239,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology);
-
-
-std::vector<Tensor> all_gather_impl(
-    const std::vector<Tensor>& input_tensors,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const MemoryConfig& output_mem_config,
-    const all_gather_op::Topology topology);
-std::vector<Tensor> all_gather(
-    const std::vector<Tensor> &input_tensors,
-    const uint32_t dim,
-    const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 struct ShardedAllGatherConfig {
     ShardedAllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim)
@@ -748,8 +733,6 @@ struct FullWorkerGridShardAddrGenArgGenerator {
     ccl::FullWorkerGridShardAddrGenArgs<true> args_struct;
     bool initialized;
 };
-
-}  // namespace utils
 
 namespace operations {
 namespace ccl {

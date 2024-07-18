@@ -23,7 +23,7 @@ struct ReduceScatter {
     const std::optional<chip_id_t> receiver_device_id;
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
-    const ttnn::utils::ccl::Topology topology;
+    const ttnn::ccl::Topology topology;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-   ttnn::utils::ccl::Topology topology);
+   ttnn::ccl::Topology topology);
 }
 }; // namespace ccl
 

@@ -9,7 +9,6 @@
 #include "ccl_host_datastructures.hpp"
 
 namespace ttnn {
-namespace utils {
 namespace ccl {
 
 std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
@@ -514,5 +513,4 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 
 
 }  // namespace ccl
-}  // namespace utils
 }  // namespace ttnn

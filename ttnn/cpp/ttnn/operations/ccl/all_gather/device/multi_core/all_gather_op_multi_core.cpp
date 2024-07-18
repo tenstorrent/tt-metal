@@ -33,8 +33,6 @@ using namespace tt::constants;
 
 namespace ttnn {
 
-namespace utils {
-
 using namespace ccl;
 
 static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction) {
@@ -75,13 +73,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
     bool is_linear = topology == all_gather_op::Topology::Linear;
-    std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
-    std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::utils::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
+    std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
+    std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     tt::tt_metal::Program program{};
     const auto& device = input_tensor.device();
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology);
-    auto const& topology_config = ttnn::utils::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
+    auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     auto const& sharding_info = ShardedAllGatherConfig(input_tensor, output_tensor, dim);
     bool enable_print = false; // ring_index == 0
@@ -179,9 +177,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         }
 
         clockwise_edm_builders.emplace_back(
-            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::utils::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
+            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
         counter_clockwise_edm_builders.emplace_back(
-            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::utils::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
+            all_gather_config.get_eth_buffer_size(), all_gather_config.get_erisc_handshake_address(), edm_sem_addrs_per_link.at(link), edm_buffer_addrs_per_link.at(link), ttnn::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED, ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED);
     }
 
     for (uint32_t direction = 0; direction < num_full_send_directions; direction++) {
@@ -242,7 +240,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             pages_per_link.at(i)++;
         }
 
-        auto tensor_slicer = ttnn::utils::ccl::InterleavedRingAllGatherTensorSlicer (
+        auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
             input_tensor,
             output_tensor,
             dim,
@@ -418,11 +416,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 std::vector<ccl::WorkerXY> receiver_worker_coords;
                 for (uint32_t w = b * num_workers_per_eth_buffer; w < (b + 1) * num_workers_per_eth_buffer; ++w) {
                     sender_worker_coords.push_back(
-                        ttnn::utils::ccl::WorkerXY(
+                        ttnn::ccl::WorkerXY(
                             device->worker_core_from_logical_core(sender_worker_cores.at(w)).x,
                             device->worker_core_from_logical_core(sender_worker_cores.at(w)).y));
                     receiver_worker_coords.push_back(
-                        ttnn::utils::ccl::WorkerXY(
+                        ttnn::ccl::WorkerXY(
                             device->worker_core_from_logical_core(receiver_worker_cores.at(w)).x,
                             device->worker_core_from_logical_core(receiver_worker_cores.at(w)).y));
                 }
@@ -1191,7 +1189,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         }
     } // num_full_send_directions
 
-    ttnn::utils::ccl::generate_edm_kernels_for_ring_or_linear_topology(
+    ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
         program,
         device,
         topology_config,
@@ -1249,7 +1247,5 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
-
-}  // namespace utils
 
 }  // namespace ttnn

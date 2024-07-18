@@ -7,10 +7,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
-using ttnn::utils::ccl::ShardType;
-using ttnn::utils::ccl::UNINITIALIZED_VALUE_U16;
-using ttnn::utils::ccl::UNINITIALIZED_VALUE_U32;
-using ttnn::utils::ccl::WorkerXY;
+using ttnn::ccl::ShardType;
+using ttnn::ccl::UNINITIALIZED_VALUE_U16;
+using ttnn::ccl::UNINITIALIZED_VALUE_U32;
+using ttnn::ccl::WorkerXY;
 
 // Only workers on local worker core, hence no uint64_t noc addresses
 template <ShardType SHARD_TYPE>
@@ -18,7 +18,7 @@ struct FullWorkerGridShardAddrGen {
     FullWorkerGridShardAddrGen() = default;
     FORCE_INLINE static void build_with_placement_new(
         FullWorkerGridShardAddrGen* placement_new_address, const uint32_t arg_index) {
-        ttnn::utils::ccl::FullWorkerGridShardAddrGenArgs<false> input_args;
+        ttnn::ccl::FullWorkerGridShardAddrGenArgs<false> input_args;
 
         uint32_t curr_arg_index = arg_index;
         input_args.tile_size_in_bytes = get_arg_val<uint32_t>(curr_arg_index++);
@@ -54,7 +54,7 @@ struct FullWorkerGridShardAddrGen {
     }
 
     FullWorkerGridShardAddrGen(
-        uint8_t num_args_consumed, ttnn::utils::ccl::FullWorkerGridShardAddrGenArgs<false> const& input_args) :
+        uint8_t num_args_consumed, ttnn::ccl::FullWorkerGridShardAddrGenArgs<false> const& input_args) :
         dest_cores(input_args.dest_cores),
         tile_size_in_bytes(input_args.tile_size_in_bytes),
         shards_start_address(input_args.shards_start_address),
@@ -101,7 +101,7 @@ struct FullWorkerGridShardAddrGen {
     }
 
     FORCE_INLINE void advance() {
-        ttnn::utils::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance(
             this->curr_shard_tile_x,
             this->curr_shard_tile_y,
             this->curr_tile_index,
@@ -115,7 +115,7 @@ struct FullWorkerGridShardAddrGen {
     }
 
     FORCE_INLINE void advance_to_next_tile_row() {
-        ttnn::utils::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             this->curr_shard_tile_x,
             this->curr_shard_tile_y,
             this->curr_tile_index,
@@ -164,7 +164,7 @@ struct ShardAddrGen final {
     ShardAddrGen() = default;
 
     FORCE_INLINE static void build_with_placement_new(ShardAddrGen* placement_new_address, const uint32_t arg_index) {
-        ttnn::utils::ccl::ShardAddrGenArgs<false> input_args;
+        ttnn::ccl::ShardAddrGenArgs<false> input_args;
 
         uint32_t curr_arg_index = arg_index;
         input_args.is_clockwise = bool(get_arg_val<uint32_t>(curr_arg_index++) == 1);
@@ -196,7 +196,7 @@ struct ShardAddrGen final {
     // This addr gen will dump all tiles from an input shard contiguously, and dump the
     // next input shard contiguously after it. This approach depends on a follow up
     //
-    ShardAddrGen(uint8_t num_args_consumed, ttnn::utils::ccl::ShardAddrGenArgs<false> const& input_args) :
+    ShardAddrGen(uint8_t num_args_consumed, ttnn::ccl::ShardAddrGenArgs<false> const& input_args) :
         dest_cores(input_args.dest_cores),
         shards_start_address(input_args.shards_start_address),
         shard_size_in_bytes(input_args.shard_size_in_bytes),
@@ -224,7 +224,7 @@ struct ShardAddrGen final {
     // correc order per worker
     FORCE_INLINE void advance() {
         if constexpr (TYPE == ShardType::Width or TYPE == ShardType::Height) {
-            ttnn::utils::ccl::all_gather::addr_gen_advance_width_sharded(
+            ttnn::ccl::all_gather::addr_gen_advance_width_sharded(
                 this->curr_core_chunk_index,
                 this->curr_worker_index,
                 this->contiguous_chunk_count,
@@ -532,11 +532,11 @@ FORCE_INLINE void read_chunk_from_output_tensor(
 template <typename AddrGen>
 FORCE_INLINE void read_chunk_from_output_tensor_v2(
     uint32_t& curr_page_idx,
-    ttnn::utils::ccl::coord_t& offset_into_worker_slice,
-    const ttnn::utils::ccl::coord_t& worker_slice_shape,
+    ttnn::ccl::coord_t& offset_into_worker_slice,
+    const ttnn::ccl::coord_t& worker_slice_shape,
 
     // In tiles for tile layout
-    const ttnn::utils::ccl::coord_t& tensor_shape,
+    const ttnn::ccl::coord_t& tensor_shape,
     const uint32_t cb_id,
     const AddrGen& s,
     const uint32_t num_pages,
@@ -581,11 +581,11 @@ FORCE_INLINE void read_chunk_from_output_tensor_v2(
 template <typename AddrGen>
 FORCE_INLINE void write_chunk_v2(
     uint32_t& curr_page_idx,
-    ttnn::utils::ccl::coord_t& offset_into_worker_slice,
-    const ttnn::utils::ccl::coord_t& worker_slice_shape,
+    ttnn::ccl::coord_t& offset_into_worker_slice,
+    const ttnn::ccl::coord_t& worker_slice_shape,
 
     // In tiles for tile layout
-    const ttnn::utils::ccl::coord_t& tensor_shape,
+    const ttnn::ccl::coord_t& tensor_shape,
     uint32_t cb_id,
     const AddrGen& d,
     const uint32_t num_pages,

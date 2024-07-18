@@ -10,7 +10,6 @@
 #include <vector>
 
 namespace ttnn {
-namespace utils {
 namespace ccl {
 
 enum EriscDataMoverBufferSharingMode : uint32_t {
@@ -304,5 +303,4 @@ inline void full_worker_grid_addr_gen_width_sharded_advance(
 };  // namespace all_gather
 
 }  // namespace ccl
-}  // namespace utils
 }  // namespace ttnn

@@ -17,9 +17,9 @@
 >>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
 #include "tt_metal/hw/inc/wormhole/noc/noc.h"
 
-using ttnn::utils::ccl::EriscDataMoverBufferSharingMode;
-using ttnn::utils::ccl::EriscDataMoverTerminationMode;
-using ttnn::utils::ccl::EriscDataMoverWorkerSignal;
+using ttnn::ccl::EriscDataMoverBufferSharingMode;
+using ttnn::ccl::EriscDataMoverTerminationMode;
+using ttnn::ccl::EriscDataMoverWorkerSignal;
 
 namespace erisc {
 namespace datamover {
@@ -38,7 +38,7 @@ struct edm_worker_index<EriscDataMoverBufferSharingMode::ROUND_ROBIN> {
     uint16_t worker_index = 0;
 };
 
-using ttnn::utils::ccl::WorkerXY;
+using ttnn::ccl::WorkerXY;
 
 /*
  * The `ChannelBuffer` is a building block of the Erisc Data Mover (EDM). For every concurrent transaction
@@ -119,13 +119,13 @@ class ChannelBuffer final {
         is_sender_side(is_sender_side) {
         clear_local_semaphore();
 
-        if (TERMINATION_MODE != ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
+        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
             }
         } else {
-            ASSERT(TERMINATION_MODE != ttnn::utils::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
+            ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
             goto_state(STATE::DONE);
         }
     };

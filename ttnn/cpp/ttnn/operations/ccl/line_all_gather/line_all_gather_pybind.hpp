@@ -43,7 +43,7 @@ void bind_line_all_gather(py::module& module, const ccl_operation_t& operation, 
 }  // namespace detail
 
 
-void py_module_line_all_gather(py::module& module) {
+void py_bind_line_all_gather(py::module& module) {
 
     detail::bind_line_all_gather(
         module,

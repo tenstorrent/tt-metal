@@ -11,8 +11,8 @@
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;
     uint32_t page_size = 2048;
-    ttnn::utils::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode = ttnn::utils::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
-    ttnn::utils::ccl::EriscDataMoverTerminationMode termination_mode = ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
+    ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode = ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
+    ttnn::ccl::EriscDataMoverTerminationMode termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto edm_builder = create_erisc_datamover_builder(num_channels, page_size, buffer_sharing_mode, termination_mode);
     std::vector<uint32_t> worker_semaphore_addresses = {
@@ -22,18 +22,18 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
         0x1030,
     };
     std::vector<uint32_t> message_counts = {256, 512, 24, 1};
-    std::vector<std::vector<ttnn::utils::ccl::WorkerXY>> const& worker_coords = {
-        {ttnn::utils::ccl::WorkerXY{1, 1}, ttnn::utils::ccl::WorkerXY{2, 1}},
-        {ttnn::utils::ccl::WorkerXY{3, 1}},
-        {ttnn::utils::ccl::WorkerXY{4, 1}, ttnn::utils::ccl::WorkerXY{5, 1}, ttnn::utils::ccl::WorkerXY{6, 1}},
-        {ttnn::utils::ccl::WorkerXY{1, 2}},
+    std::vector<std::vector<ttnn::ccl::WorkerXY>> const& worker_coords = {
+        {ttnn::ccl::WorkerXY{1, 1}, ttnn::ccl::WorkerXY{2, 1}},
+        {ttnn::ccl::WorkerXY{3, 1}},
+        {ttnn::ccl::WorkerXY{4, 1}, ttnn::ccl::WorkerXY{5, 1}, ttnn::ccl::WorkerXY{6, 1}},
+        {ttnn::ccl::WorkerXY{1, 2}},
     };
     std::vector<bool> is_sender_channel{true, false, true, false};
 
-    std::vector<ttnn::utils::ccl::EriscDatamoverBuilder::ChannelBufferInterface> channel_buffer_interfaces;
+    std::vector<ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface> channel_buffer_interfaces;
     channel_buffer_interfaces.reserve(num_channels);
     for (std::size_t i = 0; i < num_channels; i++) {
-        ttnn::utils::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& channel_buffer_interface =
+        ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& channel_buffer_interface =
             (is_sender_channel[i])
                 ? edm_builder.add_sender_channel(worker_semaphore_addresses[i], message_counts[i], worker_coords[i])
                 : edm_builder.add_receiver_channel(worker_semaphore_addresses[i], message_counts[i], worker_coords[i]);
@@ -55,36 +55,36 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
 
 TEST(CclHelpers, EriscDatamoverConfig_GetEdmHandshakeAddress_GT_0) {
     for (std::size_t i = 0; i < 8; i++) {
-        ASSERT_TRUE(ttnn::utils::ccl::EriscDatamoverConfig::get_edm_handshake_address() > 0);
+        ASSERT_TRUE(ttnn::ccl::EriscDatamoverConfig::get_edm_handshake_address() > 0);
     }
 }
 TEST(CclHelpers, EriscDatamoverConfig_GetSemaphoresBaseAddress_GT_0) {
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(
-            ttnn::utils::ccl::EriscDatamoverConfig::get_semaphores_base_address(i) >=
-            (ttnn::utils::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
-             ttnn::utils::ccl::EriscDatamoverConfig::handshake_location_size +
-             ttnn::utils::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
+            ttnn::ccl::EriscDatamoverConfig::get_semaphores_base_address(i) >=
+            (ttnn::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
+             ttnn::ccl::EriscDatamoverConfig::handshake_location_size +
+             ttnn::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
     }
 }
 
 TEST(CclHelpers, EriscDatamoverConfig_GetBuffersBaseAddress_GT_0) {
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(
-            ttnn::utils::ccl::EriscDatamoverConfig::get_buffers_base_address(i) >=
-            (ttnn::utils::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
-             ttnn::utils::ccl::EriscDatamoverConfig::handshake_location_size +
-             ttnn::utils::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
+            ttnn::ccl::EriscDatamoverConfig::get_buffers_base_address(i) >=
+            (ttnn::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
+             ttnn::ccl::EriscDatamoverConfig::handshake_location_size +
+             ttnn::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
     }
 }
 
 TEST(CclHelpers, EriscDatamoverConfig_ComputeBufferSize_GT_0) {
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(
-            ttnn::utils::ccl::EriscDatamoverConfig::get_buffers_base_address(i) >=
-            (ttnn::utils::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
-             ttnn::utils::ccl::EriscDatamoverConfig::handshake_location_size +
-             ttnn::utils::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
+            ttnn::ccl::EriscDatamoverConfig::get_buffers_base_address(i) >=
+            (ttnn::ccl::EriscDatamoverConfig::get_edm_handshake_address() +
+             ttnn::ccl::EriscDatamoverConfig::handshake_location_size +
+             ttnn::ccl::EriscDatamoverConfig::edm_receiver_first_level_ack_source_word_size));
     }
 }
 
@@ -93,32 +93,32 @@ TEST(CclHelpers, EriscDatamoverConfig_ComputeBufferSize_GT_0) {
 /////////////////////////////////////////
 //                                               x_y             x_y             x_y
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_1) {
-    const auto expected = ttnn::utils::ccl::coord_t(1, 0);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 1);
+    const auto expected = ttnn::ccl::coord_t(1, 0);
+    auto const& result = ttnn::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 1);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_0__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_1) {
-    const auto expected = ttnn::utils::ccl::coord_t(0, 1);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({1, 0}, {1, 1}, {2, 2}, 1);
+    const auto expected = ttnn::ccl::coord_t(0, 1);
+    auto const& result = ttnn::ccl::advance_slice_row_major({1, 0}, {1, 1}, {2, 2}, 1);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_1) {
-    const auto expected = ttnn::utils::ccl::coord_t(1, 1);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({0, 1}, {1, 1}, {2, 2}, 1);
+    const auto expected = ttnn::ccl::coord_t(1, 1);
+    auto const& result = ttnn::ccl::advance_slice_row_major({0, 1}, {1, 1}, {2, 2}, 1);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_2) {
-    const auto expected = ttnn::utils::ccl::coord_t(0, 1);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 2);
+    const auto expected = ttnn::ccl::coord_t(0, 1);
+    auto const& result = ttnn::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 2);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_0__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_2) {
-    const auto expected = ttnn::utils::ccl::coord_t(1, 1);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({1, 0}, {1, 1}, {2, 2}, 2);
+    const auto expected = ttnn::ccl::coord_t(1, 1);
+    auto const& result = ttnn::ccl::advance_slice_row_major({1, 0}, {1, 1}, {2, 2}, 2);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
@@ -126,102 +126,102 @@ TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_0__InnerShape_1_1__OuterShape
 // Test cases pulled from LLama 70B prefill configurations
 // chip 0 worker 0 link 0 reader unidirectional
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_24_1__OuterShape_32_4__NumWorkers_4) {
-    const auto worker_slice_offset = ttnn::utils::ccl::coord_t(0, 0);
-    const auto worker_slice_shape = ttnn::utils::ccl::coord_t(24, 1);
-    const auto tensor_slice_shape = ttnn::utils::ccl::coord_t(32, 4);
+    const auto worker_slice_offset = ttnn::ccl::coord_t(0, 0);
+    const auto worker_slice_shape = ttnn::ccl::coord_t(24, 1);
+    const auto tensor_slice_shape = ttnn::ccl::coord_t(32, 4);
     const uint32_t num_workers = 4;
 
-    const auto expected = ttnn::utils::ccl::coord_t(0, 2);
-    auto const& result_offset = ttnn::utils::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    const auto expected = ttnn::ccl::coord_t(0, 2);
+    auto const& result_offset = ttnn::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_EQ(result_offset.x, expected.x);
     ASSERT_EQ(result_offset.y, expected.y);
 
 
-    auto const& result_offset2 = ttnn::utils::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    auto const& result_offset2 = ttnn::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_TRUE(result_offset2.x >= tensor_slice_shape.x || result_offset2.y >= tensor_slice_shape.y);
 }
 
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_24_0__InnerShape_24_1__OuterShape_32_4__NumWorkers_4) {
-    const auto worker_slice_offset = ttnn::utils::ccl::coord_t(24, 0);
-    const auto worker_slice_shape = ttnn::utils::ccl::coord_t(24, 1);
-    const auto tensor_slice_shape = ttnn::utils::ccl::coord_t(32, 4);
+    const auto worker_slice_offset = ttnn::ccl::coord_t(24, 0);
+    const auto worker_slice_shape = ttnn::ccl::coord_t(24, 1);
+    const auto tensor_slice_shape = ttnn::ccl::coord_t(32, 4);
     const uint32_t num_workers = 4;
 
-    const auto expected = ttnn::utils::ccl::coord_t(24, 2);
-    auto const& result_offset = ttnn::utils::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    const auto expected = ttnn::ccl::coord_t(24, 2);
+    auto const& result_offset = ttnn::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_EQ(result_offset.x, expected.x);
     ASSERT_EQ(result_offset.y, expected.y);
 
-    auto const& result_offset2 = ttnn::utils::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    auto const& result_offset2 = ttnn::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_TRUE(result_offset2.x >= tensor_slice_shape.x || result_offset2.y >= tensor_slice_shape.y);
 }
 
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_1__InnerShape_24_1__OuterShape_32_4__NumWorkers_4) {
-    const auto worker_slice_offset = ttnn::utils::ccl::coord_t(0, 1);
-    const auto worker_slice_shape = ttnn::utils::ccl::coord_t(24, 1);
-    const auto tensor_slice_shape = ttnn::utils::ccl::coord_t(32, 4);
+    const auto worker_slice_offset = ttnn::ccl::coord_t(0, 1);
+    const auto worker_slice_shape = ttnn::ccl::coord_t(24, 1);
+    const auto tensor_slice_shape = ttnn::ccl::coord_t(32, 4);
     const uint32_t num_workers = 4;
 
-    const auto expected = ttnn::utils::ccl::coord_t(0, 3);
-    auto const& result_offset = ttnn::utils::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    const auto expected = ttnn::ccl::coord_t(0, 3);
+    auto const& result_offset = ttnn::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_EQ(result_offset.x, expected.x);
     ASSERT_EQ(result_offset.y, expected.y);
 
-    auto const& result_offset2 = ttnn::utils::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    auto const& result_offset2 = ttnn::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_TRUE(result_offset2.x >= tensor_slice_shape.x || result_offset2.y >= tensor_slice_shape.y);
 }
 
 
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_24_1__InnerShape_24_1__OuterShape_32_4__NumWorkers_4) {
-    const auto worker_slice_offset = ttnn::utils::ccl::coord_t(24, 1);
-    const auto worker_slice_shape = ttnn::utils::ccl::coord_t(24, 1);
-    const auto tensor_slice_shape = ttnn::utils::ccl::coord_t(32, 4);
+    const auto worker_slice_offset = ttnn::ccl::coord_t(24, 1);
+    const auto worker_slice_shape = ttnn::ccl::coord_t(24, 1);
+    const auto tensor_slice_shape = ttnn::ccl::coord_t(32, 4);
     const uint32_t num_workers = 4;
 
-    const auto expected = ttnn::utils::ccl::coord_t(24, 3);
-    auto const& result_offset = ttnn::utils::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    const auto expected = ttnn::ccl::coord_t(24, 3);
+    auto const& result_offset = ttnn::ccl::advance_slice_row_major(worker_slice_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_EQ(result_offset.x, expected.x);
     ASSERT_EQ(result_offset.y, expected.y);
 
-    auto const& result_offset2 = ttnn::utils::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
+    auto const& result_offset2 = ttnn::ccl::advance_slice_row_major(result_offset, worker_slice_shape, tensor_slice_shape, num_workers);
     ASSERT_TRUE(result_offset2.x >= tensor_slice_shape.x || result_offset2.y >= tensor_slice_shape.y);
 }
 
 
 // Test that we successfully go out of bounds on the last iteration
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_2) {
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({0, 1}, {1, 1}, {2, 2}, 2);
+    auto const& result = ttnn::ccl::advance_slice_row_major({0, 1}, {1, 1}, {2, 2}, 2);
     ASSERT_TRUE(result.x >= 2 || result.y >= 2);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_2) {
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({1, 1}, {1, 1}, {2, 2}, 2);
+    auto const& result = ttnn::ccl::advance_slice_row_major({1, 1}, {1, 1}, {2, 2}, 2);
     ASSERT_TRUE(result.x >= 2 || result.y >= 2);
 }
 
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::utils::ccl::coord_t(1, 1);
-    auto const& result = ttnn::utils::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 3);
+    const auto expected = ttnn::ccl::coord_t(1, 1);
+    auto const& result = ttnn::ccl::advance_slice_row_major({0, 0}, {1, 1}, {2, 2}, 3);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::utils::ccl::coord_t(1, 1);
-    const auto outer_shape = ttnn::utils::ccl::coord_t(2, 2);
-    const auto inner_offset = ttnn::utils::ccl::coord_t(1, 1);
-    const auto inner_shape = ttnn::utils::ccl::coord_t(1, 1);
+    const auto expected = ttnn::ccl::coord_t(1, 1);
+    const auto outer_shape = ttnn::ccl::coord_t(2, 2);
+    const auto inner_offset = ttnn::ccl::coord_t(1, 1);
+    const auto inner_shape = ttnn::ccl::coord_t(1, 1);
     const uint32_t num_parallel_workers = 3;
     auto const& result =
-        ttnn::utils::ccl::advance_slice_row_major(inner_offset, inner_shape, outer_shape, num_parallel_workers);
+        ttnn::ccl::advance_slice_row_major(inner_offset, inner_shape, outer_shape, num_parallel_workers);
     ASSERT_TRUE(result.x >= outer_shape.x || result.y >= outer_shape.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_24_0__InnerShape_24_0__OuterShape_32_4__NumActiveSlices_4) {
-    const auto expected = ttnn::utils::ccl::coord_t(24, 2);
-    const auto outer_shape = ttnn::utils::ccl::coord_t(32, 4);
-    const auto inner_offset = ttnn::utils::ccl::coord_t(24, 0);
-    const auto inner_shape = ttnn::utils::ccl::coord_t(24, 1);
+    const auto expected = ttnn::ccl::coord_t(24, 2);
+    const auto outer_shape = ttnn::ccl::coord_t(32, 4);
+    const auto inner_offset = ttnn::ccl::coord_t(24, 0);
+    const auto inner_shape = ttnn::ccl::coord_t(24, 1);
     const uint32_t num_parallel_workers = 4;
     auto const& result =
-        ttnn::utils::ccl::advance_slice_row_major(inner_offset, inner_shape, outer_shape, num_parallel_workers);
+        ttnn::ccl::advance_slice_row_major(inner_offset, inner_shape, outer_shape, num_parallel_workers);
     ASSERT_EQ(result.x, expected.x);
     ASSERT_EQ(result.y, expected.y);
 }
@@ -232,7 +232,7 @@ TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_24_0__InnerShape_24_0__OuterSha
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_AllWorkersSameRow) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(4, {2, 2});
     tt_xy_pair tensor_slice_shape = {8, 4};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(2, 0));
@@ -242,7 +242,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_AllWorkersSame
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_1WorkerWrapToNextRowAligned) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(4, {2, 2});
     tt_xy_pair tensor_slice_shape = {6, 4};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(2, 0));
@@ -253,7 +253,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_1WorkerWrapToN
     {
         auto worker_slice_shapes = std::vector<tt_xy_pair>(4, {2, 2});
         tt_xy_pair tensor_slice_shape = {5, 4};
-        auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+        auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
             worker_slice_shapes, tensor_slice_shape);
         ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
         ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(2, 0));
@@ -264,7 +264,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_1WorkerWrapToN
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_MultipleWorkersWrapToNextRowAligned) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(8, {2, 2});
     tt_xy_pair tensor_slice_shape = {10, 4};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(2, 0));
@@ -279,7 +279,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_MultipleWorker
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_MultipleWorkersWrapToNextRowMisaligned) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(8, {2, 2});
     tt_xy_pair tensor_slice_shape = {9, 4};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(2, 0));
@@ -294,7 +294,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_MultipleWorker
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_NMinus1WorkersWrapToNextRowAligned) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(3, {4, 4});
     tt_xy_pair tensor_slice_shape = {4, 12};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(0, 4));
@@ -304,7 +304,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_NMinus1Workers
 TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_NMinus1WorkersWrapToNextRowMisaligned) {
     auto worker_slice_shapes = std::vector<tt_xy_pair>(3, {4, 3});
     tt_xy_pair tensor_slice_shape = {3, 12};
-    auto const& worker_slice_offsets = ttnn::utils::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
+    auto const& worker_slice_offsets = ttnn::ccl::RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
         worker_slice_shapes, tensor_slice_shape);
     ASSERT_EQ(worker_slice_offsets.at(0), tt_xy_pair(0, 0));
     ASSERT_EQ(worker_slice_offsets.at(1), tt_xy_pair(0, 3));
@@ -314,7 +314,7 @@ TEST(Ccl_RingReduceScatterTensorSlicer, ComputeWorkerSliceOffsets_NMinus1Workers
 TEST(
     Ccl_InterleavedTensorWorkerSlice_ComputeNumWorkerSliceIterations,
     InnerOffset_0_0__InnerShape_24_1__OuterShape_32_4__NumActiveSlices_4) {
-    auto worker_slice = ttnn::utils::ccl::InterleavedTensorWorkerSlice(
+    auto worker_slice = ttnn::ccl::InterleavedTensorWorkerSlice(
         tt_xy_pair(99999, 99999),  // tensor shape shouldn't affect the result
         tt_xy_pair(32, 4),
         tt_xy_pair(24, 1),
@@ -328,7 +328,7 @@ TEST(
 TEST(
     Ccl_InterleavedTensorWorkerSlice_ComputeNumWorkerSliceIterations,
     InnerOffset_24_0__InnerShape_24_1__OuterShape_32_4__NumActiveSlices_4) {
-    auto worker_slice = ttnn::utils::ccl::InterleavedTensorWorkerSlice(
+    auto worker_slice = ttnn::ccl::InterleavedTensorWorkerSlice(
         tt_xy_pair(99999, 99999),  // tensor shape shouldn't affect the result
         tt_xy_pair(32, 4),
         tt_xy_pair(24, 1),
@@ -342,7 +342,7 @@ TEST(
 TEST(
     Ccl_InterleavedTensorWorkerSlice_ComputeNumWorkerSliceIterations,
     InnerOffset_0_1__InnerShape_24_1__OuterShape_32_4__NumActiveSlices_4) {
-    auto worker_slice = ttnn::utils::ccl::InterleavedTensorWorkerSlice(
+    auto worker_slice = ttnn::ccl::InterleavedTensorWorkerSlice(
         tt_xy_pair(99999, 99999),  // tensor shape shouldn't affect the result
         tt_xy_pair(32, 4),
         tt_xy_pair(24, 1),
@@ -356,7 +356,7 @@ TEST(
 TEST(
     Ccl_InterleavedTensorWorkerSlice_ComputeNumWorkerSliceIterations,
     InnerOffset_24_1__InnerShape_24_1__OuterShape_32_4__NumActiveSlices_4) {
-    auto worker_slice = ttnn::utils::ccl::InterleavedTensorWorkerSlice(
+    auto worker_slice = ttnn::ccl::InterleavedTensorWorkerSlice(
         tt_xy_pair(99999, 99999),  // tensor shape shouldn't affect the result
         tt_xy_pair(32, 4),
         tt_xy_pair(24, 1),

@@ -43,7 +43,7 @@ void bind_all_gather(py::module& module, const ccl_operation_t& operation, const
 }  // namespace detail
 
 
-void py_module_all_gather(py::module& module) {
+void py_bind_all_gather(py::module& module) {
     detail::bind_all_gather(
         module,
         ttnn::all_gather,

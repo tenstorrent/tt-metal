@@ -20,7 +20,6 @@
 #include "tt_eager/tensor/types.hpp"
 
 namespace ttnn {
-namespace utils {
 namespace ccl {
 
 // Eventual home: ccl_topology_descriptors
@@ -478,5 +477,4 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     EriscDataMoverTerminationMode termination_mode);
 
 }  // namespace ccl
-}  // namespace utils
 }  // namespace ttnn

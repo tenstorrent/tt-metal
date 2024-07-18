@@ -45,7 +45,7 @@ FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address,
     }
 }
 
-using ttnn::utils::ccl::WorkerXY;
+using ttnn::ccl::WorkerXY;
 
 template<uint8_t num_senders, uint8_t num_receivers>
 struct sender_receiver_index_t {
@@ -118,11 +118,11 @@ void kernel_main() {
     constexpr uint32_t num_senders = get_compile_time_arg_val(2);
     constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
 
-    constexpr ttnn::utils::ccl::EriscDataMoverBufferSharingMode edm_buffer_sharing_mode =
-        static_cast<ttnn::utils::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(4));
+    constexpr ttnn::ccl::EriscDataMoverBufferSharingMode edm_buffer_sharing_mode =
+        static_cast<ttnn::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(4));
 
-    constexpr ttnn::utils::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
-        static_cast<ttnn::utils::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
+    constexpr ttnn::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
+        static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
 
     constexpr auto EDM_CONFIG = erisc::datamover::EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal>();
     using EDM_CONFIG_T = decltype(EDM_CONFIG);

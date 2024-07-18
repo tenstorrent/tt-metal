@@ -12,8 +12,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
-using ttnn::utils::ccl::coord_t;
-using ttnn::utils::ccl::WorkerXY;
+using ttnn::ccl::coord_t;
+using ttnn::ccl::WorkerXY;
 
 struct reduce_scatter_reader_common_args_t {
     reduce_scatter_reader_common_args_t(uint32_t& arg_idx) :
@@ -34,10 +34,10 @@ struct reduce_scatter_reader_common_args_t {
         edm_core_buffer_address(get_arg_val<uint32_t>(arg_idx++)),
         num_concurrent_workers(get_arg_val<uint32_t>(arg_idx++)),
 
-        input_tensor_shape(ttnn::utils::ccl::coord_from_args(arg_idx)),
-        tensor_slice_shape(ttnn::utils::ccl::coord_from_args(arg_idx)),
-        worker_slice_shape(ttnn::utils::ccl::coord_from_args(arg_idx)),
-        worker_slice_offset(ttnn::utils::ccl::coord_from_args(arg_idx)),
+        input_tensor_shape(ttnn::ccl::coord_from_args(arg_idx)),
+        tensor_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
+        worker_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
+        worker_slice_offset(ttnn::ccl::coord_from_args(arg_idx)),
         total_eltwise_kernel_num_pages(get_arg_val<uint32_t>(arg_idx++))
          {
         ASSERT(full_chunk_num_pages > 0);
@@ -322,7 +322,7 @@ void kernel_main() {
                 if (!last_worker_message_to_edm) {
                     noc_semaphore_inc(
                         eth_receiver_l1_semaphore_noc_addr,
-                        ttnn::utils::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
+                        ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
                 }
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
@@ -351,6 +351,6 @@ void kernel_main() {
 
     noc_semaphore_inc(
         eth_receiver_l1_semaphore_noc_addr,
-        ttnn::utils::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+        ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
     DEBUG_STATUS("DONE");
 }

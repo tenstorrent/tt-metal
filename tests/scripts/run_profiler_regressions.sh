@@ -5,7 +5,7 @@ source scripts/tools_setup_common.sh
 set -eo pipefail
 
 run_additional_T3000_test(){
-    if [ "$ARCH_NAME" != "grayskull" ]; then
+    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
@@ -28,7 +28,7 @@ run_additional_T3000_test(){
 
 run_async_mode_T3000_test(){
     #Some tests here do not skip grayskull
-    if [ "$ARCH_NAME" != "grayskull" ]; then
+    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 

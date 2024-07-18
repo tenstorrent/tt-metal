@@ -13,12 +13,11 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 >>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
 
-using ttnn::utils::ccl::ShardType;
-using ttnn::utils::ccl::WorkerXY;
-// using ttnn::utils::ccl::coord_t;
+using ttnn::ccl::ShardType;
+using ttnn::ccl::WorkerXY;
+// using ttnn::ccl::coord_t;
 
 namespace ttnn {
-namespace utils {
 namespace ccl {
 static FORCE_INLINE coord_t coord_from_args(uint32_t& arg_idx) {
     uint32_t x = get_arg_val<uint32_t>(arg_idx++);
@@ -27,7 +26,6 @@ static FORCE_INLINE coord_t coord_from_args(uint32_t& arg_idx) {
 }
 
 }  // namespace ccl
-}  // namespace utils
 }  // namespace ttnn
 
 FORCE_INLINE void push_filler_pages_to_cb(const uint32_t& cb_id, uint32_t num_pages) {
