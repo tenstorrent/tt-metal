@@ -263,6 +263,7 @@ Pointwise Unary
    ttnn/angle_bw
    ttnn/conj_bw
    ttnn/conj
+   ttnn/complex_recip
 
 Pointwise Binary
 ================

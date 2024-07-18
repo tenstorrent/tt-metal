@@ -53,5 +53,6 @@ constexpr auto is_real = ttnn::register_operation<operations::complex_unary::Exe
 
 //OpHandler_complex_type2 = get_function_complex_unary_type2 --> ComplexTensor return type
 constexpr auto conj = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType2<operations::complex_unary::ComplexUnaryOpType::CONJ>>("ttnn::conj");
+constexpr auto complex_recip = ttnn::register_operation<operations::complex_unary::ExecuteComplexUnaryType2<operations::complex_unary::ComplexUnaryOpType::COMPLEX_RECIP>>("ttnn::complex_recip");
 
 }

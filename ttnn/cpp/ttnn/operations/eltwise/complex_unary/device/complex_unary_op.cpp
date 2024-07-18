@@ -43,4 +43,15 @@ ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_c
     return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
 }
 
+ComplexTensor _complex_recip(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    Tensor a_plus_b = ttnn::add(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor a_minus_b = ttnn::subtract(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(ttnn::square(input[0],output_mem_config),ttnn::square(input[1],output_mem_config),
+                                std::nullopt,output_mem_config);
+    Tensor inv_dr = ttnn::reciprocal( asqr_plus_bsqr, output_mem_config );
+    Tensor conj_im = ttnn::multiply( ttnn::neg(input[1],output_mem_config), inv_dr, std::nullopt, output_mem_config);
+    Tensor conj_re = ttnn::multiply( input[0], inv_dr, std::nullopt, output_mem_config);
+    return ComplexTensor({ conj_re, conj_im});
+}
+
 }  // namespace ttnn::operations::complex_unary
