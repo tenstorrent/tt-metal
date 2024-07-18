@@ -183,10 +183,10 @@ class TtModelArgs:
 
         self.model_config[
             "SDPA_DECODE_PROGCFG"
-        ] = lambda k_chunk_size: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=32,
-            k_chunk_size=k_chunk_size,
+            k_chunk_size=32,
         )
 
         self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(

@@ -96,7 +96,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         start_pos = generation_start_pos + i
         current_pos = start_pos
 
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
             start_pos,
@@ -105,7 +105,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
+        tt_out = tt_model(decode_input, start_pos, current_pos)
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (

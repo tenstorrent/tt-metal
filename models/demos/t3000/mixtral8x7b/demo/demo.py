@@ -95,6 +95,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
+        rotary_on_host=True,
     )
 
     if not embed_on_host:
@@ -127,7 +128,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     )
 
     generation_start_pos = 0
-    max_generated_tokens = 50
+    max_generated_tokens = 50  # max_seq_len-1
 
     cache_attention(
         device_mesh,
@@ -160,7 +161,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         current_pos = start_pos
 
         if embed_on_host:
-            decode_input_11BH, attn_mask = prepare_inputs_ttnn(
+            decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
                 start_pos,
@@ -169,7 +170,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
             )
 
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, attn_mask)
+        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos)
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
