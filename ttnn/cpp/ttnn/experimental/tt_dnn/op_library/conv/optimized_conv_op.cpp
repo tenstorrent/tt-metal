@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -12,9 +12,9 @@
 
 #include "tt_metal/tt_stl/reflection.hpp"
 
-#include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 
 #include "tensor/tensor_utils.hpp"
 using namespace tt::constants;

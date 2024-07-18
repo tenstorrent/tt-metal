@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 

@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 void kernel_main() {
     // TODO: Update the interleaver receive reader kernel invocation to just be able to use this

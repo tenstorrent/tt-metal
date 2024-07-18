@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/fold/fold_op.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 namespace tt::tt_metal {
 operation::ProgramWithCallbacks fold_single_core(
@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks fold_single_core(
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/fold/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fold/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
         core,
         WriterDataMovementConfig(writer_compile_time_args));
 

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
 
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"

@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
 
     auto kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/non_zero_indices/kernels/dataflow/non_zero_indices_sc_reader.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/non_zero_indices/kernels/dataflow/non_zero_indices_sc_reader.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(
             compile_time_args, defines));

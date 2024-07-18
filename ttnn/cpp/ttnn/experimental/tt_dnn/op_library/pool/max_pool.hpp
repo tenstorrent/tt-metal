@@ -5,8 +5,8 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
     return (uint32_t) std::ceil((float) n / m) * m;

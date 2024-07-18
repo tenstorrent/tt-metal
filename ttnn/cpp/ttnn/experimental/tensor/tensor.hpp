@@ -15,7 +15,7 @@
 #include "common/bfloat8.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/multi_device.hpp"

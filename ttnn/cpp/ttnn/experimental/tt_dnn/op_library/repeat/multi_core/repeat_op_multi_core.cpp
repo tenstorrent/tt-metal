@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/repeat/repeat_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/repeat/repeat_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -124,8 +124,8 @@ operation::ProgramWithCallbacks repeat_multi_core(
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout
-            ? "tt_eager/tt_dnn/op_library/repeat/kernels/dataflow/reader_repeat_stick_layout_interleaved_start_id.cpp"
-            : "tt_eager/tt_dnn/op_library/repeat/kernels/dataflow/reader_repeat_interleaved_start_id.cpp",
+            ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/repeat/kernels/dataflow/reader_repeat_stick_layout_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/repeat/kernels/dataflow/reader_repeat_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, repeat_defines));
 

@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 

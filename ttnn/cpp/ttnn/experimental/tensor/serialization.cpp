@@ -12,7 +12,7 @@
 
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 
 namespace tt {
 

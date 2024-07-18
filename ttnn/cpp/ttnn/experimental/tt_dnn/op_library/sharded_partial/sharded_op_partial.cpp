@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
 #include "tt_metal/common/assert.hpp"
 #include "tensor/types.hpp"

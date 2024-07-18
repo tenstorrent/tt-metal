@@ -92,7 +92,7 @@ KernelHandle generate_edm_kernel(
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
         eth_core,
         tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
 

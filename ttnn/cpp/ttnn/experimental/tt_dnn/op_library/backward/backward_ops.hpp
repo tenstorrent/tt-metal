@@ -8,7 +8,7 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_metal/common/constants.hpp"
 
 namespace tt {

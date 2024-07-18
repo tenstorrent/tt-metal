@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/prod/prod_op_all.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -76,7 +76,7 @@ namespace primary {
         bool math_approx_mode = true;
         auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/prod/kernels/compute/prod_all.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/prod/kernels/compute/prod_all.cpp",
             core,
             tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

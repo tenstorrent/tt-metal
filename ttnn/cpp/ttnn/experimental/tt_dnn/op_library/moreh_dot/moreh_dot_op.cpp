@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
 
 #include <algorithm>
 #include <optional>

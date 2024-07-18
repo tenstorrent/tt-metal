@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
-    string compute_kernel_name = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h.cpp";
+    string compute_kernel_name = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h.cpp";
 
     uint32_t src0_cb_index = CB::c_in0;
     CBHandle cb_src0;
@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
     }
     reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_sum_h.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_sum_h.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
 
     writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_sum_h.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_sum_h.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);

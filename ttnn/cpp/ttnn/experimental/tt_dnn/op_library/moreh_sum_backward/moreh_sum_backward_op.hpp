@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 

@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/prod/prod_op_all.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include <algorithm>
 #include <optional>
 
 #include "tt_metal/common/constants.hpp"
-#include <tt_eager/tt_numpy/functions.hpp>
+#include <ttnn/experimental/tt_numpy/functions.hpp>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 

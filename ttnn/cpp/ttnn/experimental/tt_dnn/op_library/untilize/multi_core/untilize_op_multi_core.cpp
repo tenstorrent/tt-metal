@@ -4,10 +4,10 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> writer_ct_args = {(std::uint32_t)output_cb_index};
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_ct_args));
     } else {
@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
             unary_writer_kernel_id = CreateKernel(
                 program,
-                "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/"
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/"
                 "writer_unary_stick_layout_split_rows_interleaved.cpp",
                 all_cores,
                 WriterDataMovementConfig(writer_ct_args));
@@ -185,10 +185,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(LogOp, "Using slow untilize.");
-        compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
     } else {
         log_debug(LogOp, "Using fast pack untilize.");
     }
@@ -484,7 +484,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(
@@ -495,9 +495,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     /** compute
      */
-    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
-        compute_kernel = "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp";
     }
 
     if (core_range.size() > 0) {
@@ -701,7 +701,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
         unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_batch_rows_sharded.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_batch_rows_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
@@ -722,10 +722,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(LogOp, "Using slow untilize.");
-        compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
     } else {
         log_debug(LogOp, "Using fast pack untilize.");
     }

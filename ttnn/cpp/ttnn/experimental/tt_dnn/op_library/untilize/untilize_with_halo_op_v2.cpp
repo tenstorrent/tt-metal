@@ -7,11 +7,11 @@
 #include <algorithm>
 
 #include "tensor/host_buffer/functions.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
-#include "tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -139,14 +139,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (!skip_untilize) {
         // compute kernel
         std::vector<uint32_t> compute_ct_args = {input_nblocks_per_core, ntiles_per_block};
-        std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+        std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
             log_debug(
                 LogOp,
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
                 ntiles_per_block,
                 MAX_PACK_UNTILIZE_WIDTH);
-            compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+            compute_kernel = std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
         }
         KernelHandle untilize_kernel_id =
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

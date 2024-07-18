@@ -9,8 +9,8 @@
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 
 #include <tuple>
 #include <type_traits>
 
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

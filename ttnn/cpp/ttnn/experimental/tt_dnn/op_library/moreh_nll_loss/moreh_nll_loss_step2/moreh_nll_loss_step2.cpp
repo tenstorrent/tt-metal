@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -106,20 +106,20 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_2d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_2d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_2d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_2d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_2d.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
             {core_group_2, units_per_core_group_2, {units_per_core_group_2}},
@@ -282,20 +282,20 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_3d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_3d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_3d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_3d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_3d.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
             {core_group_2, units_per_core_group_2, {units_per_core_group_2}},
@@ -468,20 +468,20 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_4d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_4d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/reader_moreh_nll_loss_step2_4d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_4d.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/writer_moreh_nll_loss_step2_4d.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/kernels/moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
             {core_group_2, units_per_core_group_2, {units_per_core_group_2}},

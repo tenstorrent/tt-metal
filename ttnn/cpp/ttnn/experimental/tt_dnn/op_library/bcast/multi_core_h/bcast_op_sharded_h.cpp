@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );

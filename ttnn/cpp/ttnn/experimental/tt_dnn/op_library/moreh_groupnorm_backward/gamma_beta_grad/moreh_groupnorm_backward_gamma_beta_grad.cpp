@@ -9,12 +9,12 @@
 #include <utility>
 #include <vector>
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -139,10 +139,10 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::string reader_kernel_file(
-        "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
         "reader_moreh_groupnorm_backward_gamma_beta_grad.cpp");
     const std::string writer_kernel_file(
-        "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
         "writer_moreh_groupnorm_backward_gamma_beta_grad.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const std::string compute_kernel_file(
-        "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp");
 
     const std::vector<uint32_t> compute_args_group_1{

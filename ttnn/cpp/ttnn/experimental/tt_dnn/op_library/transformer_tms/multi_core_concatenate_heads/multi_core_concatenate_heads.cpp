@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -98,12 +98,12 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

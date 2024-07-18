@@ -8,12 +8,12 @@
 #include <utility>
 #include <vector>
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -113,10 +113,10 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "reader_moreh_norm_w.cpp";
     const auto writer_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     const auto compute_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
     const auto compute_kernels_id_1 =

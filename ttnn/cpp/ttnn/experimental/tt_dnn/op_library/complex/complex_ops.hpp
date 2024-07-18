@@ -4,7 +4,7 @@
 
 #pragma once
 #include <array>
-#include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 
 namespace tt {
 

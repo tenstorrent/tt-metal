@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp"
 
 using tt::tt_metal::ccl::coord_t;
 

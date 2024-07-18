@@ -5,13 +5,13 @@
 #include <optional>
 #include <utility>
 
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -116,10 +116,10 @@ operation::ProgramWithCallbacks moreh_adamw_(
         static_cast<uint32_t>(is_dram(max_exp_avg_sq_out))};
 
     const auto reader_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_adamw/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adamw/kernels/"
         "reader_moreh_adamw.cpp";
     const auto writer_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_adamw/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adamw/kernels/"
         "writer_moreh_adamw.cpp";
 
     std::map<std::string, std::string> data_movement_defines{};
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_adamw/kernels/moreh_adamw.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adamw/kernels/moreh_adamw.cpp",
         {
             {core_group_1, num_units_per_core_group_1, compute_args_group_1},
             {core_group_2, num_units_per_core_group_2, compute_args_group_2},

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 

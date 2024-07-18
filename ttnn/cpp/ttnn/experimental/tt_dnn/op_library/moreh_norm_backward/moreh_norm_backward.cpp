@@ -8,13 +8,13 @@
 #include <utility>
 #include <vector>
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_numpy/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -204,10 +204,10 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "reader_moreh_norm_backward.cpp";
     const auto writer_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args =
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto compute_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "moreh_norm_backward_kernel.cpp";
     std::map<std::string, std::string> compute_defines{};
     if (fp32_dest_acc_en) {

@@ -5,11 +5,11 @@
 #pragma once
 
 #include <optional>
-#include <tt_eager/tensor/tensor.hpp>
+#include <ttnn/experimental/tensor/tensor.hpp>
 
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation_history.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/type_name.hpp"
 

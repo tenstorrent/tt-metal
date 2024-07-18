@@ -5,10 +5,10 @@
 #include <math.h>
 
 #include "tensor/host_buffer/functions.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -282,7 +282,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     };
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
         all_cores,
         WriterDataMovementConfig{writer_ct_args});
 
@@ -295,7 +295,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     };
     KernelHandle untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{.compile_args=compute_args});
 
@@ -913,7 +913,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     };
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
         all_cores,
         WriterDataMovementConfig{writer_ct_args});
 
@@ -926,7 +926,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     };
     KernelHandle untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{.compile_args=compute_args});
 

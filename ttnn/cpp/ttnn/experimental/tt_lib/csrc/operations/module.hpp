@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "primary/module.hpp"
-#include "tt_eager/tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation_history.hpp"
 #include "tt_numpy/functions.hpp"
 
 namespace py = pybind11;

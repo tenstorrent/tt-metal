@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -93,20 +93,20 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 
 	KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp",
+		"ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp",
 		all_device_cores,
 		tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
 	KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
+		"ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
 		all_device_cores,
 		tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
 	auto bcast_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
+		"ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
 		all_device_cores,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
 	);

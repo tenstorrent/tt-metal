@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
-#include <tt_eager/tensor/tensor.hpp>
-#include <tt_eager/tensor/tensor_utils.hpp>
+#include <ttnn/experimental/tensor/tensor.hpp>
+#include <ttnn/experimental/tensor/tensor_utils.hpp>
 
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

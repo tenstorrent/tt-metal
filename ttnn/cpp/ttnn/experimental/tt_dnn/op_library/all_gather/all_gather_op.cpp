@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 

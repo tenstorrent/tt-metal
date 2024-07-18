@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -68,9 +68,9 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_h_large.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_h_large.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_h_large.cpp", all_cores, {dst_is_dram}, writer_defines);
+        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_h_large.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     std::map<string, string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) compute_defines["SOFTMAX"] = "1";
@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
     // create compute kernel
     CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/moreh_softmax_h_large.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/moreh_softmax_h_large.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},

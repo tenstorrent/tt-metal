@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/embeddings/embeddings_op.hpp"
 
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(
             embedding_compile_time_args,
@@ -406,7 +406,7 @@ operation::ProgramWithCallbacks embeddings_rm(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(
             embedding_compile_time_args,

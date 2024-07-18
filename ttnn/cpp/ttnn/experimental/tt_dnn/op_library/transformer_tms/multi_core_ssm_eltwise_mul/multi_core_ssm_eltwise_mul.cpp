@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -148,19 +148,19 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     // Load kernels
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_eltwise_mul.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_eltwise_mul.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ssm_eltwise_defines));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_eltwise_mul.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_eltwise_mul.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_eltwise_mul.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_eltwise_mul.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

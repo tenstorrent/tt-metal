@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 
 namespace ttnn {

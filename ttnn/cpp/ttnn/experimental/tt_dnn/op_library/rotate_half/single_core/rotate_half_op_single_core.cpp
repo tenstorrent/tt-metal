@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -80,13 +80,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/rotate_half/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/rotate_half/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/rotate_half/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/rotate_half/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 
 	auto bcast_kernel_group_1_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp",
+		"ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp",
 		core,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
 	);

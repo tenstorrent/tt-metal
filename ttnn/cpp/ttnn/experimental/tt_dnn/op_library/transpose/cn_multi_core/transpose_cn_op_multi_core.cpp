@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved_start_id.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

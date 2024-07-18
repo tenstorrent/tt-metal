@@ -10,7 +10,7 @@
 #include "debug/assert.h"
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
-#include "tt_eager/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/hw/inc/wormhole/noc/noc.h"
 
 using tt::tt_metal::ccl::EriscDataMoverBufferSharingMode;

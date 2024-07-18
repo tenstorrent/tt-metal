@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/moreh_common.hpp"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     // create read/wrtie kernel
     auto reader_kernel_ids = CreateReadKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sgd/kernels/reader_moreh_sgd.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sgd/kernels/reader_moreh_sgd.cpp",
         all_cores,
         {
             is_dram(param_in),
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
         reader_defines);
     auto writer_kernel_ids = CreateWriteKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sgd/kernels/writer_moreh_sgd.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sgd/kernels/writer_moreh_sgd.cpp",
         all_cores,
         {is_dram(param_out), is_dram(momentum_buffer_out)},
         writer_defines);
@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     // create compute kernel
     CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sgd/kernels/moreh_sgd.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sgd/kernels/moreh_sgd.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2}},

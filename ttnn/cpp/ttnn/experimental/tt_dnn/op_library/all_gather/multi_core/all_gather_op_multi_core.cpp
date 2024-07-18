@@ -8,12 +8,12 @@
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor_impl.hpp"
-#include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
-#include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_common.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -619,8 +619,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> const& worker_send_reader_rt_args = build_worker_send_reader_rt_args();
 
                     std::string const& send_reader_kernel_path = is_sharded ?
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp" :
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp" :
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
                     KernelHandle worker_reader_sender_kernel_id = tt_metal::CreateKernel(
                         program,
                         send_reader_kernel_path,
@@ -794,8 +794,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> const& worker_sender_writer_rt_args = build_worker_sender_writer_rt_args();
 
                     std::string const& sender_writer_kernel_path = is_sharded ?
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp" :
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp" :
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
                     KernelHandle worker_sender_writer_kernel_id = tt_metal::CreateKernel(
                         program,
                         sender_writer_kernel_path,
@@ -971,8 +971,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> worker_receiver_reader_rt_args = build_worker_receiver_reader_rt_args();
 
                     std::string const& receiver_reader_kernel_path = is_sharded ?
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp" :
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp" :
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
                     KernelHandle worker_receiver_reader_kernel_id = tt_metal::CreateKernel(
                         program,
                         receiver_reader_kernel_path,
@@ -1123,8 +1123,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> worker_receive_writer_rt_args = build_worker_receive_writer_rt_args();
 
                     std::string const& receiver_writer_kernel_path = is_sharded ?
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp" :
-                        "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp" :
+                        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
                     KernelHandle worker_receive_writer_kernel_id = tt_metal::CreateKernel(
                         program,
                         receiver_writer_kernel_path,

@@ -7,10 +7,10 @@
 
 #include "tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/experimental/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
 namespace tt {

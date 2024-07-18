@@ -7,10 +7,10 @@
 #pragma once
 #include <optional>
 
-#include "tt_dnn/op_library/operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 namespace operations {

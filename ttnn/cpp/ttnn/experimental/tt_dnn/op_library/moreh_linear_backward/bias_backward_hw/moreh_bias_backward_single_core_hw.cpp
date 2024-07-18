@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -86,10 +86,10 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/reader_moreh_bias_backward_hw.cpp";
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_linear_backward/kernels/reader_moreh_bias_backward_hw.cpp";
 
     const auto writer_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/writer_moreh_bias_backward.cpp";
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_linear_backward/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_single_core_hw.cpp";
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_single_core_hw.cpp";
     const auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,

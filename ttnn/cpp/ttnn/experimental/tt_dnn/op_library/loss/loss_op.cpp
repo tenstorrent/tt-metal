@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/loss/loss_op.hpp"
 
 #include <optional>
 
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 

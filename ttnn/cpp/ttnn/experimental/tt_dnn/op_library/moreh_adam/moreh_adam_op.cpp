@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 
 #include <optional>
 #include <utility>
 
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
 
 using namespace tt::constants;
 using namespace std;

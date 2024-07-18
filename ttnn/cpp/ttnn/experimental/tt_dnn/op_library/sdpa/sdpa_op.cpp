@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/sdpa/sdpa_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sdpa/sdpa_op.hpp"
 
 #include <optional>
 #include <type_traits>
 
 #include "common/base_types.hpp"
 #include "tensor/types.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/math.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"

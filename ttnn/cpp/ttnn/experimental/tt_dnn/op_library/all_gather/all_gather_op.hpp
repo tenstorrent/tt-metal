@@ -8,13 +8,13 @@
 #include "common/core_coord.h"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include <optional>
 #include <vector>
@@ -184,24 +184,24 @@ class AllGatherConfig {
 
 struct RingInterleavedAllGatherVariantConfig : public AllGatherConfig {
 
-    std::string const& send_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
-    std::string const& sender_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
-    std::string const& receiver_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
-    std::string const& receiver_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
+    std::string const& send_reader_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
+    std::string const& sender_writer_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
+    std::string const& receiver_reader_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
+    std::string const& receiver_writer_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
 };
 
 struct SingleTileHighWidthShardedAllGatherVariantConfig : public AllGatherConfig {
 
-    std::string const& send_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp";
-    std::string const& sender_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp";
-    std::string const& receiver_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp";
-    std::string const& receiver_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp";
+    std::string const& send_reader_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp";
+    std::string const& sender_writer_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp";
+    std::string const& receiver_reader_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp";
+    std::string const& receiver_writer_kernel_path = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp";
 };
 
 struct FullWorkerGridShardedAllGatherVariantConfig : public AllGatherConfig {
 
-    std::string const& reader_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_reader.cpp";
-    std::string const& writer_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_writer.cpp";
+    std::string const& reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_reader.cpp";
+    std::string const& writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_writer.cpp";
 };
 
 struct AllGather {

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
 
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

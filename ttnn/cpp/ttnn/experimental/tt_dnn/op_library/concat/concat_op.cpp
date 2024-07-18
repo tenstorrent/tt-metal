@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
 
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/copy/copy_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 using namespace tt::constants;
 

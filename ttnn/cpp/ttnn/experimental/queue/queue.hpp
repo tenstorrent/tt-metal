@@ -6,9 +6,9 @@
 
 #include <optional>
 #include <vector>
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 
 namespace tt::tt_metal {
 

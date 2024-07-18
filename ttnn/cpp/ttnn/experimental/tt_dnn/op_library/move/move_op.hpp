@@ -10,7 +10,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 using namespace tt::constants;
 

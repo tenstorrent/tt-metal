@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/copy/copy_op.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include <tt_eager/tt_numpy/functions.hpp>
-#include <tt_eager/tensor/tensor_impl.hpp>
+#include <ttnn/experimental/tt_numpy/functions.hpp>
+#include <ttnn/experimental/tensor/tensor_impl.hpp>
 
 #include "tensor/tensor_utils.hpp"
 
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -202,13 +202,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

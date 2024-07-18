@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -73,8 +73,8 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CB::c_out0, (std::uint32_t)is_dram(dst_buffer)};
 
-    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/reader_moreh_dot.cpp";
-    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/writer_moreh_dot.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_dot/single_core/kernels/reader_moreh_dot.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_dot/single_core/kernels/writer_moreh_dot.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/moreh_dot.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_dot/single_core/kernels/moreh_dot.cpp";
     const auto compute_kernel_id =
         CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 

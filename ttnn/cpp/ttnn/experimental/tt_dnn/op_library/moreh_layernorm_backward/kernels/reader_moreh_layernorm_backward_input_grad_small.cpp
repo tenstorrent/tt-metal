@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 template <typename T>
 void read_mean_rstd(uint32_t cb_id, uint32_t tile_offset, uint32_t normalized_dims, uint32_t outer_idx, uint32_t height, uint32_t width, uint32_t Ht, uint32_t Wt, T addrg) {

@@ -8,9 +8,9 @@
 #include "impl/buffers/buffer.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "tensor/tensor_impl.hpp"
-#include "tt_dnn/op_library/ccl/ccl_common.hpp"
-#include "tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
@@ -415,9 +415,9 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     static std::string const& receiver_kernel_path =
-        "tt_eager/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
     static std::string const& sender_kernel_path =
-        "tt_eager/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
 
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;

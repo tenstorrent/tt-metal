@@ -6,10 +6,10 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -367,7 +367,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

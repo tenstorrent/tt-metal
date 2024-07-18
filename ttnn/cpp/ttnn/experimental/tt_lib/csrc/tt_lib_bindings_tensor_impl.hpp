@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_lib_bindings.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 namespace tt::tt_metal{
 

@@ -5,8 +5,8 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
 
 namespace tt {
 

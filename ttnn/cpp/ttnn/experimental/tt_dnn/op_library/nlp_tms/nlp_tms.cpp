@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 

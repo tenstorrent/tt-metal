@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
@@ -117,19 +117,19 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

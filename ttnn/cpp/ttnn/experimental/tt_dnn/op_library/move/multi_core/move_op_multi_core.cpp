@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/move/move_op.hpp"
-#include "tt_dnn/op_library/copy/copy_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/fold/fold_op.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 namespace tt::tt_metal {
 FoldOpParallelizationStrategy Fold::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {

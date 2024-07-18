@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 

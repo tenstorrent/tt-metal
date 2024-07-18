@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

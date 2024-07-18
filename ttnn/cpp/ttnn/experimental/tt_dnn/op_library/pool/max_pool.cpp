@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/pool/max_pool.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,8 +10,8 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

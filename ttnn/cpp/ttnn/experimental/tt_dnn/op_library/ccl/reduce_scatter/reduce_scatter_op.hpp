@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_common.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 

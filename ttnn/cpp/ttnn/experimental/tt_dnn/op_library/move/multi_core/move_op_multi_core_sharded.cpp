@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/move/move_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
     KernelHandle kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/move/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/move/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
         shard_grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args});

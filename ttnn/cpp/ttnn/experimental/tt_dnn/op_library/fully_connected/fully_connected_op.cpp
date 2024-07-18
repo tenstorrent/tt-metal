@@ -6,7 +6,7 @@
 #include <type_traits>
 
 #include "tt_metal/host_api.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 

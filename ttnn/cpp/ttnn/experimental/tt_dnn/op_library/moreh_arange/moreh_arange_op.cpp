@@ -4,8 +4,8 @@
 
 #include <cmath>
 
-#include "tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -67,8 +67,8 @@ operation::ProgramWithCallbacks moreh_arange_(
 
     auto kernel_id = CreateWriteKernel(
         program,
-        untilize_out ? "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
-                     : "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
+        untilize_out ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
+                     : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
         all_cores,
         {dst_is_dram},
         writer_defines);

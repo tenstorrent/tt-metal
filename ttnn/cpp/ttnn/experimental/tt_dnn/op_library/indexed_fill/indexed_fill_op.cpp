@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 
 
 namespace tt {

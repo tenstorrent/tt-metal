@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize_w.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize_w.cpp",
             all_cores,
             {
                 src_is_dram,
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize_w.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize_w.cpp",
             all_cores,
             {dst_is_dram},
             writer_defines);
@@ -396,7 +396,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize.cpp",
             all_cores,
             {
                 src_is_dram,
@@ -408,7 +408,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize.cpp",
             all_cores,
             {dst_is_dram},
             writer_defines);

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 void kernel_main() {
     constexpr ShardType shard_type = static_cast<ShardType>(get_compile_time_arg_val(0));

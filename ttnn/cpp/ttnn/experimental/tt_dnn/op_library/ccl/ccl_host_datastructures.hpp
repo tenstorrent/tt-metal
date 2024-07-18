@@ -6,7 +6,7 @@
 
 #include "eth_l1_address_map.h"
 #include "tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <limits>
 
 namespace tt {

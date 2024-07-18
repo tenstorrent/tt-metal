@@ -7,7 +7,7 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 
 namespace tt {
 namespace operations {

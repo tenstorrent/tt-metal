@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -127,8 +127,8 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     std::vector<uint32_t> writer_compile_time_args =
              {static_cast<uint32_t>(output.memory_config().buffer_type == BufferType::DRAM),
               input_granularity} ;
-    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/writer_reduce_nc.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reader_reduce_nc.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reduce_nc.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reduce_nc.cpp";
     const auto compute_kernel_1_id = tt_metal::CreateKernel(
         program,
         compute_kernel_file,

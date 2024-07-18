@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -12,9 +12,9 @@
 
 #include "tt_stl/reflection.hpp"
 
-#include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 
 #include "tensor/tensor_utils.hpp"
 
@@ -582,17 +582,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     string writer_mcast_receiver_kernel;
     bool reader_with_indices = false;
     if (rn50_first_conv) {
-        reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-        compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
-        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
+        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
     } else {
-        compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
         if (weight_size_h == 1 && weight_size_w == 1) {
             // use custom 1x1 conv kernels
-            reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv1x1_activations_fast_for_col_major_conv_out_blocks.cpp";
+            reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv1x1_activations_fast_for_col_major_conv_out_blocks.cpp";
             assert(conv_act_size_c % act_block_w_datums == 0);
             assert(num_blocks_act_w == (conv_act_size_c / act_block_w_datums));
         }
@@ -602,9 +602,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                 reader_with_indices = true;
                 if (weight_width_sliced) {
                     assert(read_3x3_window_in_inner_loop == true);
-                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
-                    writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                    writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
+                    writer_mcast_sender_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
                     act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
                     act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -614,7 +614,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                         act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
                     }
                 } else {
-                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
                 }
 
                 // Local L1 to store array for reader indices
@@ -629,11 +629,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
             } else {
                 // non 1x1 conv
                 if (act_block_w_equals_input_channels_x_filter_width) {
-                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
                 } else {
                     assert(act_block_w_datums == conv_act_size_c);
                     assert(num_blocks_act_w == weight_size_w * weight_size_h);
-                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
                 }
             }
         }

@@ -5,13 +5,13 @@
 #include <optional>
 #include <utility>
 
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -109,10 +109,10 @@ operation::ProgramWithCallbacks moreh_adam_(
         static_cast<uint32_t>(is_dram(max_exp_avg_sq_out))};
 
     const auto reader_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
         "reader_moreh_adam.cpp";
     const auto writer_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
         "writer_moreh_adam.cpp";
 
     std::map<std::string, std::string> data_movement_defines{};
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
 
     const auto compute_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
         "moreh_adam.cpp";
 
     auto compute_kernel_1_id = CreateComputeKernel(

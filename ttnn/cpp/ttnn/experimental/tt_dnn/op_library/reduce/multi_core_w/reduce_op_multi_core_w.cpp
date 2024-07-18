@@ -4,8 +4,8 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp",
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
 
@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
         auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp",
+            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
     }

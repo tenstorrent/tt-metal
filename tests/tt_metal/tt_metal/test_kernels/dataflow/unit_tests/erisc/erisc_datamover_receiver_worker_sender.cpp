@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-// #include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
+// #include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
