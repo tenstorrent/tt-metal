@@ -20,6 +20,54 @@ namespace binary_backward {
 
 namespace detail {
 
+//OpHandler_binary_bw : get_function_binary_bw_type1
+template <typename binary_backward_operation_t>
+void bind_binary_backward_type_1(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+{2}
+
+Args:
+    * :attr:`grad_tensor`
+    * :attr:`input_tensor_a`
+    * :attr:`input_tensor_b`
+
+Keyword args:
+    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+
+Example:
+
+    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+    >>> output = {1}(grad_tensor, tensor1, tensor2)
+)doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+                return self(grad_tensor, input_tensor_a, input_tensor_b, output_memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+
 template <typename binary_backward_operation_t>
 void bind_binary_backward(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
@@ -212,7 +260,7 @@ Example:
 
 
 void py_module(py::module& module) {
-    detail::bind_binary_backward(
+    detail::bind_binary_backward_type_1(
         module,
         ttnn::atan2_bw,
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
