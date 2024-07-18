@@ -29,7 +29,7 @@ from models.utility_functions import (
 def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

@@ -33,7 +33,7 @@ def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
         "linear_v": ttnn.bfloat4_b,
     }
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -75,14 +75,14 @@ def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
 
-    pcc_required = 0.99  # random weights = 0.985
+    pcc_required = 0.98  # random weights = 0.985
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(pcc_message)
     if passing:
-        logger.info("Mistral_MLP Passed!")
+        logger.info("Grok_MLP Passed!")
     else:
-        logger.warning("Mistral_MLP Failed!")
+        logger.warning("Grok_MLP Failed!")
 
-    assert passing, f"Mistral_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"Grok_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."

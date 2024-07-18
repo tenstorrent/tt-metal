@@ -29,7 +29,7 @@ from models.utility_functions import (
 def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -105,12 +105,12 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[current_pos={current_pos}] Mistral_Attention Passed!")
+            logger.info(f"[current_pos={current_pos}] Grok_Attention Passed!")
         else:
-            logger.warning(f"[current_pos={current_pos}] Mistral_Attention Failed!")
+            logger.warning(f"[current_pos={current_pos}] Grok_Attention Failed!")
             all_tests_pass = False
     if all_tests_pass:
-        logger.info("Mistral Attention output Passed!")
+        logger.info("Grok Attention output Passed!")
     else:
-        logger.warning("Mistral Attention output Failed!")
+        logger.warning("Grok Attention output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

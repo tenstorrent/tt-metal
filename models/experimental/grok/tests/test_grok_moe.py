@@ -32,7 +32,7 @@ def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -106,13 +106,13 @@ def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
         logger.info(pcc_message)
 
         if passing:
-            logger.info("Mistral MOE Passed!")
+            logger.info("Grok MOE Passed!")
         else:
-            logger.warning("Mistral MOE Failed!")
+            logger.warning("Grok MOE Failed!")
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All {iterations} Mistral MOE iterations Passed!")
+        logger.info(f"All {iterations} Grok MOE iterations Passed!")
     else:
-        logger.warning("One or more iterations of Mistral MOE Failed!")
+        logger.warning("One or more iterations of Grok MOE Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

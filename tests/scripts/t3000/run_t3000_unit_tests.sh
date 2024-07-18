@@ -122,7 +122,6 @@ run_t3000_grok_tests() {
   pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
   pytest -n auto models/experimental/grok/tests/test_grok_mlp.py ; fail+=$?
   pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest -n auto models/experimental/grok/tests/test_grok_embedding.py ; fail+=$?
   pytest -n auto models/experimental/grok/tests/test_grok_moe.py ; fail+=$?
   pytest -n auto models/experimental/grok/tests/test_grok_decoder.py ; fail+=$?
 

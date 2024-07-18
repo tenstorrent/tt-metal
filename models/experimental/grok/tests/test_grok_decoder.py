@@ -31,8 +31,7 @@ def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds)
     """
     pcc = 0.98
     dtype = ttnn.bfloat8_b
-
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     key_start = "model.layers.0."
@@ -112,13 +111,13 @@ def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds)
         logger.info(pcc_message)
 
         if passing:
-            logger.info("Mistral Decoder Block Passed!")
+            logger.info("Grok Decoder Block Passed!")
         else:
-            logger.warning("Mistral Decoder Block Failed!")
+            logger.warning("Grok Decoder Block Failed!")
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All {generation_length} Mistral decode iterations Passed!")
+        logger.info(f"All {generation_length} Grok decode iterations Passed!")
     else:
-        logger.warning("One or more iterations of Mistral decode Failed!")
+        logger.warning("One or more iterations of Grok decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

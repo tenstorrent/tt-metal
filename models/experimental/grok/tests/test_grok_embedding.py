@@ -36,7 +36,7 @@ class Emb(torch.nn.Module):
 def test_grok_embedding(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(device, dummy_weights=os.getenv("CI") == "true")
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
