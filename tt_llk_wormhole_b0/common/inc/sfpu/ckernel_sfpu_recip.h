@@ -55,7 +55,7 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
     return setexp(result, new_exp);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void _calculate_reciprocal_(const int iterations)
 {
     #pragma GCC unroll 8
@@ -70,7 +70,11 @@ inline void _calculate_reciprocal_(const int iterations)
         }
         v_endif;
 
-        dst_reg[0] = out;
+        if constexpr (is_fp32_dest_acc_en) {
+            dst_reg[0] = out;
+        } else {
+            dst_reg[0] = reinterpret<vFloat>(float_to_fp16b(out, 0));
+        }
 
         dst_reg++;
     }
