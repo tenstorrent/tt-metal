@@ -175,18 +175,6 @@ class TtModelArgs:
             )
         )
 
-        self.model_config["GATE_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
-            in0_block_w=16,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=1,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=False,
-        )
-
         self.model_config["QKV_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=4,
@@ -290,7 +278,7 @@ class TtModelArgs:
             per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=56,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
-            fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             fuse_batch=False,
         )
 
@@ -325,7 +313,7 @@ class TtModelArgs:
             per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=56,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
-            fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             fuse_batch=False,
         )
 
@@ -389,19 +377,6 @@ class TtModelArgs:
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
             k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
-        )
-
-<<<<<<< HEAD
-        if device is not None:  # Avoid issue with test_mistral_torch.py not having a device
-=======
-        self.model_config[
-            "SHARDED_NORM_PRGM_CFG"
-        ] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            subblock_w=4,
-            block_h=shard_height // 32,
-            block_w=shard_width_hidden_dim_across_32_cores // 32,
-            inplace=False,
         )
 
         if device is not None:  # Avoid issue with test_mixtral_torch.py not having a device

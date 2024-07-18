@@ -4,8 +4,8 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtMoeLayer(LightweightModule):
@@ -94,7 +94,6 @@ class TtMoeLayer(LightweightModule):
             self.gates_H8,
             memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"],
-            use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
