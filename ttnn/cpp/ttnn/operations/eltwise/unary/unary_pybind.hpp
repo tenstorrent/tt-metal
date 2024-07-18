@@ -709,50 +709,49 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
             py::arg("memory_config") = std::nullopt});
 }
 
-// template <typename unary_operation_t>
-// void bind_unary_composite_scale_shift(py::module& module, const unary_operation_t& operation) {
-//     auto doc = fmt::format(
-//         R"doc({0}(input_tensor: ttnn.Tensor, scale, shift, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+//OpHandler_1int
+template <typename unary_operation_t>
+void bind_unary_composite_int_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, int32_t parameter_a_value, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
-//             Applies {0} to :attr:`input_tensor` element-wise.
+        {5}
 
-//             .. math::
-//                 {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            * :attr:`input_tensor`
 
-//             Args:
-//                 * :attr:`input_tensor`
-//                 * :attr:`scale`
-//                 * :attr:`shift`
+        Keyword args:
+            * :attr:`{2}` (float): {3} , Default value = {4}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
 
-//             Keyword Args:
-//                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Example:
 
-//             Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2} = {4})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        description);
 
-//                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-//                 >>> output = {1}(tensor)
-//         )doc",
-//         operation.base_name(),
-//         operation.python_fully_qualified_name());
-
-//     bind_registered_operation(
-//         module,
-//         operation,
-//         doc,
-//         ttnn::pybind_overload_t{
-//             [](const unary_operation_t& self,
-//                const Tensor& input_tensor,
-//                float scale,
-//                float shift,
-//                const std::optional<MemoryConfig>& memory_config) {
-//                     return self(input_tensor, scale, shift, memory_config);
-//                 },
-//             py::arg("input_tensor"),
-//             py::arg("scale")=1.0f/6.0f,
-//             py::arg("shift")=0.5f,
-//             py::kw_only(),
-//             py::arg("memory_config") = std::nullopt});
-// }
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               int32_t parameter_a,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg("memory_config") = std::nullopt});
+}
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
@@ -1132,9 +1131,6 @@ void py_module(py::module& module) {
     detail::bind_identity(module, ttnn::identity);
     detail::bind_power(module, ttnn::pow);
 
-    // Other Unary composite
-    detail::bind_unary_operation_with_diag(module, ttnn::tril);
-    detail::bind_unary_operation_with_diag(module, ttnn::triu);
 
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad);
@@ -1200,6 +1196,16 @@ void py_module(py::module& module) {
         "threshold", "Threshold value", 1.0,
         "value", "Value value", 1.0,
         R"doc(Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.)doc");
+    detail::bind_unary_composite_int_with_default(
+        module,
+        ttnn::tril,
+        "dim", "dim value", 0,
+        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`dim`.)doc");
+    detail::bind_unary_composite_int_with_default(
+        module,
+        ttnn::triu,
+        "dim", "dim value", 0,
+        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`dim`.)doc");
 
 }
 

@@ -89,6 +89,22 @@ struct ExecuteUnaryCompositeOpWith2Float {
         }
 };
 
+
+//OpHandler_one_int : get_function_type_1int
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWith1int {
+
+    //Type 1: 1 inputs, 2 float
+    static ttnn::Tensor execute_on_main_thread(
+        const Tensor &input_tensor,
+        int32_t param1,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_type_1int<unary_comp_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+        return op_type(input_tensor, param1, output_memory_config);
+        }
+};
+
 // re-implement tt_eager composite unary op => ttnn composite unary ops.
 Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
     float t_inf = std::numeric_limits<float>::infinity();
@@ -103,27 +119,6 @@ Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std
 // Tensor div_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
 //     return ttnn::multiply(queue_id, input_tensor, (1.0f / value), std::nullopt, memory_config, optional_output_tensor);
 // }
-
-// TODO: update these composite unary ops pending decision on TensorAsync implementation.
-
-// TODO: implement these composite unary ops with optional output tensor and queue id.
-
-Tensor tril(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    int32_t diag=0,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::tril(input_tensor, diag, memory_config.value_or(input_tensor.memory_config()));
-}
-Tensor triu(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    int32_t diag=0,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    return tt::tt_metal::triu(input_tensor, diag, memory_config.value_or(input_tensor.memory_config()));
-}
 
 }  // namespace unary
 }  // namespace operations
@@ -174,8 +169,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto rdiv = REGISTER_OPERATION_FROM_FUNCTION("ttnn::rdiv", WRAP_WITH_RESHAPE(ttnn::operations::unary::rdiv));
 
-constexpr auto tril = REGISTER_OPERATION_FROM_FUNCTION("ttnn::tril", WRAP_WITH_RESHAPE(ttnn::operations::unary::tril));
-constexpr auto triu = REGISTER_OPERATION_FROM_FUNCTION("ttnn::triu", WRAP_WITH_RESHAPE(ttnn::operations::unary::triu));
 
 constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", ttnn::operations::unary::ExecutePower>();
 
@@ -276,5 +269,13 @@ constexpr auto geglu = ttnn::register_operation_with_auto_launch_op<
 constexpr auto swiglu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
+
+constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::tril",
+    operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::TRIL>>();
+
+constexpr auto TRIU = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::triu",
+    operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::TRIU>>();
 
 }  // namespace ttnn

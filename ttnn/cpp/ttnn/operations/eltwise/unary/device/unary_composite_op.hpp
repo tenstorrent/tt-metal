@@ -46,7 +46,9 @@ enum class UnaryCompositeOpType {
     GEGLU,
     SWIGLU,
     POWER_FP,
-    POWER_INT
+    POWER_INT,
+    TRIL,
+    TRIU,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -86,6 +88,8 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
+Tensor _tril(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _triu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -287,6 +291,21 @@ struct OpHandler<UnaryCompositeOpType::GLU> {
     return _glu(t1, dim, mem_cfg);
     }
 };
+
+template <>
+struct OpHandler<UnaryCompositeOpType::TRIL> {
+    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _tril(t1, param1, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::TRIU> {
+    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _triu(t1, param1, mem_cfg);
+    }
+};
+
 
 template <>
 struct OpHandler<UnaryCompositeOpType::REGLU> {
