@@ -117,24 +117,6 @@ class TtModelArgs:
             self.model_config["FF1_OUTPUT_MEMCFG"] = mlp_shard_config
             self.model_config["FF3_OUTPUT_MEMCFG"] = mlp_shard_config
 
-            shard_height = 32
-            hidden_size = 4096
-            shard_width_hidden_dim_across_32_cores = hidden_size // 32
-            self.model_config["SHARDED_NORM_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(shard_height, shard_width_hidden_dim_across_32_cores),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"] = self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
-            self.model_config["SHARDED_NORM_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[8, 4],
-                subblock_w=4,
-                block_h=shard_height // 32,
-                block_w=shard_width_hidden_dim_across_32_cores // 32,
-                inplace=False,
-            )
             # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,

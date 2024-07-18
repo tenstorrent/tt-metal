@@ -111,29 +111,6 @@ auto bind_registered_operation(
     return bind_registered_operation_helper(module, operation, doc, attach_call_operator);
 }
 
-template <auto id, typename lambda_t, typename... overload_t>
-auto bind_registered_operation(
-    py::module& module,
-    const lambda_operation_t<id, lambda_t>& operation,
-    const std::string& doc,
-    overload_t&&... overloads) {
-    using registered_operation_t = lambda_operation_t<id, lambda_t>;
-
-    auto attach_call_operator = [&](auto& py_operation) {
-        (
-            [&py_operation](auto&& overload) {
-                std::apply(
-                    [&py_operation, &overload](auto&&... args) {
-                        py_operation.def("__call__", overload.function, args...);
-                    },
-                    overload.args.value);
-            }(overloads),
-            ...);
-    };
-
-    return bind_registered_operation_helper(module, operation, doc, attach_call_operator);
-}
-
 }  // namespace decorators
 
 using decorators::bind_registered_operation;
