@@ -219,7 +219,7 @@ std::vector<ComplexTensor> complex_mul_bw(const ComplexTensor& grad, const Compl
 std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     Tensor condition_nan = ttnn::logical_and(ttnn::eqz(other.real(),output_mem_config), ttnn::eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
-    ComplexTensor grad_a = complex_div(grad, ttnn::operations::complex_unary::_conj(other,output_mem_config), output_mem_config);
+    ComplexTensor grad_a = ttnn::operations::complex_binary::_div(grad, ttnn::operations::complex_unary::_conj(other,output_mem_config), output_mem_config);
     Tensor grad_a_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_real(grad_a,output_mem_config),  output_mem_config);
     Tensor grad_a_i = where(condition_nan, full_like(grad.imag(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_imag(grad_a,output_mem_config),  output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
@@ -227,7 +227,7 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
     grad_a_i.deallocate();
     grad_tensor.emplace_back(grad_a);
     ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
-    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::operations::complex_unary::_conj(complex_div(complex_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
+    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::operations::complex_unary::_conj(ttnn::operations::complex_binary::_div(ttnn::operations::complex_binary::_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
     neg_grad.deallocate();
     Tensor grad_b_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_real(grad_b,output_mem_config),  output_mem_config);
     Tensor grad_b_i = where(condition_nan, full_like(grad.imag(), std::nanf(""), output_mem_config), ttnn::operations::complex_unary::_imag(grad_b,output_mem_config),  output_mem_config);
