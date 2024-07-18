@@ -797,7 +797,9 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     # MLP in slices: determine number of cores and shard spec
     use_mm_2d_start = 512
     model_config["MM_USE_MM2D_START"] = use_mm_2d_start
-    mlp_max_slice_size = 1024
+    mlp_max_slice_size = (
+        256 if model_config["DEFAULT_DTYPE"] == BFLOAT16_DTYPE else 1024
+    )  # BF16 runs out of L1 otherwise
     mlp_slice_size = min(mlp_max_slice_size, row_height)
     assert row_height % mlp_slice_size == 0
 
@@ -914,7 +916,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     # MLP sharding specs
 
-    if row_height > use_mm_2d_start:
+    if mlp_slice_size > use_mm_2d_start:
         model_config["MLP_INPUT_SHARD_SPEC"] = [
             row_height // mlp_num_slices // mlpn_mm_grid_size[1],
             hidden_size // mlpn_mm_grid_size[0],

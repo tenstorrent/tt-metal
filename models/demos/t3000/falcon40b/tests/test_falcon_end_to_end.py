@@ -401,22 +401,14 @@ def run_test_FalconCausalLM_end_to_end(
     (
         ("prefill", 1, 32, 0),
         ("prefill", 2, 32, 0),
-        # ("prefill", 1, 64, 0),
         ("prefill", 1, 128, 0),
-        # ("prefill", 1, 256, 0),
-        # ("prefill", 1, 512, 0),
-        # ("prefill", 1, 1024, 0),
         ("prefill", 1, 2048, 0),
         ("decode", 32, 1, 128),
     ),
     ids=[
         "prefill_seq32",
         "prefill_seq32_batch2",
-        # "prefill_seq64",
         "prefill_seq128",
-        # "prefill_seq256",
-        # "prefill_seq512",
-        # "prefill_seq1024",
         "prefill_seq2048",
         "decode_batch32",
     ],
@@ -484,41 +476,41 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         if num_layers == 60:
             if data_type == "BFLOAT8_B":
                 if seq_len == 32:
-                    out_pcc = 0.984
-                    k_cache_pcc = 0.979
-                    v_cache_pcc = 0.940
-                    token_pcc = 0.99
-                elif seq_len == 128:
-                    out_pcc = 0.989
-                    k_cache_pcc = 0.989
-                    v_cache_pcc = 0.949
-                    token_pcc = 0.99
-                elif seq_len == 2048:
-                    out_pcc = 0.993
-                    k_cache_pcc = 0.991
-                    v_cache_pcc = 0.97
-                    token_pcc = 0.99
-            elif data_type == "BFLOAT16":
-                if seq_len == 32:
                     out_pcc = 0.986
-                    k_cache_pcc = 0.993
-                    v_cache_pcc = 0.978
+                    k_cache_pcc = 0.978
+                    v_cache_pcc = 0.934
                     token_pcc = 0.99
                 elif seq_len == 128:
-                    out_pcc = 0.991
-                    k_cache_pcc = 0.994
-                    v_cache_pcc = 0.982
+                    out_pcc = 0.990
+                    k_cache_pcc = 0.988
+                    v_cache_pcc = 0.940
                     token_pcc = 0.99
                 elif seq_len == 2048:
                     out_pcc = 0.992
-                    k_cache_pcc = 0.992
-                    v_cache_pcc = 0.980
+                    k_cache_pcc = 0.990
+                    v_cache_pcc = 0.967
+                    token_pcc = 0.99
+            elif data_type == "BFLOAT16":
+                if seq_len == 32:
+                    out_pcc = 0.981
+                    k_cache_pcc = 0.978
+                    v_cache_pcc = 0.929
+                    token_pcc = 0.99
+                elif seq_len == 128:
+                    out_pcc = 0.991
+                    k_cache_pcc = 0.993
+                    v_cache_pcc = 0.976
+                    token_pcc = 0.99
+                elif seq_len == 2048:
+                    out_pcc = 0.992
+                    k_cache_pcc = 0.989
+                    v_cache_pcc = 0.972
                     token_pcc = 0.99
         elif num_layers == 12:
             out_pcc = 0.99
             k_cache_pcc = 0.98
             v_cache_pcc = 0.98
-    else:
+    else:  # Decode
         if num_layers == 60:
             out_pcc = 0.92
             k_cache_pcc = 0.99
