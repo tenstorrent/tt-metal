@@ -26,7 +26,6 @@ from models.utility_functions import (
 )
 
 
-@skip_for_wormhole_b0("See GH Issue #10322")
 def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
