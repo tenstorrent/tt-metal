@@ -12,7 +12,7 @@ import enlighten
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
-from statuses import TestStatus, VectorStatus
+from statuses import TestStatus, VectorValidity, VectorStatus
 import architecture
 from elasticsearch import Elasticsearch, NotFoundError
 
@@ -66,7 +66,7 @@ def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
     batch_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Batch: {batch_name}", leave=False)
     for test_vector in test_vectors:
         result = dict()
-        if deserialize(test_vector["status"]) == VectorStatus.INVALID:
+        if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -75,6 +75,7 @@ def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
             continue
         else:
             test_vector.pop("status")
+            test_vector.pop("validity")
         if p is None:
             p = Process(target=run, args=(test_module, input_queue, output_queue))
             p.start()
@@ -132,7 +133,11 @@ def sanitize_inputs(test_vectors):
 
 
 def get_batch_vectors(client, vector_index, batch):
-    response = client.search(index=vector_index, query={"match": {"batch_name": batch}}, size=10000)
+    response = client.search(
+        index=vector_index,
+        query={"bool": {"must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"batch_name": batch}}]}},
+        size=10000,
+    )
     test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
     test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
     for i in range(len(test_ids)):

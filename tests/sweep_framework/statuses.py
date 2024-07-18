@@ -14,6 +14,11 @@ class TestStatus(Enum):
     FAIL_WATCHER = 5
 
 
-class VectorStatus(Enum):
+class VectorValidity(Enum):
     VALID = 0
     INVALID = 1
+
+
+class VectorStatus(Enum):
+    CURRENT = 0
+    ARCHIVED = 1
