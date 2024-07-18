@@ -195,7 +195,7 @@ def run_sweeps(module_name, batch_name, vector_id):
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
-            results = execute_batch(test_module, test_vectors)
+            results = execute_batch(test_module, test_vectors, pbar_manager, "Single Vector")
             export_test_results(header_info, results)
         else:
             try:
