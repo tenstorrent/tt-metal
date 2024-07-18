@@ -30,6 +30,7 @@ ALWI void recip_tile_init() {
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ * Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.
  *
  * Return value: None
  *
