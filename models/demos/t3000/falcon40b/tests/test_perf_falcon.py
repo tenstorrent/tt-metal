@@ -11,9 +11,6 @@ import tt_lib
 import ttnn
 from ttnn import ConcatMeshToTensor
 
-if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
-    from tracy import signpost
-
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -49,7 +46,11 @@ def run_test_FalconCausalLM_end_to_end(
     expected_compile_time,
     expected_inference_time,
     warmup_iterations,
+    is_ci_env,
 ):
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     # Clear global profiler state before starting measurements
     profiler.clear()
     devices = device_mesh.get_devices()
@@ -139,7 +140,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("COMPILE_RUN")
 
     if llm_mode == "prefill":
@@ -185,7 +186,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Run warmup interations - profiler still disabled
     profiler.start(f"model_warmup_run_for_inference")
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
@@ -242,7 +243,7 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.start(f"model_run_for_inference")
 
-    if not os.getenv("CI") == "true":
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("PERF_RUN")
 
     if llm_mode == "prefill":
@@ -372,6 +373,7 @@ def test_perf_bare_metal(
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -407,4 +409,5 @@ def test_perf_bare_metal(
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
+        is_ci_env=is_ci_env,
     )
