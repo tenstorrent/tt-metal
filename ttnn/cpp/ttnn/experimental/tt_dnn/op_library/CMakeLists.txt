@@ -198,7 +198,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
 
     CACHE INTERNAL "tt_dnn sources to reuse in ttnn build"
 )
