@@ -30,7 +30,7 @@ def test_eltwise_unary_chain(device):
         .to(device)
     )
 
-    xtt = ttl.tensor.unary_chain(
+    xtt = ttnn.unary_chain(
         xt,
         [
             ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),

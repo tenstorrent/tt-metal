@@ -6,7 +6,9 @@
 #include <type_traits>
 
 #include "tt_metal/host_api.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -21,7 +23,7 @@ Tensor fully_connected_(const Tensor& act, const Tensor& weights, std::optional<
             tt::operations::primary::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt, output_mem_config}
             );
     if (bias) {
-        return bcast(mm_output, bias.value(), BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        return ttnn::add(mm_output, ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr), std::nullopt, output_mem_config);
     }
     return mm_output;
 }

@@ -1555,48 +1555,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
         );
 
-        m_tensor.def("is_real",
-		     py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::is_real),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is real.)doc"
-        );
-
-        m_tensor.def("is_imag",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::is_imag),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is imaginary.)doc"
-        );
-
-        m_tensor.def("complex_abs",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_abs),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns absolute value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("real",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::real),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns real value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("imag",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::imag),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns imaginary value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("angle",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::angle),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns angle of a complex tensor ``{0}``.)doc"
-        );
-
         m_tensor.def("conj",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::conj),
             py::arg("input"),

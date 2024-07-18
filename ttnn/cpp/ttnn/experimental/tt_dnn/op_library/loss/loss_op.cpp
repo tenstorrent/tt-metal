@@ -10,6 +10,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 using namespace tt::constants;
@@ -19,6 +20,9 @@ using namespace tt::tt_metal;
 namespace tt {
 
 namespace tt_metal {
+
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 Tensor lossfunction(
     const Tensor& ref,

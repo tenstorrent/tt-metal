@@ -5,9 +5,11 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -21,6 +23,7 @@ namespace reuse_dram_sharded_optimized_helpers {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
+using ttnn::operations::unary::UnaryOpType;
 
 void get_dram_reader_core_coords_grayskull(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
@@ -610,7 +613,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(
+            using ttnn::operations::unary::utils::get_defines;
+            mm_kernel_defines.merge(get_defines(
                 fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }

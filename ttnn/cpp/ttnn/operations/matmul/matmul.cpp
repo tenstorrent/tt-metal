@@ -6,6 +6,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
 
@@ -39,7 +40,7 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     if (!activation.has_value()) {
         return std::nullopt;
     }
-    return string_to_unary_with_param(activation.value());
+    return ttnn::operations::unary::string_to_unary_with_param(activation.value());
 }
 
 ttnn::Tensor matmul(
@@ -76,8 +77,8 @@ ttnn::Tensor matmul(
         parameters);
 
     if (post_process_bias) {
-        output_tensor = tt::operations::primary::bcast(
-            output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, parameters.output_mem_config);
+        output_tensor = ttnn::add(
+            output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
