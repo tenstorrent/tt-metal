@@ -48,7 +48,11 @@ class TtFalconModelShared:
         self.num_layers = num_layers
         self.hidden_size = config.hidden_size
         self.num_devices = device_mesh.get_num_devices()
-        self.ln_output_tensors_dict = {"final_layernorm": dict(), "mlp_layernorm": dict(), "attn_layernorm": dict()}
+        self.ln_output_tensors_dict = {
+            "final_layernorm": dict(),
+            "mlp_layernorm": dict(),
+            "attn_layernorm": dict(),
+        }
 
         # Word Embeddings
         self.embeddings = TtFalconEmbeddings(
@@ -138,10 +142,10 @@ class TtFalconModelShared:
             preprocess=lambda x: (x * -1e5),
         )
 
-        tt_attn_mask = ttnn.experimental.tensor.tilize(
+        tt_attn_mask = ttnn.tilize(
             tt_attn_mask,
-            output_mem_config=attention_mask_memconfig,
-            output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+            memory_config=attention_mask_memconfig,
+            dtype=self.model_config["ATTN_MASK_DTYPE"],
         )
         return tt_attn_mask
 
@@ -235,10 +239,10 @@ class TtFalconModelShared:
                 preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(-1, self.config.num_attention_heads, -1, -1),
             )
 
-            tt_attention_mask = ttnn.experimental.tensor.tilize(
+            tt_attention_mask = ttnn.tilize(
                 tt_attention_mask,
-                output_mem_config=attention_mask_memconfig,
-                output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                memory_config=attention_mask_memconfig,
+                dtype=self.model_config["ATTN_MASK_DTYPE"],
             )
 
         else:

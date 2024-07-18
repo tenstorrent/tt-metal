@@ -1,6 +1,9 @@
 Watcher
 =======
 
+.. note::
+   Tools are only fully supported on source builds.
+
 Overview
 --------
 

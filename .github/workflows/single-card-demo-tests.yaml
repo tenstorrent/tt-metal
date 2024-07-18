@@ -2,6 +2,7 @@ name: "[Single-card] Demo tests"
 
 on:
   workflow_dispatch:
+  workflow_call:
   schedule:
     - cron: "0 0 * * 1,2,3,4,5"
     - cron: "0 */4 * * 0,6"
@@ -21,13 +22,13 @@ jobs:
           {
             name: "N150",
             arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"],
+            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
           },
           {
             name: "N300",
             arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"],
+            runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300 --dispatch-mode ""'
           }
         ]

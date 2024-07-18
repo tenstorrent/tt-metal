@@ -94,7 +94,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             # N, 128, 2, 64
             transposed = ttl.tensor.transpose(reshaped_unt, 1, -2)
             # N, 2, 128, 64
-            retilized = ttl.tensor.tilize(transposed)
+            retilized = ttnn.tilize(transposed)
             return retilized
 
     def multiply_by_sqrt_hidden_dim(x):
@@ -211,7 +211,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ctx = ttl.tensor.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
             reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
-            retval = ttl.tensor.tilize(reshaped)
+            retval = ttnn.tilize(reshaped)
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval

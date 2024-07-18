@@ -17,6 +17,7 @@
 #include "ttnn/types.hpp"
 
 using namespace tt::constants;
+using ttnn::operations::unary::UnaryWithParam;
 
 vector<uint32_t> _get_prime_factors(uint32_t n) {
     uint32_t i = 2;
@@ -642,7 +643,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const MemoryConfig& mem_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
-    const std::optional<const UnaryWithParam> user_fused_activation,
+    const std::optional<UnaryWithParam> user_fused_activation,
     const bool user_run_batched) {
     const bool has_user_grid = user_core_coord.has_value();
     if (has_user_grid || !input_tensor_a.is_sharded()) {
@@ -1314,7 +1315,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const ttnn::types::Shape& input_shape_a,
     const ttnn::types::Shape& input_shape_b,
     const CoreCoord& core_coord,
-    const std::optional<const UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam> fused_activation,
     const bool fp32_dest_acc_en,
     const TensorMemoryLayout input_layout_a) {
     auto a_padded_shape = input_shape_a.with_tile_padding();

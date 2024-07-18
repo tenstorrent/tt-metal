@@ -90,7 +90,8 @@ struct ComputeKernelArg {
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
-    bool math_approx_mode = false);
+    bool math_approx_mode = false,
+    bool preserve_fp32_precision = false);
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -99,7 +100,8 @@ struct ComputeKernelArg {
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
-    bool math_approx_mode = false);
+    bool math_approx_mode = false,
+    bool preserve_fp32_precision = false);
 
 struct CircularBufferArg {
     uint32_t buffer_index;
@@ -276,6 +278,8 @@ bool is_hw_dim(uint32_t dim, uint32_t rank);
 uint32_t compute_inner(Shape shape, uint32_t dim);
 
 uint32_t compute_outer(Shape shape, uint32_t dim);
+
+void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape);
 
 }  // namespace primary
 }  // namespace operations

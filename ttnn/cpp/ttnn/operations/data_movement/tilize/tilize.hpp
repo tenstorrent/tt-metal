@@ -16,7 +16,7 @@ struct ExecuteTilize {
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
         return operation::run(
                    Tilize{
@@ -33,7 +33,7 @@ struct ExecuteTilize {
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
         constexpr uint8_t DefaultQueueId = 0;
         return execute_on_worker_thread(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);

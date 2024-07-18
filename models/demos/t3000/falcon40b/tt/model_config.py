@@ -583,7 +583,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             per_core_M=row_height // 32,
             per_core_N=4,
             fuse_batch=True,
-            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
             mcast_in0=True,
         )
         model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -750,7 +750,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     layernorm_num_cores_x = 8
     layernorm_max_num_cores_y = 8
 
-    layernorm_slice_size = 512
+    layernorm_slice_size = 1024
     attention_max_slice_size = 1024
     attention_slice_size = min(attention_max_slice_size, row_height)
     assert row_height % attention_slice_size == 0

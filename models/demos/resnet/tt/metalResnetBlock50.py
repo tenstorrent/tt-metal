@@ -159,7 +159,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
-            return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
+            return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
     elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
         if x.get_legacy_shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
@@ -1326,7 +1326,7 @@ class Bottleneck:
             if self.deallocate:
                 x.deallocate()
 
-        fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+        fused_activations = [ttnn.UnaryOpType.RELU]
 
         # logger.info("Running eltwise add")
         out = ttnn.add(
@@ -2187,10 +2187,10 @@ class ResNet(nn.Module):
             self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2],
             self.maxpool_output_shape[3],
         )
-        x = tt_lib.tensor.tilize(
+        x = ttnn.tilize(
             x,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=self.height_sharded_memory_config,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
             use_multicore=True,
         )
         if self.batch_size == 20:
@@ -2314,12 +2314,12 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         if self.sharded:
-            x = tt_lib.tensor.tilize_with_val_padding(
+            x = ttnn.tilize_with_val_padding(
                 x,
                 padded_shape,
                 0,
-                output_mem_config=self.width_sharded_memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.width_sharded_memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
         else:
             x = ttnn.pad(
@@ -2330,10 +2330,10 @@ class ResNet(nn.Module):
                 memory_config=self.memory_config,
                 use_multicore=True,
             )
-            x = tt_lib.tensor.tilize(
+            x = ttnn.tilize(
                 x,
-                output_mem_config=self.memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 use_multicore=True,
             )
 
@@ -2365,12 +2365,12 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         if self.sharded:
-            x = tt_lib.tensor.tilize_with_val_padding(
+            x = ttnn.tilize_with_val_padding(
                 x,
                 padded_shape,
                 0,
-                output_mem_config=self.width_sharded_memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.width_sharded_memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
         else:
             x = ttnn.pad(
@@ -2381,10 +2381,10 @@ class ResNet(nn.Module):
                 memory_config=self.memory_config,
                 use_multicore=True,
             )
-            x = tt_lib.tensor.tilize(
+            x = ttnn.tilize(
                 x,
-                output_mem_config=self.memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 use_multicore=True,
             )
 

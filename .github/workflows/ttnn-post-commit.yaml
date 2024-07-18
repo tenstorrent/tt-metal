@@ -49,8 +49,6 @@ jobs:
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
-          # For tests that tend to use entire grid
-          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45

@@ -8,11 +8,7 @@ run_n300_falcon7b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Perf verification for 128/1024/2048 seq lens
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-perf_mode_128_stochastic_verify] ; fail+=$?
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-perf_mode_1024_stochastic_verify] ; fail+=$?
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-perf_mode_2048_stochastic_verify] ; fail+=$?
-  # Output token verification for 32 user prompts
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-default_mode_1024_greedy_verify] ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -30,10 +26,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-
-# Run tests working on both N150 and N300
-source tests/scripts/single_card/run_demos_single_card_n150_tests.sh
+source tests/scripts/single_card/run_demos_single_card_wh_common.sh
 
 # Falcon7B N300 demo tests
 run_n300_falcon7b_tests

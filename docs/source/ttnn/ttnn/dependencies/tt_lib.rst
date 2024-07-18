@@ -380,15 +380,9 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.permute
 
-.. autofunction:: tt_lib.tensor.tilize
-
 .. autofunction:: tt_lib.tensor.untilize
 
-.. autofunction:: tt_lib.tensor.tilize_with_val_padding
-
 .. autofunction:: tt_lib.tensor.untilize_with_unpadding
-
-.. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 
 .. autofunction:: tt_lib.tensor.clone
 
@@ -559,12 +553,6 @@ Complex arithmetic can be carried out for multiply, divide, add and subtract as 
 
 and then unary operations for,
 
-.. autofunction:: tt_lib.tensor.real
-
-.. autofunction:: tt_lib.tensor.imag
-
-.. autofunction:: tt_lib.tensor.complex_abs
-
 .. autofunction:: tt_lib.tensor.conj
 
 .. autofunction:: tt_lib.tensor.complex_recip
@@ -645,23 +633,9 @@ Other Operations
 Backward Operations
 ===================
 
-.. autofunction:: tt_lib.tensor.conj_bw
-
-.. autofunction:: tt_lib.tensor.complex_abs_bw
-
-.. autofunction:: tt_lib.tensor.angle_bw
-
-.. autofunction:: tt_lib.tensor.complex_recip_bw
-
-.. autofunction:: tt_lib.tensor.imag_bw
-
-.. autofunction:: tt_lib.tensor.real_bw
-
 .. autofunction:: tt_lib.tensor.complex_mul_bw
 
 .. autofunction:: tt_lib.tensor.complex_div_bw
-
-.. autofunction:: tt_lib.tensor.polar_bw
 
 .. autofunction:: tt_lib.tensor.complex_add_bw
 

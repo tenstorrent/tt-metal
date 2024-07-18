@@ -16,38 +16,11 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    filter_indices,
+    filter_indices_with_last_two,
+    TILE_HEIGHT,
+    TILE_WIDTH,
 )
-
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
-
-
-# For keepdim in torch
-def filter_indices(output_shape, dims):
-    def not_in_dims(index_value_pair):
-        index, value = index_value_pair
-        return index not in dims
-
-    filtered_elements = list(filter(not_in_dims, enumerate(output_shape)))
-    filtered_values = [value for index, value in filtered_elements]
-
-    return filtered_values
-
-
-# For keep_batch_dim in tt
-def filter_indices_with_last_two(output_shape, dims):
-    last_two_elements = output_shape[-2:]
-    remaining_elements = output_shape[:-2]
-
-    def not_in_dims(index_value_pair):
-        index, _ = index_value_pair
-        return index not in dims
-
-    filtered_remaining_elements = list(filter(not_in_dims, enumerate(remaining_elements)))
-    filtered_remaining_values = [value for index, value in filtered_remaining_elements]
-    final_output_shape = filtered_remaining_values + last_two_elements
-
-    return final_output_shape
 
 
 def is_npu_dtype_uint32(data_type):
@@ -285,11 +258,11 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
     "input_shape",
     (
         [10, TILE_HEIGHT * 12, TILE_WIDTH * 12],
-        [10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1],
+        [10, TILE_HEIGHT * 12 - 10, TILE_WIDTH * 12 - 10],
     ),
     ids=[
         "10, TILE_HEIGHT * 12, TILE_WIDTH * 12",
-        "10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
+        "10, TILE_HEIGHT * 12 - 10, TILE_WIDTH * 12 - 10",
     ],
 )
 @pytest.mark.parametrize(
@@ -299,7 +272,7 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, device):
-    torch.manual_seed(2023)
+    torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 

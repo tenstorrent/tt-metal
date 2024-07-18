@@ -606,7 +606,7 @@ def get_model_config(
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
             fuse_batch=True,
-            fused_activation=ttl.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             mcast_in0=True,
         )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -643,7 +643,7 @@ def get_model_config(
             per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
-            fused_activation=ttl.tensor.FusibleActivation.SILU,
+            fused_activation=ttnn.UnaryOpType.SILU,
             fuse_batch=False,
         )
 
