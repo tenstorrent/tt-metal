@@ -1964,3 +1964,29 @@ def gen_sharded_args_coregrid(
         do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
+
+
+def gen_fmod_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+    ):
+        input_info.update({"value": random.randint(-100, 100) + 0.5})
+
+        yield input_info

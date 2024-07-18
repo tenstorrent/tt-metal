@@ -1362,24 +1362,6 @@ def eltwise_unary_remainder(
 
 
 @setup_host_and_device
-def eltwise_unary_fmod(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.fmod(t0, value, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_heaviside(
     x,
     *args,
