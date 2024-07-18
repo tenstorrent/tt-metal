@@ -54,13 +54,37 @@ class TtFalconMLP:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            cache_file_name=tt_cache_path / dense_4h_to_h_str,
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=2),
+            cache_file_name=tt_cache_path / f"{dense_4h_to_h_str}_height_fractured",
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
 
+        self.output = None
+        self._allocate_output_mlp_tensors()
+
     def set_model_config(self, model_config):
         self.model_config = model_config
+
+        self._allocate_output_mlp_tensors()
+
+    def _allocate_output_mlp_tensors(self):
+        if self.model_config["LLM_MODE"] == "prefill":
+            if self.output is not None:
+                self.output.deallocate()
+
+            seq_len = self.model_config["row_height"]
+
+            # prepare output tensor on device
+            out_shape = (1, 1, seq_len, self.dense_4h_to_h_weights.shape[-1])
+            out_tensor = torch.zeros(out_shape).bfloat16()
+
+            self.output = ttnn.from_torch(
+                out_tensor,
+                self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+                device=self.device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
     def __call__(
         self, x: List[ttnn.experimental.tensor.Tensor], llm_mode: str
@@ -83,18 +107,6 @@ class TtFalconMLP:
         )
         x.deallocate(True)
 
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-            hidden_states, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-        )
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DEFAULT_MEMCFG"],
-        )
-        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
-            hidden_states, sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
         hidden_states = ttnn.matmul(
             hidden_states,
             self.dense_4h_to_h_weights,
@@ -103,6 +115,29 @@ class TtFalconMLP:
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
+
+        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+        )
+
+        hidden_states = ttnn.get_device_tensors(
+            hidden_states
+        )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
+
+        hidden_states = ttnn.experimental.tensor.reduce_scatter(
+            hidden_states,
+            scatter_split_dim=3,
+            reduce_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            num_links=1,  # only unidirectional supported for now
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+
+        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
+
+        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states, sharded_mem_config=self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
+        )
+
         # return TT Tensor
         return hidden_states
 
@@ -111,33 +146,67 @@ class TtFalconMLP:
         should_deallocate_ln_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
         )
-        hidden_states = falcon_prefill_matmul(
-            x,
-            self.dense_h_to_4h_weights,
-            self.model_config["COMPUTE_KERNEL_CONFIG"],
-            output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-            act=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
-            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-            overwrite_subblock_h=1,
-        )
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DEFAULT_MEMCFG"],
-        )
+
+        mlp_num_slices = self.model_config["MLP_NUM_SLICES"]
+        for slice_idx in range(mlp_num_slices):
+            x_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                x,
+                self.model_config["MLP_GRID_SIZE"],
+                self.model_config["MLP_INPUT_SHARD_SPEC"],
+                mlp_num_slices,
+                slice_idx,
+                self.model_config["MLP_INPUT_SHARD_LAYOUT"],
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            )
+
+            hidden_states_slice = falcon_prefill_matmul(
+                x_slice,
+                self.dense_h_to_4h_weights,
+                self.model_config["COMPUTE_KERNEL_CONFIG"],
+                output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OPTIMIZED_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                act=[ttnn.UnaryOpType.GELU, True],
+                overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+                overwrite_subblock_h=1,
+            )
+            x_slice.deallocate(True)
+
+            hidden_states_slice = falcon_prefill_matmul(
+                hidden_states_slice,
+                self.dense_4h_to_h_weights,
+                self.model_config["COMPUTE_KERNEL_CONFIG"],
+                output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OPTIMIZED_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+                overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+                overwrite_subblock_h=1,
+            )
+
+            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                hidden_states_slice,
+                self.output,
+                mlp_num_slices,
+                slice_idx,
+                self.model_config["DEFAULT_MEMCFG"],
+            )
+            hidden_states_slice.deallocate()
+
+        # Deallocate input
         if should_deallocate_ln_tensors:
             x.deallocate(True)
 
-        hidden_states = falcon_prefill_matmul(
+        hidden_states = ttnn.get_device_tensors(
+            self.output
+        )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
+
+        hidden_states = ttnn.experimental.tensor.reduce_scatter(
             hidden_states,
-            self.dense_4h_to_h_weights,
-            self.model_config["COMPUTE_KERNEL_CONFIG"],
-            output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-            overwrite_subblock_h=1,
+            scatter_split_dim=3,
+            reduce_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            num_links=1,  # only one link supported for now
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
+        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
+
         # return TT Tensor
         return hidden_states

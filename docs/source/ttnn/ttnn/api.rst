@@ -168,8 +168,6 @@ Pointwise Unary
    ttnn/tanhshrink
    ttnn/threshold
    ttnn/mul_bw
-   ttnn/clamp_min_bw
-   ttnn/clamp_max_bw
    ttnn/clamp_bw
    ttnn/hardtanh_bw
    ttnn/threshold_bw
@@ -254,6 +252,16 @@ Pointwise Unary
    ttnn/polygamma_bw
    ttnn/gelu_bw
    ttnn/repeat_bw
+   ttnn/real
+   ttnn/imag
+   ttnn/angle
+   ttnn/is_imag
+   ttnn/is_real
+   ttnn/polar_bw
+   ttnn/imag_bw
+   ttnn/real_bw
+   ttnn/angle_bw
+   ttnn/conj_bw
 
 Pointwise Binary
 ================

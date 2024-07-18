@@ -25,8 +25,9 @@ import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-UnaryWithParam = ttnn._ttnn.deprecated.tensor.FusibleActivationWithParam
-UnaryOpType = ttnn._ttnn.deprecated.tensor.FusibleActivation
+
+UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
+UnaryOpType = ttnn._ttnn.activation.UnaryOpType
 
 
 @dataclasses.dataclass
@@ -255,6 +256,7 @@ from ttnn.decorators import (
     register_cpp_operation,
     attach_golden_function,
     query_registered_operations,
+    dump_operations,
     register_pre_operation_hook,
     register_post_operation_hook,
     get_golden_function,
@@ -273,8 +275,8 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
-import ttnn.experimental_operations
-import ttnn.experimental_operations.golden_functions
+import ttnn.experimental_loader
+import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 

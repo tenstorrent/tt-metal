@@ -9,6 +9,7 @@ from loguru import logger
 import numpy as np
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     comp_pcc,
 )
@@ -52,7 +53,7 @@ def run_bert_large_matmul_test(
         ):
             pytest.skip("Skipping test since these tensors won't fit on device!")
 
-        gelu_activation = (ttl.tensor.FusibleActivation.GELU, True)
+        gelu_activation = (ttnn.UnaryOpType.GELU, True)
         a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 4096]
         bias_shape = [1, 1, 1, 4096]

@@ -41,15 +41,17 @@
 > [!NOTE]
 >
 > All model demos in this table function on both N150 and N300 Wormhole cards, unless otherwise stated.
+>
+> Furthermore, all performance numbers here are run or based off an N300 Wormhole card.
 
-| Model                                                                                | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
-|--------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
-| [Falcon7B](./models/demos/wormhole/falcon7b)                                  | 129th              | 32                   | 13.3 t/s/u - 425 t/s         | 15.4 t/s/u - 493 t/s        | 26             |
-| [Mistral-7B](./models/demos/wormhole/mistral7b)                               | 129th              | 32                   | 9.9 t/s/u - 317 t/s          | 11.0 t/s/u - 352 t/s        | 25             |
-| [Mamba-2.8B](./models/demos/mamba)                                            | any                | 32                   | 11.6 t/s/u - 370 t/s         | 16.5 t/s/u - 528 t/s        | 41             |
-| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                        |                    | 8                    | 270                          | 340                         | 400            |
-| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 6                            | 5                           |   3            |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                        |                    | 16                   | 4,300                        | 5,550                       | 7,000          |
+| Model                                                                                  | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
+|----------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
+| [Falcon7B](./models/demos/wormhole/falcon7b)                                           | 129th              | 32                   | 13.3 t/s/u - 425 t/s         | 15.4 t/s/u - 493 t/s        | 26             |
+| [Mistral-7B](./models/demos/wormhole/mistral7b)                                        | 129th              | 32                   | 9.9 t/s/u - 317 t/s          | 11.0 t/s/u - 352 t/s        | 25             |
+| [Mamba-2.8B](./models/demos/mamba)                                                     | any                | 32                   | 11.6 t/s/u - 370 t/s         | 16.5 t/s/u - 528 t/s        | 41             |
+| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                          |                    | 8                    | 270                          | 340                         | 400            |
+| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512 (sec/img) [5] |                    | 1                    | 6                            | 5                           | 3              |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                    | 16                   | 4,300                        | 5,550                       | 7,000          |
 
 [1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
 
@@ -58,6 +60,8 @@
 [3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
 
 [4] - This model demo does not work on N150. It does work on N300.
+
+[5] - This model demo does not work on N300. It does work on N150.
 
 ## T3000 (2x4 mesh of WHs) Models
 

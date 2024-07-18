@@ -93,7 +93,7 @@ def update_model_config(config, batch_size):
             per_core_M=7,
             per_core_N=8,
             transpose_mcast=False,
-            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -113,7 +113,7 @@ def update_model_config(config, batch_size):
             per_core_M=7,
             per_core_N=3,
             transpose_mcast=False,
-            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),

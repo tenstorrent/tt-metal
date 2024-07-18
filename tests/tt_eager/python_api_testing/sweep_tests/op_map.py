@@ -456,14 +456,6 @@ op_map = {
         "tt_op": tt_lib_ops.bert_large_fused_qkv_matmul,
         "pytorch_op": pytorch_ops.bert_large_fused_qkv_matmul,
     },
-    "eltwise-relu_max": {
-        "tt_op": tt_lib_ops.eltwise_relu_max,
-        "pytorch_op": pytorch_ops.relu_max,
-    },
-    "eltwise-relu_min": {
-        "tt_op": tt_lib_ops.eltwise_relu_min,
-        "pytorch_op": pytorch_ops.relu_min,
-    },
     "eltwise-polyval": {
         "tt_op": tt_lib_ops.eltwise_polyval,
         "pytorch_op": pytorch_ops.polyval,
@@ -1229,10 +1221,6 @@ op_map = {
     "addcdiv-bw": {
         "tt_op": tt_lib_ops.addcdiv_bw,
         "pytorch_op": pytorch_ops.addcdiv_bw,
-    },
-    "addcmul-bw": {
-        "tt_op": tt_lib_ops.addcmul_bw,
-        "pytorch_op": pytorch_ops.addcmul_bw,
     },
     "addalpha-bw": {
         "tt_op": tt_lib_ops.addalpha_bw,

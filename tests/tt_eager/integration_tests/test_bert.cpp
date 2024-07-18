@@ -6,7 +6,6 @@
 
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
@@ -15,8 +14,11 @@
 #include "tt_numpy/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
 MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
@@ -196,8 +198,7 @@ Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
     auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, tt::operations::primary::Matmul{});
     hidden_states.deallocate();
 
-
-    return bcast(output, parameters.at("qa_head_bias"), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, l1_memory_config);
+    return ttnn::add(output, parameters.at("qa_head_bias"), std::nullopt, l1_memory_config);
 }
 
 

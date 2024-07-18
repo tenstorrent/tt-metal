@@ -1692,9 +1692,9 @@ def test_matmul(
 
     in_1 = ttnn.to_memory_config(in_1, dram_interleaved_memory_config)
     if fused_activation == "GELU":
-        fused_activation = [ttnn.experimental.tensor.FusibleActivation.GELU, True]
+        fused_activation = [ttnn.UnaryOpType.GELU, True]
     elif fused_activation == "RELU":
-        fused_activation = [ttnn.experimental.tensor.FusibleActivation.RELU, True]
+        fused_activation = [ttnn.UnaryOpType.RELU, True]
     else:
         assert fused_activation is None
 

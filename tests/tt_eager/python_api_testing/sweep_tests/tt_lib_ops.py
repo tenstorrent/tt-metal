@@ -419,24 +419,6 @@ def eltwise_rsqrt(
 
 
 @setup_host_and_device
-def eltwise_relu_min(
-    x,
-    *args,
-    lower_limit,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.relu_min(t0, lower_limit, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_prelu(
     x,
     *args,
@@ -450,24 +432,6 @@ def eltwise_prelu(
     weight = kwargs["weight"]
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.prelu(t0, weight, memory_config=output_mem_config)
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_relu_max(
-    x,
-    *args,
-    upper_limit,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.relu_max(t0, upper_limit, memory_config=output_mem_config)
-
     return tt2torch_tensor(t1)
 
 
@@ -754,31 +718,6 @@ def addcdiv_bw(
     t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
 
     t4 = ttl.tensor.addcdiv_bw(t0, t1, t2, t3, scalar, output_mem_config)
-
-    return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1]), tt2torch_tensor(t4[2])]
-
-
-@setup_host_and_device
-def addcmul_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    w,  # other_tensor2
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttl.tensor.addcmul_bw(t0, t1, t2, t3, scalar, output_mem_config)
 
     return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1]), tt2torch_tensor(t4[2])]
 

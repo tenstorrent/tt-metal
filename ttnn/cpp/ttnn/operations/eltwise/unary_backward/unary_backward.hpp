@@ -61,6 +61,30 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
 
 };
 
+//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
+template <UnaryBackwardOpType unary_backward_op_type>
+struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
+
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 1 inputs, 1 grad tensor, 2 float
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        std::optional<float> parameter_a,
+        std::optional<float> parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_optional_float_params_with_default<unary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        }
+
+};
+
 //OpHandler_float_string_default : get_function_type1_float_string_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloatStringDefault {
@@ -273,8 +297,10 @@ struct ExecuteUnaryBackward {
 }  // operations::unary
 
 //ExecuteUnaryBackwardTwoFloat : get_function_type1_w_two_float
-constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 constexpr auto threshold_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloat<operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>("ttnn::threshold_bw");
+
+//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
+constexpr auto clamp_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardOptionalFloatParamsWithDefault<operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>("ttnn::clamp_bw");
 
 //ExecuteUnaryBackwardTwoFloatWithDefault : get_function_type1_w_two_float_with_default
 constexpr auto softplus_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>("ttnn::softplus_bw");
@@ -303,7 +329,6 @@ constexpr auto sqrt_bw = ttnn::register_operation<operations::unary_backward::Ex
 constexpr auto prod_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>("ttnn::prod_bw");
 
 constexpr auto mul_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
-constexpr auto clamp_min_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MIN_BW>>("ttnn::clamp_min_bw");
 constexpr auto assign_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ASSIGN_BW>>("ttnn::assign_bw");
 constexpr auto multigammaln_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MULTIGAMMALN_BW>>("ttnn::multigammaln_bw");
 constexpr auto add_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ADD_BW>>("ttnn::add_bw");
@@ -333,7 +358,6 @@ constexpr auto rsqrt_bw = ttnn::register_operation<operations::unary_backward::E
 constexpr auto neg_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::NEG_BW>>("ttnn::neg_bw");
 constexpr auto relu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>("ttnn::relu_bw");
 constexpr auto logit_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOGIT_BW>>("ttnn::logit_bw");
-constexpr auto clamp_max_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::CLAMP_MAX_BW>>("ttnn::clamp_max_bw");
 constexpr auto hardshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW>>("ttnn::hardshrink_bw");
 constexpr auto softshrink_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::SOFTSHRINK_BW>>("ttnn::softshrink_bw");
 constexpr auto leaky_relu_bw = ttnn::register_operation<operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LEAKY_RELU_BW>>("ttnn::leaky_relu_bw");

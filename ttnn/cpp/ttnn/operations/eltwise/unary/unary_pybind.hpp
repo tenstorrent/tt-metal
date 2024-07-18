@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -19,6 +20,8 @@ namespace operations {
 namespace unary {
 
 namespace detail {
+
+using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
@@ -68,6 +71,65 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
             py::arg("queue_id") = 0});
 }
 
+
+template <typename unary_operation_t>
+void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor or ComplexTensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            {2}
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor, memory_config, output_tensor);
+                },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ComplexTensor& input_tensor,
+               const ttnn::MemoryConfig& memory_config) -> Tensor {
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType1<complex_unary::ComplexUnaryOpType::ABS>;
+                return ComplexUnaryOp::execute_on_main_thread(input_tensor, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
+}
 
 template <typename unary_operation_t>
 void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation) {
@@ -363,7 +425,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const std::vector<UnaryWithParam>& ops_chain,
+               const FusedActivations& ops_chain,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
                const uint8_t queue_id) {
@@ -907,7 +969,7 @@ void bind_unary_operation_with_diag(py::module& module, const unary_operation_t&
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_unary_operation(module, ttnn::abs);
+    detail::bind_unary_operation_overload_complex(module, ttnn::abs);
     detail::bind_unary_operation(module, ttnn::acos);
     detail::bind_unary_operation(module, ttnn::asin);
     detail::bind_unary_operation(module, ttnn::atan);

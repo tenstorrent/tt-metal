@@ -519,7 +519,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .fuse_batch = true,
             .mcast_in0 = false};
         if (activation != "") {
-            matmul_config.fused_activation = string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
         }
         return matmul_config;
     } else {
@@ -533,7 +533,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
             .transpose_mcast = transpose_mcast};
         if (activation != "") {
-            matmul_config.fused_activation = string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
         }
         return matmul_config;
     }
