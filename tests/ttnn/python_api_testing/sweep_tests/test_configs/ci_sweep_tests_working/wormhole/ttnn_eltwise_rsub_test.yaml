@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-rsub:
+  - eltwise-rsub:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]

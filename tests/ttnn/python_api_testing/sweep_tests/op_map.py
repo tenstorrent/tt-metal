@@ -80,7 +80,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_rsqrt,
         "pytorch_op": pytorch_ops.rsqrt,
     },
-    "ttnn-eltwise-rsub": {
+    "eltwise-rsub": {
         "tt_op": ttnn_ops.eltwise_rsub,
         "pytorch_op": pytorch_ops.eltwise_rsub,
     },
