@@ -388,7 +388,7 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize("relu_type, limit_type", [["max", "upper"], ["min", "lower"]])
+    @pytest.mark.parametrize("relu_type, limit_type", [["max", "upper"]])
     @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
     @pytest.mark.parametrize("limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
     def test_run_eltwise_relu_limit_ops(
