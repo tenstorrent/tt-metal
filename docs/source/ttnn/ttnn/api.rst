@@ -109,6 +109,7 @@ Pointwise Unary
    ttnn/gelu
    ttnn/glu
    ttnn/hardshrink
+   ttnn/normalize_global
    ttnn/hardsigmoid
    ttnn/hardswish
    ttnn/hardtanh

@@ -743,4 +743,28 @@ Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output
     return ttnn::exp(result, false);
 }
 
+using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
+Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+
+    // format to HW
+    Tensor y_hw = reshape(y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+
+    // compute @fn
+    Tensor z_0 = fn(y_hw, output_mem_config);
+    TT_FATAL(y_hw.get_legacy_shape() == z_0.get_legacy_shape(), "shape match");
+    y_hw.deallocate();
+
+    // reformat
+    Tensor z_1 = reshape(z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+    z_0.deallocate();
+
+    return z_1;
+}
+
+// Global Norm
+Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    return _make_global_from_hw_impl(_normalize, y, output_mem_config);
+}
+
 }  // namespace ttnn::operations::unary

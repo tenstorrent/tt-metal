@@ -57,6 +57,7 @@ enum class UnaryCompositeOpType {
     CELU,
     LOGICAL_NOT_,
     RPOW,
+    NORMALIZE_GLOBAL,
 };
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -104,6 +105,8 @@ Tensor _softshrink(const Tensor& a, float lambd = 0.5f, const std::optional<Memo
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _celu(const Tensor& a, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_ (const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>& );
+Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -162,6 +165,13 @@ template <>
 struct OpHandler<UnaryCompositeOpType::COSH> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _cosh(t1, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::NORMALIZE_GLOBAL> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _normalize_global(t1, mem_cfg);
     }
 };
 
