@@ -38,7 +38,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
     bool custom_mod_bank_id_calculation_exists =
-        (num_banks == 12 or num_banks == 56 or num_banks == 94 or num_banks == 124 or num_banks == 126);
+        (num_banks == 12 or num_banks == 56 or num_banks == 94 or num_banks == 124 or num_banks == 130);
     bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {

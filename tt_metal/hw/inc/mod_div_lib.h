@@ -53,12 +53,12 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_124(uint32_t n)
     return (((uint64_t) n * 0x08421085) >> 32) >> 2;
 }
 
-inline __attribute__((always_inline)) uint32_t fast_udiv_126(uint32_t n)
+inline __attribute__((always_inline)) uint32_t fast_udiv_130(uint32_t n)
 {
     // Uses embedding style magic number
     // * fixed point 1/12 then shifting.
     // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
-    return (((uint64_t) n * 0x04104105) >> 32) >> 1;
+    return (((uint64_t) n * 0xFC0FC0FD) >> 32) >> 7;
 }
 
 template <uint32_t d>
@@ -75,8 +75,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
         return fast_udiv_94(n);
     } else if constexpr (d == 124) {
         return fast_udiv_124(n);
-    } else if constexpr (d == 126) {
-        return fast_udiv_126(n);
+    } else if constexpr (d == 130) {
+        return fast_udiv_130(n);
     } else {
         // generic divide from llvm
         const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;
