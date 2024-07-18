@@ -6,7 +6,7 @@ import ttnn
 from typing import Optional
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
-from models.demos.wormhole.mistral7b.tt.mistral_rms_norm import TtRMSNorm
+from models.common.rmsnorm import RMSNorm
 
 
 class TtTransformerBlock(torch.nn.Module):
@@ -53,23 +53,23 @@ class TtTransformerBlock(torch.nn.Module):
             dtype=dtype,
             model_config=self.model_config,
         )
-        self.attention_norm = TtRMSNorm(
+        self.attention_norm = RMSNorm(
             device=device,
+            dim=args.dim,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            dtype=dtype,
             layer_num=layer_num,
+            weight_cache_path=weight_cache_path,
+            weight_dtype=dtype,
             weight_key="attention_norm",
-            model_config=self.args.get_model_config(),
         )
-        self.ffn_norm = TtRMSNorm(
+        self.ffn_norm = RMSNorm(
             device=device,
+            dim=args.dim,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            dtype=dtype,
             layer_num=layer_num,
+            weight_cache_path=weight_cache_path,
+            weight_dtype=dtype,
             weight_key="ffn_norm",
-            model_config=self.args.get_model_config(),
         )
 
     def forward(

@@ -689,4 +689,8 @@ op_map = {
         "tt_op": ttnn_ops.pad,
         "pytorch_op": pytorch_ops.pad,
     },
+    "eltwise-relu_max": {
+        "tt_op": ttnn_ops.eltwise_relu_max,
+        "pytorch_op": pytorch_ops.relu_max,
+    },
 }
