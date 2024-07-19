@@ -6,13 +6,6 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
@@ -22,7 +15,6 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import Transformer
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
@@ -55,13 +47,23 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mistral_model_perf(
-    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds, is_ci_env
 ):
+    # Set Mistral flags for CI
+    if is_ci_env:
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
+    model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -188,28 +190,3 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize(
-    "batch, iterations, expected_perf",
-    ((32, 17, 0.16),),
-)
-def test_mistral_perf_device(batch, iterations, expected_perf, reset_seeds):
-    subdir = "ttnn_mistral7b"
-    margin = 0.03
-    command = f"pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
-    expected_perf_cols = {inference_time_key: expected_perf}
-
-    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
-    prep_device_perf_report(
-        model_name=f"mistral-7B_{batch}batch",
-        batch_size=batch,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-    )

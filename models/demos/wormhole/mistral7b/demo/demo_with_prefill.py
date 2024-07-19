@@ -7,14 +7,6 @@ import json
 from time import time
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 import pytest
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
@@ -29,7 +21,6 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 
@@ -136,6 +127,15 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
 
 def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
+    # Set Mistral flags for CI
+    if is_ci_env:
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     assert batch_size == 32, "Batch size must be 32"
 
     embed_on_device = False
@@ -348,8 +348,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
                 logger.info("[User {}] {}".format(user, text))
 
 
-# Avoid running this test when in CI
-@pytest.mark.skipif(os.getenv("CI") == "true", reason="Non-CI tests")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
@@ -359,23 +357,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     ids=["general_weights", "instruct_weights"],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
-    return run_mistral_demo(
-        user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
-    )
+    if is_ci_env and instruct_weights == False:
+        pytest.skip("CI demo test only runs instruct weights (to reduce CI pipeline load)")
 
-
-# CI only runs general-weights demo
-@pytest.mark.skipif(not os.getenv("CI") == "true", reason="CI-only test")
-@pytest.mark.parametrize(
-    "input_prompts, instruct_weights",
-    [
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", False),
-    ],
-    ids=[
-        "general_weights",
-    ],
-)
-def test_mistral7B_demo_CI(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     return run_mistral_demo(
         user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
     )

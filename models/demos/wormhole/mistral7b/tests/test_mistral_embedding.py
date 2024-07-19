@@ -5,15 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -23,7 +15,6 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 class Emb(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -33,7 +24,17 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_mistral_embedding(device, use_program_cache, reset_seeds):
+@skip_for_grayskull("Requires wormhole_b0 to run")
+def test_mistral_embedding(device, use_program_cache, reset_seeds, is_ci_env):
+    # Set Mistral flags for CI
+    if is_ci_env:
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)

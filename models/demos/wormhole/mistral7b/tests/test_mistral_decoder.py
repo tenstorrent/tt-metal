@@ -5,13 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
@@ -19,7 +12,6 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     freqs_to_rotation_matrix,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
@@ -29,11 +21,16 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "iterations",
-    ((1),),
-)
-def test_mistral_decoder_inference(device, iterations, use_program_cache, reset_seeds):
+def test_mistral_decoder_inference(device, use_program_cache, reset_seeds, is_ci_env):
+    # Set Mistral flags for CI
+    if is_ci_env:
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)
@@ -48,7 +45,7 @@ def test_mistral_decoder_inference(device, iterations, use_program_cache, reset_
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
-    generation_length = iterations
+    generation_length = 2
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device

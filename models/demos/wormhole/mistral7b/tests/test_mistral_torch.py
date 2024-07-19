@@ -5,12 +5,12 @@ import torch
 import pytest
 import json
 from pathlib import Path
+import os
 
 # import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
 )
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import Transformer
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
@@ -26,7 +26,16 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_mistral_torch_inference():
+def test_mistral_torch_inference(is_ci_env):
+    # Set Mistral flags for CI
+    if is_ci_env:
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     iterations = 20
 
     model_args = TtModelArgs(device=None)
