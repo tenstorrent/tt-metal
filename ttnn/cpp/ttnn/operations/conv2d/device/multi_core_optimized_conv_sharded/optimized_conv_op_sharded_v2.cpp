@@ -983,10 +983,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
-    CBHandle cb_sharded_act = 0;
-    CBHandle cb_output = 0;
+    tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
     if (is_conv1d and is_depthwise_conv) {
-        auto [cb_sharded_act, cb_output] = create_CBs_for_depthwise_sharded_input(
+        input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,
             a,
             all_cores,
@@ -1014,7 +1013,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // TODO: Moving this function call to after kernel logic causes pcc fails
         // There are additional CBs and semaphores created in 2D conv in kernel logic,
         // so does order of create_cb calls matter?
-        auto [cb_sharded_act, cb_output] = create_CBs_for_sharded_input_v2(
+        input_output_cbs = create_CBs_for_sharded_input_v2(
             program,
             a,
             all_cores,
@@ -1039,6 +1038,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             fp32_dest_acc_en,
             packer_l1_acc_en);
     }
+    CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
+    CBHandle cb_output = std::get<1>(input_output_cbs);
 
     string reader_kernel;
     string compute_kernel;
