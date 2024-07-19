@@ -8,16 +8,11 @@
 #include <numeric>
 
 #include "common/constants.hpp"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp
-#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-=======
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 
 namespace ttnn {
 namespace ccl {

@@ -7,11 +7,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-=======
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::WorkerXY;

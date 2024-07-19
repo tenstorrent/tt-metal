@@ -4,11 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
-=======
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
->>>>>>> 9c82037fb9... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);

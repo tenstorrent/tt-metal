@@ -6,11 +6,7 @@
 
 #include "eth_l1_address_map.h"
 #include "tensor/tensor_impl.hpp"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp
-#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-=======
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp
 #include <limits>
 
 namespace ttnn {

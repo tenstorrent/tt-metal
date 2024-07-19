@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.cpp
-#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
-=======
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "tt_dnn/op_library/math.hpp"
->>>>>>> 9c82037fb9... #9486: Move CCL kernel files to TTNN:ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.cpp
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 

@@ -5,24 +5,22 @@ source scripts/tools_setup_common.sh
 set -eo pipefail
 
 run_additional_T3000_test(){
-    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
-        mkdir -p $PROFILER_ARTIFACTS_DIR
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        ./tt_metal/tools/profiler/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config=MemoryConfig\(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt\)-input_dtype=DataType.BFLOAT16-num_devices=8-num_links=1-input_shape=[8,\ 1,\ 33,\ 256]-dim=0-layout=Layout.ROW_MAJOR]'" > $PROFILER_ARTIFACTS_DIR/test_out.log
+    ./tt_metal/tools/profiler/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config=MemoryConfig\(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt\)-input_dtype=DataType.BFLOAT16-num_devices=8-num_links=1-input_shape=[8,\ 1,\ 33,\ 256]-dim=0-layout=Layout.ROW_MAJOR]'" > $PROFILER_ARTIFACTS_DIR/test_out.log
 
-        cat $PROFILER_ARTIFACTS_DIR/test_out.log
+    cat $PROFILER_ARTIFACTS_DIR/test_out.log
 
-        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-        then
-            echo "No verification as test was skipped"
-        else
-            echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/)
-            LINE_COUNT=9 #1 header + 8 devices
-            res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
-            echo $res
-        fi
+    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+    then
+        echo "No verification as test was skipped"
+    else
+        echo "Verifying test results"
+        runDate=$(ls $PROFILER_OUTPUT_DIR/)
+        LINE_COUNT=9 #1 header + 8 devices
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+        echo $res
     fi
 }
 

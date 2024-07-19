@@ -10,11 +10,7 @@
 #include "debug/assert.h"
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-=======
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
->>>>>>> 509a964fa9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
 #include "tt_metal/hw/inc/wormhole/noc/noc.h"
 
 using ttnn::ccl::EriscDataMoverBufferSharingMode;

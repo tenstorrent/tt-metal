@@ -20,7 +20,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/all_gather/all_gather_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
 
 
@@ -462,7 +461,6 @@ namespace tt::tt_metal::detail{
         );
 
         // ---------- Multi-Device ops ----------
-        // All Gather
 
         // Reduce Scatter
         m_tensor.def("reduce_scatter", &reduce_scatter,
