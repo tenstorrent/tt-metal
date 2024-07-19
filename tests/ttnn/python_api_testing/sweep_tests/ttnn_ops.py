@@ -1167,10 +1167,6 @@ def addcmul_bw(
 
     return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1]), ttnn_tensor_to_torch(t4[2])]
 
-    t3 = ttnn.add_bw(t0, t1, alpha=scalar, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t3[0])
-
 
 def rmsnorm(
     x,
