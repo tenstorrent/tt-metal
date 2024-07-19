@@ -142,6 +142,9 @@ class ResNet50TestInfra:
         use_pretrained_weight,
         dealloc_input,
         final_output_mem_config,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        output_mesh_composer=None,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -154,6 +157,9 @@ class ResNet50TestInfra:
         self.math_fidelity = math_fidelity
         self.dealloc_input = dealloc_input
         self.final_output_mem_config = final_output_mem_config
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.output_mesh_composer = output_mesh_composer
 
         torch_model = (
             torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
@@ -167,12 +173,18 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        input_shape = (batch_size, 3, 224, 224)
+        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        input_shape = (batch_size * num_devices, 3, 224, 224)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
 
+        def custom_preprocessor_mesh(model, name, ttnn_module_args, convert_to_ttnn):
+            return custom_preprocessor(
+                model, name, ttnn_module_args, convert_to_ttnn, custom_preprocessor_mesh, self.weights_mesh_mapper
+            )
+
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: torch_model, custom_preprocessor=custom_preprocessor, device=None
+            initialize_model=lambda: torch_model, custom_preprocessor=custom_preprocessor_mesh, device=None
         )
 
         torch_model.to(torch.bfloat16)
@@ -191,12 +203,13 @@ class ResNet50TestInfra:
             model_config=model_config,
             dealloc_input=dealloc_input,
             final_output_mem_config=final_output_mem_config,
+            mesh_mapper=weights_mesh_mapper,
         )
         self.ops_parallel_config = {}
 
     def preprocess_torch_input(self, torch_input_tensor=None):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        self.input_tensor = self.ttnn_resnet50_model.preprocessing(torch_input_tensor)
+        self.input_tensor = self.ttnn_resnet50_model.preprocessing(torch_input_tensor, self.inputs_mesh_mapper)
 
     def run(self, torch_input_tensor=None):
         # Note: currently not including the time to flip from torch to ttnn tensors.
@@ -206,8 +219,8 @@ class ResNet50TestInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.reshape(output_tensor, (self.batch_size, 1000))
+        output_tensor = ttnn.to_torch(output_tensor, device=self.device, mesh_composer=self.output_mesh_composer)
+        output_tensor = torch.reshape(output_tensor, (output_tensor.shape[0], 1000))
 
         valid_pcc = 1.0
         if self.batch_size >= 8:
@@ -223,7 +236,7 @@ class ResNet50TestInfra:
                     valid_pcc = 0.93
                 else:
                     valid_pcc = 0.982
-
+        print(valid_pcc)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(
@@ -240,6 +253,9 @@ def create_test_infra(
     use_pretrained_weight=True,
     dealloc_input=True,
     final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+    inputs_mesh_mapper=None,
+    weights_mesh_mapper=None,
+    output_mesh_composer=None,
 ):
     return ResNet50TestInfra(
         device,
@@ -250,6 +266,9 @@ def create_test_infra(
         use_pretrained_weight,
         dealloc_input,
         final_output_mem_config,
+        inputs_mesh_mapper,
+        weights_mesh_mapper,
+        output_mesh_composer,
     )
 
 
