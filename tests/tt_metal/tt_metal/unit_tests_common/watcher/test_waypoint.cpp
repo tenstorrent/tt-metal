@@ -81,11 +81,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     // TODO: revert this when #7771 is fixed.
     if (!fixture->IsSlowDispatch())
         has_idle_eth_cores = false;
-    // TODO: revert this when #6860 is fixed.
-    if (fixture->NumDevices() > 2) {// T3000
-        has_eth_cores = false;
-        has_idle_eth_cores = false;
-    }
     if (has_eth_cores) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
@@ -144,7 +139,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  k_id:{}",
+                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* k_id:{}",
                     device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
                     waypoint,
                     k_id_s
@@ -196,7 +191,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     }
 }
 
-TEST_F(WatcherFixture, DISABLED_TestWatcherWaypoints) {
+TEST_F(WatcherFixture, TestWatcherWaypoints) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

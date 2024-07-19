@@ -127,10 +127,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherPause) {
-    if (this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "Skip, see #9993");
-        GTEST_SKIP();
-    }
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

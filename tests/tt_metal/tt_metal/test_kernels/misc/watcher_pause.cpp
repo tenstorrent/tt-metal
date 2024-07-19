@@ -16,6 +16,9 @@ namespace NAMESPACE {
 void MAIN {
 #endif
     uint32_t wait_cycles = get_arg_val<uint32_t>(0);
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    wait_cycles = 0x5f5e1000U;
+#endif
 
     // Do a wait followed by a pause, triscs can't wait.
 #ifndef COMPILE_FOR_TRISC
