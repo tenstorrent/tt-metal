@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 using tt::tt_metal::ccl::ShardType;
 using tt::tt_metal::ccl::WorkerXY;

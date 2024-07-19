@@ -4,8 +4,8 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 using tt::tt_metal::ccl::ShardType;
 using tt::tt_metal::ccl::UNINITIALIZED_VALUE_U16;
