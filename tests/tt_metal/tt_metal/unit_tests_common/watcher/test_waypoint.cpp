@@ -81,11 +81,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     // TODO: revert this when #7771 is fixed.
     if (!fixture->IsSlowDispatch())
         has_idle_eth_cores = false;
-    // TODO: revert this when #6860 is fixed.
-    if (fixture->NumDevices() > 2) {// T3000
-        has_eth_cores = false;
-        has_idle_eth_cores = false;
-    }
     if (has_eth_cores) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
