@@ -6,7 +6,7 @@
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/cpp/ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"

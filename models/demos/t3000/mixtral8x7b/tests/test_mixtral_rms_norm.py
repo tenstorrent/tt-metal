@@ -17,8 +17,8 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
-from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm
+from models.common.rmsnorm import RMSNorm as TtRMSNorm
+from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
@@ -27,8 +27,7 @@ from models.utility_functions import (
 )
 
 
-@skip_for_wormhole_b0("See GH Issue #10322")
-def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+def test_mixtral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
@@ -36,16 +35,18 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[24:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention_norm."))}
-    reference_model = RMSNorm(dim=model_args.dim)
+    reference_model = RefRMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtRMSNormSharded(
-        device_mesh=t3k_device_mesh,
+    tt_model = TtRMSNorm(
+        device=t3k_device_mesh,
+        dim=model_args.dim,
         state_dict=state_dict,
-        args=model_args,
-        dtype=dtype,
         layer_num=0,
         weight_key="attention_norm",
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_memory_config=model_args.model_config["NORM_WEIGHTS_MEMCFG"],
+        weight_dtype=dtype,
     )
     input = torch.rand(1, 1, 32, 4096)
     reference_output = reference_model(input)[0]

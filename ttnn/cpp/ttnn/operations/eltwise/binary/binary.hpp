@@ -88,7 +88,7 @@ inline Tensor execute_on_worker_thread(
 } // utils
 
 template <BinaryOpType binary_op_type, bool in_place>
-struct Binary {
+struct BinaryOperation {
 
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
@@ -169,7 +169,7 @@ struct Binary {
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<FusedActivations> activations = std::nullopt) {
-        return Binary::execute_on_worker_thread(
+        return BinaryOperation::execute_on_worker_thread(
             DefaultQueueId,
             input_tensor_a,
             scalar,
@@ -197,7 +197,7 @@ struct Binary {
             Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return Binary::execute_on_worker_thread(
+        return BinaryOperation::execute_on_worker_thread(
             input_tensor_a,
             scalar_tensor_device,
             dtype,
@@ -318,20 +318,20 @@ struct RelationalBinary {
 }  // operations::binary
 
 constexpr auto add =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::ADD, false>>("ttnn::add");
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>("ttnn::add");
 constexpr auto add_ =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::ADD, true>>("ttnn::add_");
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>("ttnn::add_");
 constexpr auto subtract =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SUB, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>(
         "ttnn::subtract");
 constexpr auto subtract_ =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SUB, true>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>(
         "ttnn::subtract_");
 constexpr auto multiply =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::MUL, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, false>>(
         "ttnn::multiply");
 constexpr auto multiply_ =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::MUL, true>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, true>>(
         "ttnn::multiply_");
 
 constexpr auto eq =
@@ -347,28 +347,28 @@ constexpr auto le =
 constexpr auto lt =
     ttnn::register_operation<operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
 constexpr auto logical_and =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGICAL_AND, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND, false>>(
         "ttnn::logical_and");
 constexpr auto logical_or =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGICAL_OR, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_OR, false>>(
         "ttnn::logical_or");
 constexpr auto ldexp =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LDEXP, false>>("ttnn::ldexp");
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP, false>>("ttnn::ldexp");
 
 constexpr auto logaddexp =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGADDEXP, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP, false>>(
         "ttnn::logaddexp");
 constexpr auto logaddexp2 =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::LOGADDEXP2, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2, false>>(
         "ttnn::logaddexp2");
 constexpr auto squared_difference =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>(
         "ttnn::squared_difference");
 constexpr auto divide =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::DIV_FAST, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>(
         "ttnn::divide");
 constexpr auto bias_gelu =
-    ttnn::register_operation<operations::binary::Binary<operations::binary::BinaryOpType::BIAS_GELU, false>>(
+    ttnn::register_operation<operations::binary::BinaryOperation<operations::binary::BinaryOpType::BIAS_GELU, false>>(
         "ttnn::bias_gelu");
 
 template <typename InputBType>

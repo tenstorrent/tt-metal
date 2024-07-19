@@ -5,18 +5,18 @@
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_eager/tt_dnn/op_library/backward/backward_ops.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "tt_dnn/op_library/permute/permute_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/permute/permute_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttnn::operations::unary_backward {
@@ -29,30 +29,24 @@ std::vector<ttnn::Tensor> _mul_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _clamp_min_bw(
-    const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor minT = ttnn::ge(input, min, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-
-std::vector<Tensor> _clamp_max_bw(
-    const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor maxT = ttnn::le(input, max, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-
 std::vector<Tensor> _clamp_bw(
-    const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
-    Tensor minT = ttnn::ge(input, min, std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::le(input, max, std::nullopt, output_memory_config);
+    TT_FATAL((max.has_value() || min.has_value()) && "Only one of 'min' or 'max' can be None. Please provide atleast one value");
+    if (!max.has_value()) {
+        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
+        Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(result);
+    return grad_tensor;
+    }else if(!min.has_value()) {
+        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
+        Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    }
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
     result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);
@@ -1724,10 +1718,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
     switch (OpType) {
         case UnaryBackwardOpType::MUL_BW:
             return _mul_bw;
-        case UnaryBackwardOpType::CLAMP_MIN_BW:
-            return _clamp_min_bw;
-        case UnaryBackwardOpType::CLAMP_MAX_BW:
-            return _clamp_max_bw;
         case UnaryBackwardOpType::ADD_BW:
             return _add_bw;
         case UnaryBackwardOpType::EQ_BW:

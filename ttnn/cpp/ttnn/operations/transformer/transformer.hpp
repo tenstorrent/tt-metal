@@ -6,10 +6,10 @@
 
 // This is a place holder for when the cpp/ttnn folder structure and ttnn namespace is moved over to tt_eager.
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/core.hpp"
 
@@ -303,9 +303,9 @@ struct ExecuteAttentionSoftmax {
 
 namespace transformer {
 
-constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation(
+constexpr auto split_query_key_value_and_split_heads = REGISTER_OPERATION_FROM_FUNCTION(
     "ttnn::transformer::split_query_key_value_and_split_heads",
-    TO_LAMBDA(ttnn::operations::transformer::split_query_key_value_and_split_heads));
+    ttnn::operations::transformer::split_query_key_value_and_split_heads);
 
 constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
     "ttnn::transformer::concatenate_heads");

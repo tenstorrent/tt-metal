@@ -7,8 +7,6 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 
-// #include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
-
 FORCE_INLINE void fetch_chunk(
     const uint32_t max_pages_per_chunk,
     const uint32_t total_pages_to_read,
