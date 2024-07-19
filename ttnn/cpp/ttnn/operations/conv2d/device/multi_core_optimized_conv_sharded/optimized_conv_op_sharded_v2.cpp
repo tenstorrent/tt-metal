@@ -3,22 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/tensor_utils.hpp"
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
-
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
+#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-========
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -918,26 +909,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     string writer_mcast_receiver_kernel;
     bool tilize_in0 = true;
 
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
-    compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-========
     compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (weight_size_h == weight_size_w and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
         if (weight_width_sliced) {
             // 2D conv
             assert(read_window_in_inner_loop == true);
             reader_kernel =
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-                "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
-            writer_mcast_sender_kernel =
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-            writer_mcast_receiver_kernel =
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-========
                 "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
             writer_mcast_sender_kernel =
@@ -945,7 +923,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
             writer_mcast_receiver_kernel =
                 "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
                 "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -970,22 +947,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
 
             reader_kernel =
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
-            if (split_reader) {
-                writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-            } else {
-                writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/"
-========
                 "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
             if (split_reader) {
                 writer_mcast_sender_kernel =
@@ -1000,7 +961,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                     "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel =
                     "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
                     "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             }
         }

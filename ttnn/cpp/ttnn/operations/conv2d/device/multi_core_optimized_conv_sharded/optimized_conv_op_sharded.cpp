@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
-#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-========
 #include "ttnn/cpp/ttnn/operations/conv2d/device/optimized_conv_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -631,26 +625,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         // TODO: Add support for sharded rn50_first_conv
         TT_ASSERT(false, "Sharded input is not supported for resnet-50 first conv yet!");
     } else {
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
-        compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-========
         compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
         // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
         if (weight_size_h == 3 && weight_size_w == 3 && stride_h == 1) {
             reader_with_indices = true;
             // 2D conv
             if (weight_width_sliced) {
                 assert(read_3x3_window_in_inner_loop == true);
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
-                reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
-                writer_mcast_sender_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-========
                 reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
                 writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
 
                 act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
                 act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -665,15 +649,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             }
             // 1D conv
             else {
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
-                reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
-                writer_mcast_sender_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-========
                 reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
                 writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
             }
 
             // Local L1 to store array for reader indices

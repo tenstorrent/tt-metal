@@ -6,13 +6,8 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/conv2d.cpp
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-=======
-#include "ttnn/op_library/to_dtype/to_dtype_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
->>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/conv2d.cpp
 
 using namespace tt;
 namespace ttnn {
