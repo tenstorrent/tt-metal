@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/experimental/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "device/pad_op.hpp"
 

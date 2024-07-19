@@ -184,7 +184,6 @@ include(${PROJECT_SOURCE_DIR}/cmake/umd_device.cmake)
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/hw)
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_eager)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
@@ -200,13 +199,9 @@ install(TARGETS tt_metal
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
-install(TARGETS ttnn_lib
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-)
 install(TARGETS ttnn
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 if(WITH_PYTHON_BINDINGS)

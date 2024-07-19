@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     vector<uint32_t> writer_rt_args;
     if (untilize_out) {
         // out is row major
-        writer_kernel = "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
+        writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_rt_args = {
             out_dram_addr,
             in0_block_h_data,
@@ -526,7 +526,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     );
 
     // Compute kernel
-    std::string compute_kernel = "tt_eager/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
+    std::string compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
     std::vector<uint32_t> compute_comptime_args = {
         in0_block_w,
         in0_num_subblocks,

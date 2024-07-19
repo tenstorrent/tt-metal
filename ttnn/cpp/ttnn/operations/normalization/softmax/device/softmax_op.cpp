@@ -6,9 +6,9 @@
 #include "tt_metal/common/assert.hpp"
 #include "common/base_types.hpp"
 #include "tensor/types.hpp"
-#include "tt_eager/tt_dnn/op_library/math.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

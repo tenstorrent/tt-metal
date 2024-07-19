@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/tilize_with_val_padding_op.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {

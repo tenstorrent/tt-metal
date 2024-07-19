@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include <tt_numpy/functions.hpp>
 
 #include <algorithm>

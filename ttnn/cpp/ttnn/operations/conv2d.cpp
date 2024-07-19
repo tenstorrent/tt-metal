@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 using namespace tt;
 namespace ttnn {

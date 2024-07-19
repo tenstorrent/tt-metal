@@ -41,10 +41,10 @@ Makefile @tt-rkim
 /module.mk @tt-rkim
 tt_metal/module.mk @tt-rkim
 tt_metal/common/module.mk @tt-rkim
-tt_eager/module.mk @tt-rkim
+ttnn/cpp/ttnn/experimental/module.mk @tt-rkim
 /CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
 tt_metal/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
-tt_eager/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
+ttnn/cpp/ttnn/experimental/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
 
 # Testing scripts and infra
 
@@ -111,18 +111,18 @@ tests/scripts/run_performance.sh @tt-rkim
 # **/tensor/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - tensor and op infra
-tt_eager/tt_dnn/op_library/ccl/ @SeanNijjar
-tt_eager/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ @SeanNijjar
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
-**/tt_eager/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
-**/tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
-**/tt_eager/tt_lib/fallback_ops @tt-aho
+**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
+**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
+**/ttnn/cpp/ttnn/experimental/tt_lib/fallback_ops @tt-aho
 
 # TTNN
 ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt

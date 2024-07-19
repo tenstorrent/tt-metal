@@ -5,8 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker              = get_compile_time_arg_val(0) == 1;
