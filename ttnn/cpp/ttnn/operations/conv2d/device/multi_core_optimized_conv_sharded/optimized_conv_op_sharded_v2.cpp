@@ -515,11 +515,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // TODO: Move all these asserts/checks to validate?
 
-    uint32_t kernel_height = conv_params[0];
-    uint32_t kernel_width = conv_params[1];
+    uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
+    uint32_t kernel_width = conv_params[1];
     uint32_t groups = conv_params[6];
-    bool is_conv1d = kernel_height == 1 || kernel_width == 1;
+    bool is_conv1d = kernel_width == 1 && input_width == 1;
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
 
     if (has_bias) {

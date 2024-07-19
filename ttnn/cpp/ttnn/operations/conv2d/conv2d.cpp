@@ -438,10 +438,11 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     DataType weights_bias_dtype,
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
-    uint32_t act_block_h_ntiles,
     const ParallelConfig& parallel_config,
     Device& device,
-    uint32_t groups) {
+    uint32_t groups,
+    uint32_t act_block_h_ntiles,
+    uint32_t input_width) {
     validate_weight_and_bias_tensors(weight_tensor, bias_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -452,7 +453,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
-    bool is_conv1d = original_weights_window_w == 1 || original_weights_window_h == 1;
+    bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
     bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
 
     weight_tensor_ = weight_tensor;
@@ -612,10 +613,11 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
-            opt_conv_op_block_config.act_block_h_ntiles,
             parallel_config,
             device,
-            groups);
+            groups,
+            opt_conv_op_block_config.act_block_h_ntiles,
+            input_width);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && stride[0] == 1 &&
