@@ -187,10 +187,11 @@ class TtMixtralAttention(LightweightModule):
         )
 
         # Reshape such that true unpadded batch is tracked in shape
-        fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(
-            xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-        )
+        if self.max_batch_size < 32:
+            fqkv_shape = xqkv_fused.shape
+            xqkv_fused = ttnn.reshape(
+                xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+            )
 
         # split qkv into heads
         (
