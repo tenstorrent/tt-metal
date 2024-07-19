@@ -3321,3 +3321,22 @@ def eltwise_relu_max(
     t1 = ttnn.relu_max(t0, upper_limit, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def unpad(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.slice(t0, output_tensor_start, output_tensor_end, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
