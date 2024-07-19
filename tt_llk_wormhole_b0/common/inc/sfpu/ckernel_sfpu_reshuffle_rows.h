@@ -23,12 +23,13 @@ inline void _calculate_reshuffle_rows_(const uint idx_addr)
     constexpr uint output_tile_offset = 64;
 
     // clr DEST tile 1
-    for (uint row=0; row < 32; row+=4) {
-        TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row);
-        TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 2);
-        TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 32);
-        TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 34);
-    }
+    // TODO (Radomir): Add optional clear that is more optimal using tile copy
+    // for (uint row=0; row < 32; row+=4) {
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 2);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 32);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 34);
+    // }
 
     volatile tt_l1_ptr uint8_t *idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(idx_addr+(1<<4));
     static constexpr uint input_lreg[4] = {p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3};
