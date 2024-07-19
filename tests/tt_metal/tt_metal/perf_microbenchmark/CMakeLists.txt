@@ -54,7 +54,7 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_eager
+        ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/experimental # this all should go away and be replaced with link to ttnn
         ${PROJECT_SOURCE_DIR}/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}

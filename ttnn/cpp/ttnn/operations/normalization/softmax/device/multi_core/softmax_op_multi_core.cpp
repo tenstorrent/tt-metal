@@ -4,11 +4,11 @@
 
 #include "tt_metal/common/logger.hpp"
 #include "impl/buffers/buffer.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
-#include "tt_eager/tt_dnn/op_library/math.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

@@ -388,7 +388,7 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize("relu_type, limit_type", [["max", "upper"]])
+    @pytest.mark.parametrize("relu_type, limit_type", [["max", "upper"], ["min", "lower"]])
     @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
     @pytest.mark.parametrize("limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
     def test_run_eltwise_relu_limit_ops(
@@ -700,12 +700,7 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            "eltwise-unary_fmod",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            "eltwise-unary_fmod", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @pytest.mark.parametrize("unary_comp", ["unary_ne"])

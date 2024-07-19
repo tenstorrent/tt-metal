@@ -456,10 +456,6 @@ op_map = {
         "tt_op": tt_lib_ops.bert_large_fused_qkv_matmul,
         "pytorch_op": pytorch_ops.bert_large_fused_qkv_matmul,
     },
-    "eltwise-relu_min": {
-        "tt_op": tt_lib_ops.eltwise_relu_min,
-        "pytorch_op": pytorch_ops.relu_min,
-    },
     "eltwise-polyval": {
         "tt_op": tt_lib_ops.eltwise_polyval,
         "pytorch_op": pytorch_ops.polyval,
@@ -531,10 +527,6 @@ op_map = {
     "eltwise-fmod": {
         "tt_op": tt_lib_ops.eltwise_fmod,
         "pytorch_op": pytorch_ops.fmod,
-    },
-    "eltwise-unary_fmod": {
-        "tt_op": tt_lib_ops.eltwise_unary_fmod,
-        "pytorch_op": pytorch_ops.unary_fmod,
     },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,
@@ -1074,10 +1066,6 @@ op_map = {
     "add-layernorm": {
         "tt_op": tt_lib_ops.add_layernorm,
         "pytorch_op": pytorch_ops.add_layernorm,
-    },
-    "unpad": {
-        "tt_op": tt_lib_ops.unpad,
-        "pytorch_op": pytorch_ops.unpad,
     },
     ################################################
     #################### Tensor ####################

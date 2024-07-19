@@ -419,24 +419,6 @@ def eltwise_rsqrt(
 
 
 @setup_host_and_device
-def eltwise_relu_min(
-    x,
-    *args,
-    lower_limit,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.relu_min(t0, lower_limit, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_prelu(
     x,
     *args,
@@ -1357,24 +1339,6 @@ def eltwise_unary_remainder(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.remainder(t0, value, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_unary_fmod(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.fmod(t0, value, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2385,25 +2349,6 @@ def untilize_with_unpadding(
         )
 
     t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_end, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def unpad(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    output_tensor_start,
-    output_tensor_end,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.slice(t0, output_tensor_start, output_tensor_end, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
