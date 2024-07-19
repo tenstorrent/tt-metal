@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
 using namespace tt::tt_metal;
@@ -347,6 +348,8 @@ class SystemMemoryManager {
     vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
 
+    WorkerConfigBufferMgr config_buffer_mgr;
+
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
@@ -354,7 +357,9 @@ class SystemMemoryManager {
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
-        bypass_buffer_write_offset(0) {
+        bypass_buffer_write_offset(0),
+        config_buffer_mgr({{L1_KERNEL_CONFIG_BASE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE}, {L1_KERNEL_CONFIG_SIZE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE}}) {
+
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -720,4 +725,7 @@ class SystemMemoryManager {
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
+
+    WorkerConfigBufferMgr& get_config_buffer_mgr() { return config_buffer_mgr; }
+
 };

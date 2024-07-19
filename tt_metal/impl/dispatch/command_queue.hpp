@@ -313,8 +313,8 @@ class EnqueueProgramCommand : public Command {
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed);
 
-    void assemble_preamble_commands(bool prefetch_stall);
-    void assemble_device_commands();
+    void assemble_preamble_commands(bool prefetch_stall, uint32_t tensix_l1_config_base, uint32_t eth_l1_config_base);
+    void assemble_device_commands(bool is_cached, uint32_t tensix_l1_kernel_config_base, uint32_t eth_l1_kernel_config_base);
     void assemble_runtime_args_commands();
 
     void process();

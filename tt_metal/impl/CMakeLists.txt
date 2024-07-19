@@ -14,6 +14,7 @@ set(IMPL_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp

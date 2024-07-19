@@ -369,11 +369,14 @@ class DeviceCommand {
         }
     }
 
-    void add_dispatch_set_writeoffset(uint32_t write_offset) {
+    void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
         auto initialize_write_offset_cmd = [&](CQDispatchCmd *write_offset_cmd) {
             *write_offset_cmd = {};
             write_offset_cmd->base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+            write_offset_cmd->set_write_offset.offset0 = write_offset0;
+            write_offset_cmd->set_write_offset.offset1 = write_offset1;
+            write_offset_cmd->set_write_offset.offset2 = write_offset2;
         };
         CQDispatchCmd *write_offset_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
@@ -542,7 +545,8 @@ class DeviceCommand {
         const std::vector<std::vector<std::tuple<const void *, uint32_t, uint32_t>>> &data_collection,
         uint32_t packed_write_max_unicast_sub_cmds,
         const uint32_t offset_idx = 0,
-        const bool no_stride = false) {
+        const bool no_stride = false,
+        uint32_t write_offset_index = 0) {
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -565,6 +569,7 @@ class DeviceCommand {
                 (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
                 (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
             write_packed_cmd->write_packed.count = num_sub_cmds;
+            write_packed_cmd->write_packed.write_offset_index = write_offset_index;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;
         };
