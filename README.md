@@ -63,7 +63,7 @@
 
 [5] - This model demo does not work on N300. It does work on N150.
 
-## T3000 (2x4 mesh of WHs) Models
+##  TT-QuietBox & TT-LoudBox (2x4 mesh of WHs) Models
 
 | Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
 |-----------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
