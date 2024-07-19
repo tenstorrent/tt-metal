@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
