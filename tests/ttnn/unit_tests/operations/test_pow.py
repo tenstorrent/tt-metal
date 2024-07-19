@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,8 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 
     cq_id = 0
     ttnn.pow(input_tensor, exponent, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.pow(in_data, exponent)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    golden_tensor = golden_fn(in_data, exponent)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.9)
     assert comp_pass
