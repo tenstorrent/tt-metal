@@ -8,7 +8,7 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "ttnn/operations/pool/max_pool.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
