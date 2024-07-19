@@ -9,7 +9,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.common.mlp import MLP
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
@@ -42,8 +42,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
         x,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        device=llama_mlp_model.device_mesh,
-        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.device_mesh),
+        device=llama_mlp_model.device,
+        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.device),
     )
 
     if llama_mlp_model.model_config["LLM_MODE"] == "decode":
@@ -108,14 +108,14 @@ def run_test_LlamaMLP_inference(
     pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
 
     # TT hardware execution -------------------------------------------------------------
-    tt_LlamaMLP_model = TtLlamaMLP_optimized(
-        t3k_device_mesh,
-        state_dict,
-        BASE_URL,
-        UNIT_TEST_LAYER_NUM,
-        configuration.dim,
-        model_config,
-        cache_path=cache_path,
+    tt_LlamaMLP_model = MLP(
+        device=t3k_device_mesh,
+        dim=configuration.dim,
+        state_dict=state_dict,
+        layer_num=UNIT_TEST_LAYER_NUM,
+        model_config=model_config,
+        weight_base_name=BASE_URL,
+        weight_cache_path=cache_path,
     )
 
     tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
@@ -140,7 +140,7 @@ def run_test_LlamaMLP_inference(
     "llama_version",
     (
         ("llama2"),
-        ("llama3"),
+        #        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(

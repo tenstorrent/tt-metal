@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.common.lightweightmodule import LightweightModule
+from models.common.modules import LightweightModule
 
 
 TILE = 32
@@ -41,6 +41,7 @@ class RMSNorm(LightweightModule):
         dim,
         state_dict,
         weight_key,
+        weight_base="layers",
         layer_num=None,
         weight_cache_path=None,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -55,8 +56,10 @@ class RMSNorm(LightweightModule):
 
         if layer_num is None:
             weight_name = f"{weight_key}.weight"
+        elif weight_base is None:
+            weight_name = f"{layer_num}.{weight_key}.weight"
         else:
-            weight_name = f"layers.{layer_num}.{weight_key}.weight"
+            weight_name = f"{weight_base}.{layer_num}.{weight_key}.weight"
 
         torch_weight = state_dict[weight_name].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
