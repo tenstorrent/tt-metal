@@ -8,7 +8,6 @@ import torch
 import ttnn
 from ttnn import ShardTensorToMesh
 import ttnn.experimental_operations
-from models.demos.t3000.llama2_70b.tt.llama_common import get_flash_decode_chunk_size, num_to_corerange
 
 
 class TtLlamaAttention_optimized:
@@ -195,7 +194,7 @@ class TtLlamaAttention_optimized:
         attn_masks,
     ):
         query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
-        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, attn_masks)
+        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos)
         return self.attn_selfout(attn_outputs)
 
     def attn_qkv(
@@ -213,6 +212,12 @@ class TtLlamaAttention_optimized:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         xs.deallocate(True)
+
+        d = fused_query_key_value.get_legacy_shape()[-1]
+        fused_query_key_value = ttnn.reshape(
+            fused_query_key_value,
+            ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
+        )
 
         # Split QKV
         (
@@ -255,7 +260,6 @@ class TtLlamaAttention_optimized:
         key_layer,
         value_layer,
         start_pos: int,
-        attn_masks,
         batch_offset: int = 0,
     ):
         # K CACHE UPDATE
@@ -268,38 +272,15 @@ class TtLlamaAttention_optimized:
         ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-
-        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
-            compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
-            q_chunk_size=self.padded_local_heads,
-            k_chunk_size=k_chunk_size,
-        )
-
-        COMPUTE_KERNEL_SDPA = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
-        shard_grid = ttnn.CoreRangeSet({num_to_corerange(self.max_batch_size)})
-        shard_spec = ttnn.ShardSpec(
-            shard_grid, (self.padded_local_heads, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False
-        )
-        SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
-        )
-
         attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
             query_layer,
             keys,
             values,
             [start_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
-            program_config=program_config,
-            compute_kernel_config=COMPUTE_KERNEL_SDPA,
-            output_mem_config=SDPA_HEIGHT_SHARDED_MEMCFG,
+            program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
+            compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+            output_mem_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
         )
         return attn_output
 
@@ -317,7 +298,6 @@ class TtLlamaAttention_optimized:
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            # memory_config=self.model_config["L1_MEMCFG"],
             memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 

@@ -169,6 +169,10 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
+        # Pad x to match the padded batch size
+        x = torch.nn.functional.pad(
+            x, (0, 0, 0, llama_attention_model.model_config["PADDED_BATCH_SIZE"] - batch), value=0
+        )
 
         xs = ttnn.as_tensor(
             x,
@@ -201,25 +205,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             rot_mats, sharded_mem_config=llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
         )
 
-        padded_layer_past_len = nearest_32(start_pos + 1)
-        attn_mask_shape = (seq_len, 1, llama_attention_model.padded_local_heads, padded_layer_past_len)
-        attn_mask = torch.zeros(*attn_mask_shape)
-        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+        attn_masks = None
 
-        attn_masks = ttnn.as_tensor(
-            attn_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=llama_attention_model.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
-            device=llama_attention_model.device_mesh,
-        )
-        attn_masks = ttnn.to_device(attn_masks, llama_attention_model.device_mesh)
-
-        repeat_shape = (1, batch, 1, 1)
-        attn_masks = tt_lib.tensor.repeat(
-            attn_masks, repeat_shape, output_mem_config=llama_attention_model.model_config["DRAM_MEMCFG"]
-        )
     return (
         xs,
         start_pos,
@@ -329,7 +316,9 @@ def run_test_LlamaAttention_inference(
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
+        if model_config["LLM_MODE"] == "decode":
+            tt_out = tt_out[:batch]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -375,12 +364,11 @@ def run_test_LlamaAttention_inference(
         pcc,
     )
 
-    all_test_pass = all_tests_pass and cache_test_pass
+    all_tests_pass = all_tests_pass and cache_test_pass
 
     if all_tests_pass:
         logger.info(f"{llama_version} Attention output Passed!")
     else:
-        gc.collect()
         logger.warning(f"{llama_version} Attention output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
@@ -395,17 +383,17 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9997), (1, 128, 0.9997), (1, 2048, 0.9997), (1, 8192, 0.99)),
-    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+    ((32, 1, 0.9997), (16, 1, 0.999), (1, 128, 0.9997), (1, 2048, 0.9997), (1, 8192, 0.99)),
+    ids=("decode", "decodeb16", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
     (
-        # (32, 2048),
+        (32, 2048),
         (16, 8192),
     ),
     ids=(
-        # "short_context",
+        "short_context",
         "long_context",
     ),
 )
@@ -419,14 +407,14 @@ def test_LlamaAttention_inference(
     llama_version,
     use_program_cache,
 ):
-    if batch > max_batch_size:
-        pytest.skip(f"Decode with {batch} users is not supported with large context")
+    if seq_len == 1 and batch != max_batch_size:
+        pytest.skip(f"Input batch size should match max_batch_size")
 
     if batch == 1 and seq_len > max_context_len:
-        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
+        pytest.skip(f"Prefill with seq_len={seq_len} is not supported with short context")
 
     if llama_version == "llama2" and seq_len > 2048:
-        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
+        pytest.skip(f"Llama2 with seq_len={seq_len} is not supported (max 2048)")
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,

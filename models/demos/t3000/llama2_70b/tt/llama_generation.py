@@ -53,8 +53,6 @@ class TtLlamaModelForGeneration:
         del state_dict
 
     def forward(self, tokens: torch.Tensor, start_pos: int):
-        if start_pos > 2048 + 128:
-            raise ValueError("Exceeding current max context length of 2k+128 tokens")
         _, seq_len = tokens.shape
         if seq_len == 1:
             return self.decode_forward(tokens, start_pos)
@@ -63,6 +61,7 @@ class TtLlamaModelForGeneration:
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int):
         self._update_model_config("decode", tokens.shape[0], 1)
+        batch = tokens.shape[0]
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
 
         tt_logits = self.tt_model(
@@ -79,6 +78,7 @@ class TtLlamaModelForGeneration:
         logits = self._process_logits(tt_logits)
 
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
+        logits = logits[:batch]  # Remove padded users
         del tt_logits
 
         return logits
