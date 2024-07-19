@@ -149,21 +149,21 @@ def test_run_optimized_conv(
         out = ttnn.operations.conv2d.optimized_conv(
             A,
             B_tiled,
-            bias_device,
-            None,
-            [R, S, stride_h, stride_w, pad_h, pad_w],
-            K,
-            untilize_out,
-            has_bias,
-            fuse_relu,
-            ttl.tensor.MathFidelity.HiFi4,
-            ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
+            bias=bias_device,
+            conv_reader_indices=None,
+            conv_params=[R, S, stride_h, stride_w, pad_h, pad_w],
+            output_channels=K,
+            untilize_out=untilize_out,
+            has_bias=has_bias,
+            fuse_relu=fuse_relu,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            parallelization_config=ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(1, 1),
                 num_cores_nhw=1,
                 per_core_out_matrix_height_ntiles=out_matrix_height_ntiles,
                 per_core_out_matrix_width_ntiles=weight_matrix_width_ntiles,
             ),
-            ttnn.operations.conv2d.OptimizedConvBlockConfig(
+            block_config=ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,

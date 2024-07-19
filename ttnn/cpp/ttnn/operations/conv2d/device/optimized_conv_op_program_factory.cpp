@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.cpp
-#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-========
 #include "optimized_conv_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
->>>>>>>> b199fa4e2b (#9756: Move Conv2d to tttn. First commit. Works):ttnn/cpp/ttnn/operations/conv2d/device/optimized_conv_op.cpp
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -70,8 +65,8 @@ Tensor optimized_conv(const Tensor& a,
             const OptimizedConvParallelizationConfig& parallelization_config,
             const OptimizedConvBlockConfig& block_config,
             uint32_t extra_padding_for_32B_alignment,
-            std::optional<MemoryConfig> output_mem_config,
-            std::optional<DataType> output_dtype,
+            std::optional<MemoryConfig> memory_config,
+            std::optional<DataType> dtype,
             std::optional<std::array<std::uint32_t, 4>> input_tensor_shape,
             bool use_shallow_conv_variant,
             bool transpose_mcast,
@@ -82,7 +77,7 @@ Tensor optimized_conv(const Tensor& a,
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, transpose_mcast, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
+        [conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, transpose_mcast, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto& a = input_tensors.at(0);
                 auto& b = input_tensors.at(1);
@@ -98,14 +93,14 @@ Tensor optimized_conv(const Tensor& a,
                     input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
                 }
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-                if (output_mem_config.has_value()) {
-                    TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value().memory_layout == TensorMemoryLayout::INTERLEAVED));
+                if (memory_config.has_value()) {
+                    TT_ASSERT((memory_config.value().is_sharded() || memory_config.value().memory_layout == TensorMemoryLayout::INTERLEAVED));
                 }
                 auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
                 bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, transpose_mcast, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
+                    OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config.value_or(a.memory_config()), dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, transpose_mcast, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
                     ),
                     input_tensors,
                     optional_input_tensors);
@@ -119,16 +114,16 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     // TODO: ...
     TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
-        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
+        TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32));
     }
-    if (this->output_mem_config.is_sharded()) {
+    if (this->memory_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
-        if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles);
             TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
-        } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
             if (transpose_mcast) {
@@ -171,18 +166,18 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
     const auto& input_tensor = input_tensors.at(0);
     const auto& weight_tensor = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    if (this->output_mem_config.is_sharded()) {
+    if (this->memory_config.is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
             uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
             CoreRangeSet shard_grid = num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
 
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->output_mem_config;
+            auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -195,13 +190,13 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->output_mem_config;
+            auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         }
 
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, output_layout, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, this->dtype, output_layout, this->memory_config);
 }
 
 operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<Tensor>& input_tensors,
@@ -281,8 +276,8 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
-    MemoryConfig output_mem_config,
-    DataType output_dtype,
+    MemoryConfig memory_config,
+    DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
@@ -292,7 +287,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [conv_params, output_channels, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
+        [conv_params, output_channels, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto& a = input_tensors.at(0);
                 auto& b = input_tensors.at(1);
@@ -312,12 +307,13 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
+                    OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
                     ),
                     input_tensors,
                     optional_input_tensors);
             }, {a, b}, output_tensors, {bias});
     return output_tensors.at(0);
+
 }
 
 void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -326,19 +322,19 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     // TODO: ...
     TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
-        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
+        TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32));
     }
-    if (this->output_mem_config.is_sharded()) {
+    if (this->memory_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
-        if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles);
             TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
-        } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
-            if (this->output_mem_config.shard_spec.value().orientation == ShardOrientation::COL_MAJOR) {
+            if (this->memory_config.shard_spec.value().orientation == ShardOrientation::COL_MAJOR) {
                 out_width_ntiles /= this->parallelization_config.grid_size.y;
             } else {
                 out_width_ntiles /= this->parallelization_config.grid_size.x;
@@ -378,19 +374,19 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
     const auto& input_tensor = input_tensors.at(0);
     const auto& weight_tensor = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    if (this->output_mem_config.is_sharded()) {
+    if (this->memory_config.is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
             uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
             CoreRangeSet shard_grid = num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
 
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->output_mem_config;
+            auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
-        } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
+        } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
@@ -406,16 +402,16 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             CoreRangeSet shard_grid = CoreRangeSet({{{0, 0}, {num_cores_x - 1, num_cores_y - 1}}});
             log_debug(LogOp, "Calculated shard_grid: {}", shard_grid.str());
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->output_mem_config.shard_spec.value().orientation};
-            auto mem_config = this->output_mem_config;
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
+            auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
             TT_FATAL(false, "Unsupported shard scheme");
         }
 
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, output_layout, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, this->dtype, output_layout, this->memory_config);
 }
 
 operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vector<Tensor>& input_tensors,
@@ -433,7 +429,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         untilize_out, fuse_relu, math_fidelity,
         parallelization_config,
         block_config, extra_padding_for_32B_alignment,
-        output_dtype,
+        dtype,
         input_tensor_shape,
         use_shallow_conv_variant,
         compute_kernel_config,
