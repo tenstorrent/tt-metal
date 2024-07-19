@@ -15,19 +15,12 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
+def _golden_function(grad_tensor, input_index, weights, input_shapes, *args, **kwargs):
     import torch
 
-    batch_size = input_tensor.shape[0]
-    no_of_embeddings = input_tensor.shape[1] * input_tensor.shape[2]
-    embedding_dim = input_tensor.shape[3]
-
-    input_shape = [batch_size, 1, 1, no_of_embeddings]
-    input_index = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=input_shape)
-    weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
-    weights = torch.randn(weights_shape, requires_grad=True)
-    grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
-    grad_data = torch.randn(grad_shape, requires_grad=True)
+    batch_size = input_shapes[0]
+    no_of_embeddings = input_shapes[1] * input_shapes[2]
+    embedding_dim = input_shapes[3]
 
     weights.retain_grad()
 
@@ -36,7 +29,7 @@ def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
         weights.reshape((batch_size * no_of_embeddings, embedding_dim)),
     ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
 
-    pyt_y.backward(gradient=grad_data)
+    pyt_y.backward(gradient=grad_tensor)
 
     golden_output_tensor_a = weights.grad
 
@@ -47,7 +40,7 @@ ttnn.attach_golden_function(ttnn.embedding_bw, golden_function=_golden_function)
 
 
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    if torch_op == squared_difference:
+    if torch_op == "squared_difference_bw":
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     elif torch_op == torch.clone:
         pyt_y = torch.clone(input_tensor_a)
@@ -59,6 +52,17 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
         pyt_y = torch_op(input_tensor_a, input_tensor_b)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+def _golden_function_backward_with_dim(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, dimension, *args, **kwargs
+):
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+    pyt_y = torch.cat((input_tensor_a, input_tensor_b), dim=dimension)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
@@ -76,7 +80,7 @@ def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, 
 def _golden_function_backward_with_string(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, value, *args, **kwargs
 ):
-    if torch_op == bias_gelu:
+    if torch_op == "bias_gelu":
         sum_result = torch.add(input_tensor_a, input_tensor_b)
         pyt_y = torch.nn.functional.gelu(sum_result)
         sum_result.retain_grad()
@@ -159,7 +163,7 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.squared_difference_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        squared_difference, grad, a, b, *args, **kwargs
+        "squared_difference_bw", grad, a, b, *args, **kwargs
     ),
 )
 
@@ -193,8 +197,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.concat_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.clone, grad, a, b, *args, **kwargs
+    golden_function=lambda grad, a, b, dimension, *args, **kwargs: _golden_function_backward_with_dim(
+        torch.cat, grad, a, b, dimension, *args, **kwargs
     ),
 )
 

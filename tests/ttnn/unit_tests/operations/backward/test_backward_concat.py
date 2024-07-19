@@ -31,18 +31,14 @@ def test_bw_add(input_shapes, input_shapes_2, dimension, device):
 
     other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
     pyt_y = torch.cat((in_data, other_data), dim=dimension)
 
     grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
 
     tt_output_tensor_on_device = ttnn.concat_bw(grad_tensor, input_tensor, other_tensor, dimension)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.concat_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data, dimension)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
