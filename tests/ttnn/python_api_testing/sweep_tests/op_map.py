@@ -308,10 +308,6 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
-    "eltwise-relu_min": {
-        "tt_op": ttnn_ops.eltwise_relu_min,
-        "pytorch_op": pytorch_ops.relu_min,
-    },
     "ttnn-eltwise-logical_not": {
         "tt_op": ttnn_ops.eltwise_logical_not,
         "pytorch_op": pytorch_ops.logical_not,
@@ -693,8 +689,20 @@ op_map = {
         "tt_op": ttnn_ops.pad,
         "pytorch_op": pytorch_ops.pad,
     },
+    "eltwise-relu_min": {
+        "tt_op": ttnn_ops.eltwise_relu_min,
+        "pytorch_op": pytorch_ops.relu_min,
+    },
     "eltwise-relu_max": {
         "tt_op": ttnn_ops.eltwise_relu_max,
         "pytorch_op": pytorch_ops.relu_max,
+    },
+    "unpad": {
+        "tt_op": ttnn_ops.unpad,
+        "pytorch_op": pytorch_ops.unpad,
+    },
+    "eltwise-unary_fmod": {
+        "tt_op": ttnn_ops.eltwise_unary_fmod,
+        "pytorch_op": pytorch_ops.unary_fmod,
     },
 }

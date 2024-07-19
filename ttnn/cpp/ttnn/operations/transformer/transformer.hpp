@@ -4,12 +4,11 @@
 
 #pragma once
 
-// This is a place holder for when the cpp/ttnn folder structure and ttnn namespace is moved over to tt_eager.
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/core.hpp"
 

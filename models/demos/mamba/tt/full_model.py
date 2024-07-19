@@ -127,25 +127,20 @@ class MambaTT(torch.nn.Module):
     def embedding(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
         x = ttnn.embedding(
-            x, self.embedding_weights, output_dtype=ttnn.bfloat16
+            x, self.embedding_weights, output_dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.embedding always returns (B, L, E)
         return ttnn.reshape(x, [1, 1, self.configs["outer_dim"], x.shape[2]])
 
-    def forward(self, x):
-        assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
-
-        x = ttnn.from_torch(
-            x,
-            device=self.device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.uint32,
-        )
+    def _forward(self, x):
+        assert len(x.shape) == 2, f"Expected tensor to be rank 2 (shape was {x.shape})"
+        assert (
+            x.shape[-1] <= self.configs["max_seq_length"]
+        ), f"Expected L to be less than or equal to max sequence length (was {x.shape[-1]}, expected <= {self.configs['max_seq_length']})"
 
         x = self.embedding(x)
         x = ttnn.typecast(ttnn.to_layout(x, ttnn.TILE_LAYOUT), self.configs["dtype"]["activations"])
 
-        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
+        assert len(x.shape) == 4, f"Expected embedding output to be rank 4 (shape was {x.shape})"
         assert x.layout == ttnn.TILE_LAYOUT, f"Expected embedding to be tile layout (was {x.layout})"
 
         for i, layer in enumerate(self.layers):
@@ -169,7 +164,20 @@ class MambaTT(torch.nn.Module):
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.configs["dtype"]["activations"],
             )
+
+        return x
+
+    def forward(self, x):
+        assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
+        x = ttnn.from_torch(
+            x,
+            device=self.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.uint32,
+        )
+        x = self._forward(x)
+        if self.return_logits or self.configs["mode"] == ModelMode.DECODE:
             x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
             x = x.view((self.configs["batch_size"], self.configs["seq_len"], -1))
-
             return x

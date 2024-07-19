@@ -4,9 +4,9 @@
 
 #include "device/tt_xy_pair.h"
 #include "gtest/gtest.h"
-#include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_common.hpp"
-#include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_common.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;

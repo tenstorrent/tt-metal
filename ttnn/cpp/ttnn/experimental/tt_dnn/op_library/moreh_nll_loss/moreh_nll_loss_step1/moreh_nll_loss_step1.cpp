@@ -1,0 +1,157 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
+
+using namespace tt::constants;
+using namespace std;
+using namespace tt::tt_metal;
+
+namespace tt {
+namespace operations {
+namespace primary {
+
+operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
+    const Tensor &target,
+    const std::optional<const Tensor> weight,
+    Tensor &output,
+    const int32_t ignore_index,
+    const bool reduction_mean,
+    const uint32_t channel_size,
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config) {
+    auto target_shape = target.get_legacy_shape();
+    auto N = target_shape[1];
+
+    const auto target_shape_without_padding = target_shape.without_padding();
+    const auto origin_N = target_shape_without_padding[1];
+
+    const bool weight_has_value = weight.has_value();
+
+    auto H = target_shape[-2];
+    auto W = target_shape[-1];
+    auto Ht = H / TILE_HEIGHT;
+    auto Wt = W / TILE_WIDTH;
+
+    // copy TILE per core
+    uint32_t units_to_divide = target.volume() / H / W * (Ht * Wt);
+
+    uint32_t core_w = core_range.end.x - core_range.start.x + 1;
+    uint32_t core_h = core_range.end.y - core_range.start.y + 1;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(core_range, units_to_divide);
+
+    auto arch = target.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    Program program = Program();
+
+    // create circular buffers
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+
+    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+
+    uint32_t weight_num_tile = div_up(channel_size, TILE_WIDTH);
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        data_format,
+        {
+            {CB::c_in0, 1, tt::DataFormat::Int32},               // traget
+            {CB::c_in1, weight_num_tile},                        // weight
+            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  // tmp_weight
+            {CB::c_out0, 1},                                     // output
+        });
+
+    // create read/wrtie kernel
+    const std::vector<uint32_t> reader_compile_time_args{
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(is_dram(weight)),
+        static_cast<uint32_t>(weight_has_value)};
+
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
+
+    std::map<string, string> reader_defines;
+    std::map<string, string> writer_defines;
+
+    if (weight_has_value) {
+        reader_defines["WEIGHT"] = 1;
+    }
+
+    if (fp32_dest_acc_en) {
+        reader_defines["FP32_DEST_ACC_EN"] = 1;
+    }
+
+    auto reader_kernel_id = CreateReadKernel(
+        program,
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1.cpp",
+        all_cores,
+        reader_compile_time_args,
+        reader_defines);
+    auto writer_kernel_id = CreateWriteKernel(
+        program,
+        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/writer_moreh_nll_loss_step1.cpp",
+        all_cores,
+        writer_compile_time_args,
+        writer_defines);
+
+    const auto target_addr = target.buffer()->address();
+    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
+    const auto output_addr = output.buffer()->address();
+
+    // Set Runtime Args
+    auto core_x_offset = core_range.start.x;
+    auto core_y_offset = core_range.start.y;
+    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        uint32_t num_units_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_units_per_core = units_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_units_per_core = units_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
+        }
+
+        uint32_t element_size = weight_has_value ? weight.value().element_size() : 0;
+        vector<uint32_t> reader_args = {
+            target_addr,
+            weight_addr,
+            static_cast<uint32_t>(ignore_index),
+            num_units_per_core,
+            tile_offset,
+            origin_N,
+            channel_size,
+            weight_num_tile,
+            element_size,
+            target.element_size(),
+        };
+
+        vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
+
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        // compute
+        const std::vector<uint32_t> compute_runtime_args{num_units_per_core};
+
+        tile_offset += num_units_per_core;
+    }
+
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
+}
+
+}  // namespace primary
+}  // namespace operations
+}  // namespace tt

@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_eager/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
+#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
 
 #define DONT_STRIDE_IN_ETH_BUFFER 0
 
