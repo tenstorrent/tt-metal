@@ -72,7 +72,7 @@ class Attention(nn.Module):
         self.n_kv_heads: int = args.n_kv_heads
 
         self.repeats = self.n_heads // self.n_kv_heads
-        self.sliding_window = self.args.sliding_window
+        self.max_seq_len = self.args.max_seq_len
 
         self.scale = self.args.head_dim**-0.5
 
@@ -82,13 +82,13 @@ class Attention(nn.Module):
         self.wo = skip_init(nn.Linear, args.n_heads * args.head_dim, args.dim, bias=False)
         self.cache_k = torch.empty(
             args.max_batch_size,
-            args.sliding_window,
+            args.max_seq_len,
             self.n_kv_heads,
             self.args.head_dim,
         )
         self.cache_v = torch.empty(
             args.max_batch_size,
-            args.sliding_window,
+            args.max_seq_len,
             self.n_kv_heads,
             self.args.head_dim,
         )
@@ -183,23 +183,16 @@ class TransformerBlock(nn.Module):
             )
         else:
             self.feed_forward = FeedForward(args=args)
-        self.comps = []
 
     def forward(
         self, x: torch.Tensor, freqs_cis: torch.Tensor, positions: torch.Tensor, mask: Optional[torch.Tensor]
     ) -> torch.Tensor:
         x1 = self.attention_norm(x)
-        self.comps.append(x1)
         r = self.attention.forward(x1, freqs_cis, positions, mask)
-        self.comps.append(r)
         h = x + r
-        self.comps.append(h)
         h1 = self.ffn_norm(h)
-        self.comps.append(h1)
         r = self.feed_forward.forward(h1)
-        self.comps.append(r)
         out = h + r
-        self.comps.append(out)
         return out
 
 
@@ -228,27 +221,13 @@ class Transformer(nn.Module):
         self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
 
     def forward(
-        self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
+        self, input_ids: torch.Tensor, positions: torch.Tensor, mask: Optional[torch.Tensor] = None, mode="decode"
     ):
         h = input_ids
         freqs_cis = self.freqs_cis[positions]
 
-        mask: Optional[torch.Tensor] = None
-        if input_ids.shape[1] > 1:
-            seqlen = input_ids.shape[1]
-            tensor = torch.full(
-                (seqlen, seqlen),
-                dtype=h.dtype,
-                fill_value=1,
-                device=h.device,
-            )
-            mask = torch.tril(tensor, diagonal=0).to(h.dtype)
-            # make the mask banded to account for sliding window
-            # mask = torch.triu(mask, diagonal=-self.args.sliding_window)
-            mask = torch.log(mask)
         for layer in self.layers:
             h = layer(h, freqs_cis, positions, mask)
-
+        if mode == "prefill":
+            return h.float()
         return self.output(self.norm(h)).float()

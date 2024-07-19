@@ -16,15 +16,16 @@ python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpo
 ```
 
 ### Set up environment
-1. Set async env var:
+1. Set async and dispatch over ethernet cores env vars:
 ```
 export TT_METAL_ASYNC_DEVICE_QUEUE=1
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 2. Prepare the weight cache directory:
 
 ```
-# Make a directory for ttnn us to cache weights into. This speeds up subsequent runs.
+# Make a directory for ttnn to cache weights into. This speeds up subsequent runs.
 mkdir <weight_cache_dir>
 ```
 
@@ -51,18 +52,24 @@ pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mix
 ```
 
 ### Run the demo
-
-Mixtral-8x7B does not run fast prefill currently. It does prefill via sequential decoding.
-
-The largest context length supported is 3100 tokens.
+Mixtral prefill support is now available. We include two different demos: a decode-only mode where the prompts are decoded token-by-token and force-pushed until the user starts generating; and a prefill&decode mode, where the KV-caches are first prefilled for the prompt length (e.g. 128 tokens) and then decode as normal.
 
 ```
 # Run the demo with a pre-written batch of 32 user prompts
+
+# Prefill & Decode demo
+pytest -svv models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
+
+# Decode-only demo
 pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
 ```
 
-We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your flags to the correct weights):
+We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your flags to the correct weights!):
 ```
+# Prefill & Decode demo
+pytest -svv models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct_weights]
+
+# Decode-only demo
 pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct_weights]
 ```
 

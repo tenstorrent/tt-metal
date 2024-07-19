@@ -43,9 +43,9 @@ class TtTransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtypes={
-                    "w1": ttnn.bfloat4_b,
+                    "w1": ttnn.bfloat8_b,
                     "w2": ttnn.bfloat8_b,
-                    "w3": ttnn.bfloat4_b,
+                    "w3": ttnn.bfloat8_b,
                 },
             ),
             args=args,
@@ -71,12 +71,7 @@ class TtTransformerBlock(LightweightModule):
         )
 
     def forward(
-        self,
-        xs_1SBH,
-        start_pos,
-        current_pos,
-        attn_masks,
-        rot_mat,
+        self, xs_1SBH, start_pos, current_pos, attn_masks, rot_mat, transformation_mats=None, user_id=0, mode="decode"
     ) -> ttnn.Tensor:
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -86,16 +81,22 @@ class TtTransformerBlock(LightweightModule):
         H: hidden dim (4096)
         """
         attn_norm_1SBH = self.attention_norm(xs_1SBH)
-
         attn_1SBH = self.attention(
             attn_norm_1SBH,
             start_pos,
             current_pos,
             attn_masks,
             rot_mat,
+            transformation_mats,
+            user_id,
+            mode,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
+        xs_1SBH.deallocate(True)
+        attn_1SBH.deallocate(True)
         ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
-        ffn_1SBH = self.feed_forward(ffn_norm_1SBH)
+        ffn_1SBH = self.feed_forward(ffn_norm_1SBH, mode=mode)
         out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
+        hs_1SBH.deallocate(True)
+        ffn_1SBH.deallocate(True)
         return out_1SBH
