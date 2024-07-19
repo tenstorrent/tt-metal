@@ -59,8 +59,8 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());
         auto output_core_range = *(output_memory_config_.shard_spec->grid.ranges().begin());
-        auto input_core_w = input_core_range.end_.y - input_core_range.start_.y + 1;
-        auto output_core_w = output_core_range.end_.y - output_core_range.start_.y + 1;
+        auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
+        auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
         TT_FATAL(input_core_w == output_core_w);
     }
 

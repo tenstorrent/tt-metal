@@ -496,7 +496,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool mcast_1d = M == block_h;
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {bbox.end_.x + 1, bbox.end_.y+1};
+    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y+1};
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {
@@ -636,7 +636,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         if (row_wise) {
             if (use_mcast) {
                 CoreCoord all_start_core;
-                CoreCoord end_core = sender_cores.end_;
+                CoreCoord end_core = sender_cores.end_coord;
                 if (use_two_stage_reduce) {
                     if (end_core.x == all_core_grid_size.x - 1) {
                         all_start_core = {0, end_core.y + 1};
@@ -644,7 +644,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x + 1, end_core.y};
                     }
                 } else {
-                    if (end_core.x == bbox.end_.x) {
+                    if (end_core.x == bbox.end_coord.x) {
                         all_start_core = {0, end_core.y + 1};
                     } else {
                         all_start_core = {end_core.x + 1, end_core.y};
@@ -654,15 +654,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
-                    CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_.y};
+                    CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
                     CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
                     CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
                     std::set<CoreRange> none_core_set; none_core_set.insert(none_core_range);
                     not_all_to_all_workers = CoreRangeSet(none_core_set);
                 } else {
                     CoreCoord none_start_core;
-                    CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_;
-                    if (end_core.x == bbox.end_.x) {
+                    CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
+                    if (end_core.x == bbox.end_coord.x) {
                         none_start_core = {0, end_core.y + 1};
                     } else {
                         none_start_core = {end_core.x + 1, end_core.y};
@@ -673,7 +673,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         } else {
             if (use_mcast) {
                 CoreCoord all_start_core;
-                CoreCoord end_core = sender_cores.end_;
+                CoreCoord end_core = sender_cores.end_coord;
                 if (use_two_stage_reduce) {
                     if (end_core.y == all_core_grid_size.y - 1) {
                         all_start_core = {end_core.x + 1, 0};
@@ -681,7 +681,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x, end_core.y + 1};
                     }
                 } else {
-                    if (end_core.y == bbox.end_.y) {
+                    if (end_core.y == bbox.end_coord.y) {
                         all_start_core = {end_core.x + 1, 0};
                     } else {
                         all_start_core = {end_core.x, end_core.y + 1};
@@ -691,15 +691,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
-                    CoreCoord none_start_core = {sender_cores.end_.x, all_core_grid_size.y};
+                    CoreCoord none_start_core = {sender_cores.end_coord.x, all_core_grid_size.y};
                     CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
                     CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
                     std::set<CoreRange> none_core_set; none_core_set.insert(none_core_range);
                     not_all_to_all_workers = CoreRangeSet(none_core_set);
                 } else {
                     CoreCoord none_start_core;
-                    CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_;
-                    if (end_core.y == bbox.end_.y) {
+                    CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
+                    if (end_core.y == bbox.end_coord.y) {
                         none_start_core = {end_core.x + 1, 0};
                     } else {
                         none_start_core = {end_core.x, end_core.y + 1};

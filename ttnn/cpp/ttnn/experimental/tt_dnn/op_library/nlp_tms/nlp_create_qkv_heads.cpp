@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
 
     auto core_grid = q_cores.bounding_box();
-    uint32_t num_cores_x = core_grid.end_.x + 1, num_cores_y = core_grid.end_.y + 1;
+    uint32_t num_cores_x = core_grid.end_coord.x + 1, num_cores_y = core_grid.end_coord.y + 1;
     uint32_t num_kv_cores = k_cores.num_cores();
 
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);

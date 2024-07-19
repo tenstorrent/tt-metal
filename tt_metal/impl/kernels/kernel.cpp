@@ -36,8 +36,8 @@ Kernel::Kernel(
 
     size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
-        auto start = core_range.start_;
-        auto end = core_range.end_;
+        auto start = core_range.start_coord;
+        auto end = core_range.end_coord;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core({x, y});
@@ -260,8 +260,8 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
 void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
 
     for (const CoreRange &core_range : core_ranges.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto &set_rt_args = this->core_to_runtime_args_[x][y];
                 if (set_rt_args.empty()) continue;
 

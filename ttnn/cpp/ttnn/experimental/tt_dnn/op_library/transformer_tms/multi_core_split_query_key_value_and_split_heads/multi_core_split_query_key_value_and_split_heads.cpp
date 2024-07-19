@@ -231,8 +231,8 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     auto bbox = all_cores.bounding_box();
     ShardOrientation shard_orientation = a.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end_.y + 1 : bbox.end_.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end_.x + 1 : bbox.end_.y + 1;
+    uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
+    uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t M = shape[2] * shape[0]; // 4608

@@ -611,8 +611,8 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (auto &core_range : kernel->logical_coreranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
                 pass &= verify_rt_args(true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
                 pass &= verify_rt_args(false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);

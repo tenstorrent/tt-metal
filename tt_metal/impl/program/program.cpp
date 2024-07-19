@@ -272,8 +272,8 @@ void Program::update_kernel_groups(const CoreType &core_type) {
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
-                for (auto y = range.start_.y; y <= range.end_.y; y++) {
-                    for (auto x = range.start_.x; x <= range.end_.x; x++) {
+                for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                    for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[core_type][y * grid_extent_[core_type].x + x] = index;
 
                         auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
@@ -330,8 +330,8 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
     }
     // Mark which buffer indices are being used on each core the circular buffer is used on
     for (const CoreRange &core_range : core_range_set.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 std::bitset<NUM_CIRCULAR_BUFFERS> &cb_indices = this->per_core_cb_indices_[logical_core];
 
@@ -578,8 +578,8 @@ void Program::populate_dispatch_data(Device *device) {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {
-            for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-                for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
                     dst_noc_unicast_info.push_back(std::make_pair(physical_coord, /*num_mcast_dests=*/0));
                 }
@@ -782,8 +782,8 @@ void Program::finalize_rt_args() {
                 if (optional_id) {
                     auto kernel = detail::GetKernel(*this, optional_id.value());
                     for (const CoreRange &core_range : kg.core_ranges.ranges()) {
-                        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-                            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+                        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                                 CoreCoord core_coord(x, y);
                                 max_rtas[dispatch_class] =
                                     std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());

@@ -152,8 +152,8 @@ DeviceData::DeviceData(Device *device,
             this->all_data[core][bank_id].bank_offset = bank_offset;
         }
     } else {
-        for (uint32_t y = workers.start_.y; y <= workers.end_.y; y++) {
-            for (uint32_t x = workers.start_.x; x <= workers.end_.x; x++) {
+        for (uint32_t y = workers.start_coord.y; y <= workers.end_coord.y; y++) {
+            for (uint32_t x = workers.start_coord.x; x <= workers.end_coord.x; x++) {
                 CoreCoord core = {x, y};
                 CoreCoord phys_core = device->worker_core_from_logical_core(core);
                 this->all_data[core][0] = one_core_data_t();
@@ -233,8 +233,8 @@ void DeviceData::push_one(CoreCoord core, uint32_t datum) {
 void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
 
     bool counted = false;
-    for (auto y = cores.start_.y; y <= cores.end_.y; y++) {
-        for (auto x = cores.start_.x; x <= cores.end_.x; x++) {
+    for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
+        for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
             CoreCoord core = {x, y};
             if (core_and_bank_present(core, 0)) {
                 if (not counted || not is_mcast) {
@@ -287,8 +287,8 @@ void DeviceData::relevel(CoreRange range) {
     size_t max = 0;
 
     constexpr uint32_t bank = 0;
-    for (uint32_t y = range.start_.y; y <= range.end_.y; y++) {
-        for (uint32_t x = range.start_.x; x <= range.end_.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             if (this->all_data[core][bank].data.size() > max) {
                 max = this->all_data[core][bank].data.size();
@@ -296,8 +296,8 @@ void DeviceData::relevel(CoreRange range) {
         }
     }
 
-    for (uint32_t y = range.start_.y; y <= range.end_.y; y++) {
-        for (uint32_t x = range.start_.x; x <= range.end_.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             this->all_data[core][bank].data.resize(max);
             this->all_data[core][bank].valid.resize(max);
@@ -648,7 +648,7 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     bool first_core = true;
-    CoreCoord first_worker = range.start_;
+    CoreCoord first_worker = range.start_coord;
     uint32_t data_base = generated_data.size();
     for (uint32_t i = 0; i < size_words; i++) {
         uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
@@ -656,8 +656,8 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
     }
     generated_data.resize(padded_size(generated_data.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
 
-    for (uint32_t y = range.start_.y; y <= range.end_.y; y++) {
-        for (uint32_t x = range.start_.x; x <= range.end_.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             for (uint32_t i = 0; i < size_words; i++) {
                 data.push_one(core, bank_id, generated_data[data_base + i]);
@@ -845,13 +845,13 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start_, CoreType::WORKER);
-    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end_, CoreType::WORKER);
+    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start_coord, CoreType::WORKER);
+    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end_coord, CoreType::WORKER);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_);
+    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_coord);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
 
@@ -1020,21 +1020,21 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
         CoreRange range = workers;
         if (!perf_test_g) {
             // Not random, but gives some variation
-            uint32_t span = workers.end_.x - workers.start_.x + 1;
-            range.end_.x = std::rand() % span + range.start_.x;
-            span = workers.end_.y - workers.start_.y + 1;
-            range.end_.y = std::rand() % span + range.start_.y;
+            uint32_t span = workers.end_coord.x - workers.start_coord.x + 1;
+            range.end_coord.x = std::rand() % span + range.start_coord.x;
+            span = workers.end_coord.y - workers.start_coord.y + 1;
+            range.end_coord.y = std::rand() % span + range.start_coord.y;
         }
 
         device_data.relevel(range);
 
         CQDispatchWritePackedLargeSubCmd sub_cmd;
-        CoreCoord physical_start = device->physical_core_from_logical_core(range.start_, CoreType::WORKER);
-        CoreCoord physical_end = device->physical_core_from_logical_core(range.end_, CoreType::WORKER);
+        CoreCoord physical_start = device->physical_core_from_logical_core(range.start_coord, CoreType::WORKER);
+        CoreCoord physical_end = device->physical_core_from_logical_core(range.end_coord, CoreType::WORKER);
         sub_cmd.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-        sub_cmd.addr = device_data.get_result_data_addr(range.start_);
+        sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
-        sub_cmd.num_mcast_dests = (range.end_.x - range.start_.x + 1) * (range.end_.y - range.start_.y + 1);
+        sub_cmd.num_mcast_dests = (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
 
         for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
             cmds.push_back(((uint32_t *)&sub_cmd)[i]);

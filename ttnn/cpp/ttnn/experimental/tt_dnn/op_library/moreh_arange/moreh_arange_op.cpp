@@ -29,8 +29,8 @@ operation::ProgramWithCallbacks moreh_arange_(
     auto Wt = div_up(W, TILE_WIDTH);
 
     uint32_t units_to_divide = Wt;
-    uint32_t core_w = core_range.end_.x - core_range.start_.x + 1;
-    uint32_t core_h = core_range.end_.y - core_range.start_.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, units_to_divide);
@@ -74,8 +74,8 @@ operation::ProgramWithCallbacks moreh_arange_(
         writer_defines);
 
     // Set Runtime Args
-    auto core_x_offset = core_range.start_.x;
-    auto core_y_offset = core_range.start_.y;
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};

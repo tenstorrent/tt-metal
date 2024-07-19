@@ -331,7 +331,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t NHtWt = N * HtWt;
 
     auto bbox = all_cores.bounding_box();
-    vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end_.x, bbox.end_.y, num_cores_x, num_cores_y, row_major);
+    vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
 
     std::vector< std::vector<uint32_t> > unary_reader_args = { cores.size(), std::vector<uint32_t>(1) };
     std::vector< std::vector<uint32_t> > unary_compute_args = { cores.size(), std::vector<uint32_t>(5) };
@@ -397,7 +397,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
         auto bbox = all_cores.bounding_box();
-        vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end_.x, bbox.end_.y, num_cores_x, num_cores_y, row_major);
+        vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
         std::vector< std::vector<uint32_t> > unary_reader_args = { cores.size(), std::vector<uint32_t>(1) };
         std::vector< std::vector<uint32_t> > unary_compute_args = { cores.size(), std::vector<uint32_t>(5) };
         std::vector< std::vector<uint32_t> > unary_writer_args = { cores.size(), std::vector<uint32_t>(1) };

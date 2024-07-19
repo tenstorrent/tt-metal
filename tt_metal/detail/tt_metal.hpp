@@ -433,8 +433,8 @@ namespace tt::tt_metal{
             };
 
             for (const auto &core_range : core_ranges.ranges()) {
-                for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-                    for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
                         if (kernel_group != nullptr) {
                             bool local_noc0_in_use = false; bool local_noc1_in_use = false;

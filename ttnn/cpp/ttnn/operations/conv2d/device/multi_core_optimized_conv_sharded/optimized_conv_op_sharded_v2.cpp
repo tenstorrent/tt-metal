@@ -1416,7 +1416,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     }  // for num_cores
 
-    auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_, mcast_sender_cores.end_, true);
+    auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_id,

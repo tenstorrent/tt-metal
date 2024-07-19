@@ -227,12 +227,12 @@ int main(int argc, char **argv) {
         if (page_size_as_runtime_arg_g) {
             vector<uint32_t> args;
             args.push_back(page_size_g);
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_, args);
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, args);
         }
 
         std::shared_ptr<Event> sync_event = std::make_shared<Event>();
 
-        CoreCoord w = device->physical_core_from_logical_core(worker_g.start_, CoreType::WORKER);
+        CoreCoord w = device->physical_core_from_logical_core(worker_g.start_coord, CoreType::WORKER);
         log_info(LogTest, "Master core: {}", w.str());
         if (source_mem_g == 3) {
             log_info(LogTest, "Reading: {}", src_mem);

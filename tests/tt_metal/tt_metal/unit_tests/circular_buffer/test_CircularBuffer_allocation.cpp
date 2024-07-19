@@ -21,8 +21,8 @@ void validate_cb_address(Program &program, Device *device, const CoreRangeSet &c
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange &core_range : cr_set.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
@@ -133,8 +133,8 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
 
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     for (const CoreRange &core_range : cr_set.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     for (uint8_t buffer_index : buffer_indices) {
                         golden_addresses_per_core[core_coord][buffer_index] = expected_cb_addr;
@@ -312,8 +312,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange &core_range : cr_set.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
@@ -337,8 +337,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
 
     // addresses should not be changed
     for (const CoreRange &core_range : cr_set.ranges()) {
-        for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-            for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);

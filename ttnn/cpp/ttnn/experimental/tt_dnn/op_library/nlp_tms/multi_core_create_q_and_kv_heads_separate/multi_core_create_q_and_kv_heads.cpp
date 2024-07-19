@@ -20,8 +20,8 @@ static inline operation::ProgramWithCallbacks create_qkv_separate(const Tensor &
     auto bbox = all_cores.bounding_box();
     ShardOrientation shard_orientation = shard_spec.orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end_.y + 1 : bbox.end_.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end_.x + 1 : bbox.end_.y + 1;
+    uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
+    uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
     uint32_t q_shard_wt = (q_shape[3]) / (num_w_cores * TILE_WIDTH); // number of tiles in width dimension  - multiple tiles per head, multiple heads per group, multiple tensors in group, multiple groups per cores
     uint32_t q_shard_ht = (q_shape[0] * q_shape[2])/ (num_h_cores * TILE_HEIGHT);

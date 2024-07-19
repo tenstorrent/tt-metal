@@ -195,8 +195,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_;
+    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
+    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
@@ -915,8 +915,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in3_mcast_sender_semaphore = 0;
     uint32_t in3_mcast_receiver_semaphore = 0;
 
-    CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_;
-    CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_;
+    CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
+    CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 

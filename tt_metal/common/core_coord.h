@@ -66,19 +66,20 @@ inline CoreCoord get_core_coord_from_relative(const RelativeCoreCoord &in, const
 }
 
 struct CoreRange {
-    CoreCoord start_;
-    CoreCoord end_;
+    CoreCoord start_coord;
+    CoreCoord end_coord;
     CoreRange(const CoreCoord &point) {
-        this->start_ = point;
-        this->end_ = point;
+        this->start_coord = point;
+        this->end_coord = point;
     }
 
-    CoreRange(const CoreCoord &start, const CoreCoord &end) {
+    CoreRange(const CoreCoord &start_coord, const CoreCoord &end_coord) {
         TT_ASSERT(
-            end.x >= start.x and end.y >= start.y, "Invalid core range for start: {}, end: {}", start.str(), end.str());
+            end_coord.x >= start_coord.x and end_coord.y >= start_coord.y,
+            "Invalid core range for start_coord: {}, end_coord: {}", start_coord.str(), end_coord.str());
 
-        this->start_ = start;
-        this->end_ = end;
+        this->start_coord = start_coord;
+        this->end_coord = end_coord;
     }
 
     CoreRange(const CoreRange &other) = default;
@@ -86,16 +87,17 @@ struct CoreRange {
     CoreRange(CoreRange &&other) = default;
     CoreRange &operator=(CoreRange &&other) = default;
 
-    void validate() {
-        TT_FATAL(
-            end_.x >= start_.x and end_.y >= start_.y, "Invalid core range for start: {}, end: {}", start_.str(), end_.str());
-    }
+    // void validate() {
+    //     TT_FATAL(
+    //         end_coord.x >= start_coord.x and end_coord.y >= start_coord.y,
+    //         "Invalid core range for start_coord: {}, end_coord: {}", start_coord.str(), end_coord.str());
+    // }
 
     inline std::optional<CoreRange> intersects(const CoreRange &other) const {
-        std::size_t x1 = std::max(this->start_.x, other.start_.x);
-        std::size_t y1 = std::max(this->start_.y, other.start_.y);
-        std::size_t x2 = std::min(this->end_.x, other.end_.x);
-        std::size_t y2 = std::min(this->end_.y, other.end_.y);
+        std::size_t x1 = std::max(this->start_coord.x, other.start_coord.x);
+        std::size_t y1 = std::max(this->start_coord.y, other.start_coord.y);
+        std::size_t x2 = std::min(this->end_coord.x, other.end_coord.x);
+        std::size_t y2 = std::min(this->end_coord.y, other.end_coord.y);
         if (x1 <= x2 and y1 <= y2)
             return CoreRange({x1, y1}, {x2, y2});
 
@@ -103,44 +105,44 @@ struct CoreRange {
     }
 
     inline bool adjacent(const CoreRange &other) const {
-        std::size_t x1 = std::max(this->start_.x, other.start_.x);
-        std::size_t y1 = std::max(this->start_.y, other.start_.y);
-        std::size_t x2 = std::min(this->end_.x, other.end_.x);
-        std::size_t y2 = std::min(this->end_.y, other.end_.y);
+        std::size_t x1 = std::max(this->start_coord.x, other.start_coord.x);
+        std::size_t y1 = std::max(this->start_coord.y, other.start_coord.y);
+        std::size_t x2 = std::min(this->end_coord.x, other.end_coord.x);
+        std::size_t y2 = std::min(this->end_coord.y, other.end_coord.y);
         return ((x2 + 1 == x1 && y1 <= y2) || (y2 + 1 == y1 && x1 <= x2));
     }
 
     inline bool contains(const CoreRange &other) const {
-        return (other.start_.x >= this->start_.x) && (other.end_.x <= this->end_.x) && (other.start_.y >= this->start_.y) &&
-               (other.end_.y <= this->end_.y);
+        return (other.start_coord.x >= this->start_coord.x) && (other.end_coord.x <= this->end_coord.x) && (other.start_coord.y >= this->start_coord.y) &&
+               (other.end_coord.y <= this->end_coord.y);
     }
 
     inline bool contains(const CoreCoord &other) const {
-        return (other.x >= this->start_.x) && (other.x <= this->end_.x) && (other.y >= this->start_.y) &&
-               (other.y <= this->end_.y);
+        return (other.x >= this->start_coord.x) && (other.x <= this->end_coord.x) && (other.y >= this->start_coord.y) &&
+               (other.y <= this->end_coord.y);
     }
 
     // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge(const CoreRange &cr) const {
         if (this->intersects(cr) || this->adjacent(cr)) {
-            if (this->start_.x == cr.start_.x && this->end_.x == cr.end_.x)
+            if (this->start_coord.x == cr.start_coord.x && this->end_coord.x == cr.end_coord.x)
                 return CoreRange(
-                    {this->start_.x, std::min(this->start_.y, cr.start_.y)},
-                    {this->end_.x, std::max(this->end_.y, cr.end_.y)});
+                    {this->start_coord.x, std::min(this->start_coord.y, cr.start_coord.y)},
+                    {this->end_coord.x, std::max(this->end_coord.y, cr.end_coord.y)});
 
-            else if (this->start_.y == cr.start_.y && this->end_.y == cr.end_.y)
+            else if (this->start_coord.y == cr.start_coord.y && this->end_coord.y == cr.end_coord.y)
                 return CoreRange(
-                    {std::min(this->start_.x, cr.start_.x), this->start_.y},
-                    {std::max(this->end_.x, cr.end_.x), this->end_.y});
+                    {std::min(this->start_coord.x, cr.start_coord.x), this->start_coord.y},
+                    {std::max(this->end_coord.x, cr.end_coord.x), this->end_coord.y});
         }
         return std::nullopt;
     }
 
-    std::string str() const { return "[" + start_.str() + " - " + end_.str() + "]"; }
+    std::string str() const { return "[" + this->start_coord.str() + " - " + this->end_coord.str() + "]"; }
 
-    size_t size() const { return (this->end_.x - this->start_.x + 1) * (this->end_.y - this->start_.y + 1); }
+    size_t size() const { return (this->end_coord.x - this->start_coord.x + 1) * (this->end_coord.y - this->start_coord.y + 1); }
 
-    CoreCoord grid_size() const { return {this->end_.x - this->start_.x + 1, this->end_.y - this->start_.y + 1}; }
+    CoreCoord grid_size() const { return {this->end_coord.x - this->start_coord.x + 1, this->end_coord.y - this->start_coord.y + 1}; }
 
     class CoreIterator
     {
@@ -159,11 +161,11 @@ struct CoreRange {
         {
             CoreCoord next;
 
-            const bool is_curr_core_at_end_of_row = current_.x == range_.end_.x;
+            const bool is_curr_core_at_end_of_row = current_.x == range_.end_coord.x;
             if (is_curr_core_at_end_of_row)
             {
                 // Go to the beginning of the next row
-                next.x = range_.start_.x;
+                next.x = range_.start_coord.x;
                 next.y = current_.y + 1;
             }
             else
@@ -193,24 +195,24 @@ struct CoreRange {
 
     CoreIterator begin() const
     {
-        return CoreIterator(this->start_, *this);
+        return CoreIterator(this->start_coord, *this);
     }
 
     CoreIterator end() const
     {
-        const CoreCoord iterator_end(this->start_.x, this->end_.y + 1);
+        const CoreCoord iterator_end(this->start_coord.x, this->end_coord.y + 1);
         return CoreIterator(iterator_end, *this);
     }
 };
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) {
-    return a.start_ == b.start_ && a.end_ == b.end_;
+    return a.start_coord == b.start_coord && a.end_coord == b.end_coord;
 }
 
 constexpr inline bool operator!=(const CoreRange &a, const CoreRange &b) { return !(a == b); }
 
 constexpr inline bool operator<(const CoreRange &left, const CoreRange &right) {
-    return (left.start_ < right.start_ || (left.start_ == right.start_ && left.end_ < right.end_));
+    return (left.start_coord < right.start_coord || (left.start_coord == right.start_coord && left.end_coord < right.end_coord));
 }
 
 template <>
@@ -229,8 +231,8 @@ template <>
 struct hash<CoreRange> {
     std::size_t operator()(const CoreRange &core_range) const {
         std::size_t seed = 0;
-        seed = std::hash<CoreCoord>{}(core_range.start_) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        seed = std::hash<CoreCoord>{}(core_range.end_) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed = std::hash<CoreCoord>{}(core_range.start_coord) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed = std::hash<CoreCoord>{}(core_range.end_coord) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         return seed;
     }
 };
@@ -247,10 +249,10 @@ class CoreRangeSet {
                 }
                 CoreRange first_core_range = *outer_it;
                 CoreRange second_core_range = *inner_it;
-                bool first_core_left_of_second = first_core_range.end_.x < second_core_range.start_.x;
-                bool first_core_right_of_second = first_core_range.start_.x > second_core_range.end_.x;
-                bool first_core_above_second = first_core_range.end_.y < second_core_range.start_.y;
-                bool first_core_below_second = first_core_range.start_.y > second_core_range.end_.y;
+                bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
+                bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
+                bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
+                bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
                 auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
                                   first_core_below_second;
                 if (not no_overlap) {
@@ -278,10 +280,10 @@ class CoreRangeSet {
 
         for (const auto &cr : crs) {
             // std::cout << "merging " << cr.str() << std::endl;
-            min_x = std::min(min_x, cr.start_.x);
-            max_x = std::max(max_x, cr.end_.x);
-            min_y = std::min(min_y, cr.start_.y);
-            max_y = std::max(max_y, cr.end_.y);
+            min_x = std::min(min_x, cr.start_coord.x);
+            max_x = std::max(max_x, cr.end_coord.x);
+            min_y = std::min(min_y, cr.start_coord.y);
+            max_y = std::max(max_y, cr.end_coord.y);
         }
 
         // By overallocating by one x entry, we can avoid needing to check for
@@ -291,8 +293,8 @@ class CoreRangeSet {
         memset(grid, 0, sizeof(grid));
 
         for (const auto &cr : crs)
-            for (unsigned y = cr.start_.y; y <= cr.end_.y; y++)
-                for (unsigned x = cr.start_.x; x <= cr.end_.x; x++) grid[y][x] = true;
+            for (unsigned y = cr.start_coord.y; y <= cr.end_coord.y; y++)
+                for (unsigned x = cr.start_coord.x; x <= cr.end_coord.x; x++) grid[y][x] = true;
 
         crs.clear();
         for (unsigned y = min_y; y <= max_y; y++) {
@@ -381,10 +383,10 @@ class CoreRangeSet {
         TT_FATAL(this->ranges().size() > 0, "Cannot get bounding_box of an empty CoreRangeSet!");
         size_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
         for (const auto &cr : this->ranges()) {
-            min_x = std::min(min_x, cr.start_.x);
-            max_x = std::max(max_x, cr.end_.x);
-            min_y = std::min(min_y, cr.start_.y);
-            max_y = std::max(max_y, cr.end_.y);
+            min_x = std::min(min_x, cr.start_coord.x);
+            max_x = std::max(max_x, cr.end_coord.x);
+            min_y = std::min(min_y, cr.start_coord.y);
+            max_y = std::max(max_y, cr.end_coord.y);
         }
         return {{min_x, min_y}, {max_x, max_y}};
     }
@@ -501,8 +503,8 @@ inline std::vector<CoreCoord> corerange_to_cores(
     uint32_t offset = 0;
 
     for (auto core_range : crs.ranges()) {
-        auto start_coord = core_range.start_;
-        auto end_coord = core_range.end_;
+        auto start_coord = core_range.start_coord;
+        auto end_coord = core_range.end_coord;
         auto cores = grid_to_cores(start_coord, end_coord, row_wise);
         if (max_cores.has_value()) {
             if (all_cores.size() + cores.size() > max_cores.value()) {
@@ -578,7 +580,7 @@ struct from_json_t<RelativeCoreCoord> {
 template <>
 struct to_json_t<CoreRange> {
     nlohmann::json operator()(const CoreRange &core_range) noexcept {
-        return {{"start", to_json(core_range.start_)}, {"end", to_json(core_range.end_)}};
+        return {{"start", to_json(core_range.start_coord)}, {"end", to_json(core_range.end_coord)}};
     }
 };
 

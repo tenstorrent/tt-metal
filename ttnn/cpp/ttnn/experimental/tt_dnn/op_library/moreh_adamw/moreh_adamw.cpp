@@ -52,8 +52,8 @@ operation::ProgramWithCallbacks moreh_adamw_(
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    uint32_t core_w = core_range.end_.x - core_range.start_.x + 1;
-    uint32_t core_h = core_range.end_.y - core_range.start_.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto
         [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =

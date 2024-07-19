@@ -73,8 +73,8 @@ void create_and_read_max_num_semaphores(
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 
-    for (auto x = core_range.start_.x; x <= core_range.end_.x; x++) {
-        for (auto y = core_range.start_.y; y <= core_range.end_.y; y++) {
+    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             auto logical_core = CoreCoord{x, y};
             std::vector<uint32_t> res;
             for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {

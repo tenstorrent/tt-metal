@@ -77,8 +77,8 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             ((output_shape_without_padding[3] + num_elements_per_alignment - 1) / num_elements_per_alignment);
         log_debug(LogTest, "num_units {}", num_units);
 
-        uint32_t core_w = core_range.end_.x - core_range.start_.x + 1;
-        uint32_t core_h = core_range.end_.y - core_range.start_.y + 1;
+        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+        uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
@@ -182,8 +182,8 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
         uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_shape.without_padding()[1];
 
         // Set Runtime Args
-        auto core_x_offset = core_range.start_.x;
-        auto core_y_offset = core_range.start_.y;
+        auto core_x_offset = core_range.start_coord.x;
+        auto core_y_offset = core_range.start_coord.y;
 
         uint32_t g1_numcores = core_group_1.num_cores();
         uint32_t g2_numcores = core_group_2.num_cores();
@@ -340,8 +340,8 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
                              output_shape_without_padding[2] * ((output_shape_without_padding[3] + 15) / 16);
         log_debug(LogTest, "num_units {}", num_units);
 
-        uint32_t core_w = core_range.end_.x - core_range.start_.x + 1;
-        uint32_t core_h = core_range.end_.y - core_range.start_.y + 1;
+        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+        uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
@@ -440,8 +440,8 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
 
         // Set Runtime Args
-        auto core_x_offset = core_range.start_.x;
-        auto core_y_offset = core_range.start_.y;
+        auto core_x_offset = core_range.start_coord.x;
+        auto core_y_offset = core_range.start_coord.y;
 
         uint32_t g1_numcores = core_group_1.num_cores();
         uint32_t g2_numcores = core_group_2.num_cores();

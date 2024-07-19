@@ -26,20 +26,20 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
 
     for (auto core : all_cores.ranges()) {
         new_all_cores_set.insert(CoreRange(
-            {core.start_.x + offset_x, core.start_.y + offset_y},
-            {core.end_.x + offset_x, core.end_.y + offset_y}));
+            {core.start_coord.x + offset_x, core.start_coord.y + offset_y},
+            {core.end_coord.x + offset_x, core.end_coord.y + offset_y}));
     }
 
     for (auto core : core_group_1.ranges()) {
         new_core_group_1_set.insert(CoreRange(
-            {core.start_.x + offset_x, core.start_.y + offset_y},
-            {core.end_.x + offset_x, core.end_.y + offset_y}));
+            {core.start_coord.x + offset_x, core.start_coord.y + offset_y},
+            {core.end_coord.x + offset_x, core.end_coord.y + offset_y}));
     }
 
     for (auto core : core_group_2.ranges()) {
         new_core_group_2_set.insert(CoreRange(
-            {core.start_.x + offset_x, core.start_.y + offset_y},
-            {core.end_.x + offset_x, core.end_.y + offset_y}));
+            {core.start_coord.x + offset_x, core.start_coord.y + offset_y},
+            {core.end_coord.x + offset_x, core.end_coord.y + offset_y}));
     }
 
     CoreRangeSet new_all_cores(new_all_cores_set);
@@ -51,8 +51,8 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     CoreRange core_range, uint32_t units_to_divide) {
-    uint32_t core_w = core_range.end_.x - core_range.start_.x + 1;
-    uint32_t core_h = core_range.end_.y - core_range.start_.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
     CoreCoord grid_size = {core_w, core_h};
     auto
         [num_cores,
@@ -62,8 +62,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
          num_tiles_per_core_group_1,
          num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, units_to_divide);
 
-    auto core_x_offset = core_range.start_.x;
-    auto core_y_offset = core_range.start_.y;
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
 
     auto [all_cores, core_group_1, core_group_2] =
         add_core_offset(all_cores_t, core_group_1_t, core_group_2_t, core_x_offset, core_y_offset);

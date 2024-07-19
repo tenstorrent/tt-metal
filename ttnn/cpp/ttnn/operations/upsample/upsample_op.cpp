@@ -69,8 +69,8 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto shard_grid = input_shard_spec.grid.ranges();
                 TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
                 auto core_range = *shard_grid.begin();
-                uint32_t ncores_w = core_range.end_.x + 1;
-                uint32_t ncores_h = core_range.end_.y + 1;
+                uint32_t ncores_w = core_range.end_coord.x + 1;
+                uint32_t ncores_h = core_range.end_coord.y + 1;
                 // array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] / ncores_h, output_shape[-1] / ncores_w};
                 // auto output_shard_spec = input_shard_spec;
                 // output_shard_spec.shape = output_shard_shape;

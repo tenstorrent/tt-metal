@@ -91,14 +91,14 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             block_height = shard_spec.value().shape[0] / TILE_HEIGHT;
             block_width = shard_spec.value().shape[1] / TILE_WIDTH;
             block_size = block_width * block_height;
-            end_core = (*shard_spec.value().grid.ranges().begin()).end_;
+            end_core = (*shard_spec.value().grid.ranges().begin()).end_coord;
             output_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
             uint32_t output_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
             last_unpadded_block_height = block_height - (round_up(output_height, block_height) - output_height);
             last_unpadded_block_width = block_width - (round_up(output_width, block_width) - output_width);
         }
         auto bbox = core_group_1.bounding_box();
-        cores = grid_to_cores_with_noop(bbox.end_.x, bbox.end_.y, num_cores_x, num_cores_y, row_major);
+        cores = grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
     } else {
         row_major = true;
         std::tie(

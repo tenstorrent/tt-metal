@@ -98,7 +98,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 TT_FATAL(M % TILE_HEIGHT == 0, "M must be divisible by tile height.");
                 TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
                 const auto bbox = shard_spec.grid.bounding_box();
-                TT_FATAL(bbox.end_.x < program_config.compute_with_storage_grid_size.x && bbox.end_.y < program_config.compute_with_storage_grid_size.y);
+                TT_FATAL(bbox.end_coord.x < program_config.compute_with_storage_grid_size.x && bbox.end_coord.y < program_config.compute_with_storage_grid_size.y);
 
                 bool mcast_1d = M == block_h;
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -108,11 +108,11 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                     TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
                 } else {
                     if (row_wise) {
-                        TT_FATAL(tt::div_up(Kt, (bbox.end_.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
-                        TT_FATAL(Mt / (bbox.end_.y + 1) == program_config.block_h, "block_h must equal to M / num_cores_r.");
+                        TT_FATAL(tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
+                        TT_FATAL(Mt / (bbox.end_coord.y + 1) == program_config.block_h, "block_h must equal to M / num_cores_r.");
                     } else {
-                        TT_FATAL(tt::div_up(Kt, (bbox.end_.y + 1)) == program_config.block_w, "block_w must equal to K / num_cores_r.");
-                        TT_FATAL(Mt / (bbox.end_.x + 1) == program_config.block_h, "block_h must equal to M / num_cores_c.");
+                        TT_FATAL(tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w, "block_w must equal to K / num_cores_r.");
+                        TT_FATAL(Mt / (bbox.end_coord.x + 1) == program_config.block_h, "block_h must equal to M / num_cores_c.");
                     }
                 }
                 if (b.has_value()) {
