@@ -20,15 +20,10 @@ def test_bw_erf(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True)
 
-    pyt_y = torch.erf(in_data)
-
     tt_output_tensor_on_device = ttnn.erf_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.erf_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

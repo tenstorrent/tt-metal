@@ -20,15 +20,10 @@ def test_bw_sigmoid(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
 
-    pyt_y = torch.sigmoid(in_data)
-
     tt_output_tensor_on_device = ttnn.sigmoid_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.sigmoid_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor, 0.90)
     assert comp_pass
