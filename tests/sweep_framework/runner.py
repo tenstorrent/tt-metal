@@ -65,6 +65,9 @@ def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
     timeout = get_timeout(test_module)
     batch_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Batch: {batch_name}", leave=False)
     for test_vector in test_vectors:
+        if DRY_RUN:
+            print(f"Would have executed test for vector {test_vector}")
+            continue
         result = dict()
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -160,11 +163,14 @@ def run_sweeps(module_name, batch_name, vector_id):
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
                 response = client.search(
-                    index=vector_index, aggregations={"batches": {"terms": {"field": "batch_name.keyword"}}}
+                    index=vector_index,
+                    aggregations={"batches": {"terms": {"field": "batch_name.keyword", "size": 10000}}},
                 )
                 batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
                 if len(batches) == 0:
                     continue
+
+                print(batches)
 
                 module_pbar = pbar_manager.counter(total=len(batches), desc=f"Module: {sweep_name}", leave=False)
                 for batch in batches:
@@ -201,7 +207,9 @@ def run_sweeps(module_name, batch_name, vector_id):
             try:
                 if not batch_name:
                     response = client.search(
-                        index=vector_index, aggregations={"batches": {"terms": {"field": "batch_name.keyword"}}}
+                        index=vector_index,
+                        aggregations={"batches": {"terms": {"field": "batch_name.keyword", "size": 10000}}},
+                        size=10000,
                     )
                     batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
                     if len(batches) == 0:
@@ -290,6 +298,13 @@ if __name__ == "__main__":
         help="Add this flag to measure e2e perf, for op tests with performance markers.",
     )
 
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        required=False,
+        help="Add this flag to perform a dry run.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     if not args.module_name and args.batch_name:
@@ -309,6 +324,9 @@ if __name__ == "__main__":
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf
+
+    global DRY_RUN
+    DRY_RUN = args.dry_run
 
     if args.watcher:
         enable_watcher()
