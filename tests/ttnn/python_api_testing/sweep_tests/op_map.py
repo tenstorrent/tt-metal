@@ -729,4 +729,16 @@ op_map = {
         "tt_op": ttnn_ops.neg_bw,
         "pytorch_op": pytorch_ops.neg_bw,
     },
+    "clamp-bw": {
+        "tt_op": ttnn_ops.clamp_bw,
+        "pytorch_op": pytorch_ops.clamp_bw,
+    },
+    "clamp-max-bw": {
+        "tt_op": ttnn_ops.clamp_max_bw,
+        "pytorch_op": pytorch_ops.clamp_max_bw,
+    },
+    "clamp-min-bw": {
+        "tt_op": ttnn_ops.clamp_min_bw,
+        "pytorch_op": pytorch_ops.clamp_min_bw,
+    },
 }
