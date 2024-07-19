@@ -135,7 +135,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     )
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode):
+def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     assert batch_size == 32, "Batch size must be 32"
 
     embed_on_device = False
@@ -314,15 +314,19 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
         tokens_per_second_per_user = 1 / iteration_time
-        if len(user_input) == 1:
-            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-        else:
-            for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                if len(text) > 100:
-                    text = "..." + text[-97:]
-                text = text.replace("\n", " ")
-                logger.info("[User {}] {}".format(user, text))
+        # Print out generated outputs for each user at the end of every iteration
+        if not is_ci_env:
+            if len(user_input) == 1:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            else:
+                for user in range(batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    if len(text) > 100:
+                        text = "..." + text[-97:]
+                    text = text.replace("\n", " ")
+                    logger.info("[User {}] {}".format(user, text))
+
+        # Always print perf at every iteration
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
@@ -333,7 +337,18 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         if iteration >= max_generated_tokens:
             users_decoding = False
 
+    # In CI only print the final generated output to avoid spamming the logs
+    if is_ci_env:
+        if len(user_input) == 1:
+            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        else:
+            for user in range(batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                logger.info("[User {}] {}".format(user, text))
 
+
+# Avoid running this test when in CI
+@pytest.mark.skipif(os.getenv("CI") == "true", reason="Non-CI tests")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
@@ -342,5 +357,24 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_demo(device, use_program_cache, input_prompts, instruct_weights):
-    return run_mistral_demo(user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights)
+def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+    return run_mistral_demo(
+        user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+    )
+
+
+# CI only runs general-weights demo
+@pytest.mark.skipif(not os.getenv("CI") == "true", reason="CI-only test")
+@pytest.mark.parametrize(
+    "input_prompts, instruct_weights",
+    [
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", False),
+    ],
+    ids=[
+        "general_weights",
+    ],
+)
+def test_mistral7B_demo_CI(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+    return run_mistral_demo(
+        user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+    )

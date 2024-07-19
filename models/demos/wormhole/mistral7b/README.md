@@ -60,9 +60,9 @@ pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral
 
 ### Run the demo
 
-Mistral-7B runs fast prefill upto sequence lengths 4096.
+Mistral-7B runs fast prefill upto sequence lengths of 4096.
 
-For decode, the largest context length supported is 1024 tokens currently.
+For decode-only, the largest context length supported is currently 1024 tokens.
 
 Mistral-7B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 
@@ -70,12 +70,21 @@ Note that while running the demo you might see the warning: `Op | WARNING  | TIL
 
 ```
 # Run the demo with a pre-written batch of 32 user prompts:
-pytest models/demos/wormhole/mistral7b/demo/demo.py::test_demo[general_weights]
+
+# Prefill & Decode demo
+pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[general_weights]
+
+# Decode-only demo
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[general_weights]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
 ```
-pytest models/demos/wormhole/mistral7b/demo/demo.py::test_demo[instruct_weights]
+# Prefill & Decode demo
+pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[instruct_weights]
+
+# Decode-only demo
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[instruct_weights]
 ```
 
 Both input files are provided inside `models/demos/wormhole/mistral7b/demo/`.
