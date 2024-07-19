@@ -150,8 +150,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
-    # print(tokenizer.pad_id, tokenizer.bos_id,tokenizer.eos_id, tokenizer.encode("м"))
-    # exit()
+
     # TODO: Currently only supporting 1k decode
     model_args.n_layers = 32
     model_args.max_batch_size = 32
@@ -293,16 +292,16 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Save output token to print out later
         for user in range(batch_size):
             user_tok = tt_out_tok[user].tolist()
-            if user_tok[0] != 1131 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
+            if user_tok[0] != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
                 all_outputs[user].append(user_tok[0])
             else:
+                user_done[user] = True
                 if (
                     iteration < input_mask.shape[1]
                 ):  # Still in prefill, so ignore EOS token and save the generated token
                     all_outputs[user].append(user_tok[0])
                 else:
                     logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                    user_done[user] = True
                     if all(user_done):
                         users_decoding = False
 
@@ -333,7 +332,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
         if iteration >= max_generated_tokens:
             users_decoding = False
-    print(user_done)
 
 
 @pytest.mark.parametrize(

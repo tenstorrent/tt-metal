@@ -214,18 +214,16 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Save output token to print out later
         for user in range(batch_size):
             user_tok = tt_out_tok[user].tolist()
-            if (
-                user_tok[0] != tokenizer.eos_id and user_done[user] == False
-            ):  # Stop saving the ouput after hitting the EOS token
+            if user_tok[0] != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
                 all_outputs[user].append(user_tok[0])
             else:
+                user_done[user] = True
                 if (
                     iteration < input_mask.shape[1]
                 ):  # Still in prefill, so ignore EOS token and save the generated token
                     all_outputs[user].append(user_tok[0])
                 else:
                     logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                    user_done[user] = True
                     if all(user_done):
                         users_decoding = False
 
