@@ -700,5 +700,5 @@ op_map = {
     "eltwise-unary_fmod": {
         "tt_op": ttnn_ops.eltwise_unary_fmod,
         "pytorch_op": pytorch_ops.unary_fmod,
-    },    
+    },
 }
