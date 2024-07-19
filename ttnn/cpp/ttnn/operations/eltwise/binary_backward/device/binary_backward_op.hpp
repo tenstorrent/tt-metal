@@ -55,6 +55,7 @@ static std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, con
 //OpHandler_binary_bw : get_function_binary_bw_type1
 std::vector<Tensor> _atan2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _embedding_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 //OpHandler_binary_bw_opt_float_default : get_function_binary_bw_type1_opt_float_default
 std::vector<std::optional<ttnn::Tensor>> _addalpha_bw( uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt, const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true}, std::optional<Tensor> input_grad = std::nullopt, std::optional<Tensor> other_grad = std::nullopt);
@@ -84,6 +85,13 @@ template <>
 struct OpHandler_binary_bw_opt_float_default<BinaryBackwardOpType::ADDALPHA_BW> {
     static std::vector<std::optional<ttnn::Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad ) {
         return _addalpha_bw( queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw<BinaryBackwardOpType::EMBEDDING_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _embedding_bw(grad, input, other, output_mem_config);
     }
 };
 

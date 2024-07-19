@@ -48,7 +48,7 @@ std::vector<ttnn::Tensor> _atan2_bw(
 
 
 std::vector<ttnn::Tensor> _embedding_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& weight, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(input.get_dtype() == DataType::UINT32, "Input must be UINT32");
     TT_FATAL(
         grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1,
