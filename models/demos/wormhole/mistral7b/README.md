@@ -60,9 +60,9 @@ pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral
 
 ### Run the demo
 
-Mistral-7B does not run fast prefill currently. It does prefill via sequential decoding.
+Mistral-7B runs fast prefill upto sequence lengths 4096.
 
-The largest context length supported is 4096 tokens.
+For decode, the largest context length supported is 1024 tokens currently.
 
 Mistral-7B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 

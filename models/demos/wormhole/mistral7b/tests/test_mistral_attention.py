@@ -42,7 +42,7 @@ def test_mistral_attention_inference(iterations, device, use_program_cache, rese
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
-
+    model_args.sliding_window = 1024
     model_args.max_batch_size = 32
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)

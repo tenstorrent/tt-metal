@@ -66,6 +66,11 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)
+
+    # TODO: Add decode support for max_batch_size=8 so that we scale up to seqlen 4k
+    model_args.max_seq_len = 1024
+    model_args.sliding_window = 1024
+    model_args.kv_seq_len = 1024
     model_args.max_batch_size = 32
     model_args.n_layers = 32  # Full model
 
