@@ -578,7 +578,7 @@ struct from_json_t<RelativeCoreCoord> {
 template <>
 struct to_json_t<CoreRange> {
     nlohmann::json operator()(const CoreRange &core_range) noexcept {
-        return {{"start", to_json(core_range.start)}, {"end", to_json(core_range.end)}};
+        return {{"start", to_json(core_range.start_)}, {"end", to_json(core_range.end_)}};
     }
 };
 
