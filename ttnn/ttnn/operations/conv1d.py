@@ -31,10 +31,13 @@ def Conv1d(
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    # Reshape input and weight tensors to 4D
+    # Reshape the input and weight tensors to 4D for conv2d operation
     # Should be no-op as input_tensor is in RM layout
-    input_tensor = ttnn.reshape(input_tensor, [batch_size, input_length, 1, in_channels])
-    weight_tensor = ttnn.reshape(weight_tensor, [out_channels, in_channels // groups, kernel_size, 1])
+    if len(input_tensor.shape) != 4:
+        input_tensor = ttnn.reshape(input_tensor, [batch_size, input_length, 1, in_channels])
+    if len(weight_tensor.shape) != 4:
+        weight_tensor = ttnn.reshape(weight_tensor, [out_channels, in_channels // groups, kernel_size, 1])
+
     (
         output_tensor_new,
         output_length_new,
