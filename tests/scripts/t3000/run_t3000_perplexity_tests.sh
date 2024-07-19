@@ -15,8 +15,7 @@ run_t3000_perplexity_tests() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
 
   # Llama-70B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval.py::test_LlamaModel_demo[wormhole_b0-True-wikitext-128-128-greedy-tt-70b-80L-llama3] --timeout=7200 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval.py::test_LlamaModel_demo[wormhole_b0-True-wikitext-2k-128-greedy-tt-70b-80L-llama3] --timeout=7200 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

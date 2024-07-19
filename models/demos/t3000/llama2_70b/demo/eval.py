@@ -16,7 +16,6 @@ from loguru import logger
 
 from tqdm import tqdm
 from models.demos.t3000.llama2_70b.demo.demo import (
-    run_decode,
     build_generator,
     construct_arg,
     initialize_inputs,
@@ -90,14 +89,18 @@ def main(args, eval_data_args):
         max_batch_size,
     )
 
+    base_path = "models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/"
+    os.makedirs(base_path, exist_ok=True)
+
     # Get current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    path = "models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/"
-    os.makedirs(path, exist_ok=True)
-
     # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
-    filename = f"models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/perplexity_{model_args.llama_version}_{model_args.implementation}_{model_args.num_layers}L_{eval_data_args.sample_len}_{data_args.max_output_tokens}_{timestamp}.json"
+    filename = os.path.join(
+        base_path,
+        f"perplexity_{model_args.llama_version}_{model_args.implementation}_{model_args.num_layers}L_"
+        f"{eval_data_args.sample_len}_{data_args.max_output_tokens}_{timestamp}.json",
+    )
     result = {
         "model": model_args.llama_version,
         "perplexity": perplexity.item(),
@@ -361,9 +364,8 @@ def test_LlamaModel_demo(
     llama_version,
     use_program_cache,
 ):
-    logger.info("Running LlamaModel demo")
+    logger.info("Running LlamaModel perplexity test")
     ## Get model config
-
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
     )
