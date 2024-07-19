@@ -141,7 +141,7 @@ class TtModelArgs:
                 per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=56,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
-                fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+                fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
 
@@ -176,7 +176,7 @@ class TtModelArgs:
                 per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=56,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
-                fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+                fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
 
