@@ -352,10 +352,6 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
     },
-    "eltwise-add-bw": {
-        "tt_op": ttnn_ops.eltwise_add_bw,
-        "pytorch_op": pytorch_ops.add_bw,
-    },
     "ttnn-eltwise-exp": {
         "tt_op": ttnn_ops.eltwise_exp,
         "pytorch_op": pytorch_ops.exp,
@@ -417,17 +413,13 @@ op_map = {
         "tt_op": ttnn_ops.attention_softmax_nomask,
         "pytorch_op": ttnn_pytorch_ops.attention_softmax_nomask,
     },
-    "ttnn-attention_softmax": {
-        "tt_op": ttnn_ops.attention_softmax,
-        "pytorch_op": ttnn_pytorch_ops.attention_softmax,
-    },
     "ttnn-addcmul-bw": {
         "tt_op": ttnn_ops.addcmul_bw,
         "pytorch_op": pytorch_ops.addcmul_bw,
-    }
-    "unary-add-bw": {
-        "tt_op": ttnn_ops.unary_add_bw,
-        "pytorch_op": pytorch_ops.unary_add_bw,
+    },
+    "ttnn-attention_softmax": {
+        "tt_op": ttnn_ops.attention_softmax,
+        "pytorch_op": ttnn_pytorch_ops.attention_softmax,
     },
     "ttnn-rmsnorm": {
         "tt_op": ttnn_ops.rmsnorm,
@@ -720,5 +712,13 @@ op_map = {
     "eltwise-scale_mask_softmax_in_place": {
         "tt_op": ttnn_ops.eltwise_scale_mask_softmax_in_place,
         "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
+    },
+    "unary-add-bw": {
+        "tt_op": ttnn_ops.unary_add_bw,
+        "pytorch_op": pytorch_ops.unary_add_bw,
+    },
+    "eltwise-add-bw": {
+        "tt_op": ttnn_ops.eltwise_add_bw,
+        "pytorch_op": pytorch_ops.add_bw,
     },
 }
