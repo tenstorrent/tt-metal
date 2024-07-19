@@ -700,12 +700,7 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            "eltwise-unary_fmod",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            "eltwise-unary_fmod", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @pytest.mark.parametrize("unary_comp", ["unary_ne"])

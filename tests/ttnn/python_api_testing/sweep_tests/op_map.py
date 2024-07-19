@@ -697,4 +697,8 @@ op_map = {
         "tt_op": ttnn_ops.unpad,
         "pytorch_op": pytorch_ops.unpad,
     },
+    "eltwise-unary_fmod": {
+        "tt_op": ttnn_ops.eltwise_unary_fmod,
+        "pytorch_op": pytorch_ops.unary_fmod,
+    },
 }
