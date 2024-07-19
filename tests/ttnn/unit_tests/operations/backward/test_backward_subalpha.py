@@ -24,14 +24,8 @@ def test_bw_subalpha(input_shapes, alpha, device):
 
     tt_output_tensor_on_device = ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.sub(in_data, other_data, alpha=alpha)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.subalpha_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data, alpha)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
