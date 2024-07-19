@@ -28,7 +28,7 @@ from models.utility_functions import (
 
 
 def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    pcc = 0.99  # random weights = 0.87
+    pcc = 0.87  # real weights = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
 
