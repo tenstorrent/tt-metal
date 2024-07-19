@@ -50,6 +50,7 @@ enum class UnaryCompositeOpType {
     TRIL,
     TRIU,
     ROUND,
+    POLYGAMMA,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -76,12 +77,12 @@ Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _deg2rad(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _rad2deg(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _hardswish(const Tensor&, float, float, const std::optional<MemoryConfig>& );
-Tensor _hardsigmoid(const Tensor&, float, float, const std::optional<MemoryConfig>& );
-Tensor _hardtanh(const Tensor&, float, float, const std::optional<MemoryConfig>& );
+Tensor _hardswish(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _hardsigmoid(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _hardtanh(const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _clip(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _clamp(const Tensor&, float, float, const std::optional<MemoryConfig>& );
-Tensor _selu(const Tensor&, float, float, const std::optional<MemoryConfig>& );
+Tensor _selu(const Tensor&, float scale = 1.0507009873554804934193349852946, float alpha = 1.6732632423543772848170429916717, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
@@ -89,9 +90,10 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
-Tensor _tril(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
-Tensor _triu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
-Tensor _round(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -319,6 +321,11 @@ template <>
 struct OpHandler<UnaryCompositeOpType::REGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
         return _reglu(t1, dim, mem_cfg);
+    }
+};
+struct OpHandler<UnaryCompositeOpType::POLYGAMMA> {
+    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _polygamma(t1, param1, mem_cfg);
     }
 };
 

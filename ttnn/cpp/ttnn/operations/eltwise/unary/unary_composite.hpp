@@ -283,4 +283,8 @@ constexpr auto round = ttnn::register_operation_with_auto_launch_op<
     "ttnn::round",
     operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::ROUND>>();
 
+constexpr auto polygamma = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::polygamma",
+    operations::unary::ExecuteUnaryCompositeOpWith1int<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
+
 }  // namespace ttnn
