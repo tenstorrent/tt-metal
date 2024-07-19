@@ -6,11 +6,14 @@ import pytest
 import torch
 import numpy as np
 
+import ttnn
+
 import tt_lib as ttl
 from loguru import logger
 from models.utility_functions import is_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def transpose(
@@ -303,3 +306,151 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
             input_dtype=input_dtype,
             expected_program_cache_size=3,
         )
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [1])
+@pytest.mark.parametrize("h", [230])
+@pytest.mark.parametrize("w", [256])
+def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttnn.pad(
+        activation_pyt_padded,
+        padding=(
+            (0, 0),
+            (0, 26),
+            (0, 0),
+        ),
+        value=0,
+    )
+    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+    activation_pyt_padded_out = activation_pyt_padded_out[:n, :c, :w, :h]
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [8])
+@pytest.mark.parametrize("w", [256])
+def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+
+
+def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [8])
+@pytest.mark.parametrize("w", [256])
+def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+    for _ in range(2):
+        run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache)
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_tranpose_hc_rm(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(1, 2)
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 1, 2, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+
+
+def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(1, 2)
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 1, 2, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [4])
+@pytest.mark.parametrize("h", [256])
+@pytest.mark.parametrize("w", [256])
+def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+    for _ in range(2):
+        run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1

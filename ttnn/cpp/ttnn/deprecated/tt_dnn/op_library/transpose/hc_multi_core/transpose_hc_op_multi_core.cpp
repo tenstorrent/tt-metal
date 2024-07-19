@@ -4,6 +4,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -95,16 +96,117 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     return ret_val;
 }
 
+std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_hc_rm(const Tensor &input_tensor,
+                                                                                        Tensor &output_tensor,
+                                                                                        uint32_t num_cores_total,
+                                                                                        uint32_t num_cores,
+                                                                                        uint32_t num_cores_y,
+                                                                                        CoreRangeSet core_group_1,
+                                                                                        uint32_t num_w_sticks_per_core_group_1,
+                                                                                        CoreRangeSet core_group_2,
+                                                                                        uint32_t num_w_sticks_per_core_group_2
+                                                                                        ){
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
+
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t W_bytes = W * input_tensor.element_size();
+
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores_total);
+
+    uint32_t max_read_size = 2048; // TILE size
+    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
+    for(uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_sticks_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_sticks_per_core = num_w_sticks_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_sticks_per_core = num_w_sticks_per_core_group_2;
+        } else {
+            //no-op
+            num_sticks_per_core = 0;
+        }
+
+        auto merge_num_sticks_to_read = [](uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) -> uint32_t {
+            uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
+            uint32_t new_num_sticks_to_read = num_sticks_to_read;
+            uint32_t new_stick_size_bytes = stick_size_bytes;
+
+            for (uint32_t current_size = stick_size_bytes; current_size <= max_read_size; current_size += stick_size_bytes) {
+                if (total_bytes % current_size == 0) {
+                    new_stick_size_bytes = current_size;
+                    new_num_sticks_to_read = total_bytes / current_size;
+                }
+            }
+            return new_num_sticks_to_read;
+        };
+
+        // issue more reads before calling barrier
+        uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
+        if (num_sticks_per_core != 0) {
+            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
+            num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
+        }
+
+        // reader
+        std::vector<uint32_t> reader_runtime_args = {
+            input_buffer->address(),
+            num_sticks_per_core_read,
+            num_read_per_barrier,
+            curr_sticks_read,
+            curr_c,
+            curr_h,
+            curr_n
+        };
+
+        // writer
+        std::vector<uint32_t> writer_runtime_args = {
+            output_buffer->address(),
+            num_sticks_per_core_read,
+            num_read_per_barrier,
+            curr_sticks_write
+        };
+
+        ret_val[i] = {reader_runtime_args, writer_runtime_args};
+
+        curr_sticks_write += num_sticks_per_core;
+
+        for (uint32_t i = 0; i < num_sticks_per_core; ++i) {
+            curr_c++;
+            curr_sticks_read += H;
+            if (curr_c == C) { // end of channel dim
+                curr_h++;
+                curr_c = 0;
+                if (curr_h == H) { // end of H dim
+                    curr_n++;
+                    curr_c = 0;
+                    curr_h = 0;
+                    curr_sticks_read = curr_sticks_read - H + 1;
+                } else {
+                    curr_sticks_read = curr_sticks_read - C * H + 1;
+                }
+            }
+        }
+
+    }
+
+    return ret_val;
+}
 
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output) {
 
-
     const auto shape = a.get_legacy_shape();
-
 
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
+    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t NCH = N * C * H;
+    bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -127,7 +229,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
 
     Shape output_shape = output.get_legacy_shape();
 
@@ -135,38 +237,82 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    if (row_major) {
+        auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
+        auto stick_size = W * a.element_size();
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_sticks * stick_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, stick_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    } else {
+        uint32_t num_input_tiles = 2;
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    }
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) sub_tile_line_bytes,
-        (std::uint32_t) (cb_data_format == tt::DataFormat::Float32)
+        (std::uint32_t) src0_is_dram
     };
+    if (row_major) {
+        reader_compile_time_args.push_back((std::uint32_t) N);
+        reader_compile_time_args.push_back((std::uint32_t) H);
+        reader_compile_time_args.push_back((std::uint32_t) C);
+        reader_compile_time_args.push_back((std::uint32_t) W * a.element_size());
+
+        auto stick_size = W * a.element_size();
+        bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+        reader_compile_time_args.push_back((std::uint32_t) stick_size_is_power_of_two);
+        if (stick_size_is_power_of_two) {
+            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            reader_compile_time_args.push_back((std::uint32_t) log2_stick_size);
+        } else {
+            reader_compile_time_args.push_back(stick_size);
+        }
+    } else {
+        reader_compile_time_args.push_back((std::uint32_t) sub_tile_line_bytes);
+        reader_compile_time_args.push_back((std::uint32_t) (cb_data_format == tt::DataFormat::Float32));
+    }
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram
     };
+    if (row_major) {
+        writer_compile_time_args.push_back((std::uint32_t) W * a.element_size());
+
+        auto stick_size = W * a.element_size();
+        bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+        writer_compile_time_args.push_back((std::uint32_t) stick_size_is_power_of_two);
+        if (stick_size_is_power_of_two) {
+            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            writer_compile_time_args.push_back((std::uint32_t) log2_stick_size);
+        } else {
+            writer_compile_time_args.push_back(stick_size);
+        }
+    }
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
+        row_major ?
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned_rm.cpp" :
         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
+        row_major ?
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/dataflow/writer_unary_transpose_hc_interleaved_start_id_rm.cpp" :
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 
-    auto all_runtime_args =  get_runtime_args_mc_hc(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+    auto all_runtime_args = row_major ?
+                            get_runtime_args_mc_hc_rm(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2) :
+                            get_runtime_args_mc_hc(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
 
     for(uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -212,8 +358,15 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
-        auto all_runtime_args =  get_runtime_args_mc_hc(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+        uint32_t H = src_tensor.shape()[2], C = src_tensor.shape()[1], N = src_tensor.shape()[0];
+        uint32_t NCH = N * C * H;
+        bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
+
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
+        auto all_runtime_args = row_major ?
+                                get_runtime_args_mc_hc_rm(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2) :
+                                get_runtime_args_mc_hc(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+
 
         for(uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

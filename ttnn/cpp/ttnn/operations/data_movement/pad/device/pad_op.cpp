@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         if (use_multicore) {
-            return detail::pad_rm_reader_writer_multi_core(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            return detail::pad_rm_reader_writer_multi_core_v2(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         } else {
             return detail::pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         }
