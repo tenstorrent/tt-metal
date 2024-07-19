@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -12,6 +10,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
 
 namespace ttnn::operations::complex_unary {
 

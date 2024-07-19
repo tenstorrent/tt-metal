@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "tt_eager/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

@@ -29,9 +29,6 @@ struct ExecuteComplexBinaryType1 {
 
 };
 
-}
+} //namespace operations::complex_binary
 
-//OpHandler_complex_binary_type1 = get_function_complex_binary
-// constexpr auto complex_mul = ttnn::register_operation<operations::complex_unary::ExecuteComplexBinaryType1<operations::complex_unary::ComplexUnaryOpType::COMPLEX_MUL>>("ttnn::complex_mul");
-
-}
+} //namespace ttnn
