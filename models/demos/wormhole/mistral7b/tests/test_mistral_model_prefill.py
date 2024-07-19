@@ -12,7 +12,7 @@ if os.getenv("CI") == "true":
     os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
     os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
     # Prefill prompt files too large to keep in repo
-    os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
+    os.environ["MISTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
 
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
@@ -95,10 +95,10 @@ def test_mistral_model_inference(device, version, seq_len, use_program_cache, re
         # The instruct prompts follow the format: <bos> [INST] prompt [/INST]. [INST] are strings. <bos> is the correspoding bos_id token
         prompts = ["[INST] what is the capital of Canada? [/INST]"] * 32
     else:
-        prompt_file = os.environ["MIXTRAL_REF_OUTPUT_PATH"] + "/tale-of-two-cities.txt"
+        prompt_file = os.environ["MISTRAL_REF_OUTPUT_PATH"] + "/tale-of-two-cities.txt"
         assert os.path.exists(
             prompt_file
-        ), f"Expected prompt file not found: {prompt_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
+        ), f"Expected prompt file not found: {prompt_file}. Please set the flag 'MISTRAL_REF_OUTPUT_PATH' correctly."
 
         with open(prompt_file, "r") as f:
             prompts = f.read()
