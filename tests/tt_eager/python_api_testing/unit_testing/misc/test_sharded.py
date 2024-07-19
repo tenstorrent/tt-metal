@@ -233,9 +233,9 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    yt = ttl.tensor.untilize(
+    yt = ttnn.untilize(
         xt,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
         use_multicore=True,
     )
 
@@ -1481,9 +1481,9 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.untilize(
+    yt = ttnn.untilize(
         xt,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
         use_multicore=True,
     )
 
@@ -1652,10 +1652,10 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.untilize_with_unpadding(
+    yt = ttnn.untilize_with_unpadding(
         xt,
-        ttl.tensor.Shape([0, 0, 391, 511]),
-        output_mem_config=out_mem_config,
+        output_tensor_end=ttl.tensor.Shape([0, 0, 391, 511]),
+        memory_config=out_mem_config,
     )
 
     if out_sharded:
@@ -1740,10 +1740,10 @@ def test_width_sharded_untilize_with_unpadding(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.untilize_with_unpadding(
+    yt = ttnn.untilize_with_unpadding(
         xt,
-        ttl.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
-        output_mem_config=out_mem_config,
+        output_tensor_end=ttl.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
+        memory_config=out_mem_config,
     )
 
     if out_sharded:
