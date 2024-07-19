@@ -492,10 +492,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     if (input.memory_config().is_sharded()) {
         // sharded, without halo
         reader_kernel_fname =
-            std::string("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
+            std::string("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
     } else {
         reader_kernel_fname =
-            std::string("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
+            std::string("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
     }
     auto reader_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader_config);
 
@@ -509,7 +509,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args, writer_defines);
     std::string writer_kernel_fname(
-        "ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
+        "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
 
     /**
@@ -542,7 +542,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool_multi_core.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp");
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     if (out_nhw_per_core_cliff > 0) {
@@ -942,7 +942,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         bf16_one_u32};
 
     std::string reader_kernel_fname(
-        "ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
+        "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
 
     auto reader0_config = DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader0_ct_args};
@@ -973,7 +973,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
                                             .compile_args = writer_ct_args,
                                             .defines = writer_defines};
     std::string
-    writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
+    writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
     writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
     */
 
@@ -1007,7 +1007,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool_multi_core.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp");
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     /*
