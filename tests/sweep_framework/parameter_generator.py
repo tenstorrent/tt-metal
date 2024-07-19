@@ -9,6 +9,7 @@ import pathlib
 import datetime
 import os
 import zlib
+import hashlib
 
 from permutations import *
 from serialize import serialize
@@ -67,7 +68,7 @@ def export_batch_vectors(module_name, batch_name, vectors):
             },
             size=10000,
         )["hits"]["hits"]
-        old_vector_ids = set(int(vector["_id"]) for vector in response)
+        old_vector_ids = set(vector["_id"] for vector in response)
     except NotFoundError as e:
         old_vector_ids = set()
         pass
@@ -80,7 +81,7 @@ def export_batch_vectors(module_name, batch_name, vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize(vectors[i][elem])
-        id = zlib.adler32(str(vectors[i]).encode("utf-8"))
+        id = hashlib.sha224(str(vectors[i]).encode("utf-8")).hexdigest()
         new_vector_ids.add(id)
         vector["timestamp"] = current_time
         serialized_vectors[id] = vector
@@ -97,6 +98,14 @@ def export_batch_vectors(module_name, batch_name, vectors):
         for old_vector_id in old_vector_ids:
             client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
         for new_vector_id in serialized_vectors.keys():
+            try:
+                existing = client.get(index=index_name, id=new_vector_id)
+                print(existing)
+                print(new_vector_id)
+                print(serialized_vectors[new_vector_id])
+                exit(0)
+            except:
+                pass
             client.index(index=index_name, id=new_vector_id, body=serialized_vectors[new_vector_id])
         print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for batch {batch_name}.")
 
