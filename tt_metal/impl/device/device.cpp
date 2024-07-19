@@ -406,13 +406,6 @@ void Device::initialize_and_launch_firmware() {
         }
     }
 
-    // Clear idle erisc mailbox
-    for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        std::vector<uint32_t> zero_vec_mailbox(128 / sizeof(uint32_t), 0);
-        llrt::write_hex_vec_to_core(this->id(), physical_core, zero_vec_mailbox, MEM_IERISC_MAILBOX_BASE);
-    }
-
     // Clear erisc sync info
     std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
