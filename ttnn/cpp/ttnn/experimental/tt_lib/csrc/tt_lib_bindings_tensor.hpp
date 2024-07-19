@@ -9,7 +9,6 @@
 namespace tt::tt_metal{
 
 namespace detail{
-    void TensorModuleXaryOPs ( py::module & m_tensor);
     void TensorModuleCompositeOPs( py::module & m_tensor);
     void TensorModuleBackwardOPs( py::module & m_tensor);
     void TensorModuleDMOPs( py::module & m_tensor);
