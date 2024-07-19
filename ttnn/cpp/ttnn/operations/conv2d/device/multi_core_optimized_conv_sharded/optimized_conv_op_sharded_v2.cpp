@@ -1086,13 +1086,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
             TT_ASSERT(split_reader == false, "Split reader not supported for this conv yet!");
 
-            compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/compute_depthwise_conv1d.cpp";
+            compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/compute_depthwise_conv1d.cpp";
             reader_kernel =
-                "tt_eager/tt_dnn/op_library/conv/kernels/reader_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_depthwise_conv1d.cpp";
             writer_mcast_sender_kernel =
-                "tt_eager/tt_dnn/op_library/conv/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
             writer_mcast_receiver_kernel =
-                "tt_eager/tt_dnn/op_library/conv/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
 
         } else {
             // 1D conv
