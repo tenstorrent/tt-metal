@@ -27,7 +27,6 @@ from models.utility_functions import (
 )
 
 
-# @skip_for_wormhole_b0("See GH Issue #10322")
 def test_mixtral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 

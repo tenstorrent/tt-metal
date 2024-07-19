@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 from models.demos.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.mamba.reference.args import ModelMode
 from models.demos.mamba.tt import model_config
+from models.demos.mamba.tt.preprocessing import split_sequence_length
 
 
 def get_cpu_reference_model(version: MambaPretrainedModelName, batch_size: int):
@@ -159,11 +160,24 @@ def run_mamba_prefill_decode_demo(
 
     # Prefill
     model.to_prefill()
+    prefill_chunk_size = 32
     num_users = sequences.shape[0]
+
+    prefill_tokens = sequences[:, :-1]  # Omit the last token in the sequence (B, L - 1)
+
+    prefill_tokens = ttnn.from_torch(
+        prefill_tokens.view(1, 1, prefill_tokens.shape[0], prefill_tokens.shape[1]),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.uint32,
+    )
     for user_idx in tqdm(range(num_users), desc="Prefilling the prompt(s)..."):
         with torch.no_grad():
-            model(sequences[user_idx, :-1].unsqueeze(0))  # Omit the last token in the sequence
-            model.configs["current_user"] += 1
+            for chunk in split_sequence_length(prefill_tokens, batch=user_idx, chunk_size=prefill_chunk_size):
+                chunk = ttnn.reshape(chunk, [1, chunk.shape[3]])  # Mamba expects (1, L) in prefill mode
+                model._forward(chunk)
+        model.configs["current_user"] += 1
 
     # Decode
     decode_model_config = model_config.create_model_config(

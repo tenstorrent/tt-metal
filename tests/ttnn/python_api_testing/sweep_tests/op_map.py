@@ -417,6 +417,10 @@ op_map = {
         "tt_op": ttnn_ops.attention_softmax,
         "pytorch_op": ttnn_pytorch_ops.attention_softmax,
     },
+    "ttnn-addcmul-bw": {
+        "tt_op": ttnn_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
     "ttnn-rmsnorm": {
         "tt_op": ttnn_ops.rmsnorm,
         "pytorch_op": ttnn_pytorch_ops.rmsnorm,
