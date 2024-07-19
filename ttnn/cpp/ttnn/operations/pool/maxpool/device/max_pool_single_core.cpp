@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
     auto reader_config = ReaderDataMovementConfig(reader_ct_args);
-    std::string reader_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
+    std::string reader_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     std::vector<uint32_t> writer_rt_args = reader_rt_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args);
-    std::string writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
+    std::string writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,
                                                   cores,
@@ -228,7 +228,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          nbatch,
                                                          out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateKernel(program,
                                               compute_kernel_fname,
                                               cores,
