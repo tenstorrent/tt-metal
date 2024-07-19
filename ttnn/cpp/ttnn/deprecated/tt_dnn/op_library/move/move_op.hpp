@@ -6,6 +6,7 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -17,7 +18,7 @@ using namespace tt::constants;
 namespace move_op_utils {
 using namespace tt::tt_metal;
 
-bool can_deallocate(const Tensor &input_tensor);
+bool can_deallocate(const Tensor &input_tensor, bool from_multi_device = false);
 
 } // namespace move_op_utils
 
@@ -109,8 +110,9 @@ inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>
 
 inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    bool from_multi_device = is_multi_device_tensor(input_tensor);
     operation::launch_op(
-        [mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [from_multi_device, mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
             auto input_mem_config = input_tensor.memory_config();
@@ -118,7 +120,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
             auto input_address = input_tensor.buffer()->address();
             auto output_mem_config = mem_config.value_or(input_mem_config);
             TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
-            if (not move_op_utils::can_deallocate(input_tensor)) {
+            if (not move_op_utils::can_deallocate(input_tensor, from_multi_device)) {
                 TT_FATAL(false, "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably another consumer.");
                 // TODO: Should this throw error?
                 return {input_tensor};
