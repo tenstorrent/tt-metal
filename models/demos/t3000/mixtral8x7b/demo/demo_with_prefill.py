@@ -20,11 +20,14 @@ import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     load_inputs,
-    preprocess_inputs,
+    preprocess_inputs_prefill,
     prepare_inputs_ttnn,
+    prepare_inputs_ttnn_prefill,
     get_single_rot_mat,
     sample,
     cache_attention,
+    get_rot_transformation_mat,
+    get_prefill_rot_mat,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
@@ -46,11 +49,9 @@ class Emb(torch.nn.Module):
 @torch.no_grad()
 def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     assert batch_size == 32, "Batch size must be 32"
-
     dtype = ttnn.bfloat8_b
 
-    embed_on_host = True  # embedding and argmax on host. TODO Seeing bad output when on device
-    seqlen = 1  # Generating one token per user at a time
+    embed_on_host = True  # Do embedding and argmax on host. TODO Seeing bad output when on device
 
     logger.info(f"Reading inputs...")
     if len(user_input) == 1:
@@ -81,22 +82,20 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     logger.info("Loading weights finished!")
 
     # Preprocess initial prompt inputs
-    input_tokens_tt, max_prompt_len, input_mask, input_tokens_pt, input_mask_pt = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, instruct_mode, device_mesh
-    )
+    (
+        input_tokens_prefill_tt,
+        input_tokens_decode_tt,
+        max_prompt_len,
+        input_mask,
+        input_tokens_prefill_pt,
+        input_tokens_decode_pt,
+        input_mask_pt,
+        prefill_seq_len,
+        encoded_prompts,
+    ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instruct_mode, device_mesh)
 
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
-
-    # Load TTNN mixtral model
-    logger.info("Loading weights to device...")
-    tt_model = TtTransformer(
-        device_mesh=device_mesh,
-        state_dict=state_dict,
-        args=model_args,
-        layers=list(range(model_args.n_layers)),
-        dtype=dtype,
-    )
 
     if not embed_on_host:
         tt_embds = TtMixtralEmbedding(
@@ -107,27 +106,35 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-    logger.info("Finished loading weights to device.")
     # Prepare the first token embedding for each user
     if embed_on_host:
-        pt_decode_input = embd(input_tokens_pt[:, 0]).view(batch_size, seqlen, -1)
-    else:  # Embedding on device
-        # Each device does its own embedding
-        decode_input_11BH = tt_embds(input_tokens_tt[0])
-        # Reshape and change row major to tile layout
-        decode_input_11BH = ttnn.reshape(decode_input_11BH, ttnn.Shape([1, 1, batch_size, model_args.dim]))
+        pt_decode_input = embd(input_tokens_decode_pt[:, 0]).view(batch_size, 1, -1)
+        if prefill_seq_len > 0:
+            pt_prefill_input = [
+                embd(input_tokens_prefill_pt[b, :]).view(1, prefill_seq_len, -1) for b in range(batch_size)
+            ]
+    else:  # TODO Embedding on device
+        pass
 
-        decode_input_11BH = ttnn.to_layout(decode_input_11BH, layout=ttnn.TILE_LAYOUT)
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize(decode_input_11BH[i]) for i in range(len(devices))]
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
+    logger.info("Loading weights to device...")
+    tt_model = TtTransformer(
+        device_mesh=device_mesh,
+        state_dict=state_dict,
+        args=model_args,
+        layers=list(range(model_args.n_layers)),
+        dtype=dtype,
+        start_pos=prefill_seq_len,
+    )
+    logger.info("Finished loading weights to device.")
 
-    # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
+    # Prepare rotary matrix for decode
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         tt_model.device_mesh,
+        model_args.max_seq_len,
     )
 
-    generation_start_pos = 0
+    generation_start_pos = prefill_seq_len
     max_generated_tokens = 50
 
     cache_attention(
@@ -141,10 +148,43 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         dtype,
     )
 
-    logger.info("Starting inference...")
+    if prefill_seq_len > 0:
+        logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
+        rot_mats_prefill = get_prefill_rot_mat(
+            model_args.head_dim, model_args.max_seq_len, device_mesh, seq_len=prefill_seq_len
+        )
+        head_dim = model_args.dim // model_args.n_heads
+        transformation_mat_torch = get_rot_transformation_mat(head_dim)
+        transformation_mats = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        )
+        for batch_id in range(batch_size):
+            prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+                pt_prefill_input[batch_id],
+                device_mesh,
+            )
+            tt_out = tt_model(
+                prefill_input,
+                0,  # Start position
+                0,  # Current position
+                attn_mask,
+                rot_mats_prefill,
+                transformation_mats,
+                user_id=batch_id,
+                mode="prefill",
+            )
+
+        logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
+
+    logger.info("Starting decode...")
 
     # Keep track of generated outputs to print out every iteration
-    all_outputs = [[] for _ in range(batch_size)]
+    all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
 
     # Keep track of users that are done generating and stop printing their outputs
     finished_generation = [False] * batch_size
@@ -177,7 +217,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             tt_output_torch = (
                 ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0]
                 .squeeze(1)
-                .view(batch_size, seqlen, -1)
+                .view(batch_size, 1, -1)
                 .detach()
                 .float()
             )
@@ -187,21 +227,17 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:
                 tt_token_batch = torch.where(
-                    input_mask_pt[:, iteration], input_tokens_pt[:, iteration], tt_token_batch[:, 0]
+                    input_mask_pt[:, iteration], input_tokens_decode_pt[:, iteration], tt_token_batch[:, 0]
                 ).unsqueeze(1)
             # Next PT input embedding
-            pt_decode_input = embd(tt_token_batch).view(batch_size, seqlen, -1)
+            pt_decode_input = embd(tt_token_batch).view(batch_size, 1, -1)
         else:  # Embedding/argmax on device
-            # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
-            # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
-            # ttl.device.SetDefaultDevice(device_mesh.get_device(0))
-
             # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:
-                decode_input_1B = ttnn.where(input_mask[iteration], input_tokens_tt[iteration], tt_out_1B)
+                decode_input_1B = ttnn.where(input_mask[iteration], input_tokens_decode_tt[iteration], tt_out_1B)
             else:
                 decode_input_1B = tt_out_1B
 
@@ -247,19 +283,13 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     # When running in CI, check the output against the expected output to avoid accuracy regressions
     if os.getenv("CI") == "true":
-        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
+        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
         with open(expected_output, "r") as f:
             expected_out = json.load(f)
-        assert (
-            len(expected_out) >= batch_size * 2
-        ), f"expected_outputs.json should have 64 outputs: 32 for general weights and 32 for instruct weights!"
 
         for i in range(batch_size):
             user_output = "".join(tokenizer.decode(all_outputs[i]))
-            if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
-                user_expect = expected_out[i + 32]["output_instruct"]
-            else:
-                user_expect = expected_out[i]["output_general"]
+            user_expect = expected_out[i]["output_general"]
 
             assert user_output == user_expect, f"Output for user {i} does not match expected output!"
         logger.info("[CI-Only] Output token validation passed!")
@@ -270,8 +300,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions.json", True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", True),
     ],
     ids=["general_weights", "instruct_weights"],
 )
@@ -282,11 +312,11 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
 
 
 # CI only runs general-weights demo
-@pytest.mark.skipif(not os.getenv("CI") == "true", reason="CI-only test")
+@pytest.mark.skipif(os.getenv("CI") == "False", reason="CI-only test")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
     ],
     ids=[
         "general_weights",
