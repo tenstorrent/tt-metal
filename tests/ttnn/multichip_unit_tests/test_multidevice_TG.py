@@ -18,6 +18,7 @@ from ttnn import (
     TensorToMesh,
     MeshToTensor,
 )
+from models.utility_functions import nearest_32
 
 
 @pytest.mark.parametrize(
@@ -119,41 +120,59 @@ class ConcatMesh2DToTensor(MeshToTensor):
     "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
-    "M,K,N",
+    "M, K, N, weights_dtype",
     [
-        pytest.param(32, 8192, 32768, id="Llama3-70B_decode_FF1"),
-        pytest.param(32, 32768, 8192, id="Llama3-70B_decode_FF2"),
-        pytest.param(512, 8192, 32768, id="Llama3-70B_prefill_FF1"),
-        pytest.param(512, 32768, 8192, id="Llama3-70B_prefill_FF2"),
-        pytest.param(32, 16 * 1024, 64 * 1024, id="Llama3-400B_decode_FF1"),
-        pytest.param(32, 64 * 1024, 16 * 1024, id="Llama3-400B_decode_FF2"),
-        # pytest.param(512, 16*1024, 64*1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
-        pytest.param(512, 64 * 1024, 16 * 1024, id="Llama3-400B_prefill_FF2"),
+        pytest.param(32, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_decode_FF1"),
+        pytest.param(32, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_decode_FF2"),
+        pytest.param(512, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_prefill_FF1"),
+        pytest.param(512, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_prefill_FF3"),
+        pytest.param(512, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_prefill_FF2"),
+        # pytest.param(32, 16 * 1024, 64 * 1024, ttnn.bfloat4_b, id="Llama3-400B_decode_FF1"),
+        # pytest.param(32, 64 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-400B_decode_FF2"),
+        # pytest.param(512, 16*1024, 64*1024, ttnn.bfloat4_b, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
+        # pytest.param(512, 64 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-400B_prefill_FF2"),
     ],
 )
-def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
+def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
+
+    act_shard_dim = (3, None) if K == 8192 else (None, 3)
+    weight_shard_dim = (2, 3) if K == 8192 else (3, 2)
+    concat_dim = (1, 3) if K == 8192 else (3, 1)
+
+    K = K // cluster_shape[0] if K == 8192 else K // cluster_shape[1]
+    N = N // cluster_shape[1] if N == 32768 else N // cluster_shape[0]
+
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // 8),
+        core_grid=ttnn.CoreGrid(y=1, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
     act = ttnn.from_torch(
         act_pt,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=act_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(3, None), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
     )
     weights = ttnn.from_torch(
         weights_pt,
-        dtype=ttnn.bfloat8_b,
+        dtype=weights_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(2, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
     )
 
     gt = act_pt @ weights_pt
 
-    compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+    compute_kernel_lofi = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
@@ -163,11 +182,108 @@ def test_galaxy_matmul_2d_fracture(M, K, N, cluster_shape, device_mesh):
         weights,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=4, x=8),
-        use_1d_systolic_array=True if M == 32 else False,
-        compute_kernel_config=compute_kernel_attn,
+        compute_kernel_config=compute_kernel_lofi,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
+    out = ttnn.to_torch(
+        out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=concat_dim, cluster_shape=cluster_shape)
+    )
+    out = torch.sum(out, dim=1, keepdim=True)
+
+    out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
+
+
+@pytest.mark.parametrize(
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+)
+@pytest.mark.parametrize(
+    "M, K, N, weights_dtype",
+    [
+        pytest.param(32, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_decode_FF1"),
+        pytest.param(32, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_decode_FF2"),
+    ],
+)
+def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_shape, device_mesh):
+    act_pt = torch.randn(1, 1, M, K)
+    weights_pt = torch.randn(1, 1, K, N)
+
+    gt = act_pt @ weights_pt
+
+    act_shard_dim = (3, None) if K == 8192 else (None, 3)
+    weight_shard_dim = (2, 3) if K == 8192 else (3, 2)
+    concat_dim = (1, 3) if K == 8192 else (3, 1)
+
+    K = K // cluster_shape[0] if K == 8192 else K // cluster_shape[1]
+    N = N // cluster_shape[1] if N == 32768 else N // cluster_shape[0]
+
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // 8),
+        core_grid=ttnn.CoreGrid(y=1, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    act = ttnn.from_torch(
+        act_pt,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=act_mem_config,
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
+    )
+
+    compute_kernel_lofi = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    device_mesh.get_device(0).dram_grid_size().x - 1, device_mesh.get_device(0).dram_grid_size().y - 1
+                ),
+            )
+        }
+    )
+    shard_shape = (K, nearest_32(N // 12))  # padded cols to divide by 12
+    shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    weight_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    weights = ttnn.from_torch(
+        weights_pt,
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=weight_mem_config,
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
+    )
+
+    DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=K // 8 // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+        per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+        per_core_N=N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+        fused_activation=None,
+    )
+
+    out = ttnn.matmul(
+        act,
+        weights,
+        program_config=DRAM_SHARDED_PROGCFG,
+        compute_kernel_config=compute_kernel_lofi,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+    )
+
+    out = ttnn.to_torch(
+        out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=concat_dim, cluster_shape=cluster_shape)
+    )
     out = torch.sum(out, dim=1, keepdim=True)
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
@@ -294,38 +410,6 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
     assert out_pass
 
 
-class ReplicateShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.Tensor):
-        result = []
-
-        if self.dims[0] is None and self.dims[1] is not None:
-            # Replicate along rows, shard along columns
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1]))
-            for shard in sharded_tensors:
-                result.extend([shard.clone() for _ in range(self.cluster_shape[0])])
-        elif self.dims[0] is not None and self.dims[1] is None:
-            # Replicate along columns, shard along rows
-            sharded_tensors = list(torch.chunk(tensor, self.cluster_shape[0], dim=self.dims[0]))
-            for _ in range(self.cluster_shape[1]):
-                result.extend([shard.clone() for shard in sharded_tensors])
-        else:
-            raise ValueError(
-                "One dimension must be None (for replication) and the other must be specified (for sharding)"
-            )
-
-        return result
-
-    def config(self):
-        return {
-            "strategy": "replicate",
-        }
-
-
 @pytest.mark.parametrize(
     "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
@@ -354,11 +438,12 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ReplicateShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
     )
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
@@ -368,7 +453,6 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         weights,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=5, x=8) if num_heads == 80 else ttnn.CoreGrid(y=4, x=8),
-        use_1d_systolic_array=True,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -827,14 +911,14 @@ def run_test_sdpa_decode_single_iter(
     start_idx = s // 2
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(start_idx)
+    k_chunk_size = get_chunk_size(start_idx + 1)
     program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
     )
 
-    padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+    padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
     # Test various sequence lengths
     logger.debug(f"Testing with sequence length: {start_idx}")
@@ -857,23 +941,13 @@ def run_test_sdpa_decode_single_iter(
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    tt_attn_mask = ttnn.from_torch(
-        attn_mask,
-        device=device_mesh,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=dram_memcfg,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
-    )
-
     tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
-        tt_attn_mask,
+        [start_idx for _ in range(b)],
         scale=scale,
         program_config=program_config,
-        valid_seq_len=padded_layer_len,
         compute_kernel_config=compute_kernel_config,
         output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
@@ -1022,11 +1096,12 @@ def test_galaxy_layernorm(M, N, device_mesh):
 
     LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
 
-    LN_PROGCFG = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+    LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=M // 32,
@@ -1051,12 +1126,12 @@ def test_galaxy_layernorm(M, N, device_mesh):
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    norm_output = ttnn.experimental.operations.primary.rmsnorm(
+    norm_output = ttnn.rms_norm(
         layernorm_input_tt,
-        norm_eps,
-        norm_weights_tt,
+        epsilon=norm_eps,
+        weight=norm_weights_tt,
         program_config=LN_PROGCFG,
-        output_mem_config=LN_OUTPUT_MEMCFG,
+        memory_config=LN_OUTPUT_MEMCFG,
         compute_kernel_config=LN_COMPUTE_KERNEL_CONFIG,
     )
 
