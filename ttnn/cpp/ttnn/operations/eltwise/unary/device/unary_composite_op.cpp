@@ -129,7 +129,6 @@ Tensor _cosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
    Tensor scalar = ttnn::full_like(input_a, 0.5f);
     //    ttnn::operations::creation::create_scalar(0.5f, input_a.get_dtype(), Layout::TILE, input_a.device());
    return ttnn::multiply(nr_term, scalar, std::nullopt);
-   scalar.deallocate();
 }
 
 // TODO: In future will uplift the op once the floor and tan has supported.
@@ -314,7 +313,6 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     e_neg_x.deallocate();
     Tensor scalar = ttnn::full_like(input_a, 0.5f);
     return ttnn::multiply(nr_term, scalar, std::nullopt, output_mem_config);
-    scalar.deallocate();
 }
 
 // Function: softsign

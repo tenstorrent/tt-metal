@@ -270,6 +270,8 @@ Pointwise Binary
    :maxdepth: 1
 
    ttnn/add
+   ttnn/addalpha
+   ttnn/subalpha
    ttnn/multiply
    ttnn/subtract
    ttnn/pow
