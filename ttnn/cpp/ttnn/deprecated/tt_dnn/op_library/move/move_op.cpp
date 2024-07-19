@@ -7,12 +7,21 @@
 namespace move_op_utils {
 using namespace tt::tt_metal;
 
-bool can_deallocate(const Tensor &input_tensor) {
+// When a single device tensor is created from a multi-device tensor,
+// there will be 2 references instead of just 1
+bool can_deallocate(const Tensor &input_tensor, bool from_multi_device) {
     return std::visit(
-        [](auto &&storage) {
+        [&input_tensor, &from_multi_device](auto &&storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.buffer.use_count() == 1;
+                return storage.buffer.use_count() == (from_multi_device ? 2 : 1);
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                bool can_dealloc = true;
+                auto input_tensors = get_tensors_from_multi_device_storage(input_tensor);
+                for (const auto& device_tensor : input_tensors) {
+                    can_dealloc &= can_deallocate(device_tensor, true);
+                }
+                return can_dealloc;
             } else {
                 return false;
             }

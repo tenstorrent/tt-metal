@@ -303,7 +303,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                     input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
                 }
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-                auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+                auto arch = is_tensor_on_device_or_multidevice(a) ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
                 bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(

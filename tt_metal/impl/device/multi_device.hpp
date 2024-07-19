@@ -43,6 +43,12 @@ public:
 
     int num_devices() const;
 
+    CoreCoord compute_with_storage_grid_size() const;
+
+    CoreCoord dram_grid_size() const;
+
+    tt::ARCH arch() const;
+
     void close_devices();
 
    private:

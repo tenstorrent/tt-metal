@@ -75,18 +75,22 @@ Tensor to_weight_special_padding_tile_layout(
             Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     };
-    return std::visit(
-        [&compute](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return compute(owned_buffer::get_as<T>(storage.buffer));
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return compute(borrowed_buffer::get_as<T>(storage.buffer));
-            } else {
-                TT_THROW("Unsupported storage type");
-            }
-        },
-        conv_weight_tensor.get_storage());
+    auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
+        return std::visit(
+            [&compute](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return compute(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            conv_weight_tensor.get_storage());
+    };
+
+    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
 template <typename T>
@@ -155,18 +159,22 @@ Tensor to_weight_tile_layout(
             Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     };
-    return std::visit(
-        [&compute](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return compute(owned_buffer::get_as<T>(storage.buffer));
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return compute(borrowed_buffer::get_as<T>(storage.buffer));
-            } else {
-                TT_THROW("Unsupported storage type");
-            }
-        },
-        conv_weight_tensor.get_storage());
+
+    auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
+        return std::visit(
+            [&compute](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return compute(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            conv_weight_tensor.get_storage());
+    };
+    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
 // Converts convolution weights to tilized 2d matrix layout.

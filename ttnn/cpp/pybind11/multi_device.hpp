@@ -61,6 +61,29 @@ void py_module(py::module& module) {
 
             Returns:
                 List[Device]: The devices on a row in the device mesh.
+        )doc")
+        .def(
+            "compute_with_storage_grid_size",
+            &ttnn::multi_device::DeviceMesh::compute_with_storage_grid_size,
+            R"doc(
+            Get the compute grid size (x, y) of the first device in the device mesh denoting region that can be targeted by ops.
+
+            Returns:
+                CoreCoord: The compute grid size of the first device in the device mesh.
+        )doc")
+        .def("dram_grid_size", &ttnn::multi_device::DeviceMesh::dram_grid_size,
+        R"doc(
+            Get the dram grid size (x, y) of the first device in the device mesh.
+
+            Returns:
+                CoreCoord: The dram grid size of the first device in the device mesh.
+        )doc")
+        .def("arch", &ttnn::multi_device::DeviceMesh::arch,
+        R"doc(
+            Get the arch of the first device in the device mesh.
+
+            Returns:
+                Arch: The arch of the first device in the device mesh.
         )doc");
 
     module.def(
