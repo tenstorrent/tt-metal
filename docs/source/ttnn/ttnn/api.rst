@@ -263,7 +263,7 @@ Pointwise Unary
    ttnn/angle_bw
    ttnn/conj_bw
    ttnn/conj
-   ttmm/polar
+   ttnn/polar
 
 Pointwise Binary
 ================
