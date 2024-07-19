@@ -65,7 +65,6 @@ def run_conv(
         padding=padding,
         groups=groups,
     )
-    print("torch_out_golden_tensor :", torch_out_golden_tensor.shape)
 
     reader_patterns_cache = {}
 
