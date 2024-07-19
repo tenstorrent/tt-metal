@@ -111,14 +111,21 @@ class TtTransformer(LightweightModule):
             self.current_rot_mat = torch.matmul(self.rot_matrix, prev_rot_mat)
         else:
             if (start_pos + 1) % 32 == 0:
-                # generate new rotmat to avoid numerical instability every 64 tokens
+                # generate new rotmat to avoid numerical instability every 32 tokens
                 self.current_rot_mat, self.rot_matrix = get_single_rot_mat(
                     self.args.head_dim, self.device_mesh, start_pos + 1
                 )
             else:
                 # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
                 prev_rot_mat = self.current_rot_mat
-                self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
+                self.current_rot_mat = ttnn.matmul(
+                    self.rot_matrix,
+                    prev_rot_mat,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    dtype=ttnn.bfloat16,
+                )
                 prev_rot_mat.deallocate(True)
 
         return outputs
