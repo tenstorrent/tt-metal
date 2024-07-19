@@ -6,10 +6,10 @@
 
 #include <concepts>
 #include <optional>
-#include <tt_eager/tensor/tensor.hpp>
+#include "ttnn/experimental/tensor/tensor.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/operation_history.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_stl/concepts.hpp"

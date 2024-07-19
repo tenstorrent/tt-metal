@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "tt_eager/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/operations/core.hpp"
 
 

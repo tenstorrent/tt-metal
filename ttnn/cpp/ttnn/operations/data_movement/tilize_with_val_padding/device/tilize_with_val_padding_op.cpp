@@ -6,7 +6,7 @@
 
 #include "tensor/tensor_utils.hpp"
 #include "tilize_with_val_padding_program_factory.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
