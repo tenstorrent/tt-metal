@@ -10,7 +10,7 @@ from ttnn import ReplicateTensorToMesh, ListMeshToTensor, ConcatMeshToTensor
 import gc
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.TG.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
+from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 
 from models.utility_functions import skip_for_grayskull

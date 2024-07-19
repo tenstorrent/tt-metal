@@ -8,8 +8,8 @@ import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
-from models.demos.TG.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
-from models.demos.TG.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
+from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
+from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 
 
 class TtLlamaDecoder_galaxy:

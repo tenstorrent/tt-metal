@@ -5,12 +5,11 @@
 import pytest
 from loguru import logger
 import torch
-import tt_lib
 import ttnn
 from ttnn import ReplicateTensorToMesh, ListMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.TG.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
+from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -35,7 +34,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     num_to_corerange,
     ConcatMesh2DToTensor,
 )
-from models.utility_functions import nearest_32
+import gc
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
