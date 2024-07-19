@@ -5,11 +5,12 @@
 #pragma once
 
 #include "tt_lib_bindings.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 namespace tt::tt_metal{
 
 namespace detail {
+
 
 template <bool mem_config_arg = true, bool dtype_arg = true, bool opt_output_arg = true, typename Func, typename... Extra>
 void bind_op_with_mem_config_and_dtype_and_opt_output(py::module_ &module, std::string op_name, Func &&f, std::string docstring, Extra&&... extra) {
@@ -133,7 +134,7 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
     );
     if constexpr (fused_activations) {
         const std::string fused_activations_name = "fused_activations";
-        const std::optional<std::vector<UnaryWithParam>> default_fused_activations = std::nullopt;
+        const std::optional<std::vector<ttnn::operations::unary::UnaryWithParam>> default_fused_activations = std::nullopt;
         docstring += fmt::format(R"doc(
             "{0}", "Fused activations after binary computation", "List of FusibleActivation with optional param", "Default is None", "No")doc",
             fused_activations_name
