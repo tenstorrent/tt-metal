@@ -1901,29 +1901,6 @@ Tensor glu(
 }
 
 
-// Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor _geglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
-    if (dim == -1)
-        dim = 3;
-
-    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-
-    constexpr bool fast_appx = true;
-    Tensor gelu_b = ttnn::gelu(ab[1], fast_appx, output_mem_config);
-    Tensor geglu_result = ttnn::multiply(ab[0], gelu_b, std::nullopt, output_mem_config);
-    return geglu_result;
-}
-Tensor geglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _geglu)(input_a, dim, output_mem_config);
-}
-
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
 Tensor _swiglu(
     const Tensor& input_a,

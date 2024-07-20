@@ -533,4 +533,22 @@ Tensor _reglu(
     return reglu_result;
 }
 
+
+// Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
+Tensor _geglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config ) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
+    constexpr bool fast_appx = true;
+    Tensor gelu_b = ttnn::gelu(ab[1], fast_appx, output_mem_config);
+    Tensor geglu_result = ttnn::multiply(ab[0], gelu_b, std::nullopt, output_mem_config);
+    return geglu_result;
+}
+
 }  // namespace ttnn::operations::unary

@@ -39,6 +39,7 @@ enum class UnaryCompositeOpType {
     SELU,
     THRESHOLD,
     REGLU,
+    GEGLU,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -74,6 +75,8 @@ Tensor _selu(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
@@ -282,11 +285,18 @@ struct OpHandler_threshold_value<UnaryCompositeOpType::THRESHOLD> {
     }
 };
 
-//reglu is supported only for last dimension.
+//glu (geglu, reglu, swiglu, glu) varinats are supported only for last dimension.
 template <>
 struct OpHandler_dim<UnaryCompositeOpType::REGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
         return _reglu(t1, dim, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_dim<UnaryCompositeOpType::GEGLU> {
+    static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _geglu(t1, dim, mem_cfg);
     }
 };
 

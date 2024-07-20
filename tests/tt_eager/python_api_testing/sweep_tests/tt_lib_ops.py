@@ -2855,7 +2855,7 @@ def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem
 def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.geglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.geglu(t0, dim=dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

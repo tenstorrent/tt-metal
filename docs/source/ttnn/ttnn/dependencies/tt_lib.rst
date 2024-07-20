@@ -610,8 +610,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.glu
 
-.. autofunction:: tt_lib.tensor.geglu
-
 .. autofunction:: tt_lib.tensor.swiglu
 
 .. autofunction:: tt_lib.tensor.embeddings

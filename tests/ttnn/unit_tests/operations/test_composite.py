@@ -417,3 +417,26 @@ def test_unary_reglu_ttnn(input_shapes, dim, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "dim",
+    [-1, 3],
+)
+def test_unary_geglu_ttnn(input_shapes, dim, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    golden_fn = ttnn.get_golden_function(ttnn.geglu)
+
+    output_tensor = ttnn.geglu(input_tensor, dim=dim)
+    golden_tensor = golden_fn(in_data, dim=dim)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
