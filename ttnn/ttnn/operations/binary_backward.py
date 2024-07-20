@@ -68,8 +68,13 @@ def _golden_function_backward_with_dim(
     return golden_tensor
 
 
-def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
-    pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)
+def _golden_function_backward_with_float(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha=None, *args, **kwargs
+):
+    if alpha == None:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b)
+    else:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -169,7 +174,7 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.subalpha_bw,
-    golden_function=lambda grad, a, b, alpha, *args, **kwargs: _golden_function_backward_with_float(
+    golden_function=lambda grad, a, b, alpha=None, *args, **kwargs: _golden_function_backward_with_float(
         torch.sub, grad, a, b, alpha, *args, **kwargs
     ),
 )

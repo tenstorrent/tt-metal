@@ -101,7 +101,7 @@ std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
 }
 
 std::vector<ttnn::Tensor> _subalpha_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad, output_mem_config), alpha, std::nullopt, output_mem_config);
@@ -383,7 +383,7 @@ std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, con
 }
 
 std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor = ttnn::operations::binary_backward::_subalpha_bw(grad, input, other, 1.0f, output_mem_config.value_or(input.memory_config()));
+    std::vector<Tensor> grad_tensor = _subalpha_bw(grad, input, other, 1.0f, output_mem_config.value_or(input.memory_config()));
     std::swap(grad_tensor[0], grad_tensor[1]);
     return grad_tensor;
 }
@@ -638,8 +638,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
 
 std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_float(BinaryBackwardOpType OpType){
     switch (OpType) {
-        case BinaryBackwardOpType::SUBALPHA_BW:
-            return _subalpha_bw;
         case BinaryBackwardOpType::CONCAT_BW:
             return _concat_bw;
         case BinaryBackwardOpType::LERP_BW:
