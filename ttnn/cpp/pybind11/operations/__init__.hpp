@@ -7,7 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "pybind11/operations/ccl.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
 #include "pybind11/operations/conv2d.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
@@ -62,6 +63,10 @@ void py_module(py::module& module) {
     auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
     unary_backward::py_module(m_unary_backward);
 
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_bind_all_gather(m_ccl);
+    ccl::py_bind_line_all_gather(m_ccl);
+
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);
 
@@ -97,9 +102,6 @@ void py_module(py::module& module) {
 
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);
-
-    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_module(m_ccl);
 
     auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
     kv_cache::py_module(m_kv_cache);

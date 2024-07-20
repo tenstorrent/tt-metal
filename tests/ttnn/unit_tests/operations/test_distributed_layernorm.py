@@ -40,12 +40,12 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
                 )
             )
 
+    tt_stats = ttnn.aggregate_as_tensor(tt_stats)
     # AllGather stats
-    tt_stats = ttnn.experimental.tensor.all_gather(
-        tt_stats, dim=3, num_links=1, output_mem_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Run layernorm part 2
+    tt_stats = ttnn.get_device_tensors(tt_stats)
     tt_out = []
     for d in range(n_devices):
         if is_rmsnorm:

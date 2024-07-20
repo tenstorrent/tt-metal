@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 
 TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTileRow_ClockWise_In3x5_NumShards3) {
@@ -23,7 +23,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t shard_offset = 0;
         uint16_t old_curr_shard = curr_shard;
 
-       tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+       ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 1);
@@ -39,7 +39,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t curr_shard = 0;
         uint16_t old_curr_shard = curr_shard;
 
-        tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 1);
@@ -57,7 +57,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t old_curr_shard = curr_shard;
         ASSERT_EQ(curr_core_index, 0);
 
-        tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 2);
@@ -74,7 +74,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t old_curr_shard = curr_shard;
         ASSERT_EQ(curr_core_index, 0);
 
-        tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 2);
@@ -92,7 +92,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t old_curr_shard = curr_shard;
 
 
-        tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 0);
@@ -108,7 +108,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
         uint16_t curr_shard = 0;
         uint16_t old_curr_shard = curr_shard;
 
-        tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+        ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
             curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
         ASSERT_EQ(curr_shard_tile_x, 0);
         ASSERT_EQ(curr_shard_tile_y, 0);
@@ -146,7 +146,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
     for (uint16_t i = 0; i < num_core_iterations; i++) {
 
         for (uint16_t tile_row = curr_shard_tile_y; tile_row < input_shard_num_tiles_y; tile_row++) {
-            tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+            ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
                 curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
             uint16_t next_tile_row = tile_row + 1;
             if (next_tile_row == input_shard_num_tiles_y) {
@@ -184,7 +184,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceFullTil
     for (uint16_t i = 0; i < num_core_iterations; i++) {
 
         for (uint16_t tile_row = curr_shard_tile_y; tile_row < input_shard_num_tiles_y; tile_row++) {
-            tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
+            ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance_full_tile_row(
                 curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
                 uint16_t next_tile_row = tile_row + 1;
                 if (next_tile_row == input_shard_num_tiles_y) {
@@ -224,7 +224,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceSingleT
 
         for (uint16_t tile_row = curr_shard_tile_y; tile_row < input_shard_num_tiles_y; tile_row++) {
             for (uint16_t tile_col = curr_shard_tile_x; tile_col < input_shard_num_tiles_x; tile_col++) {
-                tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance (
+                ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance (
                     curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
                 uint16_t next_tile_row = tile_row;
                 uint16_t next_tile_col = tile_col + 1;
@@ -269,7 +269,7 @@ TEST(AllGatherSharded_WidthShardedIndexing_FullWorkerGridVariant, AdvanceSingleT
 
         for (uint16_t tile_row = curr_shard_tile_y; tile_row < input_shard_num_tiles_y; tile_row++) {
             for (uint16_t tile_col = curr_shard_tile_x; tile_col < input_shard_num_tiles_x; tile_col++) {
-                tt::tt_metal::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance (
+                ttnn::ccl::all_gather::full_worker_grid_addr_gen_width_sharded_advance (
                     curr_shard_tile_x, curr_shard_tile_y, curr_tile_index, curr_core_index, total_num_cores, input_shard_num_tiles_x, input_shard_num_tiles_y, num_shards_x, curr_shard, is_clockwise);
                 uint16_t next_tile_row = tile_row;
                 uint16_t next_tile_col = tile_col + 1;
