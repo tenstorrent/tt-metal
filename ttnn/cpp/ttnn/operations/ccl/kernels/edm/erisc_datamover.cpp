@@ -107,6 +107,7 @@ struct sender_receiver_index_t {
     }
 };
 
+
 void kernel_main() {
     // COMPILE TIME ARGS
     // If true, will enable this erisc's sender functionality
@@ -124,9 +125,9 @@ void kernel_main() {
     constexpr ttnn::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
         static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
 
-    constexpr auto EDM_CONFIG = erisc::datamover::EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal>();
-    using EDM_CONFIG_T = decltype(EDM_CONFIG);
+    using EDM_CONFIG_T = erisc::datamover::EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal>;
     using ChannelBufferT = erisc::datamover::ChannelBuffer<EDM_CONFIG_T>;
+
     std::array<ChannelBufferT, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS> buffer_channels;
 
     //
