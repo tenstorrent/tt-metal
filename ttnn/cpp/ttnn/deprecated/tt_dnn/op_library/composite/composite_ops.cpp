@@ -1900,25 +1900,6 @@ Tensor glu(
     return operation::decorate_as_composite(__func__, _glu)(input_a, dim, output_mem_config);
 }
 
-// ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor _reglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
-    if (dim == -1)
-        dim = 3;
-    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor relu_b = ttnn::relu(ab[1], output_mem_config);
-    Tensor reglu_result = ttnn::multiply(ab[0], relu_b, std::nullopt, output_mem_config);
-    return reglu_result;
-}
-Tensor reglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _reglu)(input_a, dim, output_mem_config);
-}
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
 Tensor _geglu(

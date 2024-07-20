@@ -376,6 +376,20 @@ def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_not, golden_function=_golden_function_bitwise_not)
 
 
+def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.relu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.reglu, golden_function=_golden_function_reglu)
+
+
 def _is_scalar(value):
     return isinstance(value, (int, float))
 
@@ -613,7 +627,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [
     ("glu", ttl.tensor.glu, "dim"),  # composite
-    ("reglu", ttl.tensor.reglu, "dim"),  # composite
     ("swiglu", ttl.tensor.swiglu, "dim"),  # composite
     ("geglu", ttl.tensor.geglu, "dim"),  # composite
 ]

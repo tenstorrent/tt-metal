@@ -357,6 +357,63 @@ void bind_unary_operation_with_integer_parameter(
             py::arg("queue_id") = 0});
 }
 
+
+template <typename unary_operation_t>
+void bind_unary_operation_with_dim_parameter(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name,
+    const std::string& parameter_doc,
+    const std::string& info_doc) {
+
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, *, {2}: int32_t = -1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            {4}
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`{2}` (int32_t): {3}.
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor, {2})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               int dim,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, dim, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim") = -1,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+
 template <typename unary_operation_t>
 void bind_softplus(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
@@ -1098,6 +1155,9 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_not, "value", "scalar value", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
+
+    // Unary ops with dim parameter
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::reglu, "dim", "Dimenstion to split input tensor. Supported dimension -1 or 3", "Apply relu function on splitted tensor");
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);

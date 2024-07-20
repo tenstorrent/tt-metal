@@ -369,13 +369,13 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         py::arg("dim") = -1,
         R"doc(Applies the Gaussian Error Gated Linear Units function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
         R"doc(dimension to split)doc");
-    detail::bind_unary_op_with_param(
+    /*detail::bind_unary_op_with_param(
         m_tensor,
         "reglu",
         &reglu,
         py::arg("dim") = -1,
         R"doc(Applies the Rectified Linear Gated Linear Units (ReGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
+        R"doc(dimension to split)doc");*/
     detail::bind_unary_op_with_param(
         m_tensor,
         "swiglu",

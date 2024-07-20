@@ -143,6 +143,20 @@ struct ExecuteUnaryCompositeOpWithScaleAlpha
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithDim
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        int32_t dim,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_type6<unary_comp_op_type>();
+            return op_type(input_tensor, dim, memory_config);
+        }
+};
+
+
+template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithThresholdValue
 {
     static ttnn::Tensor execute_on_worker_thread(
@@ -278,4 +292,5 @@ constexpr auto clamp = ttnn::register_operation<operations::unary::ExecuteUnaryC
 constexpr auto selu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleAlpha<operations::unary::UnaryCompositeOpType::SELU>>("ttnn::selu");
 constexpr auto threshold = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithThresholdValue<operations::unary::UnaryCompositeOpType::THRESHOLD>>("ttnn::threshold");
 
+constexpr auto reglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>("ttnn::reglu");
 }  // namespace ttnn

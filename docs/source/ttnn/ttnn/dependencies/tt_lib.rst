@@ -612,8 +612,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.geglu
 
-.. autofunction:: tt_lib.tensor.reglu
-
 .. autofunction:: tt_lib.tensor.swiglu
 
 .. autofunction:: tt_lib.tensor.embeddings
