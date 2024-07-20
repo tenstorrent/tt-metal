@@ -192,7 +192,7 @@ void bind_unary_backward_float_string_default(py::module& module, const unary_ba
         Args:
             * :attr:`grad_tensor`
             * :attr:`input_tensor_a` or :attr:`input_tensor`
-            * :attr:`input_tensor_b` or:attr:`{2}` (float): {3}
+            * :attr:`input_tensor_b` or :attr:`{2}` (float): {3}
 
         Keyword args:
             * :attr:`{4}` (string): {5} , Default value = {6}
