@@ -25,13 +25,6 @@ using std::mutex;
 
 namespace tt::tt_metal{
 
-    namespace device_pool {
-
-        // Definition of the global device vector
-        extern std::vector<Device*> devices;
-
-    } // device_pool
-
     namespace detail {
 
         inline static bool DispatchStateCheck( bool isFastDispatch){

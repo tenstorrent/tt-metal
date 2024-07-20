@@ -12,7 +12,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/conv/conv_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
@@ -91,21 +90,6 @@ void TensorModule(py::module& m_tensor) {
         .value("L1", BufferType::L1)
         .value("L1_SMALL", BufferType::L1_SMALL);
 
-    // Fusible Activations
-    detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");
-    py::class_<UnaryWithParam>(m_tensor, "FusibleActivationWithParam")
-        .def(py::init<UnaryOpType>())
-        .def(py::init<UnaryOpType, float>())
-        .def(py::init<>([](std::pair<UnaryOpType, float> arg) { return UnaryWithParam{arg.first, arg.second}; }))
-        .def_readonly("op_type", &UnaryWithParam::op_type);
-    // Allow implicit construction of UnaryWithParam object without user explicitly creating it
-    // Can take in just the op type, or sequence container of op type and param value
-    py::implicitly_convertible<UnaryOpType, UnaryWithParam>();
-    py::implicitly_convertible<std::pair<UnaryOpType, float>, UnaryWithParam>();
-    py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
-    py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
-
-    m_tensor.def("string_to_unary_with_param", &string_to_unary_with_param);
 
     detail::export_enum<EmbeddingsType>(m_tensor);
 
@@ -971,7 +955,6 @@ void TensorModule(py::module& m_tensor) {
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
     detail::TensorModuleCustomAndBMMOPs(m_tensor);
-    detail::TensorModuleXaryOPs(m_tensor);
 }
 
 }  // namespace tt::tt_metal

@@ -73,7 +73,7 @@ struct ExecuteGroupNorm {
         return operation::run(
             GroupNorm{
                 .eps=epsilon,
-                .num_groups=num_groups,
+                .num_groups=static_cast<uint32_t>(num_groups),
                 .output_mem_config=output_mem_config,
                 .program_config=program_config},
                 {input_tensor},

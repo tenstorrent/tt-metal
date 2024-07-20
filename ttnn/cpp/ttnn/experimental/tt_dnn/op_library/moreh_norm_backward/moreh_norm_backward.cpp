@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args =
-    { static_cast<uint32_t>(is_dram(input)), static_cast<uint32_t>(is_dram(output)), static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
+    { static_cast<uint32_t>(is_dram(input)), static_cast<uint32_t>(is_dram(output)), static_cast<uint32_t>(is_dram(output_grad)), static_cast<uint32_t>(input_grad_rank) };
     std::vector<uint32_t> writer_compile_time_args =
     { static_cast<uint32_t>(is_dram(input_grad)) };
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);

@@ -80,12 +80,12 @@ docs/source/frameworks/tt_dispatch.rst @pgkeller
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
 
 # metal - fw, llks, risc-v
-tt_metal/hw/ckernels/ @rtawfik01
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
 # tt_metal/hw/meta/ @davorchap @pgkeller @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
-tt_metal/include/compute_kernel_api/ @rtawfik01
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic
 tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @tarafdarTT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT
@@ -141,7 +141,7 @@ models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat @eyonland @AleksKnezevic @nsmithtt
 models/demos/t3000 @uaydonat @AleksKnezevic @nsmithtt
 models/demos/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
-models/demos/mamba @esmalTT @uaydonat @kpaigwar
+models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
 models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic
