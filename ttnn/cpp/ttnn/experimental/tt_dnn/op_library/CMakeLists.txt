@@ -135,7 +135,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reshape/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/permute/permute_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/composite/composite_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/backward/backward_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/optimizer_ops.cpp

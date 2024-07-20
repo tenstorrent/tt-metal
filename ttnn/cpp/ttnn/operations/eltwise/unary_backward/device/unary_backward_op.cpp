@@ -15,7 +15,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/permute/permute_op.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttnn::operations::unary_backward {
@@ -1492,13 +1492,13 @@ std::vector<Tensor> _prod_bw(
     if (prod_result.get_legacy_shape() != grad.get_legacy_shape()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
-            Tensor required = permute(grad, after_permute_dims, output_memory_config);
+            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
             Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
-            updated_grad = permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
             Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
             pad_updated_grad = pad_updated_grad.to(Layout::TILE);
@@ -1509,12 +1509,12 @@ std::vector<Tensor> _prod_bw(
             pad_prod_result.deallocate();
         } else if (dim == 2 || dim == -2) {
             std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
-            Tensor required = permute(grad, after_permute_dims, output_memory_config);
+            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
             Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
-            updated_grad = permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.get_layout()==Layout::ROW_MAJOR){
                 updated_grad = ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
             }
@@ -1543,8 +1543,8 @@ std::vector<Tensor> _prod_bw(
             tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, true, std::nullopt);
         }
         std::vector<int64_t> after_permute_dims = {0, 2, 3, 1};
-        Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_memory_config);
-        Tensor tensor_2 = permute(temp, after_permute_dims, output_memory_config);
+        Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
+        Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
@@ -1578,14 +1578,14 @@ std::vector<Tensor> _prod_bw(
         tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, false, std::nullopt);
     }
     std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
-    Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_memory_config);
-    Tensor tensor_2 = permute(temp, after_permute_dims, output_memory_config);
+    Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
+    Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
     tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
 
-    Tensor result = permute(
+    Tensor result = ttnn::permute(
         bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_memory_config),
         after_permute_dims,
         output_memory_config);
