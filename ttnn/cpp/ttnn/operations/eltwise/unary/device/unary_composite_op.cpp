@@ -551,4 +551,21 @@ Tensor _geglu(
     return geglu_result;
 }
 
+
+// Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
+Tensor _swiglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config ) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
+    Tensor swish_b = _swish(ab[1], output_mem_config);
+    Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
+    return swiglu_result;
+}
+
 }  // namespace ttnn::operations::unary

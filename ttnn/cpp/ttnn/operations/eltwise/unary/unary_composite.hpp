@@ -150,7 +150,7 @@ struct ExecuteUnaryCompositeOpWithDim
         int32_t dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_type6<unary_comp_op_type>();
+            auto op_type = get_glu_fn<unary_comp_op_type>();
             return op_type(input_tensor, dim, memory_config);
         }
 };
@@ -294,5 +294,6 @@ constexpr auto threshold = ttnn::register_operation<operations::unary::ExecuteUn
 
 constexpr auto reglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>("ttnn::reglu");
 constexpr auto geglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>("ttnn::geglu");
+constexpr auto swiglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>("ttnn::swiglu");
 
 }  // namespace ttnn

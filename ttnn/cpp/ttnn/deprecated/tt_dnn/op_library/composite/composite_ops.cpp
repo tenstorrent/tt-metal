@@ -1901,28 +1901,6 @@ Tensor glu(
 }
 
 
-// Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor _swiglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
-    if (dim == -1)
-        dim = 3;
-
-    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-
-    Tensor swish_b = swish(ab[1], output_mem_config);
-    Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
-    return swiglu_result;
-}
-Tensor swiglu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _swiglu)(input_a, dim, output_mem_config);
-}
-
 // on-device tensor creation with shape and filled with value
 Tensor _sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
     float value = device->sfpu_eps();

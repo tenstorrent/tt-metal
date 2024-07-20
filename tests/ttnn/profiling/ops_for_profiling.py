@@ -1462,7 +1462,7 @@ def reglu_1(x):
 
 
 def swiglu_1(x):
-    tt_lib.tensor.swiglu(x, -1)
+    ttnn.swiglu(x, -1)
 
 
 def glu_2(x):
@@ -1478,7 +1478,7 @@ def reglu_2(x):
 
 
 def swiglu_2(x):
-    tt_lib.tensor.swiglu(x, -2)
+    ttnn.swiglu(x, -2)
 
 
 def repeat(x):
@@ -2204,7 +2204,7 @@ all_unary_ops = [
     },
     {
         "op": swiglu_1,
-        "name": "tt_lib.tensor.swiglu_dim_3",
+        "name": "ttnn.swiglu_dim_3",
     },
     {
         "op": glu_2,
@@ -2220,7 +2220,7 @@ all_unary_ops = [
     },
     {
         "op": swiglu_2,
-        "name": "tt_lib.tensor.swiglu_dim_2",
+        "name": "ttnn.swiglu_dim_2",
     },
     {
         "op": repeat,

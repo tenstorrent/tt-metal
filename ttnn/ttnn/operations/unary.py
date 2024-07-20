@@ -404,6 +404,20 @@ def _golden_function_geglu(input_tensor_a, dim, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.geglu, golden_function=_golden_function_geglu)
 
 
+def _golden_function_swiglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.silu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.swiglu, golden_function=_golden_function_swiglu)
+
+
 def _is_scalar(value):
     return isinstance(value, (int, float))
 
@@ -554,33 +568,12 @@ for (
     )
 
 
-def torch_reglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
-
-
-def torch_swiglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.silu(tensB)
-
-
 def register_ttl_activation_function_glu(name, ttl_activation_function, param):
     def _golden_function(input_tensor: ttnn.Tensor, dim: int = -1, **_):
         import torch
 
         name_to_torch_function = {
             "glu": torch.nn.functional.glu,
-            "reglu": torch_reglu,
-            "swiglu": torch_swiglu,
-            "geglu": torch_geglu,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -632,7 +625,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [
     ("glu", ttl.tensor.glu, "dim"),  # composite
-    ("swiglu", ttl.tensor.swiglu, "dim"),  # composite
 ]
 
 

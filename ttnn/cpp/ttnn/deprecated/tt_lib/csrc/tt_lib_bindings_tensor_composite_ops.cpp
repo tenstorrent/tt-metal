@@ -365,13 +365,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     detail::bind_unary_op_with_param(
         m_tensor,
-        "swiglu",
-        &swiglu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Swish Gated Linear Units (SwiGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
         "logical_andi",
         &logical_andi,
         py::arg("immediate"),

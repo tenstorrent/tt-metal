@@ -569,12 +569,6 @@ Tensor glu(
     int32_t dim = -1,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// Swish based GLU
-Tensor swiglu(
-    const Tensor& input_a,
-    int32_t dim = -1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // on-device tensor creation with shape and filled with value
 Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config);
 
