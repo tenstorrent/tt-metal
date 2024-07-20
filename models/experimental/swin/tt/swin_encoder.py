@@ -14,6 +14,7 @@ from models.utility_functions import (
 from models.experimental.swin.tt.swin_stage import TtSwinStage
 from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging
 
+import ttnn
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
@@ -82,7 +83,7 @@ class TtSwinEncoder(nn.Module):
             _, batch_size, _, hidden_size = hidden_states.get_legacy_shape()
 
             reshaped_hidden_state = fallback_ops.reshape(hidden_states, batch_size, *input_dimensions, hidden_size)
-            reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
+            reshaped_hidden_state = ttnn.permute(reshaped_hidden_state, (0, 3, 1, 2))
             all_hidden_states += (hidden_states,)
             all_reshaped_hidden_states += (reshaped_hidden_state,)
 
@@ -134,7 +135,7 @@ class TtSwinEncoder(nn.Module):
                     *(output_dimensions[0], output_dimensions[1]),
                     hidden_size,
                 )
-                reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
+                reshaped_hidden_state = ttnn.permute(reshaped_hidden_state, (0, 3, 1, 2))
                 all_hidden_states += (hidden_states_before_downsampling,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
             elif output_hidden_states and not output_hidden_states_before_downsampling:
@@ -143,7 +144,7 @@ class TtSwinEncoder(nn.Module):
                 reshaped_hidden_state = fallback_ops.reshape(
                     reshaped_hidden_state, batch_size, *input_dimensions, hidden_size
                 )
-                reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
+                reshaped_hidden_state = ttnn.permute(reshaped_hidden_state, (0, 3, 1, 2))
                 all_hidden_states += (hidden_states,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
 

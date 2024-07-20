@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/permute/permute_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 
@@ -11,15 +10,11 @@
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tensor/tensor_utils.hpp"
 
-#include <functional>
 
-using uint32_t = std::uint32_t;
-using namespace tt::constants;
-using namespace std::placeholders;
+namespace ttnn {
+namespace operations::data_movement {
 
-namespace tt {
-
-namespace tt_metal {
+namespace permute {
 
 Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig& output_mem_config) {
     Device * device;
@@ -47,9 +42,9 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
     auto output = formatted_input_tensor;
-    static auto transpose_wh = std::bind(tt::tt_metal::transpose, _1, -2, -1, output_mem_config);
-    static auto transpose_hc = std::bind(tt::tt_metal::transpose, _1, 1, -2, output_mem_config);
-    static auto transpose_cn = std::bind(tt::tt_metal::transpose, _1, 0, 1, output_mem_config);
+    static auto transpose_wh = std::bind(tt::tt_metal::transpose, std::placeholders::_1, -2, -1, output_mem_config);
+    static auto transpose_hc = std::bind(tt::tt_metal::transpose, std::placeholders::_1, 1, -2, output_mem_config);
+    static auto transpose_cn = std::bind(tt::tt_metal::transpose, std::placeholders::_1, 0, 1, output_mem_config);
     if (N == 0 && C == 1 && H == 2 && W == 3) {
         output = formatted_input_tensor;
     } else if (N == 0 && C == 1 && H == 3 && W == 2) {
@@ -104,7 +99,7 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
     return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
 }
 
-Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
+Tensor permute_launch(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a}))};
     operation::launch_with_autoformat(
         [dims, output_mem_config]  (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -120,7 +115,6 @@ Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConf
         }, {a}, output_tensors);
     return output_tensors.at(0);
 }
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}
+}
+}  // namespace ttnn

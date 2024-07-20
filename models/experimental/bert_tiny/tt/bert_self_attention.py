@@ -70,7 +70,7 @@ def mha(
         )
         # Permute expects input to be in TILE layout
         # Input shape: [1, 128, 2, 64]
-        transposed = tt_lib.tensor.permute(reshape_unt, [0, 2, 1, 3])
+        transposed = ttnn.permute(reshape_unt, [0, 2, 1, 3])
 
         transposed = tt_to_torch_tensor(transposed)
         transposed = ttnn.from_torch(transposed, dtype=ttnn.bfloat16)

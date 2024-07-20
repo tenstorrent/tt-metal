@@ -7,7 +7,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/permute/permute_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
@@ -137,18 +136,6 @@ namespace tt::tt_metal::detail{
                 "Z", "Z dim of output tensor", "int", "", "Yes"
                 "Y", "Y dim of output tensor", "int", "", "Yes"
                 "X", "X dim of output tensor", "int", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        m_tensor.def("permute", &permute,
-            py::arg("input").noconvert(), py::arg("dims"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a tensor that is input tensor ``arg0`` with its dimensions permuted to new order ``dims``.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "dims", "The desired ordering of dimensions", "List[int]", "All indices within input tensor rank", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/permute/permute_op.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -168,15 +168,15 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             pad_c = true;
             break;
         case TransposeOpDim::NH:
-            return permute(a, {2, 1, 0, 3}, output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({2, 1, 0, 3}), output_mem_config);
             pad_n = true;
             break;
         case TransposeOpDim::NW:
-            return permute(a, {3, 1, 2, 0}, output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({3, 1, 2, 0}), output_mem_config);
             pad_n = true;
             break;
         case TransposeOpDim::CW:
-            return permute(a, {0, 3, 2, 1}, output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
             pad_c = true;
             break;
         default:

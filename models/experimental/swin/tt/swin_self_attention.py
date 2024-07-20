@@ -81,7 +81,7 @@ class TtSwinSelfAttention(nn.Module):
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
     def forward(
@@ -120,7 +120,7 @@ class TtSwinSelfAttention(nn.Module):
             self.window_size[0] * self.window_size[1],
             1,
         )
-        attention_scores = tt_lib.tensor.permute(attention_scores, (1, 2, 3, 0))
+        attention_scores = ttnn.permute(attention_scores, (1, 2, 3, 0))
         attention_scores = tt_lib.tensor.bcast(
             attention_scores,
             relative_position_bias,
@@ -128,7 +128,7 @@ class TtSwinSelfAttention(nn.Module):
             tt_lib.tensor.BcastOpDim.W,
         )
 
-        attention_scores = tt_lib.tensor.permute(attention_scores, (3, 0, 1, 2))
+        attention_scores = ttnn.permute(attention_scores, (3, 0, 1, 2))
 
         attention_scores = tt_to_torch_tensor(attention_scores)
 
@@ -160,7 +160,7 @@ class TtSwinSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
         context_layer = ttnn.matmul(attention_probs, value_layer)
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
 
         new_context_layer_shape = tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(

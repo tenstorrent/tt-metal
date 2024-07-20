@@ -27,7 +27,6 @@ void bind_permute(py::module& module) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
                 * :attr:`queue_id`: command queue id
-                * :attr:`output_tensor`: optional output tensor
 
             Example:
 
@@ -44,16 +43,14 @@ void bind_permute(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                const std::vector<int> &dims,
-                std::optional<ttnn::Tensor> &optional_output_tensor,
+                const std::vector<int64_t> &dims,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dims, memory_config, optional_output_tensor);
+                    return self(queue_id, input_tensor, dims, memory_config, false);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::arg("dims"),
                 py::kw_only(),
-                py::arg("output_tensor").noconvert() = std::nullopt,
                 py::arg("memory_config") = std::nullopt,
                 py::arg("queue_id") = 0});
 }

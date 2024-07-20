@@ -79,13 +79,13 @@ class TtGPT(nn.Module):
         tt_tok_emb = torch_to_tt_tensor_rm(tok_emb, self.device)
         tt_pos_emb = torch_to_tt_tensor_rm(pos_emb, self.device)
 
-        tt_tok_emb = tt_lib.tensor.permute(tt_tok_emb, (0, 2, 1, 3))
-        tt_pos_emb = tt_lib.tensor.permute(tt_pos_emb, (0, 2, 1, 3))
+        tt_tok_emb = ttnn.permute(tt_tok_emb, (0, 2, 1, 3))
+        tt_pos_emb = ttnn.permute(tt_pos_emb, (0, 2, 1, 3))
 
         tt_x = tt_lib.tensor.bcast(tt_tok_emb, tt_pos_emb, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         tt_tok_emb.deallocate()
         tt_pos_emb.deallocate()
-        tt_x = tt_lib.tensor.permute(tt_x, (0, 2, 1, 3))
+        tt_x = ttnn.permute(tt_x, (0, 2, 1, 3))
 
         for block in self.h:
             tt_x = block.forward(tt_x)

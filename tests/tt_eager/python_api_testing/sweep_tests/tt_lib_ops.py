@@ -9,6 +9,7 @@ from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
@@ -1366,8 +1367,10 @@ def repeat_interleave(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.repeat_interleave(t0, repeat, dim, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+    return output_tensor
 
 
 @setup_host_and_device
@@ -1639,11 +1642,13 @@ def prod(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.prod(t0, all_dimensions, dim, output_mem_config=output_mem_config)
-    output = tt2torch_tensor(t1)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
     if all_dimensions:
-        return output[:1, :1, :1, :1]
+        return output_tensor[:1, :1, :1, :1]
     else:
-        return output
+        return output_tensor
 
 
 @setup_host_and_device
@@ -2194,9 +2199,11 @@ def permute(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.permute(t0, permute_dims, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    t1 = ttnn.permute(t0, permute_dims, memory_config=output_mem_config)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+    return output_tensor
 
 
 @setup_host_and_device
