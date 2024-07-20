@@ -705,4 +705,12 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_unary_fmod,
         "pytorch_op": pytorch_ops.unary_fmod,
     },
+    "eltwise-softmax_in_place": {
+        "tt_op": ttnn_ops.eltwise_softmax_in_place,
+        "pytorch_op": pytorch_ops.softmax_in_place,
+    },
+    "eltwise-scale_mask_softmax_in_place": {
+        "tt_op": ttnn_ops.eltwise_scale_mask_softmax_in_place,
+        "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
+    },
 }
