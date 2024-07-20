@@ -8,23 +8,9 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "eth_l1_address_map.h"
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp
 
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
-=======
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-<<<<<<< HEAD
-#include "ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp"
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
-=======
-<<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
-========
-#include "ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp"
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
->>>>>>>> af98ddace6... #9486: Move kernel files into kernels directory:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
->>>>>>> af98ddace6... #9486: Move kernel files into kernels directory
 
 // Args Schema:
 // 1) handshake addr
@@ -59,11 +45,7 @@ FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address,
     }
 }
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp
 using ttnn::ccl::WorkerXY;
-=======
-using ttnn::utils::ccl::WorkerXY;
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
 
 template<uint8_t num_senders, uint8_t num_receivers>
 struct sender_receiver_index_t {
@@ -136,19 +118,11 @@ void kernel_main() {
     constexpr uint32_t num_senders = get_compile_time_arg_val(2);
     constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp
     constexpr ttnn::ccl::EriscDataMoverBufferSharingMode edm_buffer_sharing_mode =
         static_cast<ttnn::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(4));
 
     constexpr ttnn::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
         static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
-=======
-    constexpr ttnn::utils::ccl::EriscDataMoverBufferSharingMode edm_buffer_sharing_mode =
-        static_cast<ttnn::utils::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(4));
-
-    constexpr ttnn::utils::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
-        static_cast<ttnn::utils::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_datamover.cpp
 
     constexpr auto EDM_CONFIG = erisc::datamover::EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal>();
     using EDM_CONFIG_T = decltype(EDM_CONFIG);

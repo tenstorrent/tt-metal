@@ -12,7 +12,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
-namespace utils {
 
 struct ReduceScatter {
     const ttnn::operations::binary::BinaryOpType binary_op_type;
@@ -32,13 +31,6 @@ struct ReduceScatter {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-std::vector<Tensor> reduce_scatter(
-    const std::vector<Tensor> &input_tensors,
-    const uint32_t scatter_split_dim,
-    ReduceOpMath reduce_op  = ReduceOpMath::SUM,
-    const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 namespace ccl {
 namespace reduce_scatter_detail {
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
@@ -55,5 +47,16 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 }
 }; // namespace ccl
 
-};  // namespace utils
+namespace operations{
+namespace ccl{
+    std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor> &input_tensors,
+    const uint32_t scatter_split_dim,
+    ReduceOpMath reduce_op  = ReduceOpMath::SUM,
+    const uint32_t num_links = 1,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+} // namespace ccl
+} // namespace operations
+
+
 };  // namespace ttnn

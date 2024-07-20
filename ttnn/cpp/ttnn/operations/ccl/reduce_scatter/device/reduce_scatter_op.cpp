@@ -12,7 +12,6 @@
 
 
 namespace ttnn {
-namespace utils {
 
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
@@ -59,6 +58,16 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->topology);
 }
 
+static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
+    switch (reduce_op) {
+        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
+
+        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
+    }
+}
+
+namespace operations{
+namespace ccl{
 std::vector<Tensor> reduce_scatter_impl(
     const std::vector<Tensor>& input_tensors,
     const ttnn::operations::binary::BinaryOpType binary_op_type,
@@ -72,19 +81,7 @@ std::vector<Tensor> reduce_scatter_impl(
     output_tensors.reserve(input_tensors.size());
     std::vector<ReduceScatter> ops;
     ops.reserve(input_tensors.size());
-<<<<<<< HEAD
-<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.cpp
     bool is_ring = topology ==ttnn::ccl::Topology::Ring;
-    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-        bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
-        bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
-=======
-    bool is_ring = topology ==ttnn::utils::ccl::Topology::Ring;
->>>>>>> 8170cf2cca... #9486: Merge CCL reduce_scatter to TTNN:ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.cpp
-
-=======
-    bool is_ring = topology == ccl::Topology::Ring;
->>>>>>> a98abddcea... #0: Fix issues
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
         bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
         bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
@@ -97,7 +94,7 @@ std::vector<Tensor> reduce_scatter_impl(
             is_last_chip_in_counter_clockwise_direction
                 ? std::nullopt
                 : std::optional<chip_id_t>(input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id());
-        ops.emplace_back(ReduceScatter{
+        ops.emplace_back(ttnn::ReduceScatter{
             binary_op_type,
             scatter_dim,
             num_links,
@@ -112,14 +109,6 @@ std::vector<Tensor> reduce_scatter_impl(
     return output_tensors;
 }
 
-static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
-    switch (reduce_op) {
-        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
-
-        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
-    }
-}
-
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
     const uint32_t scatter_dim,
@@ -130,6 +119,7 @@ std::vector<Tensor> reduce_scatter(
     return reduce_scatter_impl(
         input_tensors, binary_op_type, scatter_dim, num_links, output_mem_config,ttnn::ccl::Topology::Ring);
 }
+} // namespace ccl
+} // namespace operations
 
-};  // namespace utils
 };  // namespace ttnn

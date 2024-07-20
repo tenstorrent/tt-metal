@@ -13,15 +13,9 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/hw/inc/wormhole/noc/noc.h"
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp
 using ttnn::ccl::EriscDataMoverBufferSharingMode;
 using ttnn::ccl::EriscDataMoverTerminationMode;
 using ttnn::ccl::EriscDataMoverWorkerSignal;
-=======
-using ttnn::utils::ccl::EriscDataMoverBufferSharingMode;
-using ttnn::utils::ccl::EriscDataMoverTerminationMode;
-using ttnn::utils::ccl::EriscDataMoverWorkerSignal;
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
 
 namespace erisc {
 namespace datamover {
@@ -40,11 +34,7 @@ struct edm_worker_index<EriscDataMoverBufferSharingMode::ROUND_ROBIN> {
     uint16_t worker_index = 0;
 };
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp
 using ttnn::ccl::WorkerXY;
-=======
-using ttnn::utils::ccl::WorkerXY;
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
 
 /*
  * The `ChannelBuffer` is a building block of the Erisc Data Mover (EDM). For every concurrent transaction
@@ -125,25 +115,16 @@ class ChannelBuffer final {
         is_sender_side(is_sender_side) {
         clear_local_semaphore();
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp
         if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
-=======
-        if (TERMINATION_MODE != ttnn::utils::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
             }
         } else {
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp
             ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
-=======
-            ASSERT(TERMINATION_MODE != ttnn::utils::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
->>>>>>> f290d934d9... #9486: Move CCL common to TTNN:ttnn/cpp/ttnn/operations/ccl/edm/erisc_async_datamover.hpp
             goto_state(STATE::DONE);
         }
-    };
-
+    }
     // Resets the semaphore in local L1, which workers write to remotely.
     FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(local_semaphore_address, 0); }
 

@@ -45,7 +45,7 @@ void bind_reduce_scatter(py::module& module, const ccl_operation_t& operation, c
 }  // namespace detail
 
 
-void py_module_reduce_scatter(py::module& module) {
+void py_bind_reduce_scatter(py::module& module) {
 
     detail::bind_reduce_scatter(
         module,

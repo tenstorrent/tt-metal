@@ -20,7 +20,7 @@ struct ExecuteReduceScatter {
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
         MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-        return utils::reduce_scatter(input_tensors, scatter_dim, math_op, num_links, out_memory_config);
+        return ttnn::operations::ccl::reduce_scatter(input_tensors, scatter_dim, math_op, num_links, out_memory_config);
     }
 };
 

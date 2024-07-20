@@ -36,8 +36,6 @@ using namespace tt::constants;
 
 namespace ttnn {
 
-namespace utils {
-
 namespace ccl {
 namespace reduce_scatter_detail {
 struct WorkerTransferInfo {
@@ -889,5 +887,4 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
 }  // namespace reduce_scatter_detail
 }  // namespace ccl
-}  // namespace utils
 }  // namespace ttnn

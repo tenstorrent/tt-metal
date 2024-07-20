@@ -19,7 +19,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
 
 
 namespace tt::tt_metal::detail{
@@ -447,28 +446,6 @@ namespace tt::tt_metal::detail{
             R"doc(Converts a partial tensor from sharded_to_interleaved memory layout)doc"
         );
 
-        // ---------- Multi-Device ops ----------
-
-        // Reduce Scatter
-        m_tensor.def("reduce_scatter", &reduce_scatter,
-            py::arg("input_tensors"), py::arg("scatter_split_dim"), py::arg("reduce_op"), py::arg("num_links") = 1, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            R"doc(
-                Performs reduce scatter across chips, where the input tensors are sliced along the scatter dim, and pairwise reduced as they propagate and reduce through the cluster.
-
-                For example, a reduce scatter on a ring of rank 8 and input tensor shapes (per rank) of [1,1,1024,8096] and scatter_dim=3, will split each input tensor
-                on width into 8 parts of size [1,1,1024,1024]. Each of those parts will reduce with the corresponding chunk from the other ranks. All chips will collectively
-                reduce the first incoming [1,1,1024,1024] chunk with their local first [1,1,1024,1024] chunk and be forwarded. The second incoming [1,1,1024,1024] chunk will
-                be reduced with the second local [1,1,1024,1024] chunk and be forwarded and so on. Each rank in the ring will start on a different offset into the chunk such
-                that by the end, they will finish with a different reduced chunk offset from the original tensor shape.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "scatter_split_dim", "Dimension to evenly slice input tensor along for each rank", "int", "0..3", "Yes"
-                "reduce_op", "reduction math operation", " ReduceOpMath", "SUM", "No"
-                "num_links", "Number of ethernet links to allow the op to use to send data chip to chip for the operation. Default=1", "int", "1..max_num_links", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-            )doc");
     }
 
 }
