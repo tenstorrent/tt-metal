@@ -25,10 +25,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/non_zero_indices/non_zero_indices_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fill_rm/fill_rm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fully_connected/fully_connected_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pool/average_pool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pool/max_pool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pool/max_pool_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pool/max_pool_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/transpose_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp
@@ -45,11 +41,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv/optimized_conv_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv/optimized_conv_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/multi_core/untilize_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/single_core/untilize_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_op.cpp

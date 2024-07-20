@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/conv/conv_op.hpp"
+#include "conv_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -400,21 +400,21 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
         if (pad_h == 0 && pad_w == 0) {
             if(rn50_first_conv) {
-                reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-                compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+                reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+                compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
             } else {
-                reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
-                compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
+                reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
+                compute_kernel = "tt_eager/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
             }
         } else {
-            reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
-            compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
+            reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast.cpp";
+            compute_kernel = "tt_eager/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
         }
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
                 (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
                 (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df)};
     } else {
-        reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_conv_activations.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
         compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
     }
@@ -474,11 +474,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     std::vector<uint32_t> writer_compile_time_args;
     if (untilize_out) {
         if (rn50_first_conv) {
-            writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
         } else if (use_fast_reader) {
-            writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
         } else {
-            writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         }
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
         writer_rt_args = {
@@ -506,9 +506,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     } else {
         assert(use_fast_reader); // tiled out not tested for generic conv
         if (rn50_first_conv) {
-            writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {
-            writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
         }
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -1225,7 +1225,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-    reader_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_binary_dtx.cpp";
+    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_binary_dtx.cpp";
     reader_rt_args = {
         // arguments for act
         act_dram_addr,
@@ -1269,7 +1269,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         };
     } else {
         assert(false && "Tiled output unsupported");
-        writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_matmul_tile_layout.cpp";
+        writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_matmul_tile_layout.cpp";
         writer_rt_args = {
             out_dram_addr,
             0,
@@ -1400,17 +1400,6 @@ Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, 
     return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, false, true, has_bias);
 }
 
-Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out, has_bias, fuse_relu, math_fidelity);
-}
-
-Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, true, false, true, false);
-}
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {

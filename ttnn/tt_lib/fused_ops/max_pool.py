@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib as ttl
-
+import ttnn
 from typing import Union, List
 
 
@@ -33,8 +33,8 @@ def run_max_pool_on_device_wrapper(
         # out_shape_nopad = compute_max_pool_shape(kernel_size, stride, padding, x_shape_nopad)
         # if reshape_2d and channels_last:
         #     x = x.reshape(x_shape_nopad[0], 1, x_shape_nopad[1] * x_shape_nopad[2], x_shape_nopad[3])
-        # out = ttl.tensor.max_pool2d(x, x_shape_nopad[1], x_shape_nopad[2], kernel_size, kernel_size, stride, stride, padding, padding, output_mem_config=output_mem_config, nblocks=nblocks, use_multicore=True)
-        out = ttl.tensor.max_pool2d(
+        # out = ttnn.max_pool2d(x, x_shape_nopad[1], x_shape_nopad[2], kernel_size, kernel_size, stride, stride, padding, padding, output_mem_config=output_mem_config, nblocks=nblocks, use_multicore=True)
+        out = ttnn.max_pool2d(
             x,
             in_n,
             in_h,
@@ -45,7 +45,7 @@ def run_max_pool_on_device_wrapper(
             stride,
             padding,
             padding,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             nblocks=nblocks,
             use_multicore=True,
         )
