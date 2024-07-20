@@ -6,7 +6,6 @@ from typing import List, Union, Optional
 from tt_lib import tensor
 
 from loguru import logger
-from ttnn import matmul
 
 
 def Linear(in_features: int, out_features: int, weight: List[Union[int, float]], bias, device):

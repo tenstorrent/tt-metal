@@ -23,6 +23,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_weight_tensor_special_padding,
 )
 import torch
+import ttnn
 
 
 # generic conv doesnt support tiled out, bias and relu fusions
@@ -169,7 +170,7 @@ def test_run_generic_conv(
         else:
             if not has_bias:
                 bias_device = None
-            out = ttl.tensor.conv(
+            out = ttnn.operations.conv2d.conv_legacy(
                 A,
                 B_tiled,
                 bias_device,  # bias not fused with generic conv

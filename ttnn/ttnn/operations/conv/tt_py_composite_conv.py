@@ -209,7 +209,7 @@ def determine_parallel_config(
         f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
     )
 
-    return ttl.tensor.OptimizedConvParallelizationConfig(
+    return ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=num_cores_nhw,
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
@@ -297,7 +297,7 @@ def determine_per_core_block_config(
         assert (
             "out_subblock_h" in config_override
         ), "out_subblock_h must also be provided as override config if out_subblock_w is provided"
-    conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
+    conv_blocking_config = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
         out_subblock_h_ntiles=out_subblock_h_ntiles,
@@ -785,8 +785,6 @@ class TTPyCompositeConv(TTPyOp):
 
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
-                # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
-                import ttnn
 
                 bias_untiled = bias_untiled.to_torch()
                 bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
@@ -814,22 +812,22 @@ class TTPyCompositeConv(TTPyOp):
             return ds_out
 
         def conv_(activation):
-            return ttl.tensor.optimized_conv(
+            return ttnn.operations.conv2d.optimized_conv(
                 activation,
                 self.weight,
-                self.bias,
-                conv_reader_indices,
-                [R, S, U, V, P_H, P_W],
-                K,
-                self.untilize_out,
-                self.bias is not None,
-                fuse_relu,
-                math_fidelity,
-                opt_conv_parall_conf,
-                opt_conv_block_conf,
-                0,
-                output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-                output_dtype=output_dtype,
+                bias=self.bias,
+                conv_reader_indices=conv_reader_indices,
+                conv_params=[R, S, U, V, P_H, P_W],
+                output_channels=K,
+                untilize_out=self.untilize_out,
+                has_bias=self.bias is not None,
+                fuse_relu=fuse_relu,
+                math_fidelity=math_fidelity,
+                parallelization_config=opt_conv_parall_conf,
+                block_config=opt_conv_block_conf,
+                extra_padding_for_32_B_alignment=0,
+                memory_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+                dtype=output_dtype,
                 input_tensor_shape=self.input_tensor_shape,
                 use_shallow_conv_variant=self.use_shallow_conv_variant,
                 transpose_mcast=self.transpose_mcast,

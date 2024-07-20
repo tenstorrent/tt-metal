@@ -21,6 +21,7 @@ from tests.tt_eager.python_api_testing.conv.conv_utils import (
 
 import torch
 from time import sleep
+import ttnn
 
 
 def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, device):
@@ -69,7 +70,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
     # Run TT metal OP
-    out = ttl.tensor.conv(
+    out = ttnn.operations.conv2d.conv_legacy(
         A,
         B_tiled,
         None,
