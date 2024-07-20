@@ -1454,11 +1454,11 @@ def glu_1(x):
 
 
 def geglu_1(x):
-    tt_lib.tensor.geglu(x, -1)
+    ttnn.geglu(x, -1)
 
 
 def reglu_1(x):
-    tt_lib.tensor.reglu(x, -1)
+    ttnn.reglu(x, -1)
 
 
 def swiglu_1(x):
@@ -1470,11 +1470,11 @@ def glu_2(x):
 
 
 def geglu_2(x):
-    tt_lib.tensor.geglu(x, -2)
+    ttnn.geglu(x, -2)
 
 
 def reglu_2(x):
-    tt_lib.tensor.reglu(x, -2)
+    ttnn.reglu(x, -2)
 
 
 def swiglu_2(x):
@@ -2196,11 +2196,11 @@ all_unary_ops = [
     },
     {
         "op": geglu_1,
-        "name": "tt_lib.tensor.geglu_dim_3",
+        "name": "ttnn.geglu_dim_3",
     },
     {
         "op": reglu_1,
-        "name": "tt_lib.tensor.reglu_dim_3",
+        "name": "ttnn.reglu_dim_3",
     },
     {
         "op": swiglu_1,
@@ -2212,11 +2212,11 @@ all_unary_ops = [
     },
     {
         "op": geglu_2,
-        "name": "tt_lib.tensor.geglu_dim_2",
+        "name": "ttnn.geglu_dim_2",
     },
     {
         "op": reglu_2,
-        "name": "tt_lib.tensor.reglu_dim_2",
+        "name": "ttnn.reglu_dim_2",
     },
     {
         "op": swiglu_2,
