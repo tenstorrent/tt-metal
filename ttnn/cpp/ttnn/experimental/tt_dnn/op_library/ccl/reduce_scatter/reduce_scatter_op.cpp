@@ -5,7 +5,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -65,14 +65,14 @@ std::vector<Tensor> reduce_scatter_impl(
     const uint32_t scatter_dim,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
-    const ccl::Topology topology) {
+    const ttnn::ccl::Topology topology) {
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     std::vector<ReduceScatter> ops;
     ops.reserve(input_tensors.size());
-    bool is_ring = topology == ccl::Topology::Ring;
+    bool is_ring = topology ==ttnn::ccl::Topology::Ring;
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
         bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
         bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
@@ -116,7 +116,7 @@ std::vector<Tensor> reduce_scatter(
     const MemoryConfig& output_mem_config) {
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     return reduce_scatter_impl(
-        input_tensors, binary_op_type, scatter_dim, num_links, output_mem_config, ccl::Topology::Ring);
+        input_tensors, binary_op_type, scatter_dim, num_links, output_mem_config,ttnn::ccl::Topology::Ring);
 }
 
 };  // namespace tt_metal

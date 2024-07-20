@@ -5,10 +5,10 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/kernel_common/worker_edm_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 
-using tt::tt_metal::ccl::coord_t;
+using ttnn::ccl::coord_t;
 
 void kernel_main() {
     constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
@@ -27,9 +27,9 @@ void kernel_main() {
     uint32_t const half_cb_n_pages = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const num_concurrent_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    coord_t const& output_tensor_shape = tt::tt_metal::ccl::coord_from_args(arg_idx);
-    coord_t const& worker_slice_shape = tt::tt_metal::ccl::coord_from_args(arg_idx);
-    coord_t worker_slice_base_offset = tt::tt_metal::ccl::coord_from_args(arg_idx);
+    coord_t const& output_tensor_shape = ttnn::ccl::coord_from_args(arg_idx);
+    coord_t const& worker_slice_shape = ttnn::ccl::coord_from_args(arg_idx);
+    coord_t worker_slice_base_offset = ttnn::ccl::coord_from_args(arg_idx);
 
     uint32_t total_eltwise_kernel_num_pages = get_arg_val<uint32_t>(arg_idx++);
 
@@ -80,7 +80,7 @@ void kernel_main() {
                 send_chunk(cb_in, n_pages, page_size, eth_l1_sender_base_noc_addr);
                 noc_semaphore_inc(
                     eth_l1_sender_semaphore_addr,
-                    tt::tt_metal::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
+                    ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
                 if (i != 0) {
                     total_lifetime_cb_pages_popped_from_math += n_pages;
                 }
@@ -144,5 +144,5 @@ void kernel_main() {
     noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
     noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
     noc_semaphore_inc(
-        eth_l1_sender_semaphore_addr, tt::tt_metal::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+        eth_l1_sender_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
 }
