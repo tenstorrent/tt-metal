@@ -1521,10 +1521,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary subtraction ``input_a - input_b`` on two complex tensors.)doc");
 
-        m_tensor.def("polar", py::overload_cast<const ComplexTensor&, const MemoryConfig&>(&tt::tt_metal::polar),
-	    py::arg("input_a"),
-            py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input.real(r), input.imag(theta) into x + i*y generating a type-2 complex tensor.)doc");
-
         m_tensor.def("polar", py::overload_cast<const Tensor&,const Tensor&, const MemoryConfig&>(&tt::tt_metal::polar),
 	    py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input_a (r), input_b(theta) into x + i*y generating a type-2 complex tensor.)doc");
@@ -1553,52 +1549,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             py::arg("real"),
             py::arg("imag"),
 	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
-        );
-
-        m_tensor.def("conj",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::conj),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns complex conjugate value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("complex_recip",
-		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_recip),
-            py::arg("input"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns complex reciprocal value of complex tensor ``{0}``.)doc"
-        );
-
-        m_tensor.def("complex_add",
-		    py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_add),
-            py::arg("input_a"),
-            py::arg("input_b"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns addition of a complex tensor ``{0}`` with ``{1}``.)doc"
-        );
-
-        m_tensor.def("complex_sub",
-            py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_sub),
-            py::arg("input_a"),
-            py::arg("input_b"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns subtraction of a complex tensor ``{1}`` from ``{0}``.)doc"
-        );
-
-        m_tensor.def("complex_mul",
-		    py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_mul),
-            py::arg("input_a"),
-            py::arg("input_b"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns addition of a complex multiplication of ``{0}`` and ``{1}``.)doc"
-        );
-
-        m_tensor.def("complex_div",
-		    py::overload_cast<const ComplexTensor&,const ComplexTensor&, const MemoryConfig&>(tt::tt_metal::complex_div),
-            py::arg("input_a"),
-            py::arg("input_b"),
-	        py::arg("output_mem_config").noconvert() = std::nullopt,
-	        R"doc(Returns addition of a complex division of ``{0}`` by ``{1}``.)doc"
         );
 
     // loss functions
