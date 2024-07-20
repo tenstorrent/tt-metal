@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/conv2d.hpp"
+#include "ttnn/operations/conv2d/conv2d.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
