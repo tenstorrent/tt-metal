@@ -189,41 +189,6 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
-    // Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
-
-    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
-        uint8_t queue_id,
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        float alpha,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> input_a_grad = std::nullopt,
-        std::optional<Tensor> input_b_grad = std::nullopt) {
-
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        auto op_type = BinaryBackwardFunction::get_function_type2(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
-    }
-
-    // Type 2 : type1 args, optional output tensor for inputs based on are_required_outputs value
-
-    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        float alpha,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> input_a_grad = std::nullopt,
-        std::optional<Tensor> input_b_grad = std::nullopt) {
-
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        auto op_type = BinaryBackwardFunction::get_function_type2_wo_qid(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
-    }
-
 };
 
 }  // operations::binary

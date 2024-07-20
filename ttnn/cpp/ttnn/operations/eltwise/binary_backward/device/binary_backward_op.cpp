@@ -660,22 +660,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type2(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type2_wo_qid(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
 std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:

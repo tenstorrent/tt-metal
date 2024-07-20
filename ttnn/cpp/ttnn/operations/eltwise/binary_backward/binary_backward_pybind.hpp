@@ -322,52 +322,6 @@ Example:
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
-            py::arg("input_b_grad") = std::nullopt},
-
-        ttnn::pybind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const float alpha,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, input_a_grad, input_b_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("alpha") = 1.0f,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("input_a_grad") = std::nullopt,
-            py::arg("input_b_grad") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-        ttnn::pybind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const float alpha,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, input_a_grad, input_b_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("alpha") = 1.0f,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("are_required_outputs") = std::vector<bool>{true, true},
-            py::arg("input_a_grad") = std::nullopt,
             py::arg("input_b_grad") = std::nullopt});
 }
 
