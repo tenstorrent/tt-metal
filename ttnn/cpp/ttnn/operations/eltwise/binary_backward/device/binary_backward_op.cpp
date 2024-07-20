@@ -339,7 +339,7 @@ std::vector<Tensor> _assign_bw(
 }
 
 std::vector<Tensor> _concat_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     std::vector<uint32_t> start_index = {0, 0, 0, 0};
     std::vector<uint32_t> end_index = {
