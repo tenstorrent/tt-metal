@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Union, Optional
-
-import sys
-
 import ttnn
-
-import ttnn._ttnn.deprecated as ttl
 
 __all__ = []
 
@@ -65,6 +59,33 @@ def _golden_function(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.abs, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.conj(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.conj, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.polar(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.polar, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.reciprocal(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function)
 
 
 __all__ = []
