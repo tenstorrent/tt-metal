@@ -8,15 +8,9 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_single_core.cpp
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-========
 #include "ttnn/operations/pool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/work_split.hpp"
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_single_core.cpp
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -157,11 +151,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
     auto reader_config = ReaderDataMovementConfig(reader_ct_args);
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_single_core.cpp
-    std::string reader_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
-========
     std::string reader_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_single_core.cpp
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
@@ -210,11 +200,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     std::vector<uint32_t> writer_rt_args = reader_rt_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args);
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_single_core.cpp
-    std::string writer_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
-========
     std::string writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_single_core.cpp
     auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,
                                                   cores,
@@ -242,11 +228,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          nbatch,
                                                          out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_single_core.cpp
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool.cpp");
-========
     std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_single_core.cpp
     auto compute_kernel = CreateKernel(program,
                                               compute_kernel_fname,
                                               cores,

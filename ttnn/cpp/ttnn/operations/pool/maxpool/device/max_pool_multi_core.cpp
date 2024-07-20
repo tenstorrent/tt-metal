@@ -8,21 +8,12 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-========
 #include "ttnn/operations/pool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -501,17 +492,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     if (input.memory_config().is_sharded()) {
         // sharded, without halo
         reader_kernel_fname =
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-            std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
-    } else {
-        reader_kernel_fname =
-            std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
-========
             std::string("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
     } else {
         reader_kernel_fname =
             std::string("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
     }
     auto reader_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader_config);
 
@@ -525,11 +509,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args, writer_defines);
     std::string writer_kernel_fname(
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
-========
         "ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
     auto writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
 
     /**
@@ -562,11 +542,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
-========
     std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool_multi_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     if (out_nhw_per_core_cliff > 0) {
@@ -966,11 +942,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         bf16_one_u32};
 
     std::string reader_kernel_fname(
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
-========
         "ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
 
     auto reader0_config = DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader0_ct_args};
@@ -1001,11 +973,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
                                             .compile_args = writer_ct_args,
                                             .defines = writer_defines};
     std::string
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-    writer_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
-========
     writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
     writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
     */
 
@@ -1039,11 +1007,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/max_pool_multi_core.cpp
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
-========
     std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/device/kernels/compute/max_pool_multi_core.cpp");
->>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     /*

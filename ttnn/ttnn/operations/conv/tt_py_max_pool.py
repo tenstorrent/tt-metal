@@ -30,7 +30,7 @@ import tt_lib as ttl
 
 import math
 import torch
-from ttnn._ttnn.operations import pool
+from ttnn.operations import pool
 
 
 class TTPyMaxPool(TTPyOp):

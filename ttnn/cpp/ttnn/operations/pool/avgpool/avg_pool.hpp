@@ -4,7 +4,25 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/pool/average_pool.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tensor/tensor.hpp"
+
+#include "tt_dnn/op_library/operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+
+enum class PoolType {
+    AVG
+};
+
+Tensor average_pool_2d(const Tensor& input, const MemoryConfig& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const std::optional<DataType>& output_dtype = std::nullopt);
+
+}  // namespace tt_metal
+}  // namespace tt
+
+
+#include "ttnn/cpp/ttnn/operations/pool/avgpool/avg_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 
