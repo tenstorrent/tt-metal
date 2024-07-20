@@ -22,15 +22,10 @@ def test_bw_clamp(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
 
-    pyt_y = torch.clamp(in_data, min=min, max=max)
-
     tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, min=min, max=max)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
+    golden_tensor = golden_function(grad_data, in_data, min, max)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
 
@@ -48,15 +43,10 @@ def test_bw_clamp_min(input_shapes, min, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
 
-    pyt_y = torch.clamp(in_data, min=min)
-
     tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, min=min)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
+    golden_tensor = golden_function(grad_data, in_data, min, None)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -75,15 +65,10 @@ def test_bw_clamp_max(input_shapes, max, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
 
-    pyt_y = torch.clamp(in_data, max=max)
-
     tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, max=max)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
+    golden_tensor = golden_function(grad_data, in_data, None, max)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

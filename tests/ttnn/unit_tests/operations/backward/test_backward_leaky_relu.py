@@ -21,14 +21,9 @@ def test_bw_leaky_relu(input_shapes, negative_slope, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
 
-    pyt_y = torch.nn.functional.leaky_relu(in_data, negative_slope=negative_slope, inplace=False)
-
     tt_output_tensor_on_device = ttnn.leaky_relu_bw(grad_tensor, input_tensor, negative_slope)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu_bw)
+    golden_tensor = golden_function(grad_data, in_data, negative_slope)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

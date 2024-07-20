@@ -21,15 +21,11 @@ def test_bw_celu(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
 
     alpha = 1
-    pyt_y = torch.nn.functional.celu(in_data, alpha)
 
     tt_output_tensor_on_device = ttnn.celu_bw(grad_tensor, input_tensor, alpha)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.celu_bw)
+    golden_tensor = golden_function(grad_data, in_data, alpha)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
 
     assert comp_pass

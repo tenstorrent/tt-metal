@@ -21,15 +21,10 @@ def test_bw_hardshrink(input_shapes, lambd, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    pyt_y = torch.nn.functional.hardshrink(in_data, lambd=lambd)
-
     tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.hardshrink_bw)
+    golden_tensor = golden_function(grad_data, in_data, lambd)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

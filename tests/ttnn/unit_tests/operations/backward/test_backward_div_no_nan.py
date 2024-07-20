@@ -8,10 +8,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
-def torch_div_no_nan(input, scalar):
-    return torch.where(torch.tensor(scalar) == 0, torch.zeros_like(input), torch.div(input, scalar))
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -27,14 +23,8 @@ def test_bw_unary_div_no_nan(input_shapes, scalar, device):
 
     tt_output_tensor_on_device = ttnn.div_no_nan_bw(grad_tensor, input_tensor, scalar)
 
-    in_data.retain_grad()
-
-    pyt_y = torch_div_no_nan(in_data, scalar)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
-    golden_tensor[0] = torch.where(torch.isnan(golden_tensor[0]), torch.zeros_like(in_data), golden_tensor[0])
+    golden_function = ttnn.get_golden_function(ttnn.div_no_nan_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

@@ -28,13 +28,8 @@ def test_bw_cosh(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.cosh(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.cosh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -54,13 +49,8 @@ def test_bw_cosh_inf(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.cosh(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.cosh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -80,13 +70,8 @@ def test_bw_cosh_neg_inf(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.cosh(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.cosh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -103,13 +88,8 @@ def test_bw_cosh_nan_test1(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.cosh(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.cosh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -126,13 +106,8 @@ def test_bw_cosh_nan_test2(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.cosh(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.cosh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
