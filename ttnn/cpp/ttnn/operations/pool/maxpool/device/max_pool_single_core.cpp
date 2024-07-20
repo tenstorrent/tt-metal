@@ -8,9 +8,9 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -55,13 +55,13 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t) ceil((float) input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
-    uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t) std::ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t) std::ceil((float) input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_hw = (uint32_t) std::ceil((float) output_shape[2] / constants::TILE_HEIGHT);
+    uint32_t out_ntiles_c = (uint32_t) std::ceil((float) output_shape[3] / constants::TILE_WIDTH);
 
     uint32_t out_nelems = nblocks;     // TODO [AS]: Remove hard coding after identifying optimal param val
-    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
+    uint32_t out_w_loop_count = std::ceil((float) out_w / out_nelems);
 
     uint32_t in_hw = in_h * in_w;
     uint32_t out_hw = out_h * out_w;
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
     auto reader_config = ReaderDataMovementConfig(reader_ct_args);
-    std::string reader_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
+    std::string reader_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     std::vector<uint32_t> writer_rt_args = reader_rt_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args);
-    std::string writer_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
+    std::string writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,
                                                   cores,
@@ -221,14 +221,14 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          kernel_size_hw_padded,
                                                          out_h,
                                                          out_w,
-                                                         (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
-                                                         (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
+                                                         (uint32_t) std::ceil((float) output_shape[2] / constants::TILE_HEIGHT),
+                                                         (uint32_t) std::ceil((float) output_shape[3] / constants::TILE_WIDTH),
                                                          out_nelems,
                                                          out_w_loop_count,
                                                          nbatch,
                                                          out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateKernel(program,
                                               compute_kernel_fname,
                                               cores,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -201,7 +201,7 @@ Tensor max_pool2d(const Tensor &input,
                                              {input}).at(0);
 }
 
-Tensor max_pool2d_v2(const Tensor &input,
+Tensor max_pool2d_legacy(const Tensor &input,
                   const Tensor &reader_indices,
                   uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,
@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks MaxPoolNew::create_program(const std::vector<Ten
                     out_mem_config_)};
 }
 
-operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
+operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors, const std::vector<Tensor> &output_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_shape();
     uint32_t batch_size = sliding_window_config_.batch_size_;
