@@ -36,7 +36,7 @@ struct ExecuteBinaryBackwardTensor {
 };
 
 //OpHandler_binary_bw_opt_float_default : get_function_binary_bw_opt_float_default
-template <BinaryBackwardOpType unary_backward_op_type>
+template <BinaryBackwardOpType binary_backward_op_type>
 struct ExecuteBinaryBackwardOptionalFloatDefault {
 
     static inline std::vector<ttnn::Tensor> create_async_output_tensors(
@@ -58,7 +58,7 @@ struct ExecuteBinaryBackwardOptionalFloatDefault {
         std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        auto op_type = get_function_binary_bw_opt_float_default<unary_backward_op_type>();
+        auto op_type = get_function_binary_bw_opt_float_default<binary_backward_op_type>();
         return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
@@ -73,15 +73,15 @@ struct ExecuteBinaryBackwardOptionalFloatDefault {
         std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        auto op_type = get_function_binary_bw_opt_float_default<unary_backward_op_type>();
+        auto op_type = get_function_binary_bw_opt_float_default<binary_backward_op_type>();
         return op_type(DefaultQueueId, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
 };
 
-//OpHandler_binary_bw_float : get_function_binary_bw_float
+//OpHandler_binary_bw_float_default : get_function_binary_bw_float_default
 template <BinaryBackwardOpType binary_backward_op_type>
-struct ExecuteBinaryBackwardFloat {
+struct ExecuteBinaryBackwardFloatDefault {
 
     static inline std::vector<ttnn::Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
@@ -96,7 +96,7 @@ struct ExecuteBinaryBackwardFloat {
         const Tensor &input_tensor_b_arg,
         float parameter,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_binary_bw_float<binary_backward_op_type>();
+        auto op_type = get_function_binary_bw_float_default<binary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
         }
@@ -120,6 +120,29 @@ struct ExecuteBinaryBackwardIntDefault {
         int parameter,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
         auto op_type = get_function_binary_bw_int_default<binary_backward_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
+        }
+};
+
+//OpHandler_binary_bw_float : get_function_binary_bw_float
+template <BinaryBackwardOpType binary_backward_op_type>
+struct ExecuteBinaryBackwardFloat {
+
+    static inline std::vector<ttnn::Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
+                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    static std::vector<Tensor> execute_on_main_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        float parameter,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_binary_bw_float<binary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
         }
@@ -223,11 +246,14 @@ constexpr auto embedding_bw = ttnn::register_operation<operations::binary_backwa
 //OpHandler_binary_bw_opt_float_default : get_function_binary_bw_opt_float_default
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardOptionalFloatDefault<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
 
-//OpHandler_binary_bw_float : get_function_binary_bw_float
-constexpr auto subalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::SUBALPHA_BW>>("ttnn::subalpha_bw");
+//OpHandler_binary_bw_float_default : get_function_binary_bw_float_default
+constexpr auto subalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardFloatDefault<operations::binary_backward::BinaryBackwardOpType::SUBALPHA_BW>>("ttnn::subalpha_bw");
 
 //OpHandler_binary_bw_int_default : get_function_binary_bw_int_default
 constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>("ttnn::concat_bw");
+
+//OpHandler_binary_bw_float : get_function_binary_bw_float
+constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>("ttnn::lerp_bw");
 
 //type 1
 constexpr auto xlogy_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::XLOGY_BW>>("ttnn::xlogy_bw");
@@ -238,8 +264,5 @@ constexpr auto logaddexp2_bw = ttnn::register_operation<operations::binary_backw
 constexpr auto squared_difference_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>("ttnn::squared_difference_bw");
 constexpr auto min_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>("ttnn::min_bw");
 constexpr auto max_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>("ttnn::max_bw");
-constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>("ttnn::lerp_bw");
-
-//type 2
 
 }  // namespace ttnn
