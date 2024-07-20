@@ -20,7 +20,7 @@ namespace binary_backward {
 
 namespace detail {
 
-//OpHandler_binary_bw : get_function_binary_bw_type1
+//OpHandler_binary_bw : get_function_binary_bw
 template <typename binary_backward_operation_t>
 void bind_binary_backward_type_1(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
@@ -67,7 +67,7 @@ Example:
             py::arg("memory_config") = std::nullopt});
 }
 
-//OpHandler_binary_bw_opt_float_default : get_function_binary_bw_type1_opt_float_default
+//OpHandler_binary_bw_opt_float_default : get_function_binary_bw_opt_float_default
 template <typename binary_backward_operation_t>
 void bind_binary_backward_opt_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, const std::string& description) {
     auto doc = fmt::format(
@@ -129,7 +129,7 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
     );
 }
 
-//OpHandler_binary_bw_float : get_function_binary_bw_type1_float
+//OpHandler_binary_bw_float : get_function_binary_bw_float
 template <typename binary_backward_operation_t>
 void bind_binary_backward_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, const std::string& description) {
     auto doc = fmt::format(
