@@ -14,6 +14,7 @@ import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import is_wormhole_b0
+import ttnn
 
 
 def volume(shape):
@@ -186,7 +187,7 @@ def test_run_max_pool(
     # ttl.device.DumpDeviceMemoryState(device)
     ttact_sharded.deallocate()
 
-    out_padded = ttl.tensor.max_pool2d(
+    out_padded = ttnn.max_pool2d(
         out_untilize,
         in_n,
         in_h,
@@ -199,9 +200,9 @@ def test_run_max_pool(
         pad_w,
         dilation_h,
         dilation_w,
-        out_mem_config,
-        nblocks,
-        True,
+        memory_config=out_mem_config,
+        nblocks=nblocks,
+        use_multicore=True,
     )
     out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)

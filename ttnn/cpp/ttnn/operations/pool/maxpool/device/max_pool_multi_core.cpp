@@ -8,12 +8,12 @@
 #include "detail/util.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
+#include "tt_dnn/op_library/sharding_utilities.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -91,7 +91,7 @@ uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) 
                 break;
             default:
                 // TT_ASSERT(false, "General case is not yet handled! Only RN50 shapes supported in multicore.");
-                uint32_t out_nhw_per_core = (uint32_t)ceil((float)out_nhw / avail_ncores);
+                uint32_t out_nhw_per_core = (uint32_t)std::ceil((float)out_nhw / avail_ncores);
                 ncores = out_nhw / out_nhw_per_core;
                 while (avail_ncores > 0) {
                     if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
@@ -104,7 +104,7 @@ uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) 
                 break;
         }
     } else if (device->arch() == ARCH::WORMHOLE_B0) {
-        uint32_t out_nhw_per_core = (uint32_t)ceil((float)out_nhw / avail_ncores);
+        uint32_t out_nhw_per_core = (uint32_t)std::ceil((float)out_nhw / avail_ncores);
         ncores = out_nhw / out_nhw_per_core;
         while (avail_ncores > 0) {
             if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
@@ -215,14 +215,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)ceil((float)input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t)ceil((float)output_shape[2] / constants::TILE_HEIGHT);
-    uint32_t out_ntiles_c = (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_hw = (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH);
 
     uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
                                     // Also ensure the calculated ncores is good
-    uint32_t out_w_loop_count = ceil((float)out_w / out_nelems);
+    uint32_t out_w_loop_count = std::ceil((float)out_w / out_nelems);
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = in_hw * nbatch;
@@ -492,10 +492,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     if (input.memory_config().is_sharded()) {
         // sharded, without halo
         reader_kernel_fname =
-            std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
+            std::string("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
     } else {
         reader_kernel_fname =
-            std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
+            std::string("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
     }
     auto reader_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader_config);
 
@@ -509,7 +509,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     auto writer_config = WriterDataMovementConfig(writer_ct_args, writer_defines);
     std::string writer_kernel_fname(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
+        "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
 
     /**
@@ -523,8 +523,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
         kernel_size_hw,
         out_h,
         out_w,
-        (uint32_t)ceil((float)output_shape[2] / constants::TILE_HEIGHT),
-        (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH),
+        (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT),
+        (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         out_nelems,
         out_w_loop_count,
         nbatch,
@@ -542,7 +542,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp");
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     if (out_nhw_per_core_cliff > 0) {
@@ -724,9 +724,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)ceil((float)input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)ceil((float)output_shape[3] / constants::TILE_WIDTH);
+    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH);
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
@@ -735,7 +735,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         TT_FATAL(input_shape[3] == 16);
         tile_w = constants::FACE_WIDTH;
     }
-    uint32_t out_w_loop_count = ceil((float)out_w / nblocks);
+    uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
@@ -942,7 +942,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         bf16_one_u32};
 
     std::string reader_kernel_fname(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
+        "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
 
     auto reader0_config = DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader0_ct_args};
@@ -973,7 +973,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
                                             .compile_args = writer_ct_args,
                                             .defines = writer_defines};
     std::string
-    writer_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
+    writer_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp"); auto
     writer_kernel = CreateKernel(program, writer_kernel_fname, all_cores, writer_config);
     */
 
@@ -1007,7 +1007,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
+    std::string compute_kernel_fname("ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp");
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
     /*

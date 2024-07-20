@@ -17,6 +17,7 @@ from models.utility_functions import comp_pcc
 
 from functools import reduce
 import operator
+import ttnn
 
 
 def volume(shape):
@@ -170,8 +171,8 @@ def test_run_max_pool(
             f"Skipping over Resnet specific config where parallelization does not fit on core grid {compute_grid_size}"
         )
 
-    if (compute_grid_size.x * compute_grid_size.y) == ncores_on_n300:
-        pytest.skip(f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent/tt-metal/issues/5458")
+    # if (compute_grid_size.x * compute_grid_size.y) == ncores_on_n300:
+    #     pytest.skip(f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent/tt-metal/issues/5458")
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -236,7 +237,7 @@ def test_run_max_pool(
     else:
         ttact = ttact.to(device, in_mem_config)
 
-    out_padded = ttl.tensor.max_pool2d(
+    out_padded = ttnn.max_pool2d(
         ttact,
         in_n,
         in_h,
@@ -249,9 +250,9 @@ def test_run_max_pool(
         pad_w,
         dilation_h,
         dilation_w,
-        out_mem_config,
-        nblocks,
-        use_multicore,
+        memory_config=out_mem_config,
+        nblocks=nblocks,
+        use_multicore=use_multicore,
     )
     if out_mem_config.is_sharded():
         out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
