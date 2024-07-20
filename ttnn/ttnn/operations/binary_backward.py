@@ -181,7 +181,7 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.addalpha_bw,
-    golden_function=lambda grad, a, b, alpha, *args, **kwargs: _golden_function_backward_with_float(
+    golden_function=lambda grad, a, b, alpha=None, *args, **kwargs: _golden_function_backward_with_float(
         torch.add, grad, a, b, alpha, *args, **kwargs
     ),
 )
