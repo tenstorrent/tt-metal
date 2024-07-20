@@ -14,7 +14,7 @@ namespace operations {
 
 namespace ternary {
 
-Tensor where(
+inline Tensor where(
     const Tensor& predicate,
     const Tensor& true_value,
     const Tensor& false_value,
@@ -28,7 +28,7 @@ Tensor where(
     return ttnn::reshape(output, original_shape);
 }
 
-Tensor where(
+inline Tensor where(
     const Tensor& predicate,
     const float true_value,
     const Tensor& false_value,
@@ -41,7 +41,7 @@ Tensor where(
     return ttnn::reshape(output, original_shape);
 }
 
-Tensor where(
+inline Tensor where(
     const Tensor& predicate,
     const Tensor& true_value,
     const float false_value,
@@ -54,7 +54,7 @@ Tensor where(
     return ttnn::reshape(output, original_shape);
 }
 
-Tensor where(
+inline Tensor where(
     const Tensor& predicate,
     const float true_value,
     const float false_value,
