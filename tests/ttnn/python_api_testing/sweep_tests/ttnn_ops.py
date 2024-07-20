@@ -3374,3 +3374,29 @@ def eltwise_unary_fmod(
     t1 = ttnn.fmod(t0, value, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_softmax_in_place(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.softmax_in_place(t0)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_scale_mask_softmax_in_place(
+    x,
+    y,
+    scale,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.scale_mask_softmax_in_place(t0, scale, t1)
+    return ttnn_tensor_to_torch(t2)

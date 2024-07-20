@@ -380,14 +380,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_gelu,
         "pytorch_op": pytorch_ops.gelu,
     },
-    "eltwise-softmax_in_place": {
-        "tt_op": tt_lib_ops.eltwise_softmax_in_place,
-        "pytorch_op": pytorch_ops.softmax_in_place,
-    },
-    "eltwise-scale_mask_softmax_in_place": {
-        "tt_op": tt_lib_ops.eltwise_scale_mask_softmax_in_place,
-        "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
-    },
     "eltwise-rsqrt": {
         "tt_op": tt_lib_ops.eltwise_rsqrt,
         "pytorch_op": pytorch_ops.rsqrt,
