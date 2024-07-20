@@ -9,10 +9,12 @@ from loguru import logger
 
 import torch
 
-from ttnn.operations.conv.tt_py_max_pool import (
+
+from ttnn.operations.pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )
+
 
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32

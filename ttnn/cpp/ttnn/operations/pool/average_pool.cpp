@@ -2,8 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+<<<<<<<< HEAD:ttnn/cpp/ttnn/experimental/tt_dnn/op_library/pool/average_pool.cpp
 #include "ttnn/experimental/tt_dnn/op_library/pool/average_pool.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+========
+#include "ttnn/operations/pool/average_pool.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
+>>>>>>>> 56d42b955d (#9758: Moved cpp files to ttnn folder):ttnn/cpp/ttnn/operations/pool/average_pool.cpp
 
 
 namespace tt {

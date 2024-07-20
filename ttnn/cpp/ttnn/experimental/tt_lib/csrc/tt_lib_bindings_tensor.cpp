@@ -14,8 +14,6 @@
 #include "ttnn/experimental/tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/average_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
@@ -524,15 +522,16 @@ void TensorModule(py::module& m_tensor) {
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
-    // Pools
+    // Upsample
     m_tensor.def(
-        "average_pool_2d",
-        &average_pool_2d,
-        py::arg().noconvert(),
+        "upsample",
+        &upsample,
+        py::arg("input").noconvert(),
+        py::arg("scale_factor_h").noconvert(),
+        py::arg("scale_factor_w").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
         R"doc(
-        Average Pool 2D
+        UpSample 2D
         It operates on tensors whose that have channels as the last dimension
 
         +----------+----------------------------+------------+-------------------------------+----------+
@@ -540,85 +539,6 @@ void TensorModule(py::module& m_tensor) {
         +==========+============================+============+===============================+==========+
         | act      | Input activations tensor   | Tensor     |                               | Yes      |
         +----------+----------------------------+------------+-------------------------------+----------+
-    )doc");
-
-        m_tensor.def(
-        "max_pool2d",
-        &max_pool2d,
-        py::arg("input").noconvert(),
-        py::arg("in_n").noconvert(),
-        py::arg("in_h").noconvert(),
-        py::arg("in_w").noconvert(),
-        py::arg("kernel_h").noconvert(),
-        py::arg("kernel_w").noconvert(),
-        py::arg("stride_h") = 1,
-        py::arg("stride_w") = 1,
-        py::arg("pad_h") = 0,
-        py::arg("pad_w") = 0,
-        py::arg("dilation_h") = 1,
-        py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("nblocks") = 1,
-        py::arg("use_multicore") = true,
-        R"doc(
-        Max Pool 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
-    )doc");
-
-    m_tensor.def(
-        "max_pool2d_v2",
-        &max_pool2d_v2,
-        py::arg("input").noconvert(),
-        py::arg("reader_indices").noconvert(),
-        py::arg("in_n").noconvert(),
-        py::arg("in_h").noconvert(),
-        py::arg("in_w").noconvert(),
-        py::arg("kernel_h").noconvert(),
-        py::arg("kernel_w").noconvert(),
-        py::arg("stride_h") = 1,
-        py::arg("stride_w") = 1,
-        py::arg("pad_h") = 0,
-        py::arg("pad_w") = 0,
-        py::arg("dilation_h") = 1,
-        py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("nblocks") = 1,
-        py::arg("use_multicore") = true,
-        R"doc(
-        Max Pool 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 
     // TMs

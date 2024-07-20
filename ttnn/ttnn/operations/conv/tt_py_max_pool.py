@@ -30,6 +30,7 @@ import tt_lib as ttl
 
 import math
 import torch
+from ttnn._ttnn.operations import pool
 
 
 class TTPyMaxPool(TTPyOp):
@@ -221,7 +222,7 @@ class TTPyMaxPool(TTPyOp):
 
             if self.deallocate_activation:
                 activation.deallocate()
-            output = ttl.tensor.max_pool2d_v2(
+            output = pool.max_pool2d_v2(
                 haloed_act,
                 reader_indices,
                 in_n,
@@ -233,7 +234,7 @@ class TTPyMaxPool(TTPyOp):
                 stride_w,
                 pad_h,
                 pad_w,
-                output_mem_config=self.output_sharded_memory_config,
+                memory_config=self.output_sharded_memory_config,
             )
             haloed_act.deallocate()
             return output

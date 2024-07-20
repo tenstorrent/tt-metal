@@ -58,6 +58,10 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/device/transformer_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/binary_composite_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/average_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/max_pool_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/max_pool_single_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/max_pool.cpp
 )
 
 ### Setup TTNN as a shared library with optional Python bindings

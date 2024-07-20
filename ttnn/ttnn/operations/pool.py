@@ -10,6 +10,7 @@ import ttnn
 from ttnn.operations.conv.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParams,
+    SlidingWindowOpParamsWithParallelConfig,
 )
 
 import tt_lib as ttl
@@ -127,5 +128,14 @@ def _golden_function(input_tensor: ttnn.Tensor):
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_function=_golden_function)
+
+max_pool2d = ttnn.register_operation(
+    name="ttnn.max_pool2d", is_method=True, validate_input_tensors=lambda *args, **kwargs: None
+)(ttnn._ttnn.operations.pool.max_pool2d)
+
+
+average_pool_2d = ttnn.register_operation(
+    name="ttnn.average_pool_2d", is_method=True, validate_input_tensors=lambda *args, **kwargs: None
+)(ttnn._ttnn.operations.pool.average_pool_2d)
 
 __all__ = []
