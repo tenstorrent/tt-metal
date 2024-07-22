@@ -3343,6 +3343,11 @@ def eltwise_relu_max(
 def unpad(
     x,
     *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
     output_tensor_start,
     output_tensor_end,
     **kwargs,
