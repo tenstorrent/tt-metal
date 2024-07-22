@@ -246,8 +246,17 @@ void kernel_main() {
         const uint32_t starting_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
         uint32_t curr_tile_id = starting_tile_id;
 
+
+        // Set the valid_worker_slice_shape
+        coord_t valid_worker_slice_shape = args.worker_slice_shape;
+        if (args.worker_slice_offset.y == args.tensor_slice_shape.y - 1) { // Worker is on last row of tensor_slice
+            if (args.tensor_slice_shape.x - args.worker_slice_offset.x < args.worker_slice_shape.x) { // Worker is cutoff by the end of the tensor_slice
+                valid_worker_slice_shape.x = args.tensor_slice_shape.x - args.worker_slice_offset.x;
+            }
+        }
+
         bool last_page_of_worker = false;
-        uint32_t const worker_slice_n_pages = args.worker_slice_shape.x * args.worker_slice_shape.y;
+        uint32_t const worker_slice_n_pages = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
         ASSERT(
             (args.num_transfers - 1) * worker_slice_n_pages + total_cb_pages_pushed_to_math <=
             args.total_eltwise_kernel_num_pages);
@@ -260,7 +269,7 @@ void kernel_main() {
                     curr_tile_id,
                     offset_into_worker_slice,
                     args.worker_slice_offset, // Offset into tensor slice
-                    args.worker_slice_shape,
+                    valid_worker_slice_shape,
                     // In tiles for tile layout
                     args.input_tensor_shape,
                     args.tensor_slice_shape,
@@ -302,7 +311,7 @@ void kernel_main() {
                     curr_tile_id,
                     offset_into_worker_slice,
                     args.worker_slice_offset, // Offset into tensor slice
-                    args.worker_slice_shape,
+                    valid_worker_slice_shape,
                     // In tiles for tile layout
                     args.input_tensor_shape,
                     args.tensor_slice_shape,

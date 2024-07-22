@@ -152,6 +152,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     uint32_t half_cb_n_pages) :
     LegacyCclTensorSlicer() {
     TT_ASSERT(max_slice_size_in_bytes > 0);
+    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4);
     this->row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
     this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();

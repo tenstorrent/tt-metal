@@ -64,8 +64,14 @@ void kernel_main() {
     uint32_t total_lifetime_cb_pages_popped_from_math = 0;
     while (worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
         // First phase - we only forward messages to EDM
-
-        uint32_t const num_pages_to_write = worker_slice_shape.x * worker_slice_shape.y;
+        // Set the valid_worker_slice_shape
+        coord_t valid_worker_slice_shape = worker_slice_shape;
+        if (worker_slice_base_offset.y == output_tensor_shape.y - 1) { // Worker is on last row of tensor_slice
+            if (output_tensor_shape.x - worker_slice_base_offset.x < worker_slice_shape.x) { // Worker is cutoff by the end of the tensor_slice
+                valid_worker_slice_shape.x = output_tensor_shape.x - worker_slice_base_offset.x;
+            }
+        }
+        uint32_t const num_pages_to_write = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
 
         ASSERT(total_lifetime_cb_pages_popped_from_math + num_pages_to_write <= total_eltwise_kernel_num_pages);
         for (uint32_t i = 0; i < num_transfers; ++i) {
@@ -115,7 +121,7 @@ void kernel_main() {
                 curr_tile_id,
                 offset_into_worker_slice,
                 worker_slice_base_offset, // Offset into tensor slice
-                worker_slice_shape,
+                valid_worker_slice_shape,
                 output_tensor_shape,  // In tiles for tile layout
                 output_tensor_shape,
                 cb_id_in0,
