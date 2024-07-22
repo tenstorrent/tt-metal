@@ -45,8 +45,8 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     uint32_t num_blocks_of_work = num_heads * input_seq_len_t;
 
     // Pagetable-specific parameters
-    uint32_t page_table_stick_size_B = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
-    TT_FATAL(page_table_stick_size_B % 32 == 0, "page table page size in bytes must be a multiple of 32 due to address alignment. Must make `max_seq_len / block_size * 4B % 32 == 0`");
+    uint32_t page_table_stick_size_B = page_table_tensor.buffer()->aligned_page_size();
+    TT_FATAL(page_table_stick_size_B % 32 == 0, "page table page size in bytes must be a multiple of 32 due to address alignment");
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 

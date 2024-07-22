@@ -68,7 +68,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().get_dtype());
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-        index_stick_size = update_idxs_tensor.value().get_legacy_shape()[-1] * update_idxs_tensor.value().element_size();
+        index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
+
         log2_page_size = std::log2(index_stick_size);
         TT_FATAL(1 << log2_page_size == index_stick_size);
     }

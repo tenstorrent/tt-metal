@@ -51,6 +51,8 @@ void kernel_main() {
         .data_format = cache_data_format
     };
 
+    bool skip_update = false;
+
     if constexpr (use_index_tensor) {
 
         const InterleavedPow2AddrGen<index_is_dram> addrg = {
@@ -66,42 +68,49 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_index_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+
         const uint32_t update_idx = index_ptr[my_batch_idx];
-
-        if constexpr (is_paged_cache) {
-            const InterleavedPow2AddrGen<page_table_is_dram> page_table_gen = {
-                .bank_base_address = page_table_tensor_addr,
-                .log_base_2_of_page_size = log2_page_table_stick_size
-            };
-            cb_reserve_back(page_table_cb_id, 1);
-            uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
-            uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
-            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-            noc_async_read_barrier();
-            cb_push_back(page_table_cb_id, 1);
-            volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
-
-            const uint32_t virtual_block_id = update_idx / block_size;
-            const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
-            const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
-            const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
-            const uint32_t block_offset = block_row_tile * Wt;
-            cache_id = block_start_id + block_offset;
-
+        if (update_idx == (uint32_t)-1) {
+            // Passing update_idx = -1 tells us to skip update for this user
+            skip_update = true;
         } else {
-            const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
-            const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-            cache_id = cache_start_id;
+            if constexpr (is_paged_cache) {
+                const InterleavedPow2AddrGen<page_table_is_dram> page_table_gen = {
+                    .bank_base_address = page_table_tensor_addr,
+                    .log_base_2_of_page_size = log2_page_table_stick_size
+                };
+                cb_reserve_back(page_table_cb_id, 1);
+                uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
+                uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
+                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+                noc_async_read_barrier();
+                cb_push_back(page_table_cb_id, 1);
+                volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+
+                const uint32_t virtual_block_id = update_idx / block_size;
+                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+                const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+                const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+                const uint32_t block_offset = block_row_tile * Wt;
+                cache_id = block_start_id + block_offset;
+
+            } else {
+                const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                cache_id = cache_start_id;
+            }
         }
     }
 
     cb_reserve_back(cache_cb_id, Wt);
-    uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
-    for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-        noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
-        cache_l1_write_addr += cache_tile_bytes;
-    }
+    if (!skip_update) {
+        uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
+        for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+            noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+            cache_l1_write_addr += cache_tile_bytes;
+        }
 
-    noc_async_read_barrier();
+        noc_async_read_barrier();
+    }
     cb_push_back(cache_cb_id, Wt );
 }

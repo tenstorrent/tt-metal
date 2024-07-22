@@ -379,6 +379,8 @@ def run_test_paged_update_cache_decode(
 
     # Create arbitrary update indices
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
+    # Arbitrary user is "dropped", to test skipping in kernel
+    cache_idxs[num_users // 2] = -1
     # logger.info(f"cache_idxs: {cache_idxs}")
     cache_idxs_tt = ttl.tensor.Tensor(torch.tensor(cache_idxs), ttl.tensor.DataType.INT32).to(device)
     page_table_tt = ttl.tensor.Tensor(page_table, ttl.tensor.DataType.INT32).to(device)
@@ -389,6 +391,8 @@ def run_test_paged_update_cache_decode(
 
     for i in range(num_users):
         update_idx = cache_idxs[i]
+        if update_idx == -1:
+            continue
         x_view = x.permute(1, 0, 2, 3)[i, ...]
         cache[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]] = x_view
 
@@ -404,6 +408,12 @@ def run_test_paged_update_cache_decode(
     tt_updated_slice = []
     for i in range(num_users):
         update_idx = cache_idxs[i]
+        if update_idx == -1:
+            # Skipped users should compare to the original cache
+            update_idx = 0
+            x[:, i : i + 1, :, :] = cache[
+                i : i + 1, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]
+            ]
         tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]]
         tt_updated_slice.append(tt_slice)
     tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(1, 0, 2, 3)
@@ -411,7 +421,6 @@ def run_test_paged_update_cache_decode(
     if input_dtype == ttl.tensor.DataType.BFLOAT16 and cache_dtype == input_dtype:
         eq_cache, output_cache = comp_equal(cache, tt_got_back)  # checks the entire kv cache
         eq_update, output_update = comp_equal(x, tt_updated_slice)  # checks the updated parts
-        # breakpoint()
     else:
         eq_cache, output_cache = comp_pcc(cache, tt_got_back)  # checks the entire kv cache
         eq_update, output_update = comp_pcc(x, tt_updated_slice)  # checks the updated parts
