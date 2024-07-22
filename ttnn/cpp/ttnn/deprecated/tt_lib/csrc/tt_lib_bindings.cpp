@@ -36,6 +36,10 @@ void DeviceModule(py::module &m_device) {
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
         .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
 
+    py::enum_<DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
+        .value("WORKER", DispatchCoreType::WORKER)
+        .value("ETH", DispatchCoreType::ETH);
+
     auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
         .def(
@@ -87,7 +91,7 @@ void DeviceModule(py::module &m_device) {
         )doc");
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) { return CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size); },
+        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, DispatchCoreType dispatch_core_type) { return CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type); },
         R"doc(
         Creates an instance of TT device.
 
@@ -100,11 +104,12 @@ void DeviceModule(py::module &m_device) {
         py::arg("device_id"),
         py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("dispatch_core_type") = DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) {
-            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
+        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, DispatchCoreType dispatch_core_type) {
+            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(
         Creates an instance of TT device.
@@ -118,7 +123,8 @@ void DeviceModule(py::module &m_device) {
         py::arg("device_ids"),
         py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("dispatch_core_type") = DispatchCoreType::WORKER);
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 

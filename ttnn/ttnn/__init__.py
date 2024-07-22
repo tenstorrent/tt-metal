@@ -141,6 +141,7 @@ from ttnn.types import (
 
 from ttnn.device import (
     Device,
+    DispatchCoreType,
     open_device,
     close_device,
     enable_program_cache,
@@ -152,6 +153,7 @@ from ttnn.device import (
 
 from ttnn.multi_device import (
     DeviceMesh,
+    DispatchCoreType,
     open_device_mesh,
     close_device_mesh,
     get_num_pcie_devices,

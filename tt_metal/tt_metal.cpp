@@ -277,13 +277,14 @@ std::map<chip_id_t, Device *> CreateDevices(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
+    DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     if (is_galaxy) {
         TT_FATAL(num_hw_cqs < 2, "Multiple Command Queues are not Currently Supported on Galaxy Systems");
     }
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -830,17 +831,18 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
+    DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize();
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;

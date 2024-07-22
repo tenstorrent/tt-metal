@@ -36,7 +36,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
     }
 
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1);
+    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
 
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
@@ -127,7 +127,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
     }
 
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1);
+    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks when we send CCLs to the
     // first tunnel (forward path).
     std::vector<Device*> ring_devices = mesh.get_devices_on_row(0); // Tunnel 0
