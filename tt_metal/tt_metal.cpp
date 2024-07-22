@@ -512,21 +512,21 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
-    LaunchProgram(device, *program, wait_until_cores_done);
+void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
+    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
-void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done) {
+void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
-        detail::DispatchStateCheck(false);
+        detail::DispatchStateCheck(force_slow_dispatch);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize();
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program);
-        detail::ConfigureDeviceWithProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+        detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
 
         auto device_id = device->id();
 
@@ -622,10 +622,10 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(Device *device, Program &program) {
+void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_dispatch) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(false);
+    detail::DispatchStateCheck(force_slow_dispatch);
 
     static vector<CoreType>core_types = {CoreType::WORKER, CoreType::ETH }; // TODO: make this global
 
