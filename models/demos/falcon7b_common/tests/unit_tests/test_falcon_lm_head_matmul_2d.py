@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.demos.falcon7b.tt.falcon_lm_head import falcon_lm_head_matmul_2d
+from models.demos.falcon7b_common.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
 
 

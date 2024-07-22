@@ -22,7 +22,7 @@ Install and build the project by following the instructions in the
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Get started with the Falcon 7B demo. Navigate to the `Falcon 7B demo folder
-<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
+<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/falcon7b>`_
 for details.
 
 You can also check our demos for

@@ -9,9 +9,9 @@ from tqdm import tqdm
 import time
 import numpy as np
 import ttnn
-from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b.tt.model_config import get_model_config
-from models.demos.falcon7b.tests.test_utils import initialize_kv_cache, load_hf_model
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.falcon7b_common.tests.test_utils import initialize_kv_cache, load_hf_model
 from models.datasets.llm_dataset_utils import (
     prepare_textgen_dataset,
     prepare_textgen_dataloader,

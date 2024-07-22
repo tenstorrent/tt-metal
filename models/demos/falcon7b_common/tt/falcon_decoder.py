@@ -6,9 +6,9 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
-from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
-from models.demos.falcon7b.tt.model_utils import get_weights_cached, layernorm
+from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
+from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
 from torch import nn
 
 

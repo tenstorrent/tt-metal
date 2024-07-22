@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconForCausalLM
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 

@@ -10,10 +10,10 @@ import ttnn
 
 import tt_lib
 
-from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.falcon7b.tt.model_utils import get_weights_cached, layernorm
+from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
 from models.utility_functions import nearest_32, torch_tensors_to_tt_tensors
-from models.demos.falcon7b.tests.test_utils import create_prefill_attn_mask_for_sharded_softmax
+from models.demos.falcon7b_common.tests.test_utils import create_prefill_attn_mask_for_sharded_softmax
 from tqdm import tqdm
 
 
