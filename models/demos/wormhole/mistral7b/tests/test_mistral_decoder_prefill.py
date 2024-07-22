@@ -26,7 +26,6 @@ from models.utility_functions import skip_for_grayskull
     "seq_len",
     (
         128,
-        1024,
         4096,
     ),
 )

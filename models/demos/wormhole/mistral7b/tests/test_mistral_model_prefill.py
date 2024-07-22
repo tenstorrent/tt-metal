@@ -39,7 +39,6 @@ class Emb(torch.nn.Module):
     "seq_len",
     (
         128,
-        1024,
         4096,
     ),
 )

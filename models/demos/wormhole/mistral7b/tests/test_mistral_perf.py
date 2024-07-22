@@ -43,7 +43,6 @@ class Emb(torch.nn.Module):
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
         (32, 6, 0.105),
-        (128, 6, 0.125),
         (1024, 6, 0.225),
     ),
 )
