@@ -339,7 +339,7 @@ std::vector<Tensor> _assign_bw(
 }
 
 std::vector<Tensor> _concat_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     std::vector<uint32_t> start_index = {0, 0, 0, 0};
     std::vector<uint32_t> end_index = {
@@ -514,7 +514,7 @@ std::vector<Tensor> _div_bw(
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
 std::vector<Tensor> _lerp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float sub_scalar = 1.0f - weight;
     Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
@@ -630,18 +630,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _min_or_max_bw<true>;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw_inter;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_float(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::CONCAT_BW:
-            return _concat_bw;
-        case BinaryBackwardOpType::LERP_BW:
-            return _lerp_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
