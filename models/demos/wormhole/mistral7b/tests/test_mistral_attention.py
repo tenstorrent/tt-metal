@@ -26,6 +26,9 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
+    # FIXME non-deterministic hang on CI pipeline cause by Mamba running before (#8606)
+    disable_persistent_kernel_cache()
+
     model_args = TtModelArgs(device)
     state_dict = torch.load(model_args.consolidated_weights_path)
 
