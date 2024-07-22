@@ -73,9 +73,9 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
 
     start_time = time.time()
     for _ in range(num_call_to_stack):
-        # signpost(header=f"starting {op_name}")
+        signpost(header=f"starting {op_name}")
         op_func()
-        # signpost(header=f"ending {op_name}")
+        signpost(header=f"ending {op_name}")
 
     dispatch_end_time = time.time()
     ttnn.synchronize_device(device)

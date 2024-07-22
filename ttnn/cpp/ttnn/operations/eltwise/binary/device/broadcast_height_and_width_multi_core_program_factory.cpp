@@ -14,6 +14,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -266,6 +267,8 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
+    op_profiler::tracy_message("`TT_SIGNPOST: BroadcastHeightAndWidthMultiCore_override_runtime_arguments_start`");
+
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -392,6 +395,8 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         UpdateDynamicCircularBufferAddressAndTotalSize(
             program, cb_output, *dst_buffer, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
+
+    op_profiler::tracy_message("`TT_SIGNPOST: BroadcastHeightAndWidthMultiCore_override_runtime_arguments_end`");
 }
 
 }  // namespace ttnn::operations::binary

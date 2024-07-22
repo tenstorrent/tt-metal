@@ -38,10 +38,10 @@ def signpost(header, message=None):
 
     if message:
         ttnn.tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
-        logger.info(f"{header} : {message} ")
+        # logger.info(f"{header} : {message} ")
     else:
         ttnn.tracy_message(f"`TT_SIGNPOST: {header}`")
-        logger.info(f"{header}")
+        # logger.info(f"{header}")
 
 
 class Profiler:

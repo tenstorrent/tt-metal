@@ -14,6 +14,24 @@ from pathlib import Path
 from loguru import logger
 
 
+def extract_number_of_subops(df, op_name, final_df, index):
+    start_index = df.loc[df["OP CODE"] == f"starting {op_name}"].index.tolist()
+    end_index = df.loc[df["OP CODE"] == f"ending {op_name}"].index.tolist()
+
+    if not (start_index and end_index):
+        return -1
+
+    count = 0
+    i = start_index[0] + 1
+
+    while i < end_index[0]:
+        if df.loc[i, "OP TYPE"] == "tt_dnn_device":
+            count += 1
+        i += 1
+
+    final_df.loc[index, f"Sub-op count"] = count
+
+
 def extract_profile_detail(df, op_begin_ind, key, final_df, index):
     start_index = df.loc[df["OP CODE"] == f"{key}_start"].index.tolist()
     end_index = df.loc[df["OP CODE"] == f"{key}_end"].index.tolist()
@@ -41,6 +59,7 @@ def extract_profile_detail(df, op_begin_ind, key, final_df, index):
 
 def extract_profile_details(final_df, row, index, df):
     op_begin_ind = df.loc[df["OP CODE"] == "start " + row["op"]].index.tolist()
+    extract_number_of_subops(df, row["op"], final_df, index)
 
     if op_begin_ind:
         extract_profile_detail(df, op_begin_ind, "compute_hash", final_df, index)
