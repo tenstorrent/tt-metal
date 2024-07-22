@@ -21,6 +21,11 @@ enum class BinaryCompositeOpType {
     MAXIMUM,
     ATAN2,
     LOGICAL_XOR,
+    BINARY_REMAINDER,
+    BINARY_FMOD,
+    DIV,
+    DIV_NO_NAN,
+    FLOOR_DIV,
 
 };
 
@@ -31,9 +36,17 @@ Tensor _maximum(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&
 Tensor _atan2(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_xor(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _nextafter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _binary_remainder(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _binary_fmod(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _addalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _subalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _isclose(const Tensor&, const Tensor&, float, float, const bool, const std::optional<MemoryConfig>&);
+Tensor _div(const Tensor&, const Tensor&, bool, string, const std::optional<MemoryConfig>&);
+Tensor _div_overload(const Tensor&, float, bool, string, const std::optional<MemoryConfig>&);
+Tensor _div_no_nan(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _div_no_nan_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <BinaryCompositeOpType OpType>
@@ -44,6 +57,12 @@ struct OpHandler;
 
 template <BinaryCompositeOpType OpType>
 struct OpHandler;
+
+template <BinaryCompositeOpType OpType>
+struct OpHandler_Div;
+
+template <BinaryCompositeOpType OpType>
+struct OpHandler_Overload;
 
 
 template <>
@@ -117,5 +136,27 @@ struct OpHandler<BinaryCompositeOpType::ISCLOSE> {
     }
 };
 
+
+using HandleFunctionPtr1 = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+using HandleFunctionPtr2 = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
+template <BinaryCompositeOpType OpType>
+auto get_function_divnonan_floordiv() -> HandleFunctionPtr1 {
+    return &OpHandler_Overload<OpType>::handle;
+}
+template <BinaryCompositeOpType OpType>
+auto get_function_divnonan_floordiv_overload() -> HandleFunctionPtr2 {
+    return &OpHandler_Overload<OpType>::handle;
+}
+
+using HandleFunctionPtr3 = Tensor (*)(const Tensor&, const Tensor&, bool, std::string, const std::optional<MemoryConfig>&);
+using HandleFunctionPtr4 = Tensor (*)(const Tensor&, float, bool, std::string, const std::optional<MemoryConfig>&);
+template <BinaryCompositeOpType OpType>
+auto get_function_div() -> HandleFunctionPtr3 {
+    return &OpHandler_Div<OpType>::handle;
+}
+template <BinaryCompositeOpType OpType>
+auto get_function_div_overload() -> HandleFunctionPtr4 {
+    return &OpHandler_Div<OpType>::handle;
+}
 
 }

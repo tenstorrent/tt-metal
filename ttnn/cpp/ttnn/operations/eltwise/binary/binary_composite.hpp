@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,6 +51,54 @@ struct ExecuteBinaryCompositeOpsIsClose
     }
 };
 
+template <BinaryCompositeOpType binary_comp_op_type>
+struct ExecuteBinaryCompositeOpsOverload
+{
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_divnonan_floordiv<binary_comp_op_type>();
+            return op_type(input_tensor_a, input_tensor_b, memory_config);
+        }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        float value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_divnonan_floordiv_overload<binary_comp_op_type>();
+            return op_type(input_tensor_a, value, memory_config);
+        }
+};
+
+template <BinaryCompositeOpType binary_comp_op_type>
+struct ExecuteBinaryCompositeOpsDiv
+{
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        bool accurate_mode = false,
+        string round_mode = "None",
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_div<binary_comp_op_type>();
+            return op_type(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
+        }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor_a,
+        float value,
+        bool accurate_mode = false,
+        string round_mode = "None",
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_div_overload<binary_comp_op_type>();
+            return op_type(input_tensor_a, value, accurate_mode, round_mode, memory_config);
+        }
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -85,5 +133,21 @@ constexpr auto subalpha = ttnn::register_operation_with_auto_launch_op<
 constexpr auto isclose = ttnn::register_operation_with_auto_launch_op<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
+constexpr auto binary_remainder = ttnn::register_operation<
+    "ttnn::binary_remainder",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::BINARY_REMAINDER>>();
+constexpr auto binary_fmod = ttnn::register_operation<
+    "ttnn::binary_fmod",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::BINARY_FMOD>>();
+constexpr auto div = ttnn::register_operation<
+    "ttnn::div",
+    operations::binary::ExecuteBinaryCompositeOpsDiv<operations::binary::BinaryCompositeOpType::DIV>>();
+constexpr auto div_no_nan = ttnn::register_operation<
+    "ttnn::div_no_nan",
+    operations::binary::ExecuteBinaryCompositeOpsOverload<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>>();
+constexpr auto floor_div = ttnn::register_operation<
+    "ttnn::floor_div",
+    operations::binary::ExecuteBinaryCompositeOpsOverload<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
+// newly imported
 
 }  // namespace ttnn
