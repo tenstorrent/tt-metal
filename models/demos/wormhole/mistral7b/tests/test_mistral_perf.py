@@ -15,6 +15,7 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import Transformer
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
@@ -47,17 +48,8 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mistral_model_perf(
-    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds, is_ci_env
+    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
-    # Set Mistral flags for CI
-    if is_ci_env:
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-
-    # This module requires the env paths above for CI runs
-    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)

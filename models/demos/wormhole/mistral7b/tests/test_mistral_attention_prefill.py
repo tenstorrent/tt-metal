@@ -7,6 +7,7 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
@@ -31,16 +32,7 @@ from models.utility_functions import skip_for_grayskull
         4096,
     ),
 )
-def test_mistral_attention_inference(seq_len, device, use_program_cache, reset_seeds, is_ci_env):
-    # Set Mistral flags for CI
-    if is_ci_env:
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-
-    # This module requires the env paths above for CI runs
-    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-
+def test_mistral_attention_inference(seq_len, device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 

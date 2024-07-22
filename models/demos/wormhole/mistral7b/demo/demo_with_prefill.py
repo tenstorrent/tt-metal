@@ -128,10 +128,10 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
 def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     # Set Mistral flags for CI
-    if is_ci_env:
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
+    if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
 
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
@@ -357,8 +357,8 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     ids=["general_weights", "instruct_weights"],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
-    if is_ci_env and instruct_weights == True:
-        pytest.skip("CI demo test only runs general weights (to reduce CI pipeline load)")
+    if is_ci_env and instruct_weights == False:
+        pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     return run_mistral_demo(
         user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env

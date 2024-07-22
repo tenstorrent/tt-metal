@@ -30,9 +30,9 @@ class TtModelArgs:
     kv_seq_len = 4096  # TODO Update the initial cache size when scaling up (Should be window_size == 4096)
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("MISTRAL_CKPT_DIR", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
-    DEFAULT_TOKENIZER_PATH = os.getenv("MISTRAL_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
-    DEFAULT_CACHE_PATH = os.getenv("MISTRAL_CACHE_PATH", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
+    DEFAULT_CKPT_DIR = os.getenv("MISTRAL_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("MISTRAL_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/")
+    DEFAULT_CACHE_PATH = os.getenv("MISTRAL_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/")
 
     OP_KEYS = (
         # Embedding

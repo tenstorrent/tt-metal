@@ -13,6 +13,7 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     sample,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import Transformer
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -37,16 +38,7 @@ class Emb(torch.nn.Module):
     "iterations",
     (17,),
 )
-def test_mistral_model_inference(device, iterations, use_program_cache, reset_seeds, is_ci_env):
-    # Set Mistral flags for CI
-    if is_ci_env:
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-
-    # This module requires the env paths above for CI runs
-    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-
+def test_mistral_model_inference(device, iterations, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 

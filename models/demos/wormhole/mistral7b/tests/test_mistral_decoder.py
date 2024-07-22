@@ -12,6 +12,7 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     freqs_to_rotation_matrix,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
@@ -21,16 +22,7 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_mistral_decoder_inference(device, use_program_cache, reset_seeds, is_ci_env):
-    # Set Mistral flags for CI
-    if is_ci_env:
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/"
-
-    # This module requires the env paths above for CI runs
-    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-
+def test_mistral_decoder_inference(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)
