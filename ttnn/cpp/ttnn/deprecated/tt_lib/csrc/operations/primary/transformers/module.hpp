@@ -131,6 +131,8 @@ void py_module(py::module& m_transformers) {
         py::arg("cache_tensor").noconvert(),
         py::arg("input_tensor").noconvert(),
         py::arg("update_idxs").noconvert(),
+        py::arg("update_idxs_tensor").noconvert() = std::nullopt,
+        py::arg("page_table").noconvert() = std::nullopt,
         py::arg("batch_offset") = 0,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
@@ -138,6 +140,18 @@ void py_module(py::module& m_transformers) {
         )doc"
     );
 
+    m_transformers.def(
+        "paged_fill_cache",
+        &paged_fill_cache,
+        py::arg("cache_tensor").noconvert(),
+        py::arg("input_tensor").noconvert(),
+        py::arg("page_table").noconvert(),
+        py::arg("batch_idx").noconvert(),
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        R"doc(
+        Paged fill cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, 1, seq_len, head_dim]. batch_idx specifies which index in the batch dimension to update with input_tensor.
+        )doc"
+    );
 
 }
 
