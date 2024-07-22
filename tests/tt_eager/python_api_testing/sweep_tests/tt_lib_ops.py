@@ -1277,7 +1277,7 @@ def repeat_interleave(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.repeat_interleave(t0, repeat, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.repeat_interleave(t0, repeat, dim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)

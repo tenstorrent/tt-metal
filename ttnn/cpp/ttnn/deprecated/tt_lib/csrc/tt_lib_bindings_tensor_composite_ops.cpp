@@ -663,29 +663,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         )doc");
 
     m_tensor.def(
-        "repeat_interleave",
-        &repeat_interleave,
-        py::arg("input").noconvert(),
-        py::arg("repeat"),
-        py::arg("dim"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Repeated tensor which has the same shape as ``input``, except along the given axis.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor input is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "repeat", "Repeat value", "int", "1 to inf", "Yes"
-                "dim", "dim value", "int", "0 to 2", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
         "full_like",
         [](const Tensor& reference_tensor,
            float value,

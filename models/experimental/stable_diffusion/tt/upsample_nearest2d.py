@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -24,6 +24,6 @@ class TtUpsampleNearest2d(nn.Module):
         output_shape = list(input.get_legacy_shape())
         output_shape[-1] *= self.scale_factor
         output_shape[-2] *= self.scale_factor
-        input = ttl.tensor.repeat_interleave(input, self.scale_factor, dim=3)
-        input = ttl.tensor.repeat_interleave(input, self.scale_factor, dim=2)
+        input = ttnn.repeat_interleave(input, self.scale_factor, dim=3)
+        input = ttnn.repeat_interleave(input, self.scale_factor, dim=2)
         return input
