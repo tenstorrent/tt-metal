@@ -24,11 +24,12 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-            setenv("WH_ARCH_YAML", "wormhole_b0_80_arch_eth_dispatch.yaml", true);
+            dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_ = tt::tt_metal::CreateDevice(0, num_cqs);
+        device_ = tt::tt_metal::CreateDevice(0, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     }
 
     void TearDown() override {

@@ -37,15 +37,18 @@ protected:
         watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
         tt::llrt::OptionsG.set_watcher_enabled(false);
 
+        // Setup dispatch core manager to get dispatch cores that need to be excluded from printing
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
+
         // By default, exclude dispatch cores from printing
         unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         std::map<CoreType, std::unordered_set<CoreCoord>> disabled;
         for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
-            // TODO: Better way to get this info once we've solidified how it will be set.
-            const tt::core_descriptor_t &core_desc = tt::get_core_descriptor_config(id, num_cqs);
-            for (auto core : tt::get_logical_dispatch_cores(id, num_cqs)) {
+            CoreType internal_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id);
+            for (auto core : tt::get_logical_dispatch_cores(id, num_cqs, internal_core_type)) {
                 log_info(tt::LogTest, "Disable dprint on Device {}: {}", id, core);
-                disabled[core_desc.dispatch_core_type].insert(core);
+                disabled[internal_core_type].insert(core);
             }
         }
         tt::llrt::OptionsG.set_feature_disabled_cores(tt::llrt::RunTimeDebugFeatureDprint, disabled);

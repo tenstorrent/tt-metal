@@ -25,7 +25,7 @@ public:
     std::vector<std::pair<int, Device *>> mesh_devices;
     std::shared_ptr<DeviceMeshView> view;
 
-    DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues);
+    DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
     ~DeviceMesh();
 
     DeviceMesh(const DeviceMesh &) = delete;

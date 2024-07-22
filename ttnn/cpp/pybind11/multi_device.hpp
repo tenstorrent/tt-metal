@@ -19,13 +19,14 @@ namespace multi_device {
 void py_module(py::module& module) {
     py::class_<DeviceMesh>(module, "DeviceMesh")
         .def(
-            py::init<DeviceGrid, std::vector<int>, size_t, size_t, size_t>(),
+            py::init<DeviceGrid, std::vector<int>, size_t, size_t, size_t, DispatchCoreType>(),
             py::kw_only(),
             py::arg("device_grid"),
             py::arg("device_ids"),
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
-            py::arg("num_command_queues"))
+            py::arg("num_command_queues"),
+            py::arg("dispatch_core_type"))
         .def("get_num_devices", &DeviceMesh::num_devices)
         .def("get_device_ids", &DeviceMesh::get_device_ids)
         .def(
@@ -100,7 +101,8 @@ void py_module(py::module& module) {
         py::arg("device_ids"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
-        py::arg("num_command_queues"));
+        py::arg("num_command_queues"),
+        py::arg("dispatch_core_type"));
 
     module.def("close_device_mesh", &close_device_mesh, py::arg("device_mesh"), py::kw_only());
     module.def(

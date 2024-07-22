@@ -27,7 +27,8 @@ class DevicePool {
         std::vector<chip_id_t> device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t trace_region_size,
+        DispatchCoreType dispatch_core_type,
         const std::vector<uint32_t> &l1_bank_remap = {}) noexcept;
 
     Device *get_active_device(chip_id_t device_id) const;

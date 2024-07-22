@@ -21,6 +21,7 @@ void py_module(py::module& module) {
         py::arg("device_id"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
+        py::arg("dispatch_core_type"),
         py::return_value_policy::reference);
 
     module.def("close_device", &ttnn::close_device, py::arg("device"), py::kw_only());

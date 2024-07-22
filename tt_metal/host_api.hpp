@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <vector>
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 
@@ -70,6 +71,7 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
     const std::vector<uint32_t> &l1_bank_remap = {});
 
 /**
@@ -83,7 +85,9 @@ Device *CreateDevice(
  * */
 Device *CreateDeviceMinimal(
     chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1);
+    const uint8_t num_hw_cqs = 1,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER
+    );
 
 /**
  * Resets device and closes device

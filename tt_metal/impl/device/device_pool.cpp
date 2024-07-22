@@ -104,6 +104,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
+// Should probably add a dispatch_core_manager.cpp and move this there
 tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
 void DevicePool::initialize(
@@ -111,9 +112,10 @@ void DevicePool::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
+    DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) noexcept {
     log_debug(tt::LogMetal, "DevicePool initialize");
-    tt::tt_metal::dispatch_core_manager::initialize();
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
 
     if (_inst == nullptr) {
         static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
@@ -181,7 +183,7 @@ void DevicePool::activate_device(chip_id_t id) {
         int core_assigned_to_device = this->device_to_core_map.at(id);
         auto dev =
             new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
-            dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
+        dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(dev->build_key())) {
             dev->build_firmware();
             this->firmware_built_keys.insert(dev->build_key());
