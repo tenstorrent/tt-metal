@@ -7,8 +7,8 @@
 #include <tensor/tensor.hpp>
 #include <tensor/tensor_utils.hpp>
 
+#include "ttnn/operation.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

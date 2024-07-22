@@ -4,7 +4,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/scan/scan_op.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace tt::tt_metal {
 

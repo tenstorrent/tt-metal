@@ -14,7 +14,7 @@
 #include "ttnn/experimental/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/core.hpp"

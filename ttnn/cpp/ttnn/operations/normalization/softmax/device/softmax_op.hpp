@@ -9,8 +9,8 @@
 #include "common/core_coord.h"
 #include "tensor/types.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace ttnn::operations::normalization {

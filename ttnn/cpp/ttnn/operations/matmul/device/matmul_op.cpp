@@ -9,7 +9,7 @@
 #include <optional>
 #include <numeric>
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"

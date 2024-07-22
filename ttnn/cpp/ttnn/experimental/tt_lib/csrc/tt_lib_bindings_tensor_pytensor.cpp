@@ -7,7 +7,7 @@
 
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor_impl.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 

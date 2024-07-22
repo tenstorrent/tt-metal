@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "tensor/tensor.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace tt::tt_metal {
 

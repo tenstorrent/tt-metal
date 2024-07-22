@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/operation_history.hpp"
 
 #include "tt_metal/common/core_coord.h"
 

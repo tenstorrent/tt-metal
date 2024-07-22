@@ -7,7 +7,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"

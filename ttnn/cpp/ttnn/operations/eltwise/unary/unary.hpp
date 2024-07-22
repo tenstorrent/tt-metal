@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/unary_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"

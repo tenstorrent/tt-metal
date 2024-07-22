@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/experimental/tensor/types.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "types.hpp"
 
 namespace ttnn {

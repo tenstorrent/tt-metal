@@ -10,7 +10,7 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 

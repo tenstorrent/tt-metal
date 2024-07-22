@@ -8,7 +8,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 

@@ -5,7 +5,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

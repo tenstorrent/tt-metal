@@ -4,7 +4,7 @@
 
 #include "tilize_op.hpp"
 #include "tilize_program_factory.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 void Tilize::validate(const std::vector<Tensor>& input_tensors) const {

@@ -7,7 +7,7 @@
 #pragma once
 #include <optional>
 
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"

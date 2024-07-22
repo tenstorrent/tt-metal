@@ -8,7 +8,7 @@
 #include <vector>
 #include "ttnn/experimental/tensor/tensor.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace tt::tt_metal {
 
