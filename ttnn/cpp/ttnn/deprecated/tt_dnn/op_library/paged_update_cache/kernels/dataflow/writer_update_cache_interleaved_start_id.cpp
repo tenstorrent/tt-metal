@@ -44,30 +44,37 @@ void kernel_main() {
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
 
+    bool skip_update = false;
+
     if constexpr (use_index_tensor) {
         cb_wait_front(cb_index_id, 1);
         uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
         const uint32_t update_idx = index_ptr[my_batch_idx];
 
-        if constexpr (is_paged_cache) {
-            cb_wait_front(page_table_cb_id, 1);
-            uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
-            volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
-
-            const uint32_t virtual_block_id = update_idx / block_size;
-            const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
-            const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
-            const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
-            const uint32_t block_offset = block_row_tile * Wt;
-            cache_id = block_start_id + block_offset;
-
+        if (update_idx == (uint32_t)-1) {
+            // Passing update_idx = -1 tells us to skip update for this user
+            skip_update = true;
         } else {
-            const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
-            const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-            cache_id = cache_start_id;
+            if constexpr (is_paged_cache) {
+                cb_wait_front(page_table_cb_id, 1);
+                uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
+                volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+
+                const uint32_t virtual_block_id = update_idx / block_size;
+                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+                const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+                const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+                const uint32_t block_offset = block_row_tile * Wt;
+                cache_id = block_start_id + block_offset;
+
+            } else {
+                const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                cache_id = cache_start_id;
+            }
+            cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
         }
-        cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
     }
 
     cb_wait_front(untilized_input_cb_id, Wt);
@@ -84,17 +91,21 @@ void kernel_main() {
 
     // Wait on compute to tilize an updated block. Write that block to DRAM
     cb_wait_front(cache_cb_id, Wt);
-    uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
-    for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-        noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
-        out_l1_read_addr += cache_tile_bytes;
-    }
+    if (!skip_update) {
+        uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
+        for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+            noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
+            out_l1_read_addr += cache_tile_bytes;
+        }
 
-    noc_async_writes_flushed();
+        noc_async_writes_flushed();
+    }
     cb_pop_front(cache_cb_id, Wt);
 
     cb_pop_front(untilized_input_cb_id, Wt);
 
-    // Delay syncing the writes to maximize perf.
-    noc_async_write_barrier();
+    if (!skip_update) {
+        // Delay syncing the writes to maximize perf.
+        noc_async_write_barrier();
+    }
 }
