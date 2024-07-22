@@ -30,6 +30,9 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 // Converts convolution weights to grouped layout with padded zeros
 Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
+// Converts convolution weights to depthwise layout with broadcasted weights
+Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
+
 const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
 const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);

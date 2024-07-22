@@ -34,6 +34,7 @@ const uint32_t matmul_partials_cb = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
 const uint32_t out0_cb = CB::c_out0;
+const uint32_t temp_sum_cb = CB::c_intermed3;
 
 // TODO: Add namespace for utilities?
 tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
@@ -207,6 +208,102 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
     }
+
+    return {cb_sharded_act, cb_output};
+}
+
+// TODO: Add namespace for utilities?
+tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
+    tt_metal::Program& program,
+    const Tensor& input,
+    CoreRange core,
+    uint32_t num_cb0_tiles,
+    uint32_t num_cb1_tiles,
+    uint32_t num_cb0_tilized_tiles,
+    uint32_t num_output_tiles,
+    uint32_t num_reblock_cb_tiles,
+    uint32_t num_writer_output_tiles,
+    bool untilize_out,
+    DataFormat act_df,
+    DataFormat weight_df,
+    DataFormat tilized_act_df,
+    DataFormat out_df,
+    DataFormat bias_df,
+    bool weight_width_sliced,
+    const Tensor& output,
+    uint32_t bias_ntiles,
+    bool with_bias,
+    bool split_reader,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc_en) {
+    tt::DataFormat interm0_df =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
+
+    uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
+    uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
+    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
+    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
+    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
+
+    CBHandle cb_sharded_act = 0;
+    if (input.memory_config().is_sharded()) {
+        uint32_t num_bytes_for_df = datum_size(act_df);
+        auto shard_shape = input.shard_spec().value().shape;
+        // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
+        TT_ASSERT(
+            shard_shape[0] <= (1 << 16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
+        CircularBufferConfig cb_sharded_act_config =
+            CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
+                .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
+        // incoming data is the input cb instead of raw l1/dram addr
+        cb_sharded_act_config.set_globally_allocated_address(*input.buffer());
+        cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
+
+        // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
+        // Then, tilize input in compute
+
+        CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
+                                                    .set_page_size(act_cb, act_tile_size);
+        auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+    } else {
+        TT_ASSERT(false, "Input must be sharded!");
+    }
+
+    CircularBufferConfig cb_weight_config =
+        CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
+            .set_page_size(weight_cb, weight_tile_size);
+    auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
+
+    // Used for placing tilized activations
+    CircularBufferConfig cb_src0_tilized_config =
+        CircularBufferConfig(
+            num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
+            .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
+    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
+
+    CBHandle cb_output = 0;
+    // Share buffer if same data format
+    CoreRangeSet cores(std::set<CoreRange>({core}));
+
+    // breakdown above as separate CBs
+    CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(1 * out_tile_size, {{matmul_partials_cb, out_df}})
+        .set_page_size(matmul_partials_cb, out_tile_size);
+    auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+
+    CircularBufferConfig cb_temp_sum_config = CircularBufferConfig(1 * out_tile_size, {{temp_sum_cb, out_df}})
+        .set_page_size(temp_sum_cb, out_tile_size);
+    auto cb_temp_sum = tt_metal::CreateCircularBuffer(program, core, cb_temp_sum_config);
+
+    std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
+        {out0_cb, out_df}
+    };
+    CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
+        .set_page_size(out0_cb, out_tile_size);
+
+    if (output.is_sharded()) {
+        cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+    }
+    cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
     return {cb_sharded_act, cb_output};
 }
@@ -418,7 +515,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // TODO: Move all these asserts/checks to validate?
 
+    uint32_t input_width = ashape[2];
+    uint32_t input_channels = ashape[3];
+    uint32_t kernel_width = conv_params[1];
+    uint32_t groups = conv_params[6];
+    bool is_conv1d = kernel_width == 1 && input_width == 1;
+    bool is_depthwise_conv = groups == input_channels && groups == output_channels;
+
     if (has_bias) {
+        if (is_conv1d and is_depthwise_conv) {
+            TT_THROW("Bias is not supported for depthwise conv1d");
+        }
         // Tensor bias is of shape {output_channels}
         TT_ASSERT(bias.has_value());
         TT_ASSERT(bias.value().buffer() != nullptr);
@@ -426,9 +533,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         TT_ASSERT(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 
-    // Normal matrix shape check
-    TT_ASSERT(act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
-
+    // matrix multiplication shape check valid for all convs except depthwise conv1d
+    if (!is_conv1d and !is_depthwise_conv){
+        TT_ASSERT(act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
+    }
     // Tile size divisibility checks
     TT_ASSERT(act_matrix_height % TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
     TT_ASSERT(act_matrix_width % TILE_WIDTH == 0, "Width of activation matrix needs to be divisible by 32");
@@ -493,7 +601,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = act_block_w_ntiles;
+    uint32_t weight_block_h_ntiles = is_conv1d and is_depthwise_conv? act_block_h_ntiles : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
@@ -875,33 +983,63 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
-    // TODO: Moving this function call to after kernel logic causes pcc fails
-    // There are additional CBs and semaphores created in 2D conv in kernel logic,
-    // so does order of create_cb calls matter?
-    auto [cb_sharded_act, cb_output] = create_CBs_for_sharded_input_v2(
-        program,
-        a,
-        all_cores,
-        num_act_cb_tiles,               // row major act cb
-        num_act_cb_second_reader_tiles, // row major act cb second reader
-        num_weight_cb_tiles,            // tiled weight cb
-        num_cb0_tilized_tiles,          // tiled act cb
-        output_block_num_tiles,  // math output cb
-        weight_block_w_ntiles,          // reblock cb
-        writer_output_block_num_tiles,  // writer output cb, double bufferred
-        untilize_out,
-        act_df,
-        weight_df,
-        tilized_act_df,
-        out_df,
-        bias_df,
-        weight_width_sliced,
-        output,
-        bias_ntiles_per_core,
-        has_bias,
-        split_reader,
-        fp32_dest_acc_en,
-        packer_l1_acc_en);
+    tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
+    if (is_conv1d and is_depthwise_conv) {
+        input_output_cbs = create_CBs_for_depthwise_sharded_input(
+            program,
+            a,
+            all_cores,
+            num_act_cb_tiles,               // row major act cb
+            num_weight_cb_tiles,            // tiled weight cb
+            num_cb0_tilized_tiles,          // tiled act cb
+            writer_output_block_num_tiles,  // math output cb
+            weight_block_w_ntiles,          // reblock cb
+            writer_output_block_num_tiles,  // writer output cb, double bufferred
+            untilize_out,
+            act_df,
+            weight_df,
+            tilized_act_df,
+            out_df,
+            bias_df,
+            weight_width_sliced,
+            output,
+            bias_ntiles_per_core,
+            has_bias,
+            split_reader,
+            fp32_dest_acc_en,
+            packer_l1_acc_en);
+    }
+    else {
+        // TODO: Moving this function call to after kernel logic causes pcc fails
+        // There are additional CBs and semaphores created in 2D conv in kernel logic,
+        // so does order of create_cb calls matter?
+        input_output_cbs = create_CBs_for_sharded_input_v2(
+            program,
+            a,
+            all_cores,
+            num_act_cb_tiles,               // row major act cb
+            num_act_cb_second_reader_tiles, // row major act cb second reader
+            num_weight_cb_tiles,            // tiled weight cb
+            num_cb0_tilized_tiles,          // tiled act cb
+            output_block_num_tiles,  // math output cb
+            weight_block_w_ntiles,          // reblock cb
+            writer_output_block_num_tiles,  // writer output cb, double bufferred
+            untilize_out,
+            act_df,
+            weight_df,
+            tilized_act_df,
+            out_df,
+            bias_df,
+            weight_width_sliced,
+            output,
+            bias_ntiles_per_core,
+            has_bias,
+            split_reader,
+            fp32_dest_acc_en,
+            packer_l1_acc_en);
+    }
+    CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
+    CBHandle cb_output = std::get<1>(input_output_cbs);
 
     string reader_kernel;
     string compute_kernel;
@@ -911,8 +1049,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-    if (weight_size_h == weight_size_w and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
-        if (weight_width_sliced) {
+    if (weight_size_h >= 1 and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
+        if (!is_conv1d and weight_width_sliced) {
             // 2D conv
             assert(read_window_in_inner_loop == true);
             reader_kernel =
@@ -942,6 +1080,20 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
             tilize_in0 = false;
+        }
+        else if (is_conv1d and is_depthwise_conv) {
+            // 1D Depthwise Conv
+            TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+            TT_ASSERT(split_reader == false, "Split reader not supported for this conv yet!");
+
+            compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/compute_depthwise_conv1d.cpp";
+            reader_kernel =
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/reader_depthwise_conv1d.cpp";
+            writer_mcast_sender_kernel =
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
+            writer_mcast_receiver_kernel =
+                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/conv/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
+
         } else {
             // 1D conv
             TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));

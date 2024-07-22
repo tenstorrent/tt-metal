@@ -275,11 +275,13 @@ struct InterleavedTensorWorkerSlice {
         tt_xy_pair const& tensor_shape,  // Don't _really_ need this
         tt_xy_pair const& tensor_slice_shape,
         tt_xy_pair const& worker_slice_shape,
-        tt_xy_pair const& worker_slice_offset) :
+        tt_xy_pair const& worker_slice_offset,
+        bool worker_slice_is_wrapped=false) :
         tensor_shape(tensor_shape),
         tensor_slice_shape(tensor_slice_shape),
         worker_slice_shape(worker_slice_shape),
-        worker_slice_offset(worker_slice_offset) {}
+        worker_slice_offset(worker_slice_offset),
+        worker_slice_is_wrapped(worker_slice_is_wrapped) {}
 
     // Could probably be solved in some closed form
     std::size_t compute_num_worker_slice_iterations(std::size_t num_workers) const {
@@ -288,7 +290,8 @@ struct InterleavedTensorWorkerSlice {
         auto const& outer_slice_shape = coord_t(tensor_slice_shape.x, tensor_slice_shape.y);
         uint32_t num_iterations = 0;
         while (slice_offset.y < tensor_slice_shape.y && slice_offset.x < tensor_slice_shape.x) {
-            slice_offset =
+
+            slice_offset = worker_slice_is_wrapped ? ccl::advance_wrapped_slice_row_major(slice_offset, slice_shape, outer_slice_shape, num_workers) :
                 ccl::advance_slice_row_major(slice_offset, slice_shape, outer_slice_shape, num_workers);
             num_iterations++;
         }
@@ -304,9 +307,74 @@ struct InterleavedTensorWorkerSlice {
     tt_xy_pair tensor_slice_shape;
     tt_xy_pair worker_slice_shape;
     tt_xy_pair worker_slice_offset;
+
+    bool worker_slice_is_wrapped;
 };
 
-class RingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
+template <class DERIVED_SLICER_T>
+class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
+    public:
+    RingReduceScatterBaseTensorSlicer(
+        Tensor const& input_tensor,
+        Tensor const& output_tensor,
+        int slice_dim,
+        uint32_t ring_index,
+        uint32_t ring_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index, bool wrapped) {
+        return ccl::InterleavedTensorWorkerSlice(
+            this->flattened_tensor_shape,
+            this->tensor_slice_shape,
+            this->worker_slice_shapes.at(global_worker_index),
+            this->worker_slice_offsets.at(global_worker_index),
+            wrapped);
+    }
+
+    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
+    virtual void increment(uint32_t num_pages) override {
+        TT_FATAL(false, "deprecated code path for ");
+    }
+
+   public:
+    std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
+    uint32_t get_worker_slice_size_bytes(int worker_index) {
+        auto worker_slice_shape = this->worker_slice_shapes.at(worker_index);
+        return worker_slice_shape.x * worker_slice_shape.y * this->input_page_size;
+    }
+
+    void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
+        TT_FATAL("Row major interleaved not supported by Reduce Scatter");
+    }
+
+    // Static methods
+    static std::vector<tt_xy_pair> compute_worker_slice_offsets(
+        std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
+
+    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+        tt::tt_metal::Shape const& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages);
+
+    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_row_major_layout(
+        tt_xy_pair const& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements);
+
+
+    protected:
+    tt_xy_pair flattened_tensor_shape;
+    tt_xy_pair tensor_slice_shape;
+    std::vector<tt_xy_pair> worker_slice_shapes;
+    // For RowMajor - offset is in elements
+    // For Tile - offset is in tiles
+    std::vector<tt_xy_pair> worker_slice_offsets;
+
+};
+
+class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterTensorSlicer> {
    public:
     RingReduceScatterTensorSlicer(
         Tensor const& input_tensor,
@@ -319,46 +387,46 @@ class RingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
         uint32_t half_cb_n_pages);
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index) {
-        return ccl::InterleavedTensorWorkerSlice(
-            this->flattened_tensor_shape,
-            this->tensor_slice_shape,
-            this->worker_slice_shapes.at(global_worker_index),
-            this->worker_slice_offsets.at(global_worker_index));
-    }
-
-    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
-    virtual void increment(uint32_t num_pages) override {
-        TT_FATAL(false, "deprecated code path for ");
-    }
-
-   public:
-    std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
-    uint32_t get_worker_slice_size_bytes(int worker_index);
+        return this->RingReduceScatterBaseTensorSlicer::get_worker_slice(global_worker_index, false);} // False: Use the non wrapped version of the worker slice
 
     static std::vector<tt_xy_pair> compute_worker_slice_offsets(
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
-    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_row_major_layout(
-        tt_xy_pair const& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements);
-
-    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
         tt::tt_metal::Shape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
         uint32_t half_cb_n_pages);
 
-    void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
-        TT_FATAL("Row major interleaved not supported by Reduce Scatter");
-    }
+};
 
-   protected:
-    tt_xy_pair flattened_tensor_shape;
-    tt_xy_pair tensor_slice_shape;
-    std::vector<tt_xy_pair> worker_slice_shapes;
-    // For RowMajor - offset is in elements
-    // For Tile - offset is in tiles
-    std::vector<tt_xy_pair> worker_slice_offsets;
+// Define a class RingReduceScatterWrappedTensor slicer that inherits from RingReduceScatterBaseTensorSlicer and overwrites the compute_worker_slice_offsets and create_worker_slice_shapes_for_tile_layout functions
+class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterWrappedTensorSlicer> {
+   public:
+    RingReduceScatterWrappedTensorSlicer(
+        Tensor const& input_tensor,
+        Tensor const& output_tensor,
+        int slice_dim,
+        uint32_t ring_index,
+        uint32_t ring_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index) {
+        return this->RingReduceScatterBaseTensorSlicer::get_worker_slice(global_worker_index, true);} // True: Use the wrapped version of the worker slice
+
+    static std::vector<tt_xy_pair> compute_worker_slice_offsets(
+        std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
+
+    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+        tt::tt_metal::Shape const& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages);
+
 };
 
 class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {

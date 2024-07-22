@@ -24,7 +24,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
+operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_grad_impl(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
