@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -11,8 +11,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn {
 
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
@@ -25,13 +24,13 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<Shape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
     TT_ASSERT(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size");
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<Shape>(input_tensors.size(), shape);
+    return std::vector<tt::tt_metal::Shape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -59,6 +58,16 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->topology);
 }
 
+static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
+    switch (reduce_op) {
+        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
+
+        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
+    }
+}
+
+namespace operations{
+namespace ccl{
 std::vector<Tensor> reduce_scatter_impl(
     const std::vector<Tensor>& input_tensors,
     const ttnn::operations::binary::BinaryOpType binary_op_type,
@@ -85,7 +94,7 @@ std::vector<Tensor> reduce_scatter_impl(
             is_last_chip_in_counter_clockwise_direction
                 ? std::nullopt
                 : std::optional<chip_id_t>(input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id());
-        ops.emplace_back(ReduceScatter{
+        ops.emplace_back(ttnn::ReduceScatter{
             binary_op_type,
             scatter_dim,
             num_links,
@@ -100,14 +109,6 @@ std::vector<Tensor> reduce_scatter_impl(
     return output_tensors;
 }
 
-static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
-    switch (reduce_op) {
-        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
-
-        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
-    }
-}
-
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
     const uint32_t scatter_dim,
@@ -118,6 +119,7 @@ std::vector<Tensor> reduce_scatter(
     return reduce_scatter_impl(
         input_tensors, binary_op_type, scatter_dim, num_links, output_mem_config,ttnn::ccl::Topology::Ring);
 }
+} // namespace ccl
+} // namespace operations
 
-};  // namespace tt_metal
-};  // namespace tt
+};  // namespace ttnn

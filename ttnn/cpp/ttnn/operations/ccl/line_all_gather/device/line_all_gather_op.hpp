@@ -45,7 +45,6 @@ struct LineAllGather {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-
 namespace operations {
 namespace ccl {
 

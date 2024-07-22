@@ -11,8 +11,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn {
 
 struct ReduceScatter {
     const ttnn::operations::binary::BinaryOpType binary_op_type;
@@ -26,18 +25,11 @@ struct ReduceScatter {
     const ttnn::ccl::Topology topology;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 };
-
-std::vector<Tensor> reduce_scatter(
-    const std::vector<Tensor> &input_tensors,
-    const uint32_t scatter_split_dim,
-    ReduceOpMath reduce_op  = ReduceOpMath::SUM,
-    const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 namespace ccl {
 namespace reduce_scatter_detail {
@@ -55,5 +47,16 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 }
 }; // namespace ccl
 
-};  // namespace tt_metal
-};  // namespace tt
+namespace operations{
+namespace ccl{
+    std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor> &input_tensors,
+    const uint32_t scatter_split_dim,
+    ReduceOpMath reduce_op  = ReduceOpMath::SUM,
+    const uint32_t num_links = 1,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+} // namespace ccl
+} // namespace operations
+
+
+};  // namespace ttnn

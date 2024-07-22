@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import tt_lib as ttl
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
@@ -75,12 +76,12 @@ def run_reduce_scatter_test(
 
     # Run the op
     # for i in range(num_iters):
-    tt_out_tensors = ttl.tensor.reduce_scatter(
+    tt_out_tensors = ttnn.reduce_scatter(
         tt_input_tensors,
-        scatter_split_dim=scatter_dim,
-        reduce_op=math_op,
+        scatter_dim=scatter_dim,
+        math_op=math_op,
         num_links=num_links,
-        output_mem_config=mem_config,
+        memory_config=mem_config,
     )
 
     for d in devices:
