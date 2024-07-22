@@ -7,7 +7,7 @@
 #include "tt_metal/common/core_coord.h"
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"

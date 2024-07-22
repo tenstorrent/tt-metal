@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"

@@ -8,7 +8,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 #include "tt_metal/common/core_coord.h"

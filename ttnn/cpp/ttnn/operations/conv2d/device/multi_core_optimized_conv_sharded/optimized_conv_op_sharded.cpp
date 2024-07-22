@@ -15,7 +15,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 

@@ -9,7 +9,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::constants;
 using namespace std;

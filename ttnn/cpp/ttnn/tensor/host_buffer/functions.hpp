@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {

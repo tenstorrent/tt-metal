@@ -7,7 +7,7 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_numpy/functions.hpp"
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"
 
 using tt::tt_metal::Host;

@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
-#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"

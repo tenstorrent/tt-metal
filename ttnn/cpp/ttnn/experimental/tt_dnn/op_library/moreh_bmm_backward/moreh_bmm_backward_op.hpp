@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 
 namespace tt {

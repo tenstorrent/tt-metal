@@ -4,8 +4,8 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
 
-#include "tensor/tensor.hpp"
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/run_operation.hpp"

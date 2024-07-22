@@ -7,10 +7,10 @@
 #include <functional>
 #include <optional>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tensor/host_buffer/functions.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/run_operation.hpp"
 

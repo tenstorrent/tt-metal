@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/serialization.hpp"
+#include "ttnn/tensor/serialization.hpp"
 
 #include <cstdint>
 #include <fstream>
@@ -10,9 +10,9 @@
 #include <string>
 #include <type_traits>
 
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt {
 

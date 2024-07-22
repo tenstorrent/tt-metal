@@ -9,8 +9,8 @@
 #include <tuple>
 
 #include "impl/device/device.hpp"
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
 
 namespace tt::tt_metal::sliding_window {
 

@@ -9,7 +9,7 @@
 #include <tuple>
 #include <type_traits>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "third_party/json/json.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tools/profiler/profiler.hpp"

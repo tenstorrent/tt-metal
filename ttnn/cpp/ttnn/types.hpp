@@ -7,8 +7,8 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
-#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 namespace types {

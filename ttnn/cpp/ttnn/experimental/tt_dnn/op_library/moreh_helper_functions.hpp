@@ -9,7 +9,7 @@
 #include <optional>
 #include <variant>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

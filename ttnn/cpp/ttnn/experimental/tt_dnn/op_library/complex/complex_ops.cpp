@@ -7,7 +7,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_numpy/functions.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "ttnn/operation.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 

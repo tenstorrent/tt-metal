@@ -8,7 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 
 namespace ttnn {

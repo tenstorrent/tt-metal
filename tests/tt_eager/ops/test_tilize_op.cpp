@@ -8,9 +8,9 @@
 #include <tt_numpy/functions.hpp>
 
 #include "common/constants.hpp"
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "tt_metal/host_api.hpp"
 

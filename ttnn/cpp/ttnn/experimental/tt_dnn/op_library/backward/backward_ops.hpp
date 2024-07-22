@@ -5,9 +5,9 @@
 #pragma once
 #include <type_traits>
 
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_metal/common/constants.hpp"
 

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "tt_metal/common/core_coord.h"
 
 namespace tt::tt_metal {

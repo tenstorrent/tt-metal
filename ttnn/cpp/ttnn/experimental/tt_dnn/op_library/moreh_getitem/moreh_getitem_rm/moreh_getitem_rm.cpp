@@ -9,7 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/experimental/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 
 using namespace tt::constants;
 using namespace std;

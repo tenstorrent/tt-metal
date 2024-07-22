@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 
-#include "tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 
 namespace tt {
 

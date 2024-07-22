@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace tt::tt_metal {

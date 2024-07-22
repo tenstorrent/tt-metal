@@ -4,8 +4,8 @@
 
 #include <chrono>
 
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"

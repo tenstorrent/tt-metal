@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <experimental/type_traits>
-#include <tensor/tensor.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 #include "tt_metal/detail/program.hpp" /* Need this for GetKernel, which is used in CQ Set/Update Runtime Args Functions */
 #include "tt_metal/host_api.hpp"
