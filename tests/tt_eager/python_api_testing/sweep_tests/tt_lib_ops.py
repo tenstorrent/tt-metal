@@ -1552,7 +1552,7 @@ def prod(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.prod(t0, all_dimensions, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.prod(t0, all_dimensions, dim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
