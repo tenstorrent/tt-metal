@@ -37,7 +37,7 @@ run_perf_models_llm_javelin() {
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker --timeout=360
     fi
 
-    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker --timeout=900
+    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py

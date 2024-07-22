@@ -33,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "seq_len",
