@@ -76,3 +76,52 @@ RVO is an optimization technique that eliminates unnecessary copying or moving o
 ### Motivation
 - **Performance**: Ensures that RVO can be applied, minimizing unnecessary copying or moving of objects.
 - **Efficiency**: Maintains optimal performance by allowing the compiler to perform return value optimizations.
+
+## 7. Avoid `const T&&` or `const auto&&` and Returning `const` Values
+
+### Practice
+Never use `const T&&` or `const auto&&`, and never return `const` values from functions.
+
+### Explanation
+Using `const` rvalue references (`const T&&` or `const auto&&`) and returning `const` values from functions can prevent the compiler from optimizing the code. These practices block the use of move constructors, which are crucial for efficient resource management and performance optimization.
+
+### Motivation
+- **Performance**: Enables the use of move constructors, enhancing performance.
+- **Optimization**: Allows the compiler to optimize code more effectively.
+- **Efficiency**: Facilitates efficient resource management by leveraging move semantics.
+
+  ## 8. Use `std::move` with `emplace_back` and Prefer `push_back` When Appropriate
+
+### Practice
+The `emplace_back` call takes the same parameters as the constructor. Passing a type by value calls the copy constructor, negating the benefits of `emplace_back`. Use `std::move` when necessary, and consider using `push_back` with the same efficiency.
+
+### Explanation
+`emplace_back` constructs an element in place, avoiding unnecessary copies or moves when the arguments match the constructor parameters. However, if parameters are passed by value, a copy constructor is invoked. Using `std::move` ensures that resources are moved rather than copied. In some cases, `push_back` can be just as efficient and more straightforward.
+
+### Motivation
+- **Efficiency**: Ensures resources are moved, not copied, maintaining performance.
+- **Clarity**: Using `push_back` can be simpler and equally efficient in certain scenarios.
+- **Optimization**: Maximizes the benefits of in-place construction and move semantics.
+
+## 9. Move constructor should not throw. Mark Move Constructors as `noexcept`
+
+### Practice
+Move constructors should be marked as `noexcept`, otherwise many STL optimizations will not be applied.
+
+### Explanation
+The `noexcept` specifier indicates that a function does not throw exceptions. Marking move constructors as `noexcept` allows the Standard Library to perform various optimizations, such as using move operations in containers more effectively.
+
+### Motivation
+- **Performance**: Enables STL optimizations that rely on `noexcept` guarantees.
+- **Safety**: Clearly indicates that move operations are safe and will not throw exceptions.
+- **Efficiency**: Enhances the performance of STL containers by allowing move operations.
+
+## 10. Use the Copy-and-Swap Idiom
+
+### Practice
+Use the Copy-and-Swap idiom to avoid duplicating code between different constructors and assignment operators.
+
+### Explanation
+The Copy-and-Swap idiom is a robust and elegant method to implement copy assignment operators. It leverages the copy constructor and the swap method to provide strong exception safety and reduce code duplication.
+
+### Motivation
