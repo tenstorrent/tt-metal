@@ -636,18 +636,4 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3_wo_qid(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::ADD_BW:
-            return _add_bw_overload;
-        case BinaryBackwardOpType::EQ_BW:
-            return _eq_bw_overload;
-        case BinaryBackwardOpType::MUL_BW:
-            return _mul_bw_overload;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
 }  // namespace ttnn::operations::binary_backward
