@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_op.hpp"
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "tilize_with_val_padding_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 

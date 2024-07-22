@@ -4,7 +4,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/repeat/repeat_op.hpp"
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 

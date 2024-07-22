@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace tt::tt_metal::tensor_impl {
 

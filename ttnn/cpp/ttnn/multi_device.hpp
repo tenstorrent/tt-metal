@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/impl/device/multi_device.hpp"
 
 using Device = ttnn::Device;

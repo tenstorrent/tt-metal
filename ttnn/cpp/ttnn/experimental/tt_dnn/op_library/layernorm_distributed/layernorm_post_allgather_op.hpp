@@ -9,7 +9,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core.hpp"
 
 using namespace tt::constants;

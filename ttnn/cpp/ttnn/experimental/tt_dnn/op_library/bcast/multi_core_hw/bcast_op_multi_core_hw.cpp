@@ -6,7 +6,7 @@
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "tt_metal/common/constants.hpp"

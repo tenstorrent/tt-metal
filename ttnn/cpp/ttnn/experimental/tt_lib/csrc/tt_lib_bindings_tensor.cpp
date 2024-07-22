@@ -4,10 +4,10 @@
 
 #include "tt_lib_bindings_tensor.hpp"
 
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/serialization.hpp"
-#include "tensor/tensor_impl.hpp"
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/embeddings/embeddings_op.hpp"

@@ -5,8 +5,8 @@
 #include <chrono>
 #include <memory>
 
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

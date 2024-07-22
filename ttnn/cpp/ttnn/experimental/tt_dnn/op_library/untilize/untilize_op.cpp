@@ -6,7 +6,7 @@
 
 #include <math.h>
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"

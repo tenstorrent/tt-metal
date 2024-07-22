@@ -5,11 +5,11 @@
 #include <cstdint>
 
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include "tt_metal/common/constants.hpp"
 

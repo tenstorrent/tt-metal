@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"

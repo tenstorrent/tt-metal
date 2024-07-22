@@ -8,7 +8,7 @@
 #include <tuple>
 #include <fmt/core.h>
 
-#include "ttnn/experimental/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "utils.hpp"
 
 namespace tt::tt_metal {

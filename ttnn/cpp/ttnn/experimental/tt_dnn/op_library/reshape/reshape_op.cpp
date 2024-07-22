@@ -9,9 +9,9 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include <ttnn/experimental/tt_numpy/functions.hpp>
-#include <ttnn/experimental/tensor/tensor_impl.hpp>
+#include <ttnn/tensor/tensor_impl.hpp>
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <algorithm>
 

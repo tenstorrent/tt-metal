@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "common/core_coord.h"
 #include "impl/buffers/buffer.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"

@@ -6,7 +6,7 @@
 
 #include <functional>
 #include <optional>
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/types.hpp"
 

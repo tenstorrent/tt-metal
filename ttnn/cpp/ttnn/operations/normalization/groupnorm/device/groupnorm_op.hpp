@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;

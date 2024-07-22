@@ -4,11 +4,11 @@
 
 #include <tuple>
 
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/experimental/tt_numpy/functions.hpp"
 

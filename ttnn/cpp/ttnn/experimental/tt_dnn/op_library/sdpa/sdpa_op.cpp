@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include "common/base_types.hpp"
-#include "tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
