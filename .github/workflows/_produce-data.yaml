@@ -37,26 +37,37 @@ jobs:
           echo "orchestrator: github (Static)"
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
-      - name: Output auxiliary values (workflow dispatch)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Get workflow run_id attempt number to analyze
+        id: get-run-id-and-attempt
+        shell: bash
+        run: |
+          event_name="${{ github.event_name }}"
+          if [[ "$event_name" == "workflow_dispatch" ]]; then
+            run_id="${{ inputs.test_workflow_run_id }}"
+            attempt_number="1"
+          elif [[ "$event_name" == "workflow_run" ]]; then
+            run_id="${{ github.event.workflow_run.id }}"
+            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
+            [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
+          else
+            echo "Unknown event name" && exit 1
+          fi
+
+          echo $run_id
+          echo $attempt_number
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
+      - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1 > workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs > workflow_jobs.json
-      - name: Output auxiliary values (workflow_run completed)
-        if: ${{ github.event_name == 'workflow_run' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }} > workflow.json
-          echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs > workflow_jobs.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.8'
