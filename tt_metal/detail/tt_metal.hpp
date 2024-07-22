@@ -86,8 +86,8 @@ namespace tt::tt_metal{
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
-        void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true);
-        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true);
+        void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
         void WaitProgramDone(Device *device, Program &program);
 
         /**
@@ -116,12 +116,13 @@ namespace tt::tt_metal{
          *
          * Return value: void
          *
-         * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
-         * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
-         * | device       | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
-         * | program      | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
+         * | Argument            | Description                                                            | Type                          | Valid Range                        | Required |
+         * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+         * | device              | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
+         * | program             | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
+         * | force_slow_dispatch | Force allowing slow dispatch                                           | bool                          |                                    | No       |
          */
-        void WriteRuntimeArgsToDevice(Device *device, Program &program);
+        void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_dispatch = false);
 
         // Configures a given device with a given program.
         // - Loads all kernel binaries into L1s of assigned Tensix cores
