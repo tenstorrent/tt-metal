@@ -57,28 +57,30 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
           gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
-      - name: Output github context values to file
-        run: |
-          echo '${{ toJSON(github) }}' > github_context.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      - name: Install infra dependencies
+        run: pip3 install -r infra/requirements-infra.txt
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_pipeline_csvs.py
+        run: python3 .github/scripts/data_analysis/create_pipeline_csvs.py
       - name: Show directory to see output files
         run: ls -hal
       - name: Show CSVs output
         run: cat *.csv
-      - name: Upload context data, even on failure
+      - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: context-data
+          name: workflow-run-data
           path: |
             if-no-files-found: warn
             path: |
               workflow.json
               workflow_jobs.json
-              github_context.json
   test-produce-benchmark-environment:
     runs-on: ubuntu-latest
     steps:

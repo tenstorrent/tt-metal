@@ -80,7 +80,7 @@ def get_data_pipeline_datetime_from_datetime(requested_datetime):
     return requested_datetime.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def get_pipeline_row_from_github_info(github_context_json, github_pipeline_json, github_jobs_json):
+def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json):
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
 
@@ -95,7 +95,7 @@ def get_pipeline_row_from_github_info(github_context_json, github_pipeline_json,
     logger.warning("Using hardcoded value tt-metal for project value")
     project = "tt-metal"
 
-    trigger = github_context_json["event_name"]
+    trigger = github_runner_environment["github_event_name"]
 
     logger.warning("Using hardcoded value github for vcs_platform value")
     vcs_platform = "github"
@@ -216,22 +216,19 @@ def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
 
 
 def create_csvs_for_data_analysis(
-    github_context_json_filename,
+    github_runner_environment,
     github_pipeline_json_filename,
     github_jobs_json_filename,
     github_pipeline_csv_filename=None,
     github_jobs_csv_filename=None,
 ):
-    with open(github_context_json_filename) as github_context_json_file:
-        github_context_json = json.load(github_context_json_file)
-
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
         github_pipeline_json = json.load(github_pipeline_json_file)
 
     with open(github_jobs_json_filename) as github_jobs_json_file:
         github_jobs_json = json.load(github_jobs_json_file)
 
-    pipeline_row = get_pipeline_row_from_github_info(github_context_json, github_pipeline_json, github_jobs_json)
+    pipeline_row = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
 
     job_rows = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json)
 
@@ -271,6 +268,15 @@ def get_github_benchmark_environment_csv_filenames():
     )
     logger.info(f"The following environment CSVs should be created: {csv_filenames}")
     return csv_filenames
+
+
+def get_github_runner_environment():
+    assert "GITHUB_EVENT_NAME" in os.environ
+    github_event_name = os.environ["GITHUB_EVENT_NAME"]
+
+    return {
+        "github_event_name": github_event_name,
+    }
 
 
 def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv_filename):
