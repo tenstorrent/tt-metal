@@ -864,6 +864,7 @@ def run_all_gather_sharded(
         else:
             eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
         if not eq:
+            all_eq = False
             logger.error(f"output mismatch for tensor {i}")
     assert all_eq, f"{i} FAILED: {output}"
 

@@ -78,12 +78,12 @@ KernelHandle generate_edm_kernel(
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
-    log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
     edm_builder.dump_to_log();
 
     std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.emit_runtime_args();
     // Ethernet Kernels
     std::vector<uint32_t> eth_sender_ct_args = edm_builder.emit_compile_time_args();
+    log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
     for (auto const& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);

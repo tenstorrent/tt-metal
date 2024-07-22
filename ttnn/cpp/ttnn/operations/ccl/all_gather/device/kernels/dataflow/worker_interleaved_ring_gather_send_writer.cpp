@@ -100,5 +100,4 @@ void kernel_main() {
             pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
-
 }
