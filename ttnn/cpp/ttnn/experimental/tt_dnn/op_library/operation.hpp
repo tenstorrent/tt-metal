@@ -110,7 +110,9 @@ struct program_output_helper<ProgramType, false> {
 template <typename ProgramType>
 using ProgramOutputTensors = typename program_output_helper<ProgramType>::type;
 
-struct OpPerformanceModel {
+template<class OutputTensorsT=Tensors>
+struct OpPerformanceModelGeneral {
+    using OutputTensors = OutputTensorsT;
     int ideal_compute_cycles = 1;
     int ideal_compute_ns = 1;
     int ideal_bandwidth_ns = 1;
@@ -118,7 +120,7 @@ struct OpPerformanceModel {
     std::vector<int> inputs_bytes = {};
     std::vector<int> outputs_bytes = {};
 
-    OpPerformanceModel(Tensors input_tensors, Tensors output_tensors, int ideal_compute_cycles) {
+    OpPerformanceModelGeneral(Tensors input_tensors, OutputTensors output_tensors, int ideal_compute_cycles) {
         const auto& t = input_tensors.at(0);
         const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
 
@@ -160,18 +162,30 @@ struct OpPerformanceModel {
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
-
-        for (const auto& t : output_tensors) {
-            this->outputs_bytes.push_back(t.volume() * t.element_size());
-            if (tensor_ns(t) > this->ideal_bandwidth_ns) {
-                this->ideal_bandwidth_ns = tensor_ns(t);
+        if constexpr(std::is_same_v<OutputTensors, Tensors>) {
+            for (const auto& t : output_tensors) {
+                this->outputs_bytes.push_back(t.volume() * t.element_size());
+                if (tensor_ns(t) > this->ideal_bandwidth_ns) {
+                    this->ideal_bandwidth_ns = tensor_ns(t);
+                }
+            }
+        } else {
+            for (const auto& ot : output_tensors) {
+                if (!ot.has_value())
+                    continue;
+                auto& t = ot.value();
+                this->outputs_bytes.push_back(t.volume() * t.element_size());
+                if (tensor_ns(t) > this->ideal_bandwidth_ns) {
+                    this->ideal_bandwidth_ns = tensor_ns(t);
+                }
             }
         }
 
+
         this->ideal_ns = std::max(this->ideal_compute_ns, this->ideal_bandwidth_ns);
     }
-    OpPerformanceModel() = default;
-    ~OpPerformanceModel() = default;
+    OpPerformanceModelGeneral() = default;
+    ~OpPerformanceModelGeneral() = default;
 
     int get_compute_ns() const { return this->ideal_compute_ns; }
     int get_ideal_ns() const { return this->ideal_ns; }
@@ -207,6 +221,8 @@ struct OpPerformanceModel {
         return 0;
     }
 };
+
+using OpPerformanceModel = OpPerformanceModelGeneral<>;
 
 struct ProfilerInfo {
     std::optional<std::string> preferred_name;
@@ -464,7 +480,7 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, output_tensors);
     }
 
-    inline OpPerformanceModel create_op_performance_model(
+    inline OpPerformanceModelGeneral<OutputTensors> create_op_performance_model(
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
@@ -586,7 +602,7 @@ struct DeviceOperation final {
         create_output_tensors_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
-               const OptionalTensors& output_tensors) -> const Tensors {
+               const OptionalTensors& output_tensors) -> const OutputTensors {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
                     return operation.create_output_tensors(input_tensors, output_tensors);
@@ -614,12 +630,12 @@ struct DeviceOperation final {
             [](const storage_t& storage,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
-               OutputTensors& output_tensors) -> OpPerformanceModel {
+               OutputTensors& output_tensors) -> OpPerformanceModelGeneral<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_op_performance_model<T>()) {
                     return operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors);
                 } else {
-                    return OpPerformanceModel(
+                    return OpPerformanceModelGeneral<OutputTensors>(
                         input_tensors, output_tensors, 1);  // TODO: account for optional_input_tensors
                 }
             }},
@@ -712,7 +728,7 @@ struct DeviceOperation final {
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
-    OpPerformanceModel (*create_op_performance_model_impl_)(
+    OpPerformanceModelGeneral<OutputTensors> (*create_op_performance_model_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
     void (*override_runtime_arguments_impl_)(
         const storage_t& value,
