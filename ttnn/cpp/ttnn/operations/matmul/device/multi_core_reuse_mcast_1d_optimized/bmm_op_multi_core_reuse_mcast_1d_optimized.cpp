@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/common_values.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"

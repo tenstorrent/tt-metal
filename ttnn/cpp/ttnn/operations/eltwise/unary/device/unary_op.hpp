@@ -12,7 +12,7 @@
 #include "ttnn/experimental/tensor/host_buffer/functions.hpp"
 #include "ttnn/experimental/tensor/tensor_utils.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 
 namespace ttnn::operations::unary {

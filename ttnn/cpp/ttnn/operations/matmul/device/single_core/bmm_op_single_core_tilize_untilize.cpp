@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 

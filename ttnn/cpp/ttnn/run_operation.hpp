@@ -8,8 +8,8 @@
 #include <ttnn/experimental/tensor/tensor.hpp>
 
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operation_history.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/type_name.hpp"
 

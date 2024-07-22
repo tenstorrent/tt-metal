@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 
 #include "ttnn/cpp/ttnn/types.hpp"

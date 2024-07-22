@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
 #include "ttnn/experimental/tensor/tensor_impl.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"

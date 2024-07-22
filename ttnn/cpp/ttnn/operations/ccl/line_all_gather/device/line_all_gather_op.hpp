@@ -14,7 +14,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include <optional>
 #include <vector>
