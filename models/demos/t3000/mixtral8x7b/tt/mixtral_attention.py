@@ -161,7 +161,7 @@ class TtMixtralAttention(LightweightModule):
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
         current_pos: start_pos
-        rot_mats: list of rotation matrices for each device
+        rot_mats: rotation matrix for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
@@ -279,6 +279,19 @@ class TtMixtralAttention(LightweightModule):
         return dense_outputs_11BH
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+        """
+        x: (1, 1, seq_len, hidden_dim)
+        attn_masks: (1, 1, seq_len, seq_len)
+        rot_mats: rotation matrices for each device
+        transformation_mats: transformation matrix (rotary embedding) for each device
+        user_id: user id for the kv cache
+
+        Tensors are postfixed with 4 characters that represent their 4-D shape:
+        S : seq_len
+        H : dim (4096)
+        D : head_dim (128)
+        """
+
         seq_len = xs_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 

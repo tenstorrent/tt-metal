@@ -168,20 +168,6 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
     )
 
 
-def get_chunk_size(s):
-    if s <= 32:
-        return 32
-    if s <= 64:
-        return 32
-    if s <= 128:
-        return 32
-    if s <= 256:
-        return 256
-    if s <= 2048:
-        return 512
-    return 512
-
-
 def nearest_n(x, n):
     return ((x + n - 1) // n) * n
 
