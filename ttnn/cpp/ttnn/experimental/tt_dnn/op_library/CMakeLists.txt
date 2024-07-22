@@ -164,10 +164,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_prefix_scan/multi_core_ssm_prefix_scan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_tiled.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_last_dim_two_chunks_tiled.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/operation_history.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/concat/multi_core/concat_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/concat/concat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/multi_core/repeat_op_multi_core.cpp
