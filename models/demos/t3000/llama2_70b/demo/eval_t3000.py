@@ -121,7 +121,6 @@ def main(args, eval_data_args):
     return perplexity
 
 
-@pytest.mark.timeout(240000)
 @pytest.mark.parametrize(
     "llama_version",
     [
