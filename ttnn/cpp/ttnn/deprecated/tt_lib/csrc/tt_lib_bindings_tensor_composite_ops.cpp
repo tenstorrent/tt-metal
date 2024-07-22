@@ -8,8 +8,11 @@
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace tt::tt_metal::detail {
+using ComplexTensor = ttnn::operations::complex_binary::ComplexTensor;
+
 void TensorModuleCompositeOPs(py::module& m_tensor) {
     m_tensor.def(
         "pow",
@@ -1536,15 +1539,15 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
 	    // *** type-2 complex operations in new submodule 'type2_complex' ***
         auto m_type2_cplx = m_tensor.def_submodule("complex", "Complex type2");
-        py::class_<tt::tt_metal::ComplexTensor> pycplx_cls(m_type2_cplx, "ComplexTensor");
+        py::class_<ComplexTensor> pycplx_cls(m_type2_cplx, "ComplexTensor");
 
-        pycplx_cls.def_property_readonly("real",&tt::tt_metal::ComplexTensor::real);
-        pycplx_cls.def_property_readonly("imag",&tt::tt_metal::ComplexTensor::imag);
-        pycplx_cls.def("deallocate",&tt::tt_metal::ComplexTensor::deallocate);
+        pycplx_cls.def_property_readonly("real",&ComplexTensor::real);
+        pycplx_cls.def_property_readonly("imag",&ComplexTensor::imag);
+        pycplx_cls.def("deallocate",&ComplexTensor::deallocate);
 
         m_tensor.def("complex_tensor",
-		     [](Tensor& r, Tensor& i) -> tt::tt_metal::ComplexTensor {
-		       return tt::tt_metal::ComplexTensor({r,i});
+		     [](Tensor& r, Tensor& i) -> ComplexTensor {
+		       return ComplexTensor({r,i});
 		     },
             py::arg("real"),
             py::arg("imag"),

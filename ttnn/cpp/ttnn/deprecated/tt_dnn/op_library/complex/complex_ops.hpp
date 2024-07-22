@@ -44,34 +44,6 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config 
 
 //////// 2-tensor representation without split-concat and associated dimensional restrictions ////////
 
-class ComplexTensor {
-    private:
-        std::array<Tensor,2> m_real_imag;
-
-    public:
-
-        ComplexTensor(std::array<Tensor,2> val): m_real_imag(val) {
-            TT_ASSERT( m_real_imag[0].get_legacy_shape() == m_real_imag[1].get_legacy_shape() , "Tensor shapes of real and imag should be identical");
-        }
-
-        const Tensor& operator[](uint32_t index) const {
-            return m_real_imag[index];
-        }
-
-        const Tensor& real() const {
-            return m_real_imag[0];
-        }
-
-        const Tensor& imag() const {
-            return m_real_imag[1];
-        }
-
-        void deallocate() {
-            m_real_imag[0].deallocate();
-            m_real_imag[1].deallocate();
-        }
-};
-
 //polar operator: return a complex value tensor
 Tensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

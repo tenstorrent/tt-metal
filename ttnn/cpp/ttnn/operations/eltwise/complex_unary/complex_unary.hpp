@@ -12,6 +12,7 @@
 namespace ttnn {
 
 namespace operations::complex_unary {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 //OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 template <ComplexUnaryOpType complex_unary_op_type>

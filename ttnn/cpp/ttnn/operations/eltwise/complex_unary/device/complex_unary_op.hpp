@@ -9,8 +9,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::complex_unary {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexUnaryOpType {

@@ -19,6 +19,7 @@ namespace operations {
 namespace complex_unary {
 
 namespace detail {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 //OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 template <typename complex_unary_operation_t>
