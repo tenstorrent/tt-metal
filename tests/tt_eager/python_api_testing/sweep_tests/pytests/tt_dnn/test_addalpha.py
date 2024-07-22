@@ -66,12 +66,7 @@ def test_run_addalpha(
     )
     comparison_func = comparison_funcs.comp_pcc
     run_single_pytorch_test(
-        f"eltwise-{fn_kind}",
-        input_shapes,
-        datagen_func,
-        comparison_func,
-        device,
-        test_args,
+        f"eltwise-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
     )
 
 

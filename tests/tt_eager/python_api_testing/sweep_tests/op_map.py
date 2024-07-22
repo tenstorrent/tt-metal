@@ -544,10 +544,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_subalpha,
         "pytorch_op": pytorch_ops.subalpha,
     },
-    "eltwise-addalpha": {
-        "tt_op": tt_lib_ops.eltwise_addalpha,
-        "pytorch_op": pytorch_ops.addalpha,
-    },
     "eltwise-addalpha-optional": {
         "tt_op": tt_lib_ops.eltwise_addalpha_optional,
         "pytorch_op": pytorch_ops.addalpha,

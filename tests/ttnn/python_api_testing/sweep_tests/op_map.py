@@ -709,6 +709,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_scale_mask_softmax_in_place,
         "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
     },
+    "addcmul-bw": {
+        "tt_op": ttnn_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
     "unary-add-bw": {
         "tt_op": ttnn_ops.unary_add_bw,
         "pytorch_op": pytorch_ops.unary_add_bw,
@@ -744,6 +748,10 @@ op_map = {
     "clamp-min-bw": {
         "tt_op": ttnn_ops.clamp_min_bw,
         "pytorch_op": pytorch_ops.clamp_min_bw,
+    }
+    "eltwise-addalpha": {
+        "tt_op": ttnn_ops.eltwise_addalpha,
+        "pytorch_op": pytorch_ops.addalpha,
     },
     "rsub-bw": {
         "tt_op": ttnn_ops.rsub_bw,
