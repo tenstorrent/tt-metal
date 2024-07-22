@@ -71,7 +71,7 @@ def test_mistral_model_perf(
     }
     profiler.end("weight_loading")
 
-    prompts = ["This is a test"] * 32
+    prompts = ["This is a test"] * model_args.max_batch_size
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Embedding on host
