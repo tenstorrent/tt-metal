@@ -34,9 +34,7 @@ using namespace tt::constants;
 // with that received chunk. It will forward the partially reduced chunk.
 // Reduces along rank
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn {
 
 namespace ccl {
 namespace reduce_scatter_detail {
@@ -394,7 +392,7 @@ static void add_worker_config_to_edm_builders(
 }
 
 static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
-    tt_metal::Program& program,
+    tt::tt_metal::Program& program,
     Device const* device,
    ttnn::ccl::RingTopology const& topology_config,
    ttnn::ccl::CCLOpConfig const& op_config,
@@ -415,9 +413,9 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     static std::string const& receiver_kernel_path =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
+        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
     static std::string const& sender_kernel_path =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/reduce_scatter/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
+        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
 
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
@@ -439,13 +437,13 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                 ? edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index);
 
-        worker_receiver_kernel_id = tt_metal::CreateKernel(
+        worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
             program,
             receiver_kernel_path,
             worker_core,
-            tt_metal::ReaderDataMovementConfig(worker_arg_builder.generate_receiver_kernel_ct_args(), worker_defines));
+            tt::tt_metal::ReaderDataMovementConfig(worker_arg_builder.generate_receiver_kernel_ct_args(), worker_defines));
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             worker_receiver_kernel_id,
             worker_core,
@@ -463,18 +461,18 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
         std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
-        KernelHandle worker_reduce_kernel_id = tt_metal::CreateKernel(
+        KernelHandle worker_reduce_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
             worker_core,
-            tt_metal::ComputeConfig{
+            tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args,
                 .defines = eltwise_defines});
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             worker_reduce_kernel_id,
             worker_core,
@@ -496,13 +494,13 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
             is_in_clockwise_direction
                 ? edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index);
-        worker_sender_kernel_id = tt_metal::CreateKernel(
+        worker_sender_kernel_id = tt::tt_metal::CreateKernel(
             program,
             sender_kernel_path,
             worker_core,
-            tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
+            tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             worker_sender_kernel_id,
             worker_core,
@@ -608,7 +606,7 @@ static bool is_cb_buffering_sufficient_to_avoid_deadlock(
     std::size_t edm_channel_buffer_size,
     uint32_t page_size) {
     uint32_t worker_size_pages_rounded_up =
-        round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / 2);
+        tt::round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / 2);
     uint32_t worker_slice_size_bytes = worker_size_pages_rounded_up * page_size;
     uint32_t available_buffering_capacity = compute_maximum_worker_slice_in_bytes(
         cb_src0_size_pages, cb_dst0_size_pages, cb_short_circuit_size_pages, edm_channel_buffer_size, page_size);
@@ -630,37 +628,37 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
    ttnn::ccl::CCLOpConfig const& op_config,
     CoreRangeSet const& worker_core_range,
     uint32_t worker_pages_per_transfer,
-    tt_metal::Program& program) {
-    tt::DataFormat df = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::tt_metal::Program& program) {
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t page_size_bytes = op_config.get_page_size();
 
     // Input 0 CB
-    uint32_t src0_cb_index = CB::c_in0;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{src0_cb_index, df}})
+    uint32_t src0_cb_index = tt::CB::c_in0;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size_bytes);
     CBHandle cb_src0_workers = CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
     // Input 1 CB
-    uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{src1_cb_index, df}})
+    uint32_t src1_cb_index = tt::CB::c_in1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{src1_cb_index, df}})
             .set_page_size(src1_cb_index, page_size_bytes);
     CBHandle cb_src1_workers = CreateCircularBuffer(program, worker_core_range, cb_src1_config);
 
     // Dataflow Writer Kernel input CB
-    uint32_t cb_dst0_index = CB::c_out0;
-    tt_metal::CircularBufferConfig cb_dst0_config =
-        tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{cb_dst0_index, df}})
+    uint32_t cb_dst0_index = tt::CB::c_out0;
+    tt::tt_metal::CircularBufferConfig cb_dst0_config =
+        tt::tt_metal::CircularBufferConfig(worker_pages_per_transfer * page_size_bytes, {{cb_dst0_index, df}})
             .set_page_size(cb_dst0_index, page_size_bytes);
     CBHandle cb_dst0_sender_workers = CreateCircularBuffer(program, worker_core_range, cb_dst0_config);
 
     // From reader -> writer kernel (I think I need this because sharing the cb_dst0_sender_workers as output
     // of reader kernel (first output) and math kernel (all subsequent outputs) doesn't seem to work because
     // it seems like the math kernels hold some of the CB state in local variables)
-    uint32_t cb_short_circuit_index = CB::c_out1;
-    tt_metal::CircularBufferConfig cb_short_circuit_config =
-        tt_metal::CircularBufferConfig(
+    uint32_t cb_short_circuit_index = tt::CB::c_out1;
+    tt::tt_metal::CircularBufferConfig cb_short_circuit_config =
+        tt::tt_metal::CircularBufferConfig(
             (worker_pages_per_transfer * page_size_bytes) * 2, {{cb_short_circuit_index, df}})
             .set_page_size(cb_short_circuit_index, page_size_bytes);
     CBHandle cb_short_circuit_sender_workers =
@@ -699,7 +697,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensors.at(0));
     uint32_t per_step_dim_size = input_tensors.at(0).get_legacy_shape()[scatter_split_dim] / ring_size;
     uint32_t input_tensor_num_units_per_scatter_dim =
-        per_step_dim_size / constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
+        per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
     TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
     uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_scatter_dim);
     bool enable_bidirectional = false;
@@ -727,21 +725,21 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     //////////////////
-    tt_metal::Program program{};
+    tt::tt_metal::Program program{};
     const auto& device = local_chip_tensor.device();
 
     auto const& topology_config =
        ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
-    auto dim_slice_factors = Shape(std::vector<uint32_t>(local_chip_tensor.get_legacy_shape().rank(), 1));
+    auto dim_slice_factors = tt::tt_metal::Shape(std::vector<uint32_t>(local_chip_tensor.get_legacy_shape().rank(), 1));
     dim_slice_factors[-1] = ring_size;
 
     CoreRangeSet const& worker_core_range = select_worker_cores(op_config, num_links, num_edm_channels);
     auto const& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
 
     // Semaphores && CBs
-    auto worker_receiver_semaphore_address = tt_metal::CreateSemaphore(program, worker_core_range, 0);
-    auto worker_sender_semaphore_address = tt_metal::CreateSemaphore(program, worker_core_range, 0);
+    auto worker_receiver_semaphore_address = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
+    auto worker_sender_semaphore_address = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
 
     uint32_t cb_num_pages =
         (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size()) * 2;
@@ -801,7 +799,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     // build the worker kernels
-    tt_metal::ComputeConfig compute_config;
+    tt::tt_metal::ComputeConfig compute_config;
     for (std::size_t link = 0; link < num_links; link++) {
         uint32_t global_worker_index = link * num_edm_channels;
         log_trace(tt::LogOp, "==============================================");
@@ -889,5 +887,4 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
 }  // namespace reduce_scatter_detail
 }  // namespace ccl
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn
