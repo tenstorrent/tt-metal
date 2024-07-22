@@ -38,6 +38,7 @@ jobs:
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
+        timeout-minutes: 3
         run: |
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local
