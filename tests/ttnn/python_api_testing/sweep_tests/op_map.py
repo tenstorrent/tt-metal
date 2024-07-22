@@ -717,4 +717,12 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_add_bw,
         "pytorch_op": pytorch_ops.add_bw,
     },
+    "unary-div-bw": {
+        "tt_op": ttnn_ops.unary_div_bw,
+        "pytorch_op": pytorch_ops.unary_div_bw,
+    },
+    "div-bw": {
+        "tt_op": ttnn_ops.div_bw,
+        "pytorch_op": pytorch_ops.div_bw,
+    },
 }

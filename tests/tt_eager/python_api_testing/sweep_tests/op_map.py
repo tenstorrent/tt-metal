@@ -1174,10 +1174,6 @@ op_map = {
         "tt_op": tt_lib_ops.complex_imag,
         "pytorch_op": pytorch_ops.complex_imag,
     },
-    "unary-div-bw": {
-        "tt_op": tt_lib_ops.unary_div_bw,
-        "pytorch_op": pytorch_ops.unary_div_bw,
-    },
     "unary-mul-bw": {
         "tt_op": tt_lib_ops.unary_mul_bw,
         "pytorch_op": pytorch_ops.unary_mul_bw,
@@ -1189,10 +1185,6 @@ op_map = {
     "binary-assign-bw": {
         "tt_op": tt_lib_ops.binary_assign_bw,
         "pytorch_op": pytorch_ops.binary_assign_bw,
-    },
-    "div-bw": {
-        "tt_op": tt_lib_ops.div_bw,
-        "pytorch_op": pytorch_ops.div_bw,
     },
     "addcdiv-bw": {
         "tt_op": tt_lib_ops.addcdiv_bw,
