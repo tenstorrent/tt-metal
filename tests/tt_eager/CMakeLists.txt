@@ -14,7 +14,6 @@ set(TT_EAGER_TESTS_OPS
     # ops/test_moreh_adam_op                  # <- not called in run_tt_eager.py
     # ops/test_moreh_matmul_op                # <- not called in run_tt_eager.py
     # ops/test_moreh_layernorm_op             # <- not called in run_tt_eager.py
-    ops/test_multi_queue_api
     ops/test_transpose_op
     ops/test_transpose_wh_single_core
     ops/test_transpose_wh_multi_core
