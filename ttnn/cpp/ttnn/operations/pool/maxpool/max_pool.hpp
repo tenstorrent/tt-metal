@@ -8,7 +8,7 @@
 #include "ttnn/types.hpp"
 #include "tensor/tensor.hpp"
 #include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 

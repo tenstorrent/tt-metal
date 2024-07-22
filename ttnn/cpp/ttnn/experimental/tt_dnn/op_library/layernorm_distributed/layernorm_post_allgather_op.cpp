@@ -4,7 +4,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"

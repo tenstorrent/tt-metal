@@ -4,11 +4,11 @@
 
 #include "tt_metal/common/logger.hpp"
 #include "impl/buffers/buffer.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sdpa/sdpa_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

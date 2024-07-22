@@ -4,8 +4,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/experimental/queue/queue.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace tt::tt_metal
 {
