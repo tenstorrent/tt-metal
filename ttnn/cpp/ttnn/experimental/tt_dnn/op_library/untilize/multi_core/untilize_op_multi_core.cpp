@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                                                             output.element_size();
         uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
         num_output_rows_unpadded = num_rows_block - (round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
-        end_core = (*shard_spec.grid.ranges().begin()).end;
+        end_core = (*shard_spec.grid.ranges().begin()).end_coord;
     }
 
     uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
@@ -625,8 +625,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto grid = *shard_spec.grid.ranges().begin();
-    uint32_t ncores_x = grid.end.x + 1;
-    uint32_t ncores_y = grid.end.y + 1;
+    uint32_t ncores_x = grid.end_coord.x + 1;
+    uint32_t ncores_y = grid.end_coord.y + 1;
     auto all_cores = shard_spec.grid;
     uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
