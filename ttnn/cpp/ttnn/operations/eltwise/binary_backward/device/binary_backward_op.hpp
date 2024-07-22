@@ -45,7 +45,6 @@ enum class BinaryBackwardOpType {
 struct BinaryBackwardFunction{
 static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType); //get_function_binary_bw
 static std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType);
-static std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3(BinaryBackwardOpType OpType);
 static std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType);
 };
 
@@ -76,6 +75,11 @@ std::vector<ttnn::Tensor> _concat_bw( const Tensor& grad, const Tensor& input, c
 //OpHandler_binary_bw_opt_float_default : get_function_binary_bw_opt_float_default
 std::vector<std::optional<ttnn::Tensor>> _addalpha_bw( uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt, const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true}, std::optional<Tensor> input_grad = std::nullopt, std::optional<Tensor> other_grad = std::nullopt);
 
+//OpHandler_binary_bw_opt : get_function_binary_bw_opt
+std::vector<std::optional<ttnn::Tensor>> _add_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
+std::vector<std::optional<ttnn::Tensor>> _mul_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
+std::vector<std::optional<ttnn::Tensor>> _eq_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
+
 // OpHandler struct template
 template <BinaryBackwardOpType OpType>
 struct OpHandler;
@@ -101,6 +105,9 @@ struct OpHandler<BinaryBackwardOpType::HYPOT_BW> {
         return _hypot_bw(grad, input, other, output_mem_config);
     }
 };
+
+template <BinaryBackwardOpType OpType>
+struct OpHandler_binary_bw_opt;
 
 template <>
 struct OpHandler<BinaryBackwardOpType::LDEXP_BW> {
@@ -177,12 +184,31 @@ struct OpHandler<BinaryBackwardOpType::CONCAT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const std::optional<MemoryConfig>& output_mem_config ) {
         return _concat_bw(grad, input, other, dim, output_mem_config);
     }
+}
+
+struct OpHandler_binary_bw_opt<BinaryBackwardOpType::ADD_BW> {
+    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+        return _add_bw(queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+    }
 };
 
 template <>
 struct OpHandler<BinaryBackwardOpType::LERP_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, float weight, const std::optional<MemoryConfig>& output_mem_config ) {
         return _lerp_bw(grad, input, other, weight, output_mem_config);
+    }
+}
+
+struct OpHandler_binary_bw_opt<BinaryBackwardOpType::MUL_BW> {
+    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+        return _mul_bw(queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw_opt<BinaryBackwardOpType::EQ_BW> {
+    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+        return _eq_bw(queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
     }
 };
 
@@ -216,4 +242,10 @@ template <BinaryBackwardOpType OpType>
 auto get_function_binary_bw_float() {
     return &OpHandler<OpType>::handle;
 }
+
+template <BinaryBackwardOpType OpType>
+auto get_function_binary_bw_opt() {
+    return &OpHandler_binary_bw_opt<OpType>::handle;
+}
+
 }  // namespace ttnn::operations::binary_backward
