@@ -288,23 +288,20 @@ constexpr auto logit = ttnn::register_operation_with_auto_launch_op<
 constexpr auto celu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::celu",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
-
-
 constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();
-
 constexpr auto triu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::triu",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIU>>();
-
-
 constexpr auto round = ttnn::register_operation_with_auto_launch_op<
     "ttnn::round",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::ROUND>>();
-
 constexpr auto polygamma = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
+constexpr auto rpow = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::rpow",
+    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::RPOW>>();
 
 }  // namespace ttnn

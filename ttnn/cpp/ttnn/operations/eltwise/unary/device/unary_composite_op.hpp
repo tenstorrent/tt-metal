@@ -56,8 +56,8 @@ enum class UnaryCompositeOpType {
     LOGIT,
     CELU,
     LOGICAL_NOT_,
+    RPOW,
 };
-
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -95,7 +95,6 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
-Tensor _rdiv(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -378,7 +377,7 @@ struct OpHandler<UnaryCompositeOpType::HARDSHRINK> {
     static Tensor handle(const Tensor& t1, float lambd, const std::optional<MemoryConfig>& mem_cfg ) {
         return _hardshrink(t1, lambd, mem_cfg);
     }
-};
+}
 
 template <>
 struct OpHandler<UnaryCompositeOpType::SOFTSHRINK> {
@@ -410,4 +409,10 @@ struct OpHandler<UnaryCompositeOpType::LOGICAL_NOT_> {
     }
 };
 
+template <>
+struct OpHandler<UnaryCompositeOpType::RPOW> {
+    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _rpow(t1, param, mem_cfg);
+    }
+};
 }
