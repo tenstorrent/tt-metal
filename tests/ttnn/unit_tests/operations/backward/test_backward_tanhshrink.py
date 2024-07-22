@@ -20,13 +20,10 @@ def test_bw_tanhshrink(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
 
-    pyt_y = torch.nn.functional.tanhshrink(in_data)
     tt_output_tensor_on_device = ttnn.tanhshrink_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

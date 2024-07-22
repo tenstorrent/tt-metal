@@ -21,14 +21,10 @@ def test_bw_i0(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, required_grad=True)
     in_data = in_data.float()
 
-    pyt_y = torch.i0(in_data)
-
     tt_output_tensor_on_device = ttnn.i0_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.i0_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

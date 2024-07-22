@@ -21,16 +21,10 @@ def test_bw_relu(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    pyt_y = torch.relu(in_data)
-
     tt_output_tensor_on_device = ttnn.relu_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = list()
-    golden_tensor.append(in_data.grad)
+    golden_function = ttnn.get_golden_function(ttnn.relu_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
