@@ -2,19 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
+#include "paged_cache_operation.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include "paged_update_cache_program_factory.hpp"
+#include "paged_fill_cache_program_factory.hpp"
 
-using namespace tt::constants;
-
-namespace tt {
-namespace operations {
-namespace primary {
+namespace ttnn::operations::experimental::paged_cache {
 
 
-void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& cache_tensor = input_tensors.at(0);
     const auto& input_tensor = input_tensors.at(1);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE and cache_tensor.storage_type() == StorageType::DEVICE, "Operands to update_cache need to be on device!");
@@ -61,7 +57,7 @@ void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const 
             // must be iterleaved
             TT_FATAL(update_idxs_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
             // must be in dram
-            TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+            TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM);
         } else {
             num_indices = this->update_idxs.size();
         }
@@ -102,17 +98,17 @@ void PagedUpdateCache::validate(const std::vector<Tensor>& input_tensors, const 
     }
 }
 
-std::vector<Shape> PagedUpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+const std::vector<tt::tt_metal::Shape> PagedUpdateCacheDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-std::vector<Tensor> PagedUpdateCache::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> PagedUpdateCacheDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-operation::ProgramWithCallbacks PagedUpdateCache::create_program(
+operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -126,24 +122,22 @@ operation::ProgramWithCallbacks PagedUpdateCache::create_program(
             if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
                 const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
                 const auto page_table = optional_input_tensors.at(1);
-                return paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config);
+                return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config);
             } else {
                 const auto& page_table = input_tensors.at(2);
-                return paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);
+                return detail::paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);
             }
     };
 }
 
 
-PagedUpdateCacheOpParallelizationStrategy PagedUpdateCache::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+PagedUpdateCacheOpParallelizationStrategy PagedUpdateCacheDeviceOperation::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE;
 }
 
-const operation::Hash PagedUpdateCache::compute_program_hash(
+const operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<PagedUpdateCache>(this->op_type, input_tensors, optional_input_tensors);
+    return operation::hash_operation<PagedUpdateCacheDeviceOperation>(this->op_type, input_tensors, optional_input_tensors);
 }
 
-}   // namespace primary
-}   // namespace operations
-}   // namespace tt
+}  // namespace ttnn::operations::experimental::paged_cache

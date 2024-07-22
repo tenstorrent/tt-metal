@@ -2,22 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
-
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/common/core_coord.h"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include <stdint.h>
-#include <optional>
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
+#include "paged_cache_operation.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+
+namespace ttnn::operations::experimental::paged_cache::detail {
 
 using namespace tt::constants;
-
-namespace tt {
-namespace operations {
-namespace primary {
+using namespace tt;
 
 bool enable_fp32_dest(const DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
     bool fp32_dest_acc_en;
@@ -217,19 +213,19 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     auto unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/paged_update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/paged_update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/paged_update_cache/kernels/compute/update_cache.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp",
         all_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
@@ -288,7 +284,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
-        const std::vector<uint32_t> update_idxs = static_cast<const PagedUpdateCache*>(operation)->update_idxs;
+        const std::vector<uint32_t> update_idxs = static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
         auto src_buffer = input_tensors.at(1).buffer();
 
@@ -335,6 +331,4 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-}   // namespace primary
-}   // namespace operations
-}   // namespace tt
+}  // ttnn::operations::experimental::paged_cache::detail
