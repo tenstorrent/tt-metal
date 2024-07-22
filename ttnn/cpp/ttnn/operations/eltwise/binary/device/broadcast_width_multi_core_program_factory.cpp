@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_device_operation.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"

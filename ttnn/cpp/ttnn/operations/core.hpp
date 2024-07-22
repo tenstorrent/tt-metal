@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/experimental/tensor/tensor.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"

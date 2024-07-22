@@ -71,6 +71,7 @@ set(TTNN_SRCS
 
 ### Setup TTNN as a shared library with optional Python bindings
 add_subdirectory(cpp/ttnn/experimental)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
 set(TTNN_FINAL_SRC
     ${TTNN_SRCS}
     ${QUEUE_SRCS}
@@ -83,8 +84,6 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/tt_metal
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental # symlink to tt_eager; should become native folder once merge complete
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tensor
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/queue
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt)
 set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_common_libs tt_metal linker_flags) # linker_flags = -rdynamic if tracy enabled

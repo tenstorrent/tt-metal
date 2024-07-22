@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "ttnn/experimental/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 namespace ccl {

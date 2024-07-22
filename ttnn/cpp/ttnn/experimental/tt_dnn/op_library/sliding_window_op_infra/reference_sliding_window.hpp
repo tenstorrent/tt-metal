@@ -8,11 +8,11 @@
 #include <cstdlib>
 
 #include "common/bfloat16.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/types.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;

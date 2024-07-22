@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"

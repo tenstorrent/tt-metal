@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace tt {
 

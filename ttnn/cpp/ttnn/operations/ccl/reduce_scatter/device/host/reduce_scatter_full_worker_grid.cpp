@@ -7,7 +7,7 @@
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/kernels/data_types.hpp"
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"

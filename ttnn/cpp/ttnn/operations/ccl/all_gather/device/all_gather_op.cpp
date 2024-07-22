@@ -7,7 +7,7 @@
 
 #include "tt_metal/host_api.hpp"
 
-#include "tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "eth_l1_address_map.h"
 

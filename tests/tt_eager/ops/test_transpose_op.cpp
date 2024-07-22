@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include <tt_numpy/functions.hpp>
 

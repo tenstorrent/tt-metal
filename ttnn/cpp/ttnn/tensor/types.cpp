@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt {
 

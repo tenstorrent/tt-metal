@@ -4,7 +4,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "eth_l1_address_map.h"
-#include "tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <limits>
 
