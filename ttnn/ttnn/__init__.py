@@ -140,6 +140,7 @@ from ttnn.types import (
 
 from ttnn.device import (
     Device,
+    DispatchCoreType,
     open_device,
     close_device,
     enable_program_cache,
