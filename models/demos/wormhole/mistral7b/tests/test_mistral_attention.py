@@ -17,6 +17,7 @@ from models.demos.wormhole.mistral7b.reference.model import Attention
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    disable_persistent_kernel_cache,
 )
 from models.utility_functions import skip_for_grayskull
 
