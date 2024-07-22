@@ -14,9 +14,13 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_simple_l1_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute/binary/single_core_binary_compute.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute/matmul/single_core_matmul_compute.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute/sfpu/sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_golden_impls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_reduce.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_binary_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_matmul_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_tilize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_adjacent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_contains.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_intersects.cpp

@@ -16,11 +16,8 @@ set (TT_METAL_TESTS
     test_datacopy_output_in_l1
     test_dataflow_cb
     test_transpose_hc
-    test_transpose_wh
     test_multiple_programs
     test_multi_core_kernel
-    test_unpack_tilize
-    test_untilize
     test_interleaved_layouts
     test_interleaved_l1_buffer
     test_bcast
@@ -28,9 +25,6 @@ set (TT_METAL_TESTS
     # test_3x3conv_as_matmul_large_block        <- not tested in run_tt_metal.py
     # test_l1_to_l1_multi_core                    <- test borked
     test_dram_copy_sticks_multi_core
-    test_reduce_h
-    test_reduce_w
-    test_reduce_hw
     test_untilize_eltwise_binary
     test_bfp8_conversion
     # test_bfp4_conversion            <- not tested in run_tt_metal.py
