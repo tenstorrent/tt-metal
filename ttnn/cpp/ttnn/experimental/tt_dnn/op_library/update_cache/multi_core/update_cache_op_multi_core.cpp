@@ -92,8 +92,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         num_batched_heads_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end.x + 1;
-        num_cores_y = bbox.end.y + 1;
+        num_cores_x = bbox.end_coord.x + 1;
+        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(num_cores, all_cores, core_group_1, core_group_2, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
@@ -353,8 +353,8 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
         num_blocks_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end.x + 1;
-        num_cores_y = bbox.end.y + 1;
+        num_cores_x = bbox.end_coord.x + 1;
+        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_blocks_of_work, row_major);

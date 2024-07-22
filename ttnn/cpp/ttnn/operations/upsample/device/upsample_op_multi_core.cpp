@@ -55,8 +55,8 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(in_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this restriction", in_nsticks_per_core, in_w);
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end.x + 1;
-        ncores_nhw = all_cores.ranges().begin()->end.y + 1;
+        ncores_x = all_cores.ranges().begin()->end_coord.x + 1;
+        ncores_nhw = all_cores.ranges().begin()->end_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     } else {

@@ -81,7 +81,7 @@ inline Tensor interleaved_to_sharded(
                         grid_set = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
                     } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
                         auto bbox = grid.bounding_box();
-                        grid_size = CoreCoord{bbox.end.x + 1, bbox.end.y + 1};
+                        grid_size = CoreCoord{bbox.end_coord.x + 1, bbox.end_coord.y + 1};
                         grid_set = grid;
                     }
                 },
@@ -110,7 +110,7 @@ inline Tensor interleaved_to_sharded(
             const auto& input_tensor = input_tensors.at(0);
             TT_FATAL(sharded_mem_config.is_sharded());
             auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
-            CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
+            CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
             return operation::run(
                     Sharded{
                         .grid_size = grid_size,

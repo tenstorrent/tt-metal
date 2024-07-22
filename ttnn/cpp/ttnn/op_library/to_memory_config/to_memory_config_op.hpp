@@ -73,7 +73,7 @@ struct ToMemoryConfig {
                 }
             } else {
                 auto bbox = memory_config.shard_spec.value().grid.bounding_box();
-                CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
+                CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
                 return operation::run(
                            Sharded{
                                .grid_size = grid_size,

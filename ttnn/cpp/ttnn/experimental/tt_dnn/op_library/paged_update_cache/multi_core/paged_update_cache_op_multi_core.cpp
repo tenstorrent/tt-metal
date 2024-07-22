@@ -85,8 +85,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     num_batched_heads_per_core = shard_spec.value().shape[0] / TILE_HEIGHT;
     num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
     auto bbox = all_cores.bounding_box();
-    num_cores_x = bbox.end.x + 1;
-    num_cores_y = bbox.end.y + 1;
+    num_cores_x = bbox.end_coord.x + 1;
+    num_cores_y = bbox.end_coord.y + 1;
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_cache_tiles = 2 * Wt; // double buffered

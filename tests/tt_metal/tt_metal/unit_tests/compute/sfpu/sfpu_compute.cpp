@@ -208,19 +208,11 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .compile_args = compute_kernel_args,
                 .defines = sfpu_defines});
 
-        int chip_id = 0;
-        CoresInCoreRangeGenerator cores_in_core_range(core_range, device->logical_grid_size());
-
-        bool terminate;
-
-        do {
-            auto [core_coord, terminate_] = cores_in_core_range();
-
-            terminate = terminate_;
-
+        for (const CoreCoord& core_coord : core_range)
+        {
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
-        } while (not terminate);
+        }
     }
 
     std::vector<uint32_t> dest_buffer_data;

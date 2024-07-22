@@ -2080,17 +2080,17 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
         return NOC_MULTICAST_ENCODING(
-            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
-            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start_coord.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start_coord.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end_coord.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
         return NOC_MULTICAST_ENCODING(
-            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y),
-            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
-            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y)
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end_coord.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end_coord.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start_coord.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start_coord.y)
         );
     }
 }
