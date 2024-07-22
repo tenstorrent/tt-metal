@@ -1,0 +1,26 @@
+name: "Upload artifact with a uuid"
+description: "Upload artifact with a uuid for later identification with the job"
+
+inputs:
+  path:
+    description: "Paths to pass to upload-artifact and upload"
+    required: true
+  prefix:
+    description: "Artifact name prefix"
+    default: "artifact_"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate artifact name
+      id: generate-artifact-name
+      shell: bash
+      run: |
+        uuid=$(uuidgen)
+        artifact_name="${{ inputs.prefix }}$uuid"
+        echo "[UPLOAD-ARTIFACT-UUID] $artifact_name"
+        echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: "${{ steps.generate-artifact-name.outputs.artifact-name }}"
+        path: ${{ inputs.path }}

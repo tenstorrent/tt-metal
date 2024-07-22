@@ -17,6 +17,7 @@ import multiprocess
 import signal
 import time
 import psutil
+from datetime import datetime
 
 from loguru import logger
 
@@ -588,3 +589,12 @@ def reset_tensix(tt_open_devices=None):
 @pytest.hookimpl(tryfirst=True)
 def pytest_xdist_auto_num_workers(config):
     return 1
+
+
+@pytest.fixture(scope="function", autouse=True)
+def record_test_timestamp(record_property):
+    start_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
+    record_property("start_timestamp", start_timestamp)
+    yield
+    end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
+    record_property("end_timestamp", end_timestamp)
