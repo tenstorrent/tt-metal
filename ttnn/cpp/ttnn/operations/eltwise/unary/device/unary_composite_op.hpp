@@ -57,10 +57,6 @@ enum class UnaryCompositeOpType {
     SOFTSHRINK,
     BIAS_GELU_UNARY,
     LOGIT,
-    LOGICAL_XORI,
-    LOGICAL_NOTI,
-    LOGICAL_ANDI,
-    LOGICAL_ORI,
     CELU,
     GLU,
 };
@@ -113,6 +109,7 @@ Tensor _logical_xori(const Tensor& a, float param, const std::optional<MemoryCon
 Tensor _logical_noti(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_andi(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logical_ori(const Tensor& a, float param, const std::optional<MemoryConfig>& );
+Tensor _logit(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _celu(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _glu(const Tensor& a, int32_t dim, const std::optional<MemoryConfig>& );
 
@@ -400,32 +397,7 @@ struct OpHandlerWithFloat<UnaryCompositeOpType::LOGIT> {
         return _logit(t1, param, mem_cfg);
     }
 };
-template <>
-struct OpHandlerWithFloat<UnaryCompositeOpType::LOGICAL_ANDI> {
-    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _logical_andi(t1, param, mem_cfg);
-    }
-};
 
-template <>
-struct OpHandlerWithFloat<UnaryCompositeOpType::LOGICAL_XORI> {
-    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _logical_xori(t1, param, mem_cfg);
-    }
-};
-template <>
-struct OpHandlerWithFloat<UnaryCompositeOpType::LOGICAL_NOTI> {
-    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _logical_noti(t1, param, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandlerWithFloat<UnaryCompositeOpType::LOGICAL_ORI> {
-    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _logical_ori(t1, param, mem_cfg);
-    }
-};
 
 template <>
 struct OpHandlerWithFloat<UnaryCompositeOpType::CELU> {

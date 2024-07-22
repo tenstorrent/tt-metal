@@ -720,36 +720,6 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
     return logit_result;
 }
 
-Tensor _logical_andi(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
-    if (std::fpclassify(immediate) == FP_ZERO) {
-        return full_like(input_a, immediate);
-    } else {
-        return ttnn::nez(input_a);
-    }
-}
-
-Tensor _logical_noti(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_imm = full_like(input_a, immediate);
-    Tensor result = ttnn::logical_not(t_imm, output_mem_config);
-    return result;
-}
-
-Tensor _logical_xori(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    if (std::fpclassify(value) == FP_ZERO) {
-        return ttnn::nez(input_a);
-    } else {
-        return ttnn::eqz(input_a);  // eqz( input_a ) = not( nez( input_a ) )
-    }
-}
-
-Tensor _logical_ori(const Tensor& input_a, float immediate, const std::optional<MemoryConfig>& output_mem_config) {
-    if (std::fpclassify(immediate) == FP_ZERO) {
-        return ttnn::nez(input_a, output_mem_config);
-    } else {
-        return full_like(input_a, 1);
-    }
-}
-
 // Celu
 // torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
 Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfig>& output_mem_config) {

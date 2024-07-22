@@ -156,10 +156,6 @@ Pointwise Unary
    ttnn/softplus
    ttnn/softshrink
    ttnn/bias_gelu_unary
-   ttnn/logical_andi
-   ttnn/logical_xori
-   ttnn/logical_noti
-   ttnn/logical_ori
    ttnn/softsign
    ttnn/swish
    ttnn/tan

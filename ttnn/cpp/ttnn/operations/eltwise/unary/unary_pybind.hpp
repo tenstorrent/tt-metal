@@ -1348,10 +1348,6 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_with_float(module, ttnn::softshrink);
     detail::bind_unary_composite_with_float(module, ttnn::bias_gelu_unary);
     detail::bind_unary_composite_with_float(module, ttnn::logit);
-    detail::bind_unary_composite_with_float(module, ttnn::logical_xori);
-    detail::bind_unary_composite_with_float(module, ttnn::logical_noti);
-    detail::bind_unary_composite_with_float(module, ttnn::logical_andi);
-    detail::bind_unary_composite_with_float(module, ttnn::logical_ori);
     detail::bind_unary_composite_with_float(module, ttnn::celu);
 
     // unary composite with int imported into ttnn
