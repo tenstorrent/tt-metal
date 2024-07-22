@@ -717,4 +717,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_add_bw,
         "pytorch_op": pytorch_ops.add_bw,
     },
+    "eltwise-rdiv": {
+        "tt_op": ttnn_ops.eltwise_rdiv,
+        "pytorch_op": pytorch_ops.eltwise_rdiv,
+    },
 }
