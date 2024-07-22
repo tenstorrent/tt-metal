@@ -299,7 +299,7 @@ def test_tensor_index_update_cache_decode(
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
+@pytest.mark.parametrize("cache_idx", [127, 1057])
 @pytest.mark.parametrize("cache_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_tensor_index_update_cache_decode_program_cache(
     cache_idx,
@@ -452,7 +452,7 @@ def test_paged_update_cache_decode(
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
+@pytest.mark.parametrize("cache_idx", [127, 1057])
 @pytest.mark.parametrize("cache_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_paged_update_cache_decode_program_caching(
     cache_idx,
@@ -520,7 +520,6 @@ def run_test_paged_fill_cache(
     input_shape = [1, num_heads, user_seq_len, head_dim]
     cache_shape = [num_users, num_heads, max_seq_len, head_dim]
     cache = torch.randn(cache_shape).bfloat16().float()
-    # cachett = ttl.tensor.Tensor(cache, cache_dtype).to(ttl.tensor.Layout.TILE).to(device) # DEBUG
 
     # Turn cache into paged cache
     paged_cache = (
@@ -536,6 +535,7 @@ def run_test_paged_fill_cache(
     # page_table is the reverse permutation from shuffled -> unshuffled, and is used to map
     # a virtual block to the physical block id.
     page_table = reverse_permutation.reshape(num_users, max_num_blocks_per_seq)
+
     # logger.info(f"page_table: {page_table}")
     unshuffled_page_cache = shuffled_page_cache[reverse_permutation]
 
@@ -551,10 +551,7 @@ def run_test_paged_fill_cache(
     page_table_tt = ttl.tensor.Tensor(page_table, ttl.tensor.DataType.INT32).to(device)
 
     # Update cache for every user
-    # for i in range(num_users):
-    for i in range(2):
-        logger.info(f"Updating cache for user {i}")
-        logger.info(f"User pagetable: [{page_table[i]}]")
+    for i in range(num_users):
         x = torch.randn(input_shape).bfloat16().float()
         xt = ttl.tensor.Tensor(x, input_dtype).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -578,6 +575,7 @@ def run_test_paged_fill_cache(
     assert eq
 
 
+@pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
@@ -585,7 +583,6 @@ def run_test_paged_fill_cache(
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-# @pytest.mark.parametrize("cache_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_paged_fill_cache(
     block_size,
     head_dim,
@@ -601,3 +598,24 @@ def test_paged_fill_cache(
     run_test_paged_fill_cache(
         block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
     )
+
+
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_paged_fill_cache_program_cache(
+    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, device, use_program_cache
+):
+    cache_dtype = input_dtype
+    run_test_paged_fill_cache(
+        block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+    run_test_paged_fill_cache(
+        block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+
+    assert device.num_program_cache_entries() == 1

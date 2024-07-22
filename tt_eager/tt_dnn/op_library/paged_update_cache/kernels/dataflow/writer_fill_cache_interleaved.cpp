@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 template<uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(uint32_t seq_tile_idx, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
@@ -14,7 +13,6 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(uint32_t seq_tile_idx, volatile
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
     const uint32_t physical_block = page_table_ptr[virtual_block];
-    DPRINT << "WRITER: virtual_block: " << virtual_block << " physical_block: " << physical_block << ENDL();
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + block_offset;
@@ -37,14 +35,6 @@ void kernel_main() {
     constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(7);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(8);
 
-    DPRINT << "WRITER: num_heads: " << num_heads << ENDL();
-    DPRINT << "WRITER: block_size_t: " << block_size_t << ENDL();
-    DPRINT << "WRITER: Wt: " << Wt << ENDL();
-    DPRINT << "WRITER: log2_page_table_stick_size: " << log2_page_table_stick_size << ENDL();
-    DPRINT << "WRITER: page_table_stick_size: " << page_table_stick_size << ENDL();
-    DPRINT << "WRITER: start_row_num: " << start_row_num << ENDL();
-    DPRINT << "WRITER: num_rows: " << num_rows << ENDL();
-    DPRINT << "WRITER: batch_idx: " << batch_idx << ENDL();
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
@@ -70,7 +60,6 @@ void kernel_main() {
 
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
         uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(row_id, page_table_ptr);
-        DPRINT << "WRITER: row_id: " << row_id << " physical_tile_id: " << physical_tile_id << ENDL();
         cb_wait_front(cb_id_in, Wt);
         uint32_t l1_read_addr = get_read_ptr(cb_id_in);
         for (uint32_t w = 0; w < Wt; ++w) {
@@ -78,7 +67,7 @@ void kernel_main() {
             l1_read_addr += tile_bytes;
             physical_tile_id += 1;
         }
-        noc_async_read_barrier();
+        noc_async_write_barrier();
         cb_pop_front(cb_id_in, Wt);
     }
 

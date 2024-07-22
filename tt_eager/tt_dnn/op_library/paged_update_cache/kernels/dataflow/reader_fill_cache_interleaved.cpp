@@ -7,15 +7,12 @@
 
 void kernel_main() {
     const uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_rows = get_arg_val<uint32_t>(3);
-    // TODO: use start row so we can read Wt tiles at a time before pushign
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
+    const uint32_t num_rows = get_arg_val<uint32_t>(2);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
-
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);

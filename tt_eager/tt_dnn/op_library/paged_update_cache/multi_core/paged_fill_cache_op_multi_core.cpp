@@ -19,33 +19,11 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-// bool enable_fp32_dest(const DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
-//     bool fp32_dest_acc_en;
-//     std::visit([&](auto&& compute_kernel_config) {
-//         using T = std::decay_t<decltype(compute_kernel_config)>;
-//         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-//             TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
-//             fp32_dest_acc_en = false;
-//         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-//             TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
-//             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-//         } else {
-//             TT_FATAL("arch not supported");
-//         }
-
-//     }, compute_kernel_config);
-
-//     return fp32_dest_acc_en;
-// }
-
 operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const Tensor &page_table_tensor, const uint32_t batch_idx) {
     Program program{};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-
-    // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
-    // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within reader/writer
 
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
@@ -66,10 +44,9 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
 
     uint32_t num_blocks_of_work = num_heads * input_seq_len_t;
 
-    log_warning("[paged_fill_cache]: num_blocks_of_work: {}", num_blocks_of_work);
-
     // Pagetable-specific parameters
     uint32_t page_table_stick_size_B = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
+    TT_FATAL(page_table_stick_size_B % 32 == 0, "page table page size in bytes must be a multiple of 32 due to address alignment. Must make `max_seq_len / block_size * 4B % 32 == 0`");
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 
@@ -86,10 +63,9 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
 
     CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
 
-    uint32_t num_input_tiles;
     row_major = true;
     std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size,  num_blocks_of_work, row_major);
-    num_input_tiles = Wt * 2; // double buffered
+    uint32_t num_input_tiles = Wt * 2; // double buffered
 
     tt::CB src0_cb_index = tt::CB::c_in0;
     tt::CB page_table_cb_index = tt::CB::c_in1;
@@ -144,9 +120,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    log_warning("[paged_fill_cache] runtime args by core for batch_idx {}", batch_idx);
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
-        log_warning("[paged_fill_cache] core {}", i);
         const CoreCoord &core = cores.at(i);
         uint32_t num_blocks_per_core = 0;
         if (i < g1_numcores) {
@@ -157,8 +131,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
             num_blocks_per_core = 0;
         }
 
-        log_warning("[paged_fill_cache] num_blocks_per_core {}", num_blocks_per_core);
-        log_warning("[paged_fill_cache] num_blocks_written {}", num_blocks_written);
         tt_metal::SetRuntimeArgs(
             program,
             unary_reader_kernel_id,
@@ -179,26 +151,21 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
                 page_table_buffer->address(),
                 num_blocks_written, // start_row_num
                 num_blocks_per_core, // num_rows
-                i, // batch_idx
+                batch_idx, // batch_idx
             }
         );
         num_blocks_written+=num_blocks_per_core;
     }
 
     auto override_runtime_args_callback = [
-            // unary_reader_kernel_id,
-            // unary_writer_kernel_id,
-            // cb_src0,
-            // cores,
-            // g1_numcores,
-            // core_group_1,
-            // num_blocks_per_core_group_1,
-            // core_group_2,
-            // num_blocks_per_core_group_2,
-            // Wt,
-            // input_Ht,
-            // cache_HtWt,
-            // cache_CHtWt
+            unary_reader_kernel_id,
+            unary_writer_kernel_id,
+            cores,
+            g1_numcores,
+            g2_numcores,
+            num_blocks_per_core_group_1,
+            num_blocks_per_core_group_2,
+            Wt
         ]
     (
         const void* operation,
@@ -207,41 +174,40 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
     ) {
-        // const auto batch_idx = static_cast<const UpdateCache*>(operation)->batch_idx;
-        // const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
+        const auto batch_idx = static_cast<const PagedUpdateCache*>(operation)->batch_idx;
 
-        // uint32_t update_idxt = update_idx / TILE_HEIGHT;
-        // uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+        auto dst_addr = input_tensors.at(0).buffer()->address();
+        auto src_addr = input_tensors.at(1).buffer()->address();
+        auto page_table_addr = input_tensors.at(2).buffer()->address();
 
-        // auto src_buffer = input_tensors.at(1).buffer();
+        auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
 
-        // auto dst_buffer = input_tensors.at(0).buffer();
+        for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++){
+            const CoreCoord &core = cores.at(i);
+            uint32_t num_blocks_per_core = 0;
+            if (i < g1_numcores) {
+                num_blocks_per_core = num_blocks_per_core_group_1;
+            } else if (i < g1_numcores + g2_numcores) {
+                num_blocks_per_core = num_blocks_per_core_group_2;
+            } else {
+                num_blocks_per_core = 0;
+            }
 
-        // for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++){
-        //     const CoreCoord &core = cores.at(i);
-        //     uint32_t num_blocks_per_core = 0;
-        //     if (i < g1_numcores) {
-        //         num_blocks_per_core = num_blocks_per_core_group_1;
-        //     } else {
-        //         num_blocks_per_core = num_blocks_per_core_group_2;
-        //     }
+            auto& reader_args = reader_args_by_core.at(core.x).at(core.y);
+            reader_args[0] = src_addr;
+            reader_args[1] = num_blocks_written*Wt; // start_tile_id
+            reader_args[2] = num_blocks_per_core; // num_rows
 
-        //     {
-        //         auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-        //         runtime_args[0] = src_buffer->address();
-        //     }
+            auto& writer_args = writer_args_by_core.at(core.x).at(core.y);
+            writer_args[0] = dst_addr;
+            writer_args[1] = page_table_addr;
+            writer_args[2] = num_blocks_written; // start_row_num
+            writer_args[3] = num_blocks_per_core; // num_rows
+            writer_args[4] = batch_idx; // batch_idx
 
-        //     {
-        //         const uint32_t cache_start_id = start_idx // user batch start
-        //             + num_blocks_written / input_Ht * cache_HtWt // cache head offset
-        //             + (num_blocks_written % input_Ht) * Wt; // seq_len offset
-
-        //         auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-        //         runtime_args[0] = dst_buffer->address();
-        //         runtime_args[2] = cache_start_id;
-        //     }
-        //     num_blocks_written += num_blocks_per_core;
-        // }
+            num_blocks_written += num_blocks_per_core;
+        }
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
