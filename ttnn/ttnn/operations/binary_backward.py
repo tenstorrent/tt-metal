@@ -54,16 +54,36 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
             return _golden_function_complex_sub(grad_tensor, input_tensor_a, input_tensor_b, alpha)
         elif torch_op == torch.mul:
             return _golden_function_complex_mul(grad_tensor, input_tensor_a, input_tensor_b)
+    elif torch_op == torch.add or torch_op == torch.sub or torch_op == torch.mul:
+        return _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b)
     if torch_op == "torch.squared_difference":
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
-    elif torch_op == torch.clone:
+    else:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b=None, *args, **kwargs):
+    if torch_op == torch.clone:
         pyt_y = torch.clone(input_tensor_a)
+        input_tensor_a.retain_grad()
+        pyt_y.backward(gradient=grad_tensor)
+        if input_tensor_b == None:
+            golden_tensor = [input_tensor_a.grad]
+            return golden_tensor
+        else:
+            golden_tensor = [input_tensor_a.grad, input_tensor_a.grad]
+            return golden_tensor
+    pyt_y = torch_op(input_tensor_a, input_tensor_b)
+    if isinstance(input_tensor_b, (float, int)):
         input_tensor_a.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
         golden_tensor = [input_tensor_a.grad]
         return golden_tensor
-    else:
-        pyt_y = torch_op(input_tensor_a, input_tensor_b)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -99,22 +119,31 @@ def _golden_function_backward_with_float(
     return golden_tensor
 
 
-def _golden_function_backward_with_string(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_backward_with_string(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, **kwargs
+):
     if torch.is_complex(input_tensor_a):
         if torch_op == torch.div:
             return _golden_function_complex_div(grad_tensor, input_tensor_a, input_tensor_b)
-    if torch_op == bias_gelu:
+    if torch_op == "bias_gelu_bw":
         sum_result = torch.add(input_tensor_a, input_tensor_b)
-        pyt_y = torch.nn.functional.gelu(sum_result)
+        pyt_y = torch.nn.functional.gelu(sum_result, approximate=value)
         sum_result.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
-        golden_tensor = [sum_result.grad, sum_result.grad]
+        if isinstance(input_tensor_b, (float, int)):
+            golden_tensor = [sum_result.grad]
+        else:
+            golden_tensor = [sum_result.grad, sum_result.grad]
         return golden_tensor
-    value = kwargs.pop("value")
-    if torch_op == torch.div:
+    elif torch_op == torch.div:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
     else:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
+    if isinstance(input_tensor_b, (float, int)):
+        input_tensor_a.retain_grad()
+        pyt_y.backward(gradient=grad_tensor)
+        golden_tensor = [input_tensor_a.grad]
+        return golden_tensor
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -123,7 +152,10 @@ def _golden_function_backward_with_string(torch_op, grad_tensor, input_tensor_a,
 
 
 def _golden_function_comparison_ops(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    golden_tensor = [torch.zeros_like(input_tensor_a), torch.zeros_like(input_tensor_b)]
+    if isinstance(input_tensor_b, (float, int)):
+        golden_tensor = [torch.zeros_like(input_tensor_a)]
+    else:
+        golden_tensor = [torch.zeros_like(input_tensor_a), torch.zeros_like(input_tensor_b)]
     return golden_tensor
 
 
@@ -138,6 +170,20 @@ ttnn.attach_golden_function(
     ttnn.add_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
         torch.add, grad, a, b, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.remainder_bw,
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_overload(
+        torch.remainder, grad, a, b, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.fmod_bw,
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_overload(
+        torch.fmod, grad, a, b, *args, **kwargs
     ),
 )
 
@@ -213,7 +259,7 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.assign_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+    golden_function=lambda grad, a, b=None, *args, **kwargs: _golden_function_backward_overload(
         torch.clone, grad, a, b, *args, **kwargs
     ),
 )
@@ -241,8 +287,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.bias_gelu_bw,
-    golden_function=lambda grad, a, b, value, *args, **kwargs: _golden_function_backward_with_string(
-        torch.gelu, grad, a, b, value, *args, **kwargs
+    golden_function=lambda grad, a, b, value="none", *args, **kwargs: _golden_function_backward_with_string(
+        "bias_gelu_bw", grad, a, b, value, *args, **kwargs
     ),
 )
 
@@ -290,8 +336,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.div_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_with_string(
-        torch.div, grad, a, b, *args, **kwargs
+    golden_function=lambda grad, a, b, value=None, *args, **kwargs: _golden_function_backward_with_string(
+        torch.div, grad, a, b, value, *args, **kwargs
     ),
 )
 
