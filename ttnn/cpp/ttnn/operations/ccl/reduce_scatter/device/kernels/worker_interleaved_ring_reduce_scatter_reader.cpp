@@ -220,6 +220,8 @@ void kernel_main() {
     uint32_t total_cb_pages_pushed = 0;
     uint32_t total_cb_pages_pushed_to_math = 0;
 
+
+
     // For the first timestep, there is no other input to reduce with, so we just send it straight to the input CB
     // of the output data movement kernel - short-circuiting past the (reducer) math kernel
     // For tile => shape in tiles
@@ -234,7 +236,7 @@ void kernel_main() {
             width_sliced ? args.tensor_slice_shape.x * start_ring_index
                          : args.tensor_slice_shape.y * start_ring_index * args.input_tensor_shape.x;
 
-        auto const& next_slice_offset = advance_slice_row_major(
+        auto const& next_slice_offset = advance_wrapped_slice_row_major(
             args.worker_slice_offset, args.worker_slice_shape, args.tensor_slice_shape, args.num_concurrent_workers);
         bool last_slice_of_worker = next_slice_offset.x >= args.tensor_slice_shape.x ||
                                     next_slice_offset.y >= args.tensor_slice_shape.y;
@@ -244,9 +246,14 @@ void kernel_main() {
         const uint32_t starting_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
         uint32_t curr_tile_id = starting_tile_id;
 
-        coord_t valid_worker_slice_shape = coord_t(
-            std::min(args.worker_slice_shape.x, args.tensor_slice_shape.x - args.worker_slice_offset.x),
-            std::min(args.worker_slice_shape.y, args.tensor_slice_shape.y - args.worker_slice_offset.y));
+
+        // Set the valid_worker_slice_shape
+        coord_t valid_worker_slice_shape = args.worker_slice_shape;
+        if (args.worker_slice_offset.y == args.tensor_slice_shape.y - 1) { // Worker is on last row of tensor_slice
+            if (args.tensor_slice_shape.x - args.worker_slice_offset.x < args.worker_slice_shape.x) { // Worker is cutoff by the end of the tensor_slice
+                valid_worker_slice_shape.x = args.tensor_slice_shape.x - args.worker_slice_offset.x;
+            }
+        }
 
         bool last_page_of_worker = false;
         uint32_t const worker_slice_n_pages = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
@@ -254,16 +261,18 @@ void kernel_main() {
             (args.num_transfers - 1) * worker_slice_n_pages + total_cb_pages_pushed_to_math <=
             args.total_eltwise_kernel_num_pages);
         {
-            coord_t offset_into_worker_slice = {0, 0};
+            uint32_t offset_into_worker_slice = 0;
             for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
                 uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
                 ASSERT(!last_page_of_worker);
-                read_chunk_from_output_tensor_v2(
+                read_wrapped_chunk_from_output_tensor(
                     curr_tile_id,
                     offset_into_worker_slice,
+                    args.worker_slice_offset, // Offset into tensor slice
                     valid_worker_slice_shape,
                     // In tiles for tile layout
                     args.input_tensor_shape,
+                    args.tensor_slice_shape,
                     to_dm_sender_short_circuit_cb,
                     args.s,
                     n_pages,
@@ -282,7 +291,7 @@ void kernel_main() {
 
         for (uint32_t i = 1; i < args.num_transfers; ++i) {
             bool last_transfer = i == args.num_transfers - 1;
-            coord_t offset_into_worker_slice = {0, 0};
+            uint32_t offset_into_worker_slice = 0;
             std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) = advance_to_next_transfer_slice<is_sharded>(
                 args.ring_size,
                 args.my_ring_idx,
@@ -298,12 +307,14 @@ void kernel_main() {
                 uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
                 ASSERT(n_pages > 0);
                 // Fetch from input tensor
-                read_chunk_from_output_tensor_v2(
+                read_wrapped_chunk_from_output_tensor(
                     curr_tile_id,
                     offset_into_worker_slice,
+                    args.worker_slice_offset, // Offset into tensor slice
                     valid_worker_slice_shape,
                     // In tiles for tile layout
                     args.input_tensor_shape,
+                    args.tensor_slice_shape,
                     cb_id_in1,
                     args.s,
                     n_pages,

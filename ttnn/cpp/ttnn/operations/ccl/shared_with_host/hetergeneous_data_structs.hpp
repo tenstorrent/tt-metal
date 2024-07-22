@@ -84,6 +84,58 @@ inline coord_t advance_slice_row_major(
     return coord_t(next_offset_x, next_offset_y);
 }
 
+inline coord_t advance_wrapped_slice_row_major(
+    coord_t const &inner_slice_offset,
+    coord_t const &inner_slice_shape,
+    coord_t const &outer_slice_shape,
+    uint32_t num_active_slices) {
+
+    uint32_t flattened_inner_slice_offset = inner_slice_offset.x + (inner_slice_offset.y * outer_slice_shape.x);
+
+    uint32_t next_flattened_offset = flattened_inner_slice_offset + (inner_slice_shape.x * inner_slice_shape.y * num_active_slices); // num_active_slices is the total number of workers, so need to stride by that.
+
+    uint32_t next_offset_x = next_flattened_offset % outer_slice_shape.x;
+    uint32_t next_offset_y = next_flattened_offset / outer_slice_shape.x;
+
+    return coord_t(next_offset_x, next_offset_y);
+}
+
+
+// Increments the index into the input (global) tensor, while respecting the tensor slice, for wrapped worker slice
+// that is internal to the tensor slice.
+inline void advance_worker_global_page_interleaved (
+    uint32_t &curr_page_idx,
+    uint32_t &offset_into_worker_slice, // local to the worker chunk
+    coord_t &offset_worker_slice, // local to the tensor slice
+
+    coord_t const &worker_slice_shape, // worker chunk shape
+    coord_t const &tensor_slice_shape, // tensor slice shape (per device)
+
+    coord_t const &tensor_shape, // full tensor shape
+
+    bool &last_page_of_worker
+  ) {
+
+    offset_into_worker_slice++;
+
+    uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_shape.x);
+    bool wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x == 0;
+
+    bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.x * worker_slice_shape.y;
+    if (end_of_worker_slice_row) {
+        offset_into_worker_slice = 0;
+        last_page_of_worker = true;
+    } else {
+        // Check for wrap around
+        if (wrap_around) { // wrap around wrt to global tensor
+            curr_page_idx += tensor_shape.x - tensor_slice_shape.x + 1;
+        } else {
+            curr_page_idx++;
+        }
+    }
+
+}
+
 static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
 static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
 
