@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -42,9 +42,9 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
     auto output = formatted_input_tensor;
-    static auto transpose_wh = std::bind(tt::tt_metal::transpose, std::placeholders::_1, -2, -1, output_mem_config);
-    static auto transpose_hc = std::bind(tt::tt_metal::transpose, std::placeholders::_1, 1, -2, output_mem_config);
-    static auto transpose_cn = std::bind(tt::tt_metal::transpose, std::placeholders::_1, 0, 1, output_mem_config);
+    static auto transpose_wh = std::bind(ttnn::transpose, std::placeholders::_1, -2, -1, output_mem_config);
+    static auto transpose_hc = std::bind(ttnn::transpose, std::placeholders::_1, 1, -2, output_mem_config);
+    static auto transpose_cn = std::bind(ttnn::transpose, std::placeholders::_1, 0, 1, output_mem_config);
     if (N == 0 && C == 1 && H == 2 && W == 3) {
         output = formatted_input_tensor;
     } else if (N == 0 && C == 1 && H == 3 && W == 2) {
