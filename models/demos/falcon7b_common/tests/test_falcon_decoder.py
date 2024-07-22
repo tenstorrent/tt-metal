@@ -6,9 +6,9 @@ import torch
 import pytest
 from loguru import logger
 
-from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.falcon7b.tt.model_config import get_model_config
-from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs, load_hf_model
+from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.falcon7b_common.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs, load_hf_model
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )

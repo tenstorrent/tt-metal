@@ -6,9 +6,9 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from models.demos.falcon7b.tt.falcon_lm_head import falcon_lm_head_matmul_2d
-from models.demos.falcon7b.tt.falcon_model import TtFalconModelShared
-from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.falcon_lm_head import falcon_lm_head_matmul_2d
+from models.demos.falcon7b_common.tt.falcon_model import TtFalconModelShared
+from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,

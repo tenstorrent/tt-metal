@@ -140,7 +140,7 @@ models/demos @eyonland @arakhmati @cfjchu @xanderchin
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat @eyonland @AleksKnezevic @nsmithtt
 models/demos/t3000 @uaydonat @AleksKnezevic @nsmithtt
-models/demos/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
+models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum

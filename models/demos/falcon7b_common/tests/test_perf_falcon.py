@@ -4,13 +4,13 @@
 
 import pytest
 
-from models.demos.falcon7b.tests.run_falcon_end_to_end import (
+from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.falcon7b_common.tt.model_config import (
     get_model_config,
 )
 

@@ -7,7 +7,7 @@ import math
 from torch import nn
 from typing import List, Optional, Tuple
 
-from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
+from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
 import ttnn
 
 from models.utility_functions import (
@@ -17,7 +17,7 @@ from models.utility_functions import (
     is_wormhole_b0,
 )
 
-from models.demos.falcon7b.tt.model_utils import get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import get_weights_cached
 from models.utility_functions import torch_tensors_to_tt_tensors
 
 

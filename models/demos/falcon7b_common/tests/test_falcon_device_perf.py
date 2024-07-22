@@ -4,13 +4,13 @@
 
 import pytest
 
-from models.demos.falcon7b.tests.run_falcon_end_to_end import (
+from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache
 
@@ -85,7 +85,7 @@ def test_device_perf(seq_len, samples):
     margin = 0.03
     num_iterations = 1
     model_config = "BFLOAT16-DRAM".lower()
-    command = f"pytest models/demos/falcon7b/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k prefill_seq{seq_len}_{model_config}"
+    command = f"pytest models/demos/falcon7b_common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k prefill_seq{seq_len}_{model_config}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 

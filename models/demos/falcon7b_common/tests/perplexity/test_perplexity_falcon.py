@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.demos.falcon7b.tests.perplexity.run_perplexity_falcon import run_test_perplexity
+from models.demos.falcon7b_common.tests.perplexity.run_perplexity_falcon import run_test_perplexity
 from models.utility_functions import is_wormhole_b0
 
 
