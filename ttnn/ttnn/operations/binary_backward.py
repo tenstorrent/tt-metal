@@ -7,7 +7,12 @@ from typing import List, Union, Optional
 import sys
 
 import ttnn
-
+from ttnn.operations.complex_binary_backward import (
+    _golden_function_complex_add,
+    _golden_function_complex_sub,
+    _golden_function_complex_mul,
+    _golden_function_complex_div,
+)
 import torch
 
 THIS_MODULE = sys.modules[__name__]
@@ -40,7 +45,16 @@ ttnn.attach_golden_function(ttnn.embedding_bw, golden_function=_golden_function)
 
 
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    if torch_op == "squared_difference_bw":
+    if torch.is_complex(input_tensor_a):
+        if torch_op == torch.add:
+            alpha = kwargs.pop("alpha")
+            return _golden_function_complex_add(grad_tensor, input_tensor_a, input_tensor_b, alpha)
+        elif torch_op == torch.sub:
+            alpha = kwargs.pop("alpha")
+            return _golden_function_complex_sub(grad_tensor, input_tensor_a, input_tensor_b, alpha)
+        elif torch_op == torch.mul:
+            return _golden_function_complex_mul(grad_tensor, input_tensor_a, input_tensor_b)
+    if torch_op == "torch.squared_difference":
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     elif torch_op == torch.clone:
         pyt_y = torch.clone(input_tensor_a)
@@ -82,17 +96,18 @@ def _golden_function_backward_with_float(
     return golden_tensor
 
 
-def _golden_function_backward_with_string(
-    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value, *args, **kwargs
-):
-    if torch_op == "bias_gelu":
+def _golden_function_backward_with_string(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    if torch.is_complex(input_tensor_a):
+        if torch_op == torch.div:
+            return _golden_function_complex_div(grad_tensor, input_tensor_a, input_tensor_b)
+    if torch_op == bias_gelu:
         sum_result = torch.add(input_tensor_a, input_tensor_b)
         pyt_y = torch.nn.functional.gelu(sum_result)
         sum_result.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
         golden_tensor = [sum_result.grad, sum_result.grad]
         return golden_tensor
-
+    value = kwargs.pop("value")
     if torch_op == torch.div:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
     else:
@@ -168,7 +183,7 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.squared_difference_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        "squared_difference_bw", grad, a, b, *args, **kwargs
+        "torch.squared_difference", grad, a, b, *args, **kwargs
     ),
 )
 

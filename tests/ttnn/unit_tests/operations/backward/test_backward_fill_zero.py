@@ -24,7 +24,7 @@ def test_bw_fill_zero(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
     tt_output_tensor_on_device = ttnn.fill_zero_bw(grad_tensor, input_tensor)
-    pyt_y = torch.zeros_like(grad_data)
-    golden_tensor = [pyt_y]
+    golden_function = ttnn.get_golden_function(ttnn.fill_zero_bw)
+    golden_tensor = golden_function(grad_data, in_data)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

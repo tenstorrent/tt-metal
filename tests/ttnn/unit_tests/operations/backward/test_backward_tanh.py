@@ -20,15 +20,11 @@ def test_bw_tanh(input_shapes, device):
     # tt tan supports input range [-1.45, 1.45]
     in_data, input_tensor = data_gen_with_range(input_shapes, -1.45, 1.45, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
-    pyt_y = torch.tanh(in_data)
 
     tt_output_tensor_on_device = ttnn.tanh_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.tanh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor, 0.95)
     assert status
@@ -59,13 +55,8 @@ def test_bw_tanh_with_output(input_shapes, device):
         queue_id=cq_id,
     )
 
-    pyt_y = torch.tanh(in_data)
-
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.tanh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor, 0.95)
     assert status

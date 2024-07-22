@@ -19,15 +19,11 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_wit
 def test_bw_erfinv(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -110, 110, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, True)
-    in_data.retain_grad()
 
     tt_output_tensor_on_device = ttnn.erfinv_bw(grad_tensor, input_tensor)
 
-    pyt_y = torch.erfinv(in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.erfinv_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
