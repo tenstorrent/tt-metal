@@ -5,11 +5,11 @@
 import torch
 import pytest
 from loguru import logger
-from models.demos.falcon7b.tt.falcon_model import TtFalconModel
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.falcon7b_common.tt.falcon_model import TtFalconModel
+from models.demos.falcon7b_common.tt.model_config import (
     get_model_config,
 )
-from models.demos.falcon7b.tests.test_utils import (
+from models.demos.falcon7b_common.tests.test_utils import (
     get_rand_falcon_inputs,
     concat_device_out_layer_present,
     load_hf_model,

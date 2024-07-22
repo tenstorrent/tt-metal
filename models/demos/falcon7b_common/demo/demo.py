@@ -12,10 +12,10 @@ import torch.nn.functional as F
 import ttnn
 import tt_lib
 from loguru import logger
-from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig
-from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b.tt.model_config import get_model_config, model_config_entries
-from models.demos.falcon7b.tests.test_utils import initialize_kv_cache, load_hf_model
+from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.model_config import get_model_config, model_config_entries
+from models.demos.falcon7b_common.tests.test_utils import initialize_kv_cache, load_hf_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf, check_tokens_match
 from models.utility_functions import (
     disable_compilation_reports,

@@ -9,13 +9,13 @@ import numpy as np
 from sklearn.metrics import top_k_accuracy_score
 
 import tt_lib
-from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 
-from models.demos.falcon7b.tt.falcon_common import (
+from models.demos.falcon7b_common.tt.falcon_common import (
     PytorchFalconCausalLM,
 )
 
-from models.demos.falcon7b.tests.test_utils import (
+from models.demos.falcon7b_common.tests.test_utils import (
     get_rand_falcon_inputs,
     concat_device_out_layer_present,
     load_hf_model,
