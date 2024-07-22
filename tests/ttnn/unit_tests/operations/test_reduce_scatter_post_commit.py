@@ -108,7 +108,7 @@ def run_reduce_scatter_test(
             logger.error(f"output mismatch for tensor {i}")
         else:
             logger.info(f"output match for tensor {i}")
-        assert not mismatch, f"{i} FAILED: {output}"
+    assert not mismatch, f"{i} FAILED: {output}"
 
 
 # ~2:45 extra time in the current state
@@ -123,6 +123,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
+        ([1, 2, 256, 32 * 8], 3, ttl.tensor.Layout.TILE),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
         ([1, 1, 32, 32 * 8], 3, ttl.tensor.Layout.TILE),
         ([1, 8, 1024, 1024], 3, ttl.tensor.Layout.TILE),
         ([1, 4, 2048, 1024], 3, ttl.tensor.Layout.TILE),

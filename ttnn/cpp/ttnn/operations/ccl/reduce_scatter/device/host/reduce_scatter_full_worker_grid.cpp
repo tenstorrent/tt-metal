@@ -319,8 +319,8 @@ struct EdmInterfaceAddresses {
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
     Device* device,
-    ttnn::ccl::RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
-    ttnn::ccl::CCLOpConfig const& op_config,
+    RingReduceScatterWrappedTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
+    ccl::CCLOpConfig const& op_config,
     std::vector<CoreCoord> const& worker_cores,
     uint32_t num_channels_per_edm,
 
@@ -528,8 +528,8 @@ static CoreRangeSet select_worker_cores(
 }
 
 static WorkerTransferInfo compute_num_edm_messages_per_channel(
-   ttnn::ccl::CCLOpConfig const& op_config,
-    ttnn::ccl::RingReduceScatterTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
+    ccl::CCLOpConfig const& op_config,
+    RingReduceScatterWrappedTensorSlicer& tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     std::vector<ttnn::ccl::EriscDatamoverBuilder> const& cw_per_link_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder> const& ccw_per_link_edm_builders,
     std::size_t const num_edm_channels,
@@ -754,7 +754,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         cb_num_pages,
         cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
         op_config.get_page_size());
-    auto tensor_slicer =ttnn::ccl::RingReduceScatterTensorSlicer(
+    auto tensor_slicer = ttnn::ccl::RingReduceScatterWrappedTensorSlicer(
         local_chip_tensor,
         local_chip_output_tensor,
         scatter_split_dim,

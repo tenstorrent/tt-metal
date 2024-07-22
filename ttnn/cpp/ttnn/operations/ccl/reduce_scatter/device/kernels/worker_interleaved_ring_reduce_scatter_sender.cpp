@@ -64,9 +64,13 @@ void kernel_main() {
     uint32_t total_lifetime_cb_pages_popped_from_math = 0;
     while (worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
         // First phase - we only forward messages to EDM
-        coord_t valid_worker_slice_shape = coord_t(
-            std::min(worker_slice_shape.x, output_tensor_shape.x - worker_slice_base_offset.x),
-            std::min(worker_slice_shape.y, output_tensor_shape.y - worker_slice_base_offset.y));
+        // Set the valid_worker_slice_shape
+        coord_t valid_worker_slice_shape = worker_slice_shape;
+        if (worker_slice_base_offset.y == output_tensor_shape.y - 1) { // Worker is on last row of tensor_slice
+            if (output_tensor_shape.x - worker_slice_base_offset.x < worker_slice_shape.x) { // Worker is cutoff by the end of the tensor_slice
+                valid_worker_slice_shape.x = output_tensor_shape.x - worker_slice_base_offset.x;
+            }
+        }
         uint32_t const num_pages_to_write = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
 
         ASSERT(total_lifetime_cb_pages_popped_from_math + num_pages_to_write <= total_eltwise_kernel_num_pages);
@@ -101,10 +105,11 @@ void kernel_main() {
         uint32_t curr_ring_slice_start_page_offset = 0;
         const uint32_t worker_relative_start_offset_into_slice =
             worker_slice_base_offset.x + (worker_slice_base_offset.y * output_tensor_shape.x);
-        auto current_worker_slice_offset = worker_slice_base_offset;
+
         const uint32_t starting_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
         uint32_t curr_tile_id = starting_tile_id;
 
+        uint32_t offset_into_worker_slice = 0;
         bool last_page_of_worker = false;
         for (uint32_t p = 0; p < num_pages_to_write; p += full_chunk_num_pages) {
             ASSERT(curr_tile_id < output_tensor_shape.x * output_tensor_shape.y);
@@ -112,11 +117,13 @@ void kernel_main() {
             uint32_t n_pages = std::min(full_chunk_num_pages, num_pages_to_write - p);
             ASSERT(n_pages <= half_cb_n_pages);
             ASSERT(full_chunk_num_pages <= half_cb_n_pages);
-            write_chunk_v2(
+            write_wrapped_chunk(
                 curr_tile_id,
-                current_worker_slice_offset,
+                offset_into_worker_slice,
+                worker_slice_base_offset, // Offset into tensor slice
                 valid_worker_slice_shape,
                 output_tensor_shape,  // In tiles for tile layout
+                output_tensor_shape,
                 cb_id_in0,
                 d,
                 n_pages,
@@ -131,7 +138,7 @@ void kernel_main() {
             }
         }
 
-        worker_slice_base_offset = advance_slice_row_major(
+        worker_slice_base_offset = advance_wrapped_slice_row_major(
             worker_slice_base_offset, worker_slice_shape, output_tensor_shape, num_concurrent_workers);
     }
 
