@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/buffers/circular_buffer_types.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
+#include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 

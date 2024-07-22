@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "ttnn/cpp/ttnn/operations/upsample/upsample_op.hpp"
+#include "ttnn/operations/upsample/upsample_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"

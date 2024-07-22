@@ -5,12 +5,12 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/run_operation.hpp"
 
 #include "device/topk_op.hpp"
-#include "ttnn/cpp/ttnn/types.hpp"
+#include "ttnn/types.hpp"
 
 template <class Tuple,
    class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>

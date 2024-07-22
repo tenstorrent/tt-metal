@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/ttnn/operations/embedding/embedding/embedding_pybind.hpp"
+#include "ttnn/operations/embedding/embedding/embedding_pybind.hpp"
 
 namespace py = pybind11;
 

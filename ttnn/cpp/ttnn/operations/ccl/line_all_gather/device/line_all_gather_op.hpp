@@ -8,11 +8,11 @@
 #include "common/core_coord.h"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include "ttnn/run_operation.hpp"
 

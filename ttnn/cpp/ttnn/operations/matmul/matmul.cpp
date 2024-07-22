@@ -5,7 +5,7 @@
 #include "matmul.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/operations/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
