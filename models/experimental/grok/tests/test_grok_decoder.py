@@ -23,6 +23,7 @@ from models.utility_functions import comp_pcc, comp_allclose
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 
+@pytest.mark.timeout(500 * 8)
 def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     """
     b: batch

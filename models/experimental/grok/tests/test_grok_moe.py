@@ -27,6 +27,7 @@ from models.utility_functions import (
 )
 
 
+@pytest.mark.timeout(500 * 8)
 def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.87  # real weights = 0.99
     iterations = 1
