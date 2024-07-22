@@ -776,8 +776,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     int32_t ncores_col = 1;
     if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(all_cores.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
-        ncores_col = core_range.end.y - core_range.start.y + 1;
+        ncores = core_range.end_coord.x - core_range.start_coord.x + 1;
+        ncores_col = core_range.end_coord.y - core_range.start_coord.y + 1;
     }
 
     CoreRangeSet core_range_cliff = CoreRangeSet({});
@@ -795,7 +795,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         nblocks = ceil((float) ntiles / ntiles_per_block);
         block_size_nbytes = shard_shape[1] * output.element_size();
         auto core_range = *(all_cores.ranges().begin());
-        int32_t ncores_y = core_range.end.y - core_range.start.y + 1;
+        int32_t ncores_y = core_range.end_coord.y - core_range.start_coord.y + 1;
         TT_ASSERT(a.shard_spec().value().shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
     } else {
         TT_ASSERT(a.shard_spec().value().shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
@@ -1318,7 +1318,7 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
     uint32_t ncores = in_nhw / shard_shape[0];
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(input.shard_spec().value().grid.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
+        ncores = core_range.end_coord.x - core_range.start_coord.x + 1;
     }
 
     uint32_t total_nsticks = ncores * max_out_nsticks_per_core_;
@@ -1351,7 +1351,7 @@ std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Te
     uint32_t ncores = input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[2] / shard_spec.shape[0];
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(input_tensor.shard_spec().value().grid.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
+        ncores = core_range.end_coord.x - core_range.start_coord.x + 1;
     }
     shard_spec.shape[0] = output_shape[0] * div_up(output_shape[2], ncores);
     shard_spec.halo = true;
@@ -1400,7 +1400,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         TT_ASSERT(input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR);
         TT_ASSERT(all_cores.ranges().size() == 1);
         auto core_range = *(all_cores.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
+        ncores = core_range.end_coord.x - core_range.start_coord.x + 1;
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shape[0];
     }
 
