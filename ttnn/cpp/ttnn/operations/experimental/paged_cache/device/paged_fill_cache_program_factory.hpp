@@ -2,22 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
-
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/common/core_coord.h"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include <stdint.h>
-#include <optional>
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
+#include "paged_cache_operation.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+namespace ttnn::operations::experimental::paged_cache::detail {
 
 using namespace tt::constants;
+using namespace tt;
 
-namespace tt {
-namespace operations {
-namespace primary {
 
 operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const Tensor &page_table_tensor, const uint32_t batch_idx) {
     Program program{};
@@ -105,13 +101,13 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/paged_update_cache/kernels/dataflow/reader_fill_cache_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_fill_cache_interleaved.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/paged_update_cache/kernels/dataflow/writer_fill_cache_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_fill_cache_interleaved.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -174,7 +170,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
     ) {
-        const auto batch_idx = static_cast<const PagedUpdateCache*>(operation)->batch_idx;
+        const auto batch_idx = static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->batch_idx;
 
         auto dst_addr = input_tensors.at(0).buffer()->address();
         auto src_addr = input_tensors.at(1).buffer()->address();
@@ -213,6 +209,4 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
-}   // namespace primary
-}   // namespace operations
-}   // namespace tt
+}  // ttnn::operations::experimental::paged_cache::detail
