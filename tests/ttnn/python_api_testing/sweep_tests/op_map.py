@@ -709,6 +709,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_scale_mask_softmax_in_place,
         "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
     },
+   "eltwise-rdiv": {
+        "tt_op": ttnn_ops.eltwise_rdiv,
+        "pytorch_op": pytorch_ops.eltwise_rdiv,
+    },      
     "unary-add-bw": {
         "tt_op": ttnn_ops.unary_add_bw,
         "pytorch_op": pytorch_ops.unary_add_bw,
@@ -717,8 +721,4 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_add_bw,
         "pytorch_op": pytorch_ops.add_bw,
     },
-   "eltwise-rdiv": {
-        "tt_op": ttnn_ops.eltwise_rdiv,
-        "pytorch_op": pytorch_ops.eltwise_rdiv,
-    },  
 }
