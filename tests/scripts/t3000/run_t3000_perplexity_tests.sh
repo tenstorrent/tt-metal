@@ -11,6 +11,9 @@ run_t3000_perplexity_tests() {
   # Falcon7B perplexity tests
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
 
+  # Falcon40B perplexity tests
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
