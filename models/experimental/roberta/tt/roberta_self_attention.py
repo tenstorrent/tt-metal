@@ -84,7 +84,7 @@ class TtRobertaSelfAttention(nn.Module):
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
     def linear(self, x, weight, bias):
@@ -223,7 +223,7 @@ class TtRobertaSelfAttention(nn.Module):
             attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.mem_config)
 
         context_layer = ttnn.matmul(attention_probs, value_layer, memory_config=self.mem_config)
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
 
         # TODO left here. Finish porting and re-test everything. See other TODO s
         # context_layer = context_layer.permute(0, 2, 1, 3). contiguous() TODO: CHECK contiguous

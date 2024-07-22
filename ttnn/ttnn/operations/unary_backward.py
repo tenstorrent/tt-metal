@@ -6,208 +6,767 @@ import sys
 
 import ttnn
 
+import torch
 
-def register_ttnn_cpp_unary_backward_function(unary_backward_function):
+THIS_MODULE = sys.modules[__name__]
+
+__all__ = []
+
+
+def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, **kwargs):
+    if torch_op == "softsign":
+        pyt_y = torch.nn.functional.softsign(input_tensor)
+    else:
+        pyt_y = torch_op(input_tensor)
+    input_tensor.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad]
+    return golden_tensor
+
+
+def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
+    if torch_op == "leaky_relu":
+        pyt_y = torch.nn.functional.leaky_relu(input_tensor, negative_slope=alpha, inplace=False)
+    elif torch_op == "elu":
+        pyt_y = torch.nn.functional.elu(input_tensor, alpha=alpha)
+    elif torch_op == "celu":
+        pyt_y = torch.nn.functional.celu(input_tensor, alpha)
+    elif torch_op == "div_no_nan":
+        pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
+    else:
+        pyt_y = torch_op(input_tensor, alpha)
+    input_tensor.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad]
+    if torch_op == "div_no_nan":
+        golden_tensor[0] = torch.where(torch.isnan(golden_tensor[0]), torch.zeros_like(input_tensor), golden_tensor[0])
+    return golden_tensor
+
+
+def _golden_function_unary_backward_with_two_float(torch_op, grad_tensor, input_tensor, a, b, *args, **kwargs):
+    if torch_op == torch.clamp:
+        pyt_y = torch.clamp(input_tensor, min=a, max=b)
+    else:
+        pyt_y = torch_op(input_tensor, a, b)
+    input_tensor.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad]
+    return golden_tensor
+
+
+ttnn.attach_golden_function(
+    ttnn.atanh_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.atanh, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.asin_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.asin, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.asinh_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.asinh, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.sin_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.sin, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.sinh_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.sinh, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.log10_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.log10, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.log1p_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.log1p, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.erfc_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.erfc, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.ceil_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.ceil, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.softsign_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        "softsign", grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.hardshrink_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.hardshrink, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.softshrink_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.softshrink, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.leaky_relu_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "leaky_relu", grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.elu_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "elu", grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.celu_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "celu", grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.rpow_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.pow, grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.logiteps_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.logit, grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.cosh_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.cosh, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.sign_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.sign, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.log2_bw,
+    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
+        torch.log2, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.div_no_nan_bw,
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "div_no_nan", grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.clamp_bw,
+    golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
+        torch.clamp, grad, input, a, b, *args, **kwargs
+    ),
+)
+
+
+def _golden_function_abs_cmplx(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    def unary_bw_with_float(torch_op, x, grad_data, *args, **kwargs):
-        value = kwargs.pop("scalar")
-        x.retain_grad()
+    input_tensor.retain_grad()
 
-        pyt_y = torch_op(x, value)
+    pyt_y = torch.abs(input_tensor)
 
-        pyt_y.backward(gradient=grad_data)
+    pyt_y.backward(gradient=grad_tensor)
 
-        golden_tensor = [x.grad, x.grad]
+    grad_res_real = torch.real(input_tensor.grad)
+    grad_res_imag = torch.imag(input_tensor.grad)
 
-        return golden_tensor
+    golden_tensor = [torch.cat((grad_res_real, grad_res_imag), dim=-1)]
 
-    def unary_bw(torch_op, x, grad_data, *args, **kwargs):
-        x.retain_grad()
-
-        pyt_y = torch_op(x)
-
-        pyt_y.backward(gradient=grad_data)
-
-        golden_tensor = [x.grad, x.grad]
-
-        return golden_tensor
-
-    def unary_bw_prod(torch_op, x, grad_data, *args, **kwargs):
-        all_dimensions = kwargs.pop("all_dimensions", True)
-        dim = kwargs.pop("dim", 0)
-        if all_dimensions:
-            temp = torch.prod(x)
-            result = temp.view(1, 1, 1, 1)
-        else:
-            result = torch.prod(x, dim, keepdim=True)
-        x.retain_grad()
-        pyt_y.backward(gradient=grad_data)
-        golden_tensor = [in_data.grad]
-        return golden_tensor
-
-    name_to_golden_function = {
-        "mul_bw": lambda x, grad_data: unary_bw_with_float(torch.mul, x, grad_data),
-        "add_bw": lambda x, grad_data: unary_bw_with_float(torch.add, x, grad_data),
-        "eq_bw": lambda x, grad_data: unary_bw_with_float(torch.eq, x, grad_data),
-        "gt_bw": lambda x, grad_data: unary_bw_with_float(torch.gt, x, grad_data),
-        "lt_bw": lambda x, grad_data: unary_bw_with_float(torch.lt, x, grad_data),
-        "le_bw": lambda x, grad_data: unary_bw_with_float(torch.le, x, grad_data),
-        "ge_bw": lambda x, grad_data: unary_bw_with_float(torch.ge, x, grad_data),
-        "ne_bw": lambda x, grad_data: unary_bw_with_float(torch.ne, x, grad_data),
-        "sub_bw": lambda x, grad_data: unary_bw_with_float(torch.sub, x, grad_data),
-        "hardshrink_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.hardshrink, x, grad_data),
-        "softshrink_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.softshrink, x, grad_data),
-        "leaky_relu_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.leaky_relu, x, grad_data),
-        "elu_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.elu, x, grad_data),
-        "celu_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.celu, x, grad_data),
-        "rpow_bw": lambda x, grad_data: unary_bw_with_float(torch.pow, x, grad_data),
-        "logiteps_bw": lambda x, grad_data: unary_bw_with_float(torch.nn.functional.logsigmoid, x, grad_data),
-        "fmod_bw": lambda x, grad_data: unary_bw_with_float(torch.fmod, x, grad_data),
-        "remainder_bw": lambda x, grad_data: unary_bw_with_float(torch.remainder, x, grad_data),
-        "div_no_nan_bw": lambda x, grad_data: unary_bw_with_float(torch.div, x, grad_data),
-        "polygamma_bw": lambda x, grad_data: unary_bw_with_float(torch.polygamma, x, grad_data),
-        "assign_bw": lambda x, grad_data: unary_bw(torch.assign, x, grad_data),
-        "multigammaln_bw": lambda x, grad_data: unary_bw(torch.multigammaln, x, grad_data),
-        "lgamma_bw": lambda x, grad_data: unary_bw(torch.lgamma, x, grad_data),
-        "fill_bw": lambda x, grad_data: unary_bw(torch.fill, x, grad_data),
-        "hardsigmoid_bw": lambda x, grad_data: unary_bw(torch.nn.functional.hardsigmoid, x, grad_data),
-        "cos_bw": lambda x, grad_data: unary_bw(torch.cos, x, grad_data),
-        "acosh_bw": lambda x, grad_data: unary_bw(torch.acosh, x, grad_data),
-        "prod_bw": lambda x, grad_data: unary_bw_prod(torch.prod, x, grad_data),
-        "acos_bw": lambda x, grad_data: unary_bw(torch.acos, x, grad_data),
-        "atan_bw": lambda x, grad_data: unary_bw(torch.atan, x, grad_data),
-        "rad2deg_bw": lambda x, grad_data: unary_bw(torch.rad2deg, x, grad_data),
-        "frac_bw": lambda x, grad_data: unary_bw(torch.frac, x, grad_data),
-        "trunc_bw": lambda x, grad_data: unary_bw(torch.trunc, x, grad_data),
-        "log_sigmoid_bw": lambda x, grad_data: unary_bw(torch.nn.functional.logsigmoid, x, grad_data),
-        "fill_zero_bw": lambda x, grad_data: unary_bw(torch.fill_zero, x, grad_data),
-        "i0_bw": lambda x, grad_data: unary_bw(torch.i0, x, grad_data),
-        "tan_bw": lambda x, grad_data: unary_bw(torch.tan, x, grad_data),
-        "sigmoid_bw": lambda x, grad_data: unary_bw(torch.sigmoid, x, grad_data),
-        "rsqrt_bw": lambda x, grad_data: unary_bw(torch.rsqrt, x, grad_data),
-        "neg_bw": lambda x, grad_data: unary_bw(torch.neg, x, grad_data),
-        "relu_bw": lambda x, grad_data: unary_bw(torch.relu, x, grad_data),
-        "logit_bw": lambda x, grad_data: unary_bw(torch.nn.functional.logit, x, grad_data),
-        "floor_bw": lambda x, grad_data: unary_bw(torch.floor, x, grad_data),
-        "round_bw": lambda x, grad_data: unary_bw(torch.round, x, grad_data),
-        "log_bw": lambda x, grad_data: unary_bw(torch.log, x, grad_data),
-        "relu6_bw": lambda x, grad_data: unary_bw(torch.nn.functional.relu6, x, grad_data),
-        "abs_bw": lambda x, grad_data: unary_bw(torch.abs, x, grad_data),
-        "silu_bw": lambda x, grad_data: unary_bw(torch.nn.functional.silu, x, grad_data),
-        "selu_bw": lambda x, grad_data: unary_bw(torch.nn.functional.selu, x, grad_data),
-        "square_bw": lambda x, grad_data: unary_bw(torch.square, x, grad_data),
-        "hardswish_bw": lambda x, grad_data: unary_bw(torch.nn.functional.hardswish, x, grad_data),
-        "tanhshrink_bw": lambda x, grad_data: unary_bw(torch.nn.functional.tanhshrink, x, grad_data),
-        "atanh_bw": lambda x, grad_data: unary_bw(torch.atanh, x, grad_data),
-        "asin_bw": lambda x, grad_data: unary_bw(torch.asin, x, grad_data),
-        "asinh_bw": lambda x, grad_data: unary_bw(torch.asinh, x, grad_data),
-        "sin_bw": lambda x, grad_data: unary_bw(torch.sin, x, grad_data),
-        "sinh_bw": lambda x, grad_data: unary_bw(torch.sinh, x, grad_data),
-        "log10_bw": lambda x, grad_data: unary_bw(torch.log10, x, grad_data),
-        "log1p_bw": lambda x, grad_data: unary_bw(torch.log1p, x, grad_data),
-        "erfc_bw": lambda x, grad_data: unary_bw(torch.erfc, x, grad_data),
-        "ceil_bw": lambda x, grad_data: unary_bw(torch.ceil, x, grad_data),
-        "softsign_bw": lambda x, grad_data: unary_bw(torch.nn.functional.softsign, x, grad_data),
-        "cosh_bw": lambda x, grad_data: unary_bw(torch.cosh, x, grad_data),
-        "log2_bw": lambda x, grad_data: unary_bw(torch.log2, x, grad_data),
-        "sign_bw": lambda x, grad_data: unary_bw(torch.sign, x, grad_data),
-        "exp2_bw": lambda x, grad_data: unary_bw(torch.exp2, x, grad_data),
-        "expm1_bw": lambda x, grad_data: unary_bw(torch.expm1, x, grad_data),
-        "reciprocal_bw": lambda x, grad_data: unary_bw(torch.reciprocal, x, grad_data),
-        "digamma_bw": lambda x, grad_data: unary_bw(torch.digamma, x, grad_data),
-        "erfinv_bw": lambda x, grad_data: unary_bw(torch.erfinv, x, grad_data),
-        "erf_bw": lambda x, grad_data: unary_bw(torch.erf, x, grad_data),
-        "deg2rad_bw": lambda x, grad_data: unary_bw(torch.deg2rad, x, grad_data),
-    }
-
-    golden_keys = set(name_to_golden_function.keys())
-    function_names = {function.__name__.split(".")[-1] for function in TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS}
-    if golden_keys != function_names:
-        raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
-
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
-        torch_function = name_to_golden_function[unary_backward_function.__name__.split(".")[-1]]
-        return torch_function(input_tensor)
-
-    ttnn.attach_golden_function(unary_backward_function, golden_function=_golden_function)
+    return golden_tensor
 
 
-TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS = [
-    ttnn.mul_bw,
-    ttnn.add_bw,
-    ttnn.eq_bw,
-    ttnn.gt_bw,
-    ttnn.lt_bw,
-    ttnn.le_bw,
-    ttnn.ge_bw,
-    ttnn.ne_bw,
-    ttnn.sub_bw,
-    ttnn.hardshrink_bw,
-    ttnn.softshrink_bw,
-    ttnn.leaky_relu_bw,
-    ttnn.elu_bw,
-    ttnn.celu_bw,
-    ttnn.rpow_bw,
-    ttnn.logiteps_bw,
-    ttnn.fmod_bw,
-    ttnn.remainder_bw,
-    ttnn.div_no_nan_bw,
-    ttnn.polygamma_bw,
-    ttnn.assign_bw,
-    ttnn.multigammaln_bw,
-    ttnn.lgamma_bw,
-    ttnn.fill_bw,
-    ttnn.hardsigmoid_bw,
-    ttnn.cos_bw,
-    ttnn.acosh_bw,
-    ttnn.acos_bw,
-    ttnn.atan_bw,
-    ttnn.rad2deg_bw,
-    ttnn.frac_bw,
-    ttnn.trunc_bw,
-    ttnn.log_sigmoid_bw,
-    ttnn.fill_zero_bw,
-    ttnn.i0_bw,
-    ttnn.tan_bw,
-    ttnn.sigmoid_bw,
-    ttnn.rsqrt_bw,
-    ttnn.neg_bw,
-    ttnn.relu_bw,
-    ttnn.logit_bw,
-    ttnn.floor_bw,
-    ttnn.round_bw,
-    ttnn.log_bw,
-    ttnn.relu6_bw,
-    ttnn.abs_bw,
-    ttnn.silu_bw,
-    ttnn.selu_bw,
-    ttnn.square_bw,
-    ttnn.hardswish_bw,
-    ttnn.tanhshrink_bw,
-    ttnn.atanh_bw,
-    ttnn.asin_bw,
-    ttnn.asinh_bw,
-    ttnn.sin_bw,
-    ttnn.sinh_bw,
-    ttnn.log10_bw,
-    ttnn.log1p_bw,
-    ttnn.erfc_bw,
-    ttnn.ceil_bw,
-    ttnn.softsign_bw,
-    ttnn.cosh_bw,
-    ttnn.log2_bw,
-    ttnn.sign_bw,
-    ttnn.exp2_bw,
-    ttnn.expm1_bw,
-    ttnn.reciprocal_bw,
-    ttnn.digamma_bw,
-    ttnn.erfinv_bw,
-    ttnn.erf_bw,
-    ttnn.deg2rad_bw,
-    ttnn.prod_bw,
-]
-for unary_backward_function in TTNN_ELTWISE_UNARY_BACKWARD_CPP_FUNCTIONS:
-    register_ttnn_cpp_unary_backward_function(unary_backward_function)
+def _golden_function(grad_tensor, input_tensor, min_val=None, max_val=None, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    if min_val != None and max_val != None:
+        pyt_y = torch.nn.functional.hardtanh(input_tensor, min_val, max_val)
+    else:
+        pyt_y = torch.nn.functional.hardtanh(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.hardtanh_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, beta=None, threshold=None, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    if beta != None and threshold != None:
+        pyt_y = torch.nn.functional.softplus(input_tensor, beta, threshold)
+    else:
+        pyt_y = torch.nn.functional.softplus(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.softplus_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+
+    pyt_y = torch.trunc(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.trunc_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+
+    pyt_y = torch.acos(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.acos_bw, golden_function=_golden_function)
+
+
+def _golden_function_acosh(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.acosh(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh)
+
+
+def _golden_function_atan(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.atan(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.atan_bw, golden_function=_golden_function_atan)
+
+
+def _golden_function_cos(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.cos(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.cos_bw, golden_function=_golden_function_cos)
+
+
+def _golden_function_deg2rad(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.deg2rad(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.deg2rad_bw, golden_function=_golden_function_deg2rad)
+
+
+def _golden_function_digamma(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.digamma(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.digamma_bw, golden_function=_golden_function_digamma)
+
+
+def _golden_function_erf(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.erf(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.erf_bw, golden_function=_golden_function_erf)
+
+
+def _golden_function_erfinv(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.erfinv(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.erfinv_bw, golden_function=_golden_function_erfinv)
+
+
+def _golden_function_exp(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.exp(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.exp_bw, golden_function=_golden_function_exp)
+
+
+def _golden_function_exp2(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.exp2(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.exp2_bw, golden_function=_golden_function_exp2)
+
+
+def _golden_function_expm1(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.expm1(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.expm1_bw, golden_function=_golden_function_expm1)
+
+
+def _golden_function_fill_zero(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.zeros_like(grad_tensor)
+
+    return [pyt_y]
+
+
+ttnn.attach_golden_function(ttnn.fill_zero_bw, golden_function=_golden_function_fill_zero)
+
+
+def _golden_function_frac(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.frac(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.frac_bw, golden_function=_golden_function_frac)
+
+
+def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.gelu(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.gelu_bw, golden_function=_golden_function_gelu)
+
+
+def _golden_function_hardsigmoid(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.hardsigmoid(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.hardsigmoid_bw, golden_function=_golden_function_hardsigmoid)
+
+
+def _golden_function_i0(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.i0(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.i0_bw, golden_function=_golden_function_i0)
+
+
+def _golden_function_lgamma(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.lgamma(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.lgamma_bw, golden_function=_golden_function_lgamma)
+
+
+def _golden_function_log_sigmoid(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.logsigmoid(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.log_sigmoid_bw, golden_function=_golden_function_log_sigmoid)
+
+
+def _golden_function_logit(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.logit(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.logit_bw, golden_function=_golden_function_logit)
+
+
+def _golden_function_mvlgamma(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.mvlgamma(input_tensor, 4)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.multigammaln_bw, golden_function=_golden_function_mvlgamma)
+
+
+def _golden_function_neg(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.neg(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.neg_bw, golden_function=_golden_function_neg)
+
+
+def _golden_function_rad2deg(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.rad2deg(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.rad2deg_bw, golden_function=_golden_function_rad2deg)
+
+
+def _golden_function_reciprocal(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.reciprocal(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.reciprocal_bw, golden_function=_golden_function_reciprocal)
+
+
+def _golden_function_relu(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.relu(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.relu_bw, golden_function=_golden_function_relu)
+
+
+def _golden_function_rsqrt(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.rsqrt(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.rsqrt_bw, golden_function=_golden_function_rsqrt)
+
+
+def _golden_function_sigmoid(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.sigmoid(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.sigmoid_bw, golden_function=_golden_function_sigmoid)
+
+
+def _golden_function_sqrt(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.sqrt(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.sqrt_bw, golden_function=_golden_function_sqrt)
+
+
+def _golden_function_tan(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.tan(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.tan_bw, golden_function=_golden_function_tan)
+
+
+def _golden_function_tanh(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.tanh(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.tanh_bw, golden_function=_golden_function_tanh)
+
+
+def _golden_function_threshold(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.threshold(input_tensor, *args)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.threshold_bw, golden_function=_golden_function_threshold)
+
+
+def _golden_function_trunc(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.trunc(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.trunc_bw, golden_function=_golden_function_trunc)
+
+
+def _golden_function_abs(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    if torch.is_complex(input_tensor):
+        return _golden_function_abs_cmplx(grad_tensor, input_tensor)
+
+    input_tensor.retain_grad()
+    pyt_y = torch.abs(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.abs_bw, golden_function=_golden_function_abs)
+
+
+def _golden_function_floor(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.floor(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.floor_bw, golden_function=_golden_function_floor)
+
+
+def _golden_function_hardswish(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.hardswish(input_tensor, inplace=False)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.hardswish_bw, golden_function=_golden_function_hardswish)
+
+
+def _golden_function_log(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.log(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.log_bw, golden_function=_golden_function_log)
+
+
+def _golden_function_relu6(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.relu6(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.relu6_bw, golden_function=_golden_function_relu6)
+
+
+def _golden_function_round(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.round(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.round_bw, golden_function=_golden_function_round)
+
+
+def _golden_function_selu(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.selu(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.selu_bw, golden_function=_golden_function_selu)
+
+
+def _golden_function_silu(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.silu(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.silu_bw, golden_function=_golden_function_silu)
+
+
+def _golden_function_square(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.square(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.square_bw, golden_function=_golden_function_square)
+
+
+def _golden_function_tanhshrink(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.nn.functional.tanhshrink(input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.tanhshrink_bw, golden_function=_golden_function_tanhshrink)
+
 
 __all__ = []

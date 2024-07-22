@@ -380,14 +380,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_gelu,
         "pytorch_op": pytorch_ops.gelu,
     },
-    "eltwise-softmax_in_place": {
-        "tt_op": tt_lib_ops.eltwise_softmax_in_place,
-        "pytorch_op": pytorch_ops.softmax_in_place,
-    },
-    "eltwise-scale_mask_softmax_in_place": {
-        "tt_op": tt_lib_ops.eltwise_scale_mask_softmax_in_place,
-        "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
-    },
     "eltwise-rsqrt": {
         "tt_op": tt_lib_ops.eltwise_rsqrt,
         "pytorch_op": pytorch_ops.rsqrt,
@@ -648,10 +640,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_rpow,
         "pytorch_op": pytorch_ops.eltwise_rpow,
     },
-    "eltwise-rdiv": {
-        "tt_op": tt_lib_ops.eltwise_rdiv,
-        "pytorch_op": pytorch_ops.eltwise_rdiv,
-    },
     "eltwise-rsub": {
         "tt_op": tt_lib_ops.eltwise_rsub,
         "pytorch_op": pytorch_ops.eltwise_rsub,
@@ -704,10 +692,6 @@ op_map = {
     "eltwise-add": {
         "tt_op": tt_lib_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
-    },
-    "eltwise-add-bw": {
-        "tt_op": tt_lib_ops.eltwise_add_bw,
-        "pytorch_op": pytorch_ops.add_bw,
     },
     "eltwise-sub": {
         "tt_op": tt_lib_ops.eltwise_sub,
@@ -1189,10 +1173,6 @@ op_map = {
     "unary-div-bw": {
         "tt_op": tt_lib_ops.unary_div_bw,
         "pytorch_op": pytorch_ops.unary_div_bw,
-    },
-    "unary-add-bw": {
-        "tt_op": tt_lib_ops.unary_add_bw,
-        "pytorch_op": pytorch_ops.unary_add_bw,
     },
     "unary-mul-bw": {
         "tt_op": tt_lib_ops.unary_mul_bw,

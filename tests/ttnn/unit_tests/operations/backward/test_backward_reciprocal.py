@@ -24,15 +24,11 @@ def test_bw_reciprocal_0(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, val=0)
 
-    pyt_y = torch.reciprocal(in_data)
-
     tt_output_tensor_on_device = ttnn.reciprocal_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.reciprocal_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
 
@@ -49,14 +45,10 @@ def test_bw_reciprocal(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
 
-    pyt_y = torch.reciprocal(in_data)
-
     tt_output_tensor_on_device = ttnn.reciprocal_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.reciprocal_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

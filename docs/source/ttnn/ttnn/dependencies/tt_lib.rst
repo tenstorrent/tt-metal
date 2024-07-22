@@ -378,8 +378,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.transpose
 
-.. autofunction:: tt_lib.tensor.permute
-
 .. autofunction:: tt_lib.tensor.untilize
 
 .. autofunction:: tt_lib.tensor.untilize_with_unpadding
@@ -553,6 +551,12 @@ Complex arithmetic can be carried out for multiply, divide, add and subtract as 
 
 and then unary operations for,
 
+.. autofunction:: tt_lib.tensor.real
+
+.. autofunction:: tt_lib.tensor.imag
+
+.. autofunction:: tt_lib.tensor.complex_abs
+
 .. autofunction:: tt_lib.tensor.conj
 
 .. autofunction:: tt_lib.tensor.complex_recip
@@ -581,8 +585,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm
-
-.. autofunction:: tt_lib.tensor.conv
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 

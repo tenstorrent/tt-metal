@@ -10,14 +10,10 @@
 #include "tensor/tensor_utils.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/conv/conv_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/average_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/pool/max_pool.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
@@ -225,8 +221,8 @@ void TensorModule(py::module& m_tensor) {
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
-        .def_readonly("start", &CoreRange::start)
-        .def_readonly("end", &CoreRange::end)
+        .def_readonly("start", &CoreRange::start_coord)
+        .def_readonly("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
 
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
@@ -390,144 +386,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
 
-    m_tensor.def("conv", &conv, R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
-    py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
-        .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("grid_size"),
-            py::arg("num_cores_nhw"),
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
-        .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
-        .def_property_readonly(
-            "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
-        .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
-            return c.per_core_out_matrix_width_ntiles;
-        });
-
-    py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
-        .def(
-            py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("act_block_h_ntiles").noconvert(),
-            py::arg("act_block_w_ntiles").noconvert(),
-            py::arg("out_subblock_h_ntiles").noconvert(),
-            py::arg("out_subblock_w_ntiles").noconvert())
-        .def_property_readonly(
-            "act_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_h_ntiles; })
-        .def_property_readonly(
-            "act_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_w_ntiles; })
-        .def_property_readonly(
-            "out_subblock_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_h_ntiles; })
-        .def_property_readonly(
-            "out_subblock_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_w_ntiles; });
-
-    m_tensor.def(
-        "optimized_conv",
-        &optimized_conv,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("conv_reader_indices").noconvert() = std::nullopt,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert() = 0,
-        py::arg("output_mem_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        py::arg("input_tensor_shape").noconvert() = std::nullopt,
-        py::arg("use_shallow_conv_variant").noconvert() = false,
-        py::arg("transpose_mcast").noconvert() = true,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("enable_act_double_buffer").noconvert() = false,
-        py::arg("enable_split_reader").noconvert() = false,
-        py::arg("enable_subblock_padding").noconvert() = false,
-        R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
-    m_tensor.def(
-        "conv_with_fast_reader",
-        &conv_with_fast_reader,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-        R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
-    m_tensor.def("conv_with_address_map", &conv_with_address_map, R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-        Reader kernel uses an address map which pre-computed on the host to read activations and weights
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
     m_tensor.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,
@@ -662,103 +520,6 @@ void TensorModule(py::module& m_tensor) {
             "weights", "Input weights tensor", "Tensor", "", "Yes"
             "bias", "Input bias tensor", "Tensor", "", "No"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
-    // Pools
-    m_tensor.def(
-        "average_pool_2d",
-        &average_pool_2d,
-        py::arg().noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        R"doc(
-        Average Pool 2D
-        It operates on tensors whose that have channels as the last dimension
-
-        +----------+----------------------------+------------+-------------------------------+----------+
-        | Argument | Description                | Data type  | Valid range                   | Required |
-        +==========+============================+============+===============================+==========+
-        | act      | Input activations tensor   | Tensor     |                               | Yes      |
-        +----------+----------------------------+------------+-------------------------------+----------+
-    )doc");
-
-        m_tensor.def(
-        "max_pool2d",
-        &max_pool2d,
-        py::arg("input").noconvert(),
-        py::arg("in_n").noconvert(),
-        py::arg("in_h").noconvert(),
-        py::arg("in_w").noconvert(),
-        py::arg("kernel_h").noconvert(),
-        py::arg("kernel_w").noconvert(),
-        py::arg("stride_h") = 1,
-        py::arg("stride_w") = 1,
-        py::arg("pad_h") = 0,
-        py::arg("pad_w") = 0,
-        py::arg("dilation_h") = 1,
-        py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("nblocks") = 1,
-        py::arg("use_multicore") = true,
-        R"doc(
-        Max Pool 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
-    )doc");
-
-    m_tensor.def(
-        "max_pool2d_v2",
-        &max_pool2d_v2,
-        py::arg("input").noconvert(),
-        py::arg("reader_indices").noconvert(),
-        py::arg("in_n").noconvert(),
-        py::arg("in_h").noconvert(),
-        py::arg("in_w").noconvert(),
-        py::arg("kernel_h").noconvert(),
-        py::arg("kernel_w").noconvert(),
-        py::arg("stride_h") = 1,
-        py::arg("stride_w") = 1,
-        py::arg("pad_h") = 0,
-        py::arg("pad_w") = 0,
-        py::arg("dilation_h") = 1,
-        py::arg("dilation_w") = 1,
-        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("nblocks") = 1,
-        py::arg("use_multicore") = true,
-        R"doc(
-        Max Pool 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 
     // TMs

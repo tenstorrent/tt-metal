@@ -60,7 +60,11 @@ class RefModel(torch.nn.Module):
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_rmsnorm_singledevice(device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "is_sharded",
+    (True, False),
+)
+def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -72,6 +76,7 @@ def test_rmsnorm_singledevice(device, use_program_cache, reset_seeds):
         dim=dim,
         state_dict=state_dict,
         weight_key="rmsnorm",
+        is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
     reference_output = reference_model(input)
@@ -99,7 +104,11 @@ def test_rmsnorm_singledevice(device, use_program_cache, reset_seeds):
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_rmsnorm_multidevice(t3k_device_mesh, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "is_sharded",
+    (True, False),
+)
+def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -111,6 +120,7 @@ def test_rmsnorm_multidevice(t3k_device_mesh, use_program_cache, reset_seeds):
         dim=dim,
         state_dict=state_dict,
         weight_key="rmsnorm",
+        is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
     reference_output = reference_model(input)

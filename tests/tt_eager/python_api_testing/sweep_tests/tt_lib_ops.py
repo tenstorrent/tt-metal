@@ -9,6 +9,7 @@ from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
@@ -362,34 +363,6 @@ def eltwise_gelu(
 
 
 @setup_host_and_device
-def eltwise_softmax_in_place(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softmax_in_place(t0)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_scale_mask_softmax_in_place(
-    x,
-    y,
-    scale,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttnn.scale_mask_softmax_in_place(t0, scale, t1)
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_rsqrt(
     x,
     *args,
@@ -610,27 +583,6 @@ def rsqrt_bw(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t3 = ttl.tensor.rsqrt_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t3)
-
-
-@setup_host_and_device
-def unary_add_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t3 = ttl.tensor.unary_add_bw(t0, t1, scalar, output_mem_config)[0]
 
     return tt2torch_tensor(t3)
 
@@ -1394,8 +1346,10 @@ def repeat_interleave(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.repeat_interleave(t0, repeat, dim, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+    return output_tensor
 
 
 @setup_host_and_device
@@ -1667,11 +1621,13 @@ def prod(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.prod(t0, all_dimensions, dim, output_mem_config=output_mem_config)
-    output = tt2torch_tensor(t1)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
     if all_dimensions:
-        return output[:1, :1, :1, :1]
+        return output_tensor[:1, :1, :1, :1]
     else:
-        return output
+        return output_tensor
 
 
 @setup_host_and_device
@@ -2222,9 +2178,11 @@ def permute(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.permute(t0, permute_dims, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    t1 = ttnn.permute(t0, permute_dims, memory_config=output_mem_config)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+    return output_tensor
 
 
 @setup_host_and_device
@@ -2349,25 +2307,6 @@ def untilize_with_unpadding(
         )
 
     t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_end, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_rdiv(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    factor = kwargs["factor"]
-    queue_id = 0
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rdiv(t0, factor, memory_config=output_mem_config, queue_id=queue_id)
 
     return tt2torch_tensor(t1)
 
@@ -3477,28 +3416,6 @@ def eltwise_min_bw(
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
     t3 = ttl.tensor.min_bw(t0, t1, t2, output_mem_config)
-
-    return [tt2torch_tensor(t3[0]), tt2torch_tensor(t3[1])]
-
-
-@setup_host_and_device
-def eltwise_add_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t3 = ttl.tensor.add_bw(t0, t1, t2, output_mem_config)
 
     return [tt2torch_tensor(t3[0]), tt2torch_tensor(t3[1])]
 

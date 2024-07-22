@@ -42,8 +42,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    uint32_t core_w = core_range.end.x - core_range.start.x + 1;
-    uint32_t core_h = core_range.end.y - core_range.start.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     uint32_t units_to_divide = input_grad.volume() / H / W * Ht * Wt;
 
@@ -141,8 +141,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
 
-    auto core_x_offset = core_range.start.x;
-    auto core_y_offset = core_range.start.y;
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t units_per_core;
@@ -220,8 +220,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    uint32_t core_w = core_range.end.x - core_range.start.x + 1;
-    uint32_t core_h = core_range.end.y - core_range.start.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     uint32_t units_to_divide = input_grad.volume() / TILE_HEIGHT / TILE_WIDTH;
 
@@ -319,8 +319,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
 
-    auto core_x_offset = core_range.start.x;
-    auto core_y_offset = core_range.start.y;
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t units_per_core;
@@ -394,8 +394,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    uint32_t core_w = core_range.end.x - core_range.start.x + 1;
-    uint32_t core_h = core_range.end.y - core_range.start.y + 1;
+    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     uint32_t units_to_divide = input_grad.volume() / TILE_HEIGHT / TILE_WIDTH;
 
@@ -493,8 +493,8 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
 
-    auto core_x_offset = core_range.start.x;
-    auto core_y_offset = core_range.start.y;
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t units_per_core;

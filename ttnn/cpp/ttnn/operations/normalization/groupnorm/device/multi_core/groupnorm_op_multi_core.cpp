@@ -382,7 +382,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         }
     }
     for (auto& coord : mcast_sender_core_ranges) {
-        log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start.x, coord.start.y);
+        log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i=0; i < num_cores; ++i) {
         // not found in mcast sender
@@ -391,7 +391,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         }
     }
     for (auto& coord : mcast_receiver_core_ranges) {
-        log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start.x, coord.start.y);
+        log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);

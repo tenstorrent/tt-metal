@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end;
+    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
     if (input.get_layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -339,7 +339,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto shard_strategy = input.memory_config().memory_layout;
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end;
+    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
     if (output.get_layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -620,7 +620,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
-    CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end;
+    CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});
