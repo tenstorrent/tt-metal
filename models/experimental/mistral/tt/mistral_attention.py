@@ -106,8 +106,8 @@ class TtAttention(nn.Module):
         dim = 2
         keys = torch_to_tt_tensor_rm(keys, self.device)
         values = torch_to_tt_tensor_rm(values, self.device)
-        keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim, output_mem_config=self.args.out_mem_config)
-        values = tt_lib.tensor.repeat_interleave(values, repeats, dim, output_mem_config=self.args.out_mem_config)
+        keys = ttnn.repeat_interleave(keys, repeats, dim, output_mem_config=self.args.out_mem_config)
+        values = ttnn.repeat_interleave(values, repeats, dim, output_mem_config=self.args.out_mem_config)
         return keys, values
 
     def forward(

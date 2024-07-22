@@ -624,8 +624,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.repeat
 
-.. autofunction:: tt_lib.tensor.repeat_interleave
-
 .. autofunction:: tt_lib.tensor.pow
 
 .. autofunction:: tt_lib.tensor.argmax
