@@ -3442,3 +3442,21 @@ def eltwise_add_bw(
     t3 = ttnn.add_bw(t0, t1, t2, memory_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
+
+
+def eltwise_rdiv(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    factor = kwargs["factor"]
+    queue_id = 0
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.rdiv(t0, factor, memory_config=output_mem_config, queue_id=queue_id)
+
+    return ttnn_tensor_to_torch(t1)
