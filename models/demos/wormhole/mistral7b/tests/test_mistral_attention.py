@@ -31,12 +31,11 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
-    model_args.sliding_window = 1024
-    model_args.max_batch_size = 32
+
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = 32
+    batch = model_args.max_batch_size
     seq_len = 1
 
     # pre-compute the rotational embedding matrix and send to device
@@ -88,7 +87,9 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
-        tt_output_torch = ttnn.to_torch(tt_out).permute(1, 0, 2)  # [ batch, seq, hidden_dim]
+        tt_output_torch = ttnn.to_torch(tt_out).permute(1, 0, 2)[
+            : model_args.max_batch_size, :, :
+        ]  # [ batch, seq, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
         positions = torch.tensor([current_pos])

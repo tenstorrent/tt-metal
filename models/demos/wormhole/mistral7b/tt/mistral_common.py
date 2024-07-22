@@ -130,6 +130,11 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
             x, (batch, seq_len, 1, hidden_size)
         )  # [batch, seqlen, hidden_dim] -> [batch, seqlen, 1, hidden_dim]
         x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
+    # Pad small batches to 32
+    if batch < 32:
+        zeros = torch.zeros(1, seq_len, 32, hidden_size)
+        zeros[:, :, :batch, :] = x
+        x = zeros
 
     current = current_pos % sliding_window
 
@@ -177,7 +182,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 
 
-def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
+def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
     attention_input = ttnn.from_torch(
         torch.randn(1, 1, 32, 4096),
         dtype=ttnn.bfloat16,
@@ -195,7 +200,7 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
         rot_mat=rot_emb_matrix_list,
         start_pos=0,
     )
-    for iter in range(1024):
+    for iter in range(iterations):
         pos = iter
         tt_out = tt_model(
             [attention_input],

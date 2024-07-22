@@ -132,31 +132,23 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
         os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
         os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
-
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-
-    assert batch_size == 32, "Batch size must be 32"
 
     embed_on_device = False
     dtype = ttnn.bfloat8_b
 
     logger.info(f"Reading inputs...")
     if len(user_input) == 1:
-        input_prompts = user_input * 32  # Always process 32 users
+        input_prompts = user_input * batch_size
     else:
-        input_prompts = load_inputs(user_input, 32)
+        input_prompts = load_inputs(user_input, batch_size)
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    # TODO: Currently only supporting 1k decode
     model_args.n_layers = 32
-    model_args.max_batch_size = 32
-    model_args.max_seq_len = 1024
-    model_args.sliding_window = 1024
-    model_args.kv_seq_len = 1024
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path)
@@ -188,7 +180,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     max_generated_tokens = 120
     users_decoding = True
     logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype)
+    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
 
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -269,7 +261,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 
         # Run ttnn mistral model
         tt_out = tt_model(decode_input, current_pos)
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [batch, seq, hidden_dim]
+        tt_output_torch = (
+            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
+        )  # [batch, seq, hidden_dim]
 
         # If temperature is 0, does greedy decoding (top-1)
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
@@ -361,5 +355,5 @@ def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weigh
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     return run_mistral_demo(
-        user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+        user_input=input_prompts, batch_size=8, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
     )

@@ -27,7 +27,7 @@ class TtModelArgs:
     # Parameters for our use
     max_batch_size = 8
     max_seq_len = 4096
-    kv_seq_len = 4096  # TODO Update the initial cache size when scaling up (Should be window_size == 4096)
+    kv_seq_len = 4096
 
     # Default folder location for weights and cached files
     DEFAULT_CKPT_DIR = os.getenv("MISTRAL_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/")

@@ -142,7 +142,7 @@ class TtMistralAttention(nn.Module):
         # Pre-scaled head dimension (for softmax) to avoid fallbacking to host
         self.head_dims = [
             ttnn.from_torch(
-                torch.ones(1, self.n_heads, self.max_batch_size, self.head_dim)
+                torch.ones(1, self.n_heads, 32, self.head_dim)
                 * (self.head_dim**-0.5),  # [seqlen, n_heads, bsz, head_dim] [1,32,32,128]
                 device=self.devices[i],
                 layout=ttnn.TILE_LAYOUT,
@@ -193,7 +193,7 @@ class TtMistralAttention(nn.Module):
             for i in range(len(devices))
         ]
 
-        mask_Q_8D_torch = torch.zeros(1, 32, 32, 8 * 128)
+        mask_Q_8D_torch = torch.zeros(1, self.max_batch_size, 32, 8 * 128)
         for j in range(8):
             mask_Q_8D_torch[:, :, j * 4 : (j + 1) * 4, j * 128 : (j + 1) * 128] = 1
         self.mask_Q_8D = [
@@ -286,6 +286,13 @@ class TtMistralAttention(nn.Module):
                 core_grid=self.grid_size,
             )
 
+            # Reshape such that true unpadded batch is tracked in shape
+            if self.max_batch_size < 32:
+                fqkv_shape = xqkv_fused.shape
+                xqkv_fused = ttnn.reshape(
+                    xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+                )
+
             # ttnn.deallocate(x)
 
             ###
@@ -357,6 +364,11 @@ class TtMistralAttention(nn.Module):
                 ttnn.deallocate(keys_sliced)
                 q_heads = q_heads * head_dim  # Scale q_heads instead of QK before softmax
 
+                # Reshape such that true unpadded batch is tracked in shape
+                if self.max_batch_size < 32:
+                    keys_sliced_T_shape = keys_sliced_T.shape
+                    keys_sliced_T = ttnn.reshape(keys_sliced_T, ttnn.Shape([32, 8, 128, keys_sliced_T_shape[3]]))
+
                 attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     q_heads,
                     keys_sliced_T,
@@ -374,8 +386,11 @@ class TtMistralAttention(nn.Module):
                     dim=-1,
                 )
 
+                # Reshape such that true unpadded batch is tracked in shape
+                if self.max_batch_size < 32:
+                    values_sliced_shape = values.shape
+                    values = ttnn.reshape(values, ttnn.Shape([32, 8, values_sliced_shape[2], 128]))
                 values_sliced = values[:, :, :layer_slice, :]
-
                 attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     attn_sliced,
                     values_sliced,
@@ -386,7 +401,6 @@ class TtMistralAttention(nn.Module):
 
                 ttnn.deallocate(attn_sliced)
                 ttnn.deallocate(values_sliced)
-
                 attn_output_cat = ttnn.transformer.concatenate_heads(
                     attn_output, memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"]
                 )
@@ -418,6 +432,8 @@ class TtMistralAttention(nn.Module):
                     q_heads_1QBD, dtype=ttnn.bfloat16, memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"]
                 )
                 q_heads_1BQD = ttnn.permute(q_heads_1QBD, (0, 2, 1, 3))
+                if self.max_batch_size < 32:
+                    q_heads_1BQD = q_heads_1BQD[:, : self.max_batch_size, :, :]
                 q_heads_1QBD.deallocate()
                 q_heads_1B_Q_8D_preshard = (
                     ttnn.matmul(
@@ -468,6 +484,11 @@ class TtMistralAttention(nn.Module):
                     program_config=self.reduce_program_config,
                     memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
                 )
+                if self.max_batch_size < 32:
+                    attn_output_1BQD_shape = attn_output_1BQD.shape
+                    attn_output_1BQD = ttnn.reshape(
+                        attn_output_1BQD, ttnn.Shape([1, 32, attn_output_1BQD_shape[2], 128])
+                    )
                 attn_output_1QBD = ttnn.permute(attn_output_1BQD, (0, 2, 1, 3))
 
                 attn_output_1BQD.deallocate()
