@@ -4,23 +4,36 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-// #include "dprint.h"
 
 void kernel_main() {
     const uint32_t cache_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t Wt          = get_arg_val<uint32_t>(1);
-    const uint32_t cache_start_id = get_arg_val<uint32_t>(2);
-    const uint32_t Wbytes      = get_arg_val<uint32_t>(3);
-    const uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(4);
+    const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
+    uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(2);
+    const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
 
     constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
+    constexpr bool use_index_tensor = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(6);
+    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t Wbytes = get_compile_time_arg_val(9);
+
+    // paged_cache args
+    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
+    constexpr uint32_t block_size = get_compile_time_arg_val(12);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
+    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
+    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
+
+    constexpr uint32_t TILE_HEIGHT = 32;
 
     const InterleavedAddrGenFast<cache_is_dram> s0 = {
         .bank_base_address = cache_addr,
@@ -29,6 +42,33 @@ void kernel_main() {
     };
 
     uint32_t cache_id = cache_start_id;
+    uint32_t update_idx = 0;
+
+    if constexpr (use_index_tensor) {
+        cb_wait_front(cb_index_id, 1);
+        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
+        const uint32_t update_idx = index_ptr[my_batch_idx];
+
+        if constexpr (is_paged_cache) {
+            cb_wait_front(page_table_cb_id, 1);
+            uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
+            volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+
+            const uint32_t virtual_block_id = update_idx / block_size;
+            const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+            const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+            const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+            const uint32_t block_offset = block_row_tile * Wt;
+            cache_id = block_start_id + block_offset;
+
+        } else {
+            const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+            const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+            cache_id = cache_start_id;
+        }
+        cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
+    }
 
     cb_wait_front(untilized_input_cb_id, Wt);
     uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id));
