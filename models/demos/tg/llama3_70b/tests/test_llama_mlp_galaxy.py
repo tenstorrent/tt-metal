@@ -21,6 +21,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     comp_pcc,
     should_skip_model_load,
     ShardTensor2dMesh,
+    ConcatMesh2DToTensor,
 )
 import gc
 
@@ -126,7 +127,12 @@ def run_test_LlamaMLP_inference(
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+    # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+    )
+    tt_out = tt_out[:, 0:1, :, :]
 
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")

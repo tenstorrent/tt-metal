@@ -33,6 +33,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
     num_to_corerange,
     ConcatMesh2DToTensor,
+    ShardTensor2dMesh,
 )
 import gc
 
@@ -113,7 +114,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 32),
+            shape=(x.shape[2], x.shape[3] // 32 // llama_decoder_model.cluster_shape[0]),
             core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -123,9 +124,12 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ACT_MEMCFG,
+            # memory_config=ACT_MEMCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            mesh_mapper=ShardTensor2dMesh(
+                llama_decoder_model.device_mesh, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+            ),
         )
 
         rot_emb = generate_rot_emb(
@@ -229,7 +233,7 @@ def run_test_LlamaDecoder_inference(
         generation_length = 1
     else:
         generation_start_pos = UNIT_TEST_START_POS
-        generation_length = UNIT_TEST_GENERATION_LENGTH
+        generation_length = UNIT_TEST_GENERATION_LENGTH  # 1
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -264,8 +268,14 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+        tt_out = ttnn.to_torch(
+            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+        )
+
+        breakpoint()
+        tt_out = tt_out[:, 0:1, :, :]
+
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
