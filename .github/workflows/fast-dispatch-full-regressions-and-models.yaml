@@ -19,14 +19,62 @@ jobs:
       matrix:
         test-group:
           [
-            { name: "Common models GS", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_common_models.sh, timeout: 40 },
-            { name: "Common models N300 WH B0", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_common_models.sh, timeout: 40 },
-            { name: "GS-only ttnn nightly", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_ttnn.sh, timeout: 40 },
-            { name: "GS-only models", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_gs_only.sh, timeout: 40 },
-            { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh, timeout: 50 },
-            { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
-            { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
-            { name: "[Unstable] N300 models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh, timeout: 45 },
+            {
+              name: "Common models GS",
+              arch: grayskull,
+              runs-on: ["grayskull", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40
+            },
+            {
+              name: "Common models N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
+              name: "GS-only ttnn nightly",
+              arch: grayskull,
+              runs-on: ["grayskull", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 40
+            },
+            {
+              name: "GS-only models",
+              arch: grayskull,
+              runs-on: ["grayskull", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+              timeout: 40
+            },
+            {
+              name: "N300 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 50
+            },
+            {
+              name: "API tests GS",
+              arch: grayskull,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "[Unstable] N300 models",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
+              timeout: 45
+            },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -34,7 +82,7 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: model-runner-${{ matrix.test-group.arch }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
