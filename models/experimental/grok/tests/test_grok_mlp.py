@@ -4,6 +4,7 @@
 import os
 import torch
 from loguru import logger
+import pytest
 
 # Set Grok flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -25,6 +26,7 @@ from models.utility_functions import (
 )
 
 
+@pytest.mark.timeout(500)
 def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
