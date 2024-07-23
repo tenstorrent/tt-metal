@@ -57,12 +57,18 @@ std::vector<Tensor> _xlogy_bw( const Tensor& grad, const Tensor& input, const Te
 std::vector<Tensor> _hypot_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ldexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _logaddexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 //OpHandler_binary_bw_float_default : get_function_binary_bw_float_default
 std::vector<ttnn::Tensor> _subalpha_bw( const Tensor& grad, const Tensor& input, const Tensor& other, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 //OpHandler_binary_bw_float : get_function_binary_bw_float
 std::vector<ttnn::Tensor> _lerp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, float weight , const std::optional<MemoryConfig>& output_mem_config);
+
+//OpHandler_binary_bw_string_default : get_function_binary_bw_string_default
+std::vector<ttnn::Tensor> _div_bw( const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode = "None" , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 //OpHandler_binary_bw_int_default : get_function_binary_bw_int_default
 std::vector<ttnn::Tensor> _concat_bw( const Tensor& grad, const Tensor& input, const Tensor& other, int dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -118,6 +124,27 @@ struct OpHandler<BinaryBackwardOpType::RSUB_BW> {
 };
 
 template <>
+struct OpHandler<BinaryBackwardOpType::SUB_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _sub_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::GT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _gt_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::ASSIGN_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _assign_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
 struct OpHandler<BinaryBackwardOpType::ADDALPHA_BW> {
     static std::vector<std::optional<ttnn::Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad ) {
         return _addalpha_bw( queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
@@ -135,6 +162,13 @@ template <>
 struct OpHandler<BinaryBackwardOpType::SUBALPHA_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
         return _subalpha_bw(grad, input, other, alpha, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::DIV_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _div_bw(grad, input, other, round_mode, output_mem_config);
     }
 };
 
@@ -165,6 +199,11 @@ auto get_function_binary_bw_opt_float_default() {
 
 template <BinaryBackwardOpType OpType>
 auto get_function_binary_bw_float_default() {
+    return &OpHandler<OpType>::handle;
+}
+
+template <BinaryBackwardOpType OpType>
+auto get_function_binary_bw_string_default() {
     return &OpHandler<OpType>::handle;
 }
 
