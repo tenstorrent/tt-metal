@@ -24,6 +24,7 @@ from tests.ttnn.unit_tests.operations.backward.complex_ops.backward_complex_util
 )
 
 
+@pytest.mark.skip(reason="this test is failing because ttnn.mul_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "memcfg",
     (

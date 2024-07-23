@@ -35,29 +35,27 @@ Tensor permute_launch(const Tensor &a, std::vector<std::int64_t> dims, const Mem
 }
 
 struct ExecutePermute {
-
-    static inline ttnn::Tensor execute_on_main_thread_composite(
+    static inline ttnn::Tensor composite_invoke(
         uint8_t queue_id,
-        const ttnn::Tensor &input_tensor,
+        const ttnn::Tensor& input_tensor,
         const std::vector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config) {
         std::vector<int64_t> iorder(dims.size());
 
-        auto output_tensor = permute::permute_launch(input_tensor, dims, memory_config.value_or(input_tensor.memory_config()));
+        auto output_tensor =
+            permute::permute_launch(input_tensor, dims, memory_config.value_or(input_tensor.memory_config()));
 
         return output_tensor;
     }
 
-
-    static inline ttnn::Tensor execute_on_main_thread(
+    static inline ttnn::Tensor operator()(
         uint8_t queue_id,
-        const ttnn::Tensor &input_tensor,
+        const ttnn::Tensor& input_tensor,
         const std::vector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config,
         bool composite = true) {
-
-        if(composite)
-            return execute_on_main_thread_composite(queue_id, input_tensor, dims, memory_config);
+        if (composite)
+            return composite_invoke(queue_id, input_tensor, dims, memory_config);
 
         const bool initial_input_tensor_on_device = permute::is_on_device(input_tensor);
         const auto input_layout = input_tensor.get_layout();
@@ -81,14 +79,15 @@ struct ExecutePermute {
             return new_order;
         };
         auto itensor = (input_tensor.get_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
-        auto iorder = adjust_order(dims); // internals of permute_impl already adjust negative indices
+        auto iorder = adjust_order(dims);  // internals of permute_impl already adjust negative indices
 
         if (permute::has_tile_padding(itensor)) {
             itensor = ttnn::to_layout(itensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
         }
 
         TT_FATAL(permute::is_on_device(itensor) and itensor.get_shape().rank() == 4);
-        auto output_tensor = permute::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));
+        auto output_tensor =
+            permute::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));
         output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 
         if (input_rank < 4) {
@@ -106,29 +105,23 @@ struct ExecutePermute {
         }
 
         if (initial_input_tensor_on_device and not permute::is_on_device(output_tensor)) {
-            output_tensor = ttnn::to_device(output_tensor, input_tensor.device(), memory_config.value_or(input_tensor.memory_config()));
+            output_tensor = ttnn::to_device(
+                output_tensor, input_tensor.device(), memory_config.value_or(input_tensor.memory_config()));
         }
 
         return output_tensor;
     }
 
-
-    static inline auto execute_on_main_thread(
-        const ttnn::Tensor &input_tensor,
+    static inline auto operator()(
+        const ttnn::Tensor& input_tensor,
         const std::vector<int64_t>& dims,
-        const std::optional<MemoryConfig>& memory_config
-        ) {
-        return execute_on_main_thread(0, input_tensor, dims, memory_config);
+        const std::optional<MemoryConfig>& memory_config) {
+        return operator()(0, input_tensor, dims, memory_config);
     }
 
-
-    static inline auto execute_on_main_thread(
-        const ttnn::Tensor &input_tensor,
-        const std::vector<int64_t>& dims
-        ) {
-        return execute_on_main_thread(input_tensor, dims, std::nullopt);
+    static inline auto operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
+        return operator()(input_tensor, dims, std::nullopt);
     }
-
 };
 
 }  // namespace operations::data_movement

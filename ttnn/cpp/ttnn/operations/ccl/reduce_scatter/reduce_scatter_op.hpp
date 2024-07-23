@@ -12,8 +12,7 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteReduceScatter {
-
-    static std::vector<ttnn::Tensor> execute_on_main_thread(
+    static std::vector<ttnn::Tensor> operator()(
         const std::vector<ttnn::Tensor>& input_tensors,
         const uint32_t scatter_dim,
         ReduceOpMath math_op,
