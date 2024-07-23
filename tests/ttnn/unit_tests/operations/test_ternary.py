@@ -49,7 +49,9 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor1 = scalar1
     torch_input_tensor2 = scalar2
-    torch_output_tensor = torch_mac(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
+    torch_output_tensor = torch.unsqueeze(
+        torch.unsqueeze(torch_mac(torch_input_tensor, torch_input_tensor1, torch_input_tensor2), 0), 0
+    )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.to_device(input_tensor, device)
