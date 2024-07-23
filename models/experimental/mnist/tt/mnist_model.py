@@ -28,9 +28,9 @@ class TtMnistModel(torch.nn.Module):
         self.fc3_weight = torch2tt_tensor(state_dict["fc3.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
         self.fc3_bias = torch2tt_tensor(state_dict["fc3.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.fc1_weight = tt_lib.tensor.transpose(self.fc1_weight, -2, -1)
-        self.fc2_weight = tt_lib.tensor.transpose(self.fc2_weight, -2, -1)
-        self.fc3_weight = tt_lib.tensor.transpose(self.fc3_weight, -2, -1)
+        self.fc1_weight = ttnn.transpose(self.fc1_weight, -2, -1)
+        self.fc2_weight = ttnn.transpose(self.fc2_weight, -2, -1)
+        self.fc3_weight = ttnn.transpose(self.fc3_weight, -2, -1)
 
     def forward(self, x):
         # tt_lib.tensor.reshape throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.get_legacy_shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:

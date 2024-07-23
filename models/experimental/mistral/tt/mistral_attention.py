@@ -178,7 +178,7 @@ class TtAttention(nn.Module):
 
         xq = torch_to_tt_tensor(xq, self.device)
 
-        query = tt_lib.tensor.transpose(xq, 1, -2, output_mem_config=self.args.out_mem_config)
+        query = ttnn.transpose(xq, 1, -2, memory_config=self.args.out_mem_config)
         desired_score_shape = [
             query.get_legacy_shape()[-1],
             query.get_legacy_shape()[-2],
@@ -193,7 +193,7 @@ class TtAttention(nn.Module):
         key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
 
         value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-        value = tt_lib.tensor.transpose(value, 1, -2, output_mem_config=self.args.out_mem_config)
+        value = ttnn.transpose(value, 1, -2, memory_config=self.args.out_mem_config)
         value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
 
         query = format_tensor(query, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
@@ -230,7 +230,7 @@ class TtAttention(nn.Module):
         output = unpad_from_zero(output, desired_output_shape)
         output = torch_to_tt_tensor_rm(output, self.device, put_on_device=False)
 
-        output = tt_lib.tensor.transpose(output, 1, -2, output_mem_config=self.args.out_mem_config)
+        output = ttnn.transpose(output, 1, -2, memory_config=self.args.out_mem_config)
 
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
 

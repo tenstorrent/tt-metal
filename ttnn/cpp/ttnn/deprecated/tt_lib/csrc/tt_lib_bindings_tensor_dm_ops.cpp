@@ -7,8 +7,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
@@ -406,7 +406,7 @@ namespace tt::tt_metal::detail{
             "dim0", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
             "dim1", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-       )doc");
+        )doc");
 
         // Sharding ops
         m_tensor.def("interleaved_to_sharded", py::overload_cast<const Tensor&, const std::variant<CoreCoord, CoreRangeSet>,  std::array<uint32_t, 2>, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded),

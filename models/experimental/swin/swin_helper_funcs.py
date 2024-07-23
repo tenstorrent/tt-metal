@@ -11,7 +11,7 @@ def linear(
     weight: tt_lib.tensor.Tensor,
     bias: tt_lib.tensor.Tensor = None,
 ) -> tt_lib.tensor.Tensor:
-    weight = tt_lib.tensor.transpose(weight, -2, -1)
+    weight = ttnn.transpose(weight, -2, -1)
     x = ttnn.matmul(x, weight)
 
     if bias is not None:
