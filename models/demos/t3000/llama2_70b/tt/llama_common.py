@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import math
 from loguru import logger
 import re
 from typing import Tuple
@@ -241,13 +242,37 @@ def tt_all_gather_torch(tensors, dim=-1):
     return res
 
 
-def generate_rot_emb(dhead, end, theta: float = 10000.0):
-    cos, sin = precompute_freqs(dhead, end, theta)
+def generate_rot_emb(dhead, end, theta: float = 10000.0, use_scaled: bool = False):
+    cos, sin = precompute_freqs(dhead, end, theta, use_scaled)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
+def apply_scaling(freqs: torch.Tensor):
+    # Llama-3.1 specific scaling
+    # Values obtained from grid search
+    scale_factor = 8
+    low_freq_factor = 1
+    high_freq_factor = 4
+    old_context_len = 8192  # original llama3 length
+
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def precompute_freqs(dim: int, end: int, theta: float = 10000.0, use_scaled: bool = False):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -261,6 +286,8 @@ def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
+    if use_scaled:
+        freqs = apply_scaling(freqs)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
