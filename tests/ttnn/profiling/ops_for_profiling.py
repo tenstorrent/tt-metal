@@ -1450,7 +1450,7 @@ def logical_noti(x):
 
 
 def glu_1(x):
-    tt_lib.tensor.glu(x, -1)
+    ttnn.glu(x, -1)
 
 
 def geglu_1(x):
@@ -1466,7 +1466,7 @@ def swiglu_1(x):
 
 
 def glu_2(x):
-    tt_lib.tensor.glu(x, -2)
+    ttnn.glu(x, -2)
 
 
 def geglu_2(x):
@@ -2192,7 +2192,7 @@ all_unary_ops = [
     },
     {
         "op": glu_1,
-        "name": "tt_lib.tensor.glu_dim_3",
+        "name": "ttnn.glu_dim_3",
     },
     {
         "op": geglu_1,
@@ -2208,7 +2208,7 @@ all_unary_ops = [
     },
     {
         "op": glu_2,
-        "name": "tt_lib.tensor.glu_dim_2",
+        "name": "ttnn.glu_dim_2",
     },
     {
         "op": geglu_2,

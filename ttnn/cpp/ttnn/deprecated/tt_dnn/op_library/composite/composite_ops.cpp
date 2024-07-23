@@ -1879,27 +1879,6 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     return t_split;
 }
 
-// Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor _glu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
-    if (dim == -1)
-        dim = 3;
-
-    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
-    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
-    return glu_result;
-}
-Tensor glu(
-    const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _glu)(input_a, dim, output_mem_config);
-}
-
 
 // on-device tensor creation with shape and filled with value
 Tensor _sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {

@@ -376,6 +376,15 @@ def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_not, golden_function=_golden_function_bitwise_not)
 
 
+def _golden_function_glu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.glu(input_tensor_a, dim)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.glu, golden_function=_golden_function_glu)
+
+
 def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
     import torch
 
@@ -566,70 +575,5 @@ for (
     register_ttl_activation_function_with_two_float_params(
         activation_function_name, ttl_activation_function, param1, param2
     )
-
-
-def register_ttl_activation_function_glu(name, ttl_activation_function, param):
-    def _golden_function(input_tensor: ttnn.Tensor, dim: int = -1, **_):
-        import torch
-
-        name_to_torch_function = {
-            "glu": torch.nn.functional.glu,
-        }
-        torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
-
-        return torch_function(input_tensor, dim=dim)
-
-    doc = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-
-            """
-
-    @ttnn.register_python_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)
-    def activation_function(
-        input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        input_shape = tuple(input_tensor.shape)
-        last_dim = input_shape[-1]
-        glu_shape = input_shape[:-1] + (int(last_dim / 2),)
-
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not _is_scalar(dim):
-            raise TypeError("Expected second argument to be a float")
-
-        if not ttnn.is_tensor_storage_on_device(input_tensor):
-            raise RuntimeError("input_tensor must be on device!")
-
-        output_tensor = ttl_activation_function(input_tensor, dim, output_mem_config=memory_config)
-
-        output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(glu_shape))
-        return output_tensor
-
-
-TTL_ACTIVATION_FUNCTIONS_GLU = [
-    ("glu", ttl.tensor.glu, "dim"),  # composite
-]
-
-
-for activation_function_name, ttl_activation_function, param in TTL_ACTIVATION_FUNCTIONS_GLU:
-    register_ttl_activation_function_glu(activation_function_name, ttl_activation_function, param)
-
 
 __all__ = []

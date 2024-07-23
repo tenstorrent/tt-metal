@@ -332,13 +332,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         R"doc(Returns tensor with the polyval of all of elements of the input tensor ``{0}`` with coefficients ``{1}``.)doc",
         R"doc("coefficients value with highest degree first", "List of float", "List size > 0")doc");
 
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "glu",
-        &glu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Gated Linear Units (GLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
     m_tensor.def(
         "prod",
         &prod,
