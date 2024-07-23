@@ -51,6 +51,7 @@ class TtLlamaModel_optimized:
         self.norm_eps = configuration.norm_eps
         self.llama3 = self.vocab_size == 128256
         self.rope_theta = configuration.rope_theta if self.llama3 else 10000.0
+        self.use_scaled_rope = getattr(configuration, "use_scaled_rope", False)
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
@@ -83,7 +84,9 @@ class TtLlamaModel_optimized:
         logger.info("Done creating layers")
 
         # Rotary Embedding
-        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for prefill
+        self.cos, self.sin = precompute_freqs(
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope
+        )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
