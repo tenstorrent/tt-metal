@@ -44,7 +44,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
-    bool untilize_out);
+    bool untilize_out,
+    bool disable_stagger);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -75,7 +76,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out);
+    bool untilize_out,
+    bool disable_stagger);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -90,7 +92,8 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out);
+    bool untilize_out,
+    bool disable_stagger);
 
 }  // namespace tt_metal
 
@@ -110,6 +113,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
+    bool disable_stagger = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -122,6 +126,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    bool disable_stagger = false;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
@@ -134,6 +139,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool fuse_batch;
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
+    bool disable_stagger = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -141,6 +147,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M;
     std::size_t per_core_N;
     std::optional<UnaryWithParam> fused_activation;
+    bool disable_stagger = false;
 };
 
 struct MatmulMultiCoreProgramConfig {};

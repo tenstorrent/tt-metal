@@ -26,21 +26,22 @@ void py_module(py::module& module) {
 
     py::class_<MatmulMultiCoreReuseProgramConfig>(module, "MatmulMultiCoreReuseProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert())
-        .def_readwrite(
-            "compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
+            py::arg("per_core_N").noconvert(),
+            py::arg("disable_stagger").noconvert() = false)
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N)
+        .def_readwrite("disable_stagger", &MatmulMultiCoreReuseProgramConfig::disable_stagger)
         .def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(module, "MatmulMultiCoreReuseMultiCastProgramConfig")
@@ -54,6 +55,7 @@ void py_module(py::module& module) {
                 std::size_t,
                 bool,
                 std::optional<UnaryWithParam>,
+                bool,
                 bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -64,10 +66,9 @@ void py_module(py::module& module) {
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
             py::arg("fused_activation"),
-            py::arg("fuse_batch").noconvert() = true)
-        .def_readwrite(
-            "compute_with_storage_grid_size",
-            &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
+            py::arg("fuse_batch").noconvert() = true,
+            py::arg("disable_stagger").noconvert() = false)
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w)
@@ -76,6 +77,7 @@ void py_module(py::module& module) {
         .def_readwrite("transpose_mcast", &MatmulMultiCoreReuseMultiCastProgramConfig::transpose_mcast)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch)
+        .def_readwrite("disable_stagger", &MatmulMultiCoreReuseMultiCastProgramConfig::disable_stagger)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format("{}", config);
         });
@@ -91,6 +93,7 @@ void py_module(py::module& module) {
                 std::size_t,
                 bool,
                 std::optional<UnaryWithParam>,
+                bool,
                 bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -101,10 +104,9 @@ void py_module(py::module& module) {
             py::arg("per_core_N").noconvert(),
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
-            py::arg("mcast_in0").noconvert())
-        .def_readwrite(
-            "compute_with_storage_grid_size",
-            &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
+            py::arg("mcast_in0").noconvert(),
+            py::arg("disable_stagger").noconvert() = false)
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w)
@@ -113,6 +115,7 @@ void py_module(py::module& module) {
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
         .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
+        .def_readwrite("disable_stagger", &MatmulMultiCoreReuseMultiCast1DProgramConfig::disable_stagger)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format("{}", config);
         });
@@ -120,16 +123,23 @@ void py_module(py::module& module) {
     py::class_<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
         module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig")
         .def(
-            py::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
+            py::init<
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::optional<UnaryWithParam>,
+                bool>(),
             py::kw_only(),
             py::arg("in0_block_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
-            py::arg("fused_activation"))
+            py::arg("fused_activation"),
+            py::arg("disable_stagger").noconvert() = false)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation)
+        .def_readwrite("disable_stagger", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::disable_stagger)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             return fmt::format("{}", config);
         });

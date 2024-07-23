@@ -1252,7 +1252,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.per_core_M,
                     program_config.per_core_N,
                     /*fuse_batch=*/false,
-                    this->untilize_out);
+                    this->untilize_out,
+                    program_config.disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a,
@@ -1270,7 +1271,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fuse_batch,
                     program_config.transpose_mcast,
                     program_config.fused_activation,
-                    this->untilize_out);
+                    this->untilize_out,
+                    program_config.disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
@@ -1288,10 +1290,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fuse_batch,
                     program_config.fused_activation,
                     program_config.mcast_in0,
-                    this->untilize_out);
-            } else if constexpr (std::is_same_v<
-                                     ProgramConfigType,
-                                     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                    this->untilize_out,
+                    program_config.disable_stagger);
+            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 return matmul_multi_core_reuse_dram_sharded_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -1305,7 +1306,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->untilize_out,
                     false,
                     false,
-                    false);
+                    false,
+                    program_config.disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core non-optimized reuse");
                 return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);

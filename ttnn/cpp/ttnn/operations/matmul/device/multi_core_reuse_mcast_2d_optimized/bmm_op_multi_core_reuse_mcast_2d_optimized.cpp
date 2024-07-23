@@ -49,7 +49,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out) {
+    bool untilize_out,
+    bool disable_stagger) {
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     tt_metal::Program program{};
 
@@ -187,7 +188,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
+    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -468,7 +469,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // This is done to mitigate di/dt issues.
     // See issue #9857.
     if (device->arch() == ARCH::WORMHOLE_B0 && cores.size() > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        if (std::getenv("DISABLE_MATMUL_STAGGER") != nullptr || disable_stagger) {
+            log_warning(LogOp, "Stagger disabled for matmul 2D op.");
+        } else {
+            mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        }
     }
 
     if (in0_receiver_interleaved.num_cores() == 0) {
@@ -801,9 +806,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
-    const auto& in0_sender_interleaved_cores = grid_to_cores(
-        in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
+    const auto& in0_sender_interleaved_cores =
+        grid_to_cores(in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
     const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
@@ -1217,7 +1221,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out) {
+    bool untilize_out,
+    bool disable_stagger) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1362,7 +1367,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_data_format,
         bias_data_format,
         output_data_format,
-        untilize_out);
+        untilize_out,
+        disable_stagger);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1381,7 +1387,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out) {
+    bool untilize_out,
+    bool disable_stagger) {
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         a,
         b,
@@ -1398,7 +1405,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         fuse_batch,
         transpose_mcast,
         fused_activation,
-        untilize_out);
+        untilize_out,
+        disable_stagger);
 }
 
 }  // namespace tt_metal

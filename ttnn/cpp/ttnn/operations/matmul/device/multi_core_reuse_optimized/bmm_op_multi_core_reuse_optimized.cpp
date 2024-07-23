@@ -40,8 +40,8 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out
-
+    bool untilize_out,
+    bool disable_stagger
 ) {
     tt_metal::Program program{};
 
@@ -217,7 +217,11 @@ operation::ProgramWithCallbacks create_program(
     // This is done to mitigate di/dt issues.
     // See issue #9857.
     if (device->arch() == ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        if (std::getenv("DISABLE_MATMUL_STAGGER") != nullptr || disable_stagger) {
+            log_warning(LogOp, "Stagger disabled for matmul op.");
+        } else {
+            mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        }
     }
 
     // Create compute kernel
@@ -475,7 +479,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out) {
+    bool untilize_out,
+    bool disable_stagger) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
 
@@ -581,7 +586,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
         in0_data_format,
         in1_data_format,
         output_data_format,
-        untilize_out);
+        untilize_out,
+        disable_stagger);
 }
 
 // TODO: Get rid of no-op reshapes when we generalize
@@ -600,7 +606,8 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out) {
+    bool untilize_out,
+    bool disable_stagger) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -622,7 +629,8 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         per_core_M,
         per_core_N,
         fuse_batch,
-        untilize_out);
+        untilize_out,
+        disable_stagger);
 }
 
 }  // namespace tt_metal

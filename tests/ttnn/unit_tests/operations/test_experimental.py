@@ -173,7 +173,8 @@ def test_ttnn_linear(
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
-def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
+@pytest.mark.parametrize("disable_stagger", [True, False])
+def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size, disable_stagger):
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=1, x=8)
@@ -217,10 +218,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=32,
-        per_core_M=1,
-        per_core_N=4,
-        fused_activation=None,
+        in0_block_w=32, per_core_M=1, per_core_N=4, fused_activation=None, disable_stagger=disable_stagger
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
