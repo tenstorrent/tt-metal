@@ -6,7 +6,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
-        default: 9605916313
+        default: 10066042850
         type: number
   workflow_run:
     workflows:
@@ -84,11 +84,11 @@ jobs:
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python3 .github/scripts/data_analysis/create_pipeline_csvs.py
+        run: python3 .github/scripts/data_analysis/create_pipeline_json.py
       - name: Show directory to see output files
         run: ls -hal
       - name: Show JSON output
-        run: cat *.json
+        run: cat pipeline_*.json
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
