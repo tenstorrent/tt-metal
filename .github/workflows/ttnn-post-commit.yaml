@@ -17,6 +17,7 @@ jobs:
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
           # # N300
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
+          {arch: blackhole, runs-on: ["blackhole"], name: BH},
         ]
         test-group:
           - name: ttnn group 1
