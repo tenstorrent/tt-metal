@@ -2178,15 +2178,14 @@ void Device::deallocate_buffers(){
 }
 
 float Device::sfpu_eps() const {
+    switch (arch()) {
+        case tt::ARCH::GRAYSKULL: return tt::tt_metal::EPS_GS;
+        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::EPS_WHB0;
+        case tt::ARCH::BLACKHOLE: return tt::tt_metal::EPS_BH;
+        default: return std::numeric_limits<float>::epsilon();
+    }
 
-  float value = std::numeric_limits<float>::epsilon();
-  if( arch() == tt::ARCH::GRAYSKULL  ) {
-    value = tt::tt_metal::EPS_GS;
-  } else if( arch() == tt::ARCH::WORMHOLE_B0 ) {
-    value = tt::tt_metal::EPS_WHB0;
-  }
-
-  return value;
+    return std::numeric_limits<float>::epsilon();
 }
 
 pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {

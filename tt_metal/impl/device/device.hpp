@@ -45,8 +45,10 @@ class TraceDescriptor;
 
 using on_close_device_callback = std::function<void ()>;
 
+// TODO: These should be moved into arch specific host files that get exported here
 static constexpr float  EPS_GS = 0.001953125f;
 static constexpr float  EPS_WHB0 = 1.19209e-7f;
+static constexpr float  EPS_BH = EPS_WHB0;
 
 // A physical PCIexpress Tenstorrent device
 class Device {

@@ -19,6 +19,7 @@ def test_global_var_toggle_and_device_eps():
     # to device epsilon constants
     assert tt_lib.device.EPS_GS == 0.001953125
     assert tt_lib.device.EPS_WHB0 == 1.1920899822825959e-07
+    assert tt_lib.device.EPS_BH == 1.1920899822825959e-07
 
 
 @pytest.mark.eager_host_side
@@ -26,4 +27,5 @@ def test_global_var_toggle_and_device_eps():
 def test_device_arch():
     assert tt_lib.device.Arch.GRAYSKULL.name == "GRAYSKULL"
     assert tt_lib.device.Arch.WORMHOLE_B0.name == "WORMHOLE_B0"
+    assert tt_lib.device.Arch.BLACKHOLE.name == "BLACKHOLE"
     pass
