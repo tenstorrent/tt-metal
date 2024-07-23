@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
+#include "ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/embedding/embedding/device/embeddings_program_factory.hpp"
+#include "ttnn/operations/embedding/embedding/device/embeddings_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace std;

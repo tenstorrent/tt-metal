@@ -8,7 +8,7 @@
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "common/bfloat16.hpp"
-#include "ttnn/cpp/ttnn/async_runtime.hpp"
+#include "ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"
 #include <cmath>
 

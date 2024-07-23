@@ -6,7 +6,7 @@
 
 #include "ttnn/experimental/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "device/softmax_op.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::normalization {

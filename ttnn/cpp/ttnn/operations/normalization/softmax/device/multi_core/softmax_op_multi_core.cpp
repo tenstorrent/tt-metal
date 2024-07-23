@@ -5,7 +5,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/math.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/run_operation.hpp"

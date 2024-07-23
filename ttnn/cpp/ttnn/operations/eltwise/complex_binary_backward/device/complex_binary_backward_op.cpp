@@ -7,7 +7,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 

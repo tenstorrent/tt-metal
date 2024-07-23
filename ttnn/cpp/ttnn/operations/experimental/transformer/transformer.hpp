@@ -6,7 +6,7 @@
 
 #include "device/transformer_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {

@@ -7,10 +7,10 @@
 #include <optional>
 
 #include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 using namespace tt::constants;
 

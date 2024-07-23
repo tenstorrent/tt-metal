@@ -9,8 +9,8 @@
 #include "ttnn/experimental/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 

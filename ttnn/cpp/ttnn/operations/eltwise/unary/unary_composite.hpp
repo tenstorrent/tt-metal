@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 namespace ttnn {
 namespace operations {

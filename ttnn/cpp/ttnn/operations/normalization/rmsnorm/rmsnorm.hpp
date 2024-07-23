@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
 namespace ttnn {
 namespace operations::normalization {

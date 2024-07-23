@@ -5,11 +5,11 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
 
-#include "ttnn/cpp/ttnn/types.hpp"
+#include "ttnn/types.hpp"
 
 
 namespace ttnn {

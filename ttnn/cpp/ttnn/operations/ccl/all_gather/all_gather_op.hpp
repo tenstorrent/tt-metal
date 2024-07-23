@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/multi_device.hpp"
+#include "ttnn/multi_device.hpp"
 
 namespace ttnn {
 namespace operations {

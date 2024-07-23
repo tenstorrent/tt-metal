@@ -5,7 +5,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 
 #include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"

@@ -22,9 +22,9 @@ Tensor avg_pool2d(const Tensor& input, const MemoryConfig& memory_config = opera
 }  // namespace tt
 
 
-#include "ttnn/cpp/ttnn/operations/pool/avgpool/avg_pool.hpp"
+#include "ttnn/operations/pool/avgpool/avg_pool.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations {

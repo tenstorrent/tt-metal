@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

@@ -6,9 +6,9 @@
 
 #include "device/unary_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
+#include "ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 
