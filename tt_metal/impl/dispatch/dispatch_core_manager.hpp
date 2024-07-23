@@ -75,7 +75,6 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
 };
 
-
 class dispatch_core_manager {
    public:
     dispatch_core_manager &operator=(const dispatch_core_manager &) = delete;
@@ -83,14 +82,20 @@ class dispatch_core_manager {
     dispatch_core_manager(const dispatch_core_manager &) = delete;
     dispatch_core_manager(dispatch_core_manager &&other) noexcept = delete;
 
-    // Ugly to accept num HW CQs here but it is needed to pull the correct number of initially available dispatch cores for assignment
-    static dispatch_core_manager &get(uint8_t num_hw_cqs) {
-        static std::unordered_map<uint8_t, std::unique_ptr<dispatch_core_manager>> dispatch_core_managers;
-        if (dispatch_core_managers[num_hw_cqs] == nullptr) {
-            // Need to do this since dispatch_core_manager constructor is private
-            dispatch_core_managers[num_hw_cqs] = std::unique_ptr<dispatch_core_manager>(new dispatch_core_manager(num_hw_cqs));
+
+    //TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
+    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
+    static void initialize() noexcept {
+        log_debug(tt::LogMetal, "DevicePool initialize");
+        if (_inst == nullptr) {
+            static dispatch_core_manager dispatch_core_manager;
+            _inst = &dispatch_core_manager;
         }
-        return *dispatch_core_managers[num_hw_cqs];
+    }
+
+    static dispatch_core_manager &instance() {
+        TT_ASSERT(_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
+        return *_inst;
     }
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command queue
@@ -343,6 +348,7 @@ class dispatch_core_manager {
     }
 
     void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
+        // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
         auto& dispatch_cores = available_dispatch_cores_by_device.at(device_id);
         if (std::find(dispatch_cores.begin(), dispatch_cores.end(), core) == dispatch_cores.end()) {
             dispatch_cores.push_back(core);
@@ -353,13 +359,13 @@ class dispatch_core_manager {
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    dispatch_core_manager(uint8_t num_hw_cqs) {
+    dispatch_core_manager() {
         for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
             std::list<CoreCoord> &logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
-            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs)) {
+            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS)) {
                 logical_dispatch_cores.push_back(logical_dispatch_core);
             }
-            this->dispatch_core_type_by_device[device_id] = tt::get_dispatch_core_type(device_id, num_hw_cqs);
+            this->dispatch_core_type_by_device[device_id] = tt::get_dispatch_core_type(device_id, MAX_NUM_HW_CQS);
         }
     }
 
@@ -383,6 +389,8 @@ class dispatch_core_manager {
     std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>> dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     std::unordered_map<chip_id_t, CoreType> dispatch_core_type_by_device;
+    static dispatch_core_manager *_inst;
+
 };
 
 
