@@ -79,3 +79,7 @@ ShardSpec = ttnn._ttnn.deprecated.tensor.ShardSpec
 CoreRangeSet = ttnn._ttnn.deprecated.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.deprecated.tensor.CoreRange
 CoreCoord = ttnn._ttnn.deprecated.tensor.CoreCoord
+
+
+UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
+UnaryOpType = ttnn._ttnn.activation.UnaryOpType
