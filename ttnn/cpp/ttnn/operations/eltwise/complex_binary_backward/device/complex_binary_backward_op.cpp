@@ -12,6 +12,7 @@
 
 
 namespace ttnn::operations::complex_binary_backward {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 // complex add
 // self: grad, other: grad * alpha

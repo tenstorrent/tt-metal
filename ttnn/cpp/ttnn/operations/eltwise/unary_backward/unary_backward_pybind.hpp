@@ -13,6 +13,7 @@
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace py = pybind11;
 
@@ -21,6 +22,7 @@ namespace operations {
 namespace unary_backward {
 
 namespace detail {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 //OpHandler_two_float : get_function_type1_w_two_float
 template <typename unary_backward_operation_t>
