@@ -24,22 +24,19 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteMoe {
-    static inline std::vector<Tensor> execute_on_worker_thread(
+    static inline ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor &input_tensor,
         const Tensor &topk_mask_tensor,
         const Tensor &expert_mask_tensor,
         const uint16_t k,
-        const int8_t dim,
-        const bool largest,
-        const bool sorted,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
-        return operation::run(Moe{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config())},
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
+        return operation::run(Moe{k, memory_config.value_or(input_tensor.memory_config())},
         {input_tensor, topk_mask_tensor, expert_mask_tensor},
         {},
-        optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value()) : std::vector<std::optional<Tensor>>{},
-        queue_id);
+        {optional_output_tensor},
+        queue_id).at(0);
     }
 
     static inline auto execute_on_worker_thread(
@@ -47,13 +44,10 @@ struct ExecuteMoe {
         const Tensor &topk_mask_tensor,
         const Tensor &expert_mask_tensor,
         const uint16_t k,
-        const int8_t dim,
-        const bool largest,
-        const bool sorted,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+        const std::optional<MemoryConfig>& memory_config= std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, topk_mask_tensor, expert_mask_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+        return execute_on_worker_thread(DefaultQueueId, input_tensor, topk_mask_tensor, expert_mask_tensor, k, memory_config, optional_output_tensor);
     }
 
 

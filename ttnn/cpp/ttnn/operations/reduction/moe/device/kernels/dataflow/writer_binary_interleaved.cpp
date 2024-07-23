@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+#include <stdint.h>
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -24,14 +24,14 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    // Get Kt rows of values and then Kt rows of indices from compute kernel
+    // // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t j = 0; j < Ht; ++j) {
         for (uint32_t i = 0; i < Kt; ++i) {
-            cb_wait_front(out_cb_index, onetile);
-            uint32_t l1_read_addr = get_read_ptr(out_cb_index);
-            noc_async_write_tile(j*Kt + i, interleaved_accessor0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(out_cb_index, onetile);
+            //cb_wait_front(out_cb_index, onetile);
+            // uint32_t l1_read_addr = get_read_ptr(out_cb_index);
+            // noc_async_write_tile(j*Kt + i, interleaved_accessor0, l1_read_addr);
+            // noc_async_write_barrier();
+            //cb_pop_front(out_cb_index, onetile);
         }
     }
 }

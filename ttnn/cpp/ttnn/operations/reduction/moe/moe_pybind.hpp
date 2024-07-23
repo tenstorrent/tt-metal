@@ -61,25 +61,19 @@ void bind_reduction_moe_operation(py::module& module) {
                 const ttnn::Tensor& topk_mask_tensor,
                 const ttnn::Tensor& expert_mask_tensor,
                 const uint16_t k,
-                const int8_t dim,
-                const bool largest,
-                const bool sorted,
-                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
+                std::optional<ttnn::Tensor> optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, topk_mask_tensor, expert_mask_tensor, k, dim, largest, sorted,
-                    memory_config, optional_output_tensors);
+                    return self(queue_id, input_tensor, topk_mask_tensor, expert_mask_tensor, k,
+                    memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::arg("topk_mask_tensor").noconvert(),
                 py::arg("expert_mask_tensor").noconvert(),
                 py::arg("k") = 32,
-                py::arg("dim") = -1,
-                py::arg("largest") = true,
-                py::arg("sorted") = true,
                 py::kw_only(),
-                py::arg("out") = std::nullopt,
                 py::arg("memory_config") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0});
 }
 

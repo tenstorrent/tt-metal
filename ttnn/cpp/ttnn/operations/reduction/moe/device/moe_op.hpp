@@ -13,9 +13,6 @@ namespace ttnn::operations::reduction {
 
 struct Moe {
     const uint16_t k;
-    const int8_t dim;
-    const bool largest;
-    const bool sorted;
     const MemoryConfig output_mem_config;
 
     void validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
