@@ -63,7 +63,7 @@ show_help() {
 export_compile_commands="OFF"
 enable_ccache="OFF"
 build_type="Release"
-while getopts "hect:" opt; do
+while getopts "hecb:" opt; do
     case ${opt} in
         h )
             show_help
@@ -75,7 +75,7 @@ while getopts "hect:" opt; do
         c )
             enable_ccache="ON"
             ;;
-        t )
+        b )
             build_type="$OPTARG"
             ;;
         \? )
