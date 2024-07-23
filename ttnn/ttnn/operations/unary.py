@@ -401,17 +401,6 @@ def _golden_function_softshrink(input_tensor_a, param, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_bias_gelu_unary(input_tensor_a, param, *args, **kwargs):
-    import torch
-
-    return torch.nn.functional.gelu(input_tensor_a + param)
-
-
-ttnn.attach_golden_function(
-    ttnn._ttnn.operations.unary.bias_gelu_unary, golden_function=_golden_function_bias_gelu_unary
-)
-
-
 def _golden_function_logit(input_tensor_a, param, *args, **kwargs):
     import torch
 
@@ -425,6 +414,9 @@ def _golden_function_celu(input_tensor_a, param, *args, **kwargs):
     import torch
 
     return torch.celu(input_tensor_a, alpha=param)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.celu, golden_function=_golden_function_celu)
 
 
 def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
@@ -482,9 +474,6 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
 
 for unary_function_name, ttl_unary_function, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, param)
-
-
-ttnn.attach_golden_function(ttnn._ttnn.operations.unary.celu, golden_function=_golden_function_celu)
 
 
 def _is_scalar(value):

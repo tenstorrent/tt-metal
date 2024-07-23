@@ -938,30 +938,32 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
 }
 
 
+//OpHandler_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_with_float(py::module& module, const unary_operation_t& operation) {
+void bind_unary_composite_float_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, param, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        {5}
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            * :attr:`input_tensor`
 
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`param`
+        Keyword args:
+            * :attr:`{2}` (float): {3} , Default value = {4}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Example:
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2} = {4})
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name());
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        description);
 
     bind_registered_operation(
         module,
@@ -969,14 +971,14 @@ void bind_unary_composite_with_float(py::module& module, const unary_operation_t
         doc,
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               float param,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor, param, memory_config);
-                },
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, memory_config);
+            },
             py::arg("input_tensor"),
-            py::arg("param"),
             py::kw_only(),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -1344,11 +1346,27 @@ void py_module(py::module& module) {
         R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
 
     // unary composite with float imported into ttnn
-    detail::bind_unary_composite_with_float(module, ttnn::hardshrink);
-    detail::bind_unary_composite_with_float(module, ttnn::softshrink);
-    detail::bind_unary_composite_with_float(module, ttnn::bias_gelu_unary);
-    detail::bind_unary_composite_with_float(module, ttnn::logit);
-    detail::bind_unary_composite_with_float(module, ttnn::celu);
+    detail::bind_unary_composite_float_with_default(
+        module,
+        ttnn::hardshrink,
+        "lambd", "lambd value", 0.5f,
+        R"doc(Performs hardshrink function on :attr:`input_tensor`, :attr:`lambd`.)doc");
+    detail::bind_unary_composite_float_with_default(
+        module,
+        ttnn::softshrink,
+        "lambd", "lambd value", 0.5f,
+        R"doc(Performs softhrink function on :attr:`input_tensor`, :attr:`lambd`.)doc");
+    detail::bind_unary_composite_float_with_default(
+        module,
+        ttnn::celu,
+        "alpha", "alpha value", 1.0f,
+        R"doc(Performs celu function on :attr:`input_tensor`, :attr:`alpha`.)doc");
+    detail::bind_unary_composite_float_with_default(
+        module,
+        ttnn::logit,
+        "eps", "eps", 0.0f,
+        R"doc(Performs logit function on :attr:`input_tensor`, :attr:`eps`.)doc");
+
 
     // unary composite with int imported into ttnn
     detail::bind_unary_composite_with_dim(module, ttnn::glu);

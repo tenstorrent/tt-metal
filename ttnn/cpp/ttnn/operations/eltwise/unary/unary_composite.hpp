@@ -61,18 +61,20 @@ struct ExecuteUnaryCompositeOp {
         return OpHandler<unary_comp_op_type>::handle(input_tensor, output_memory_config);
     }
 };
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithFloat
-{
-    static ttnn::Tensor execute_on_worker_thread(
-        const Tensor& input_tensor,
-        float param,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt)
-        {
-            auto op_type = get_function_type_float<unary_comp_op_type>();
-            return op_type(input_tensor, param, memory_config);
-        }
 
+//OpHandler_two_float : get_function_type_float
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithFloat {
+
+    //Type 1: 1 inputs, 2 float
+    static ttnn::Tensor execute_on_main_thread(
+        const Tensor &input_tensor,
+        float param1,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        auto op_type = get_function_type_float<unary_comp_op_type>();
+        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+        return op_type(input_tensor, param1, output_memory_config);
+        }
 };
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithDim
@@ -308,7 +310,6 @@ constexpr auto std_hw = ttnn::register_operation<operations::unary::ExecuteUnary
 constexpr auto normalize_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>("ttnn::normalize_hw");
 constexpr auto hardshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>("ttnn::hardshrink");
 constexpr auto softshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>("ttnn::softshrink");
-constexpr auto bias_gelu_unary = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::BIAS_GELU_UNARY>>("ttnn::bias_gelu_unary");
 constexpr auto logit = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>("ttnn::logit");
 constexpr auto celu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>("ttnn::celu");
 constexpr auto glu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>("ttnn::glu");

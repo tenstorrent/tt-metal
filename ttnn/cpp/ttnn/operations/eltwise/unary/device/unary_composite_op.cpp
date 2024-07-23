@@ -668,8 +668,8 @@ Tensor _rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const st
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
 Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(param >= 0);
-    Tensor t1 = ttnn::multiply(ttnn::ltz(ttnn::add(a, param)), a);
-    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::subtract(a, param)), a);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(ttnn::add(a, param, std::nullopt, output_mem_config)), a, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::subtract(a, param, std::nullopt, output_mem_config)), a, std::nullopt, output_mem_config);
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
 
@@ -678,10 +678,10 @@ Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(param >= 0);
     Tensor t_a_plus_param = ttnn::add(a, param, std::nullopt, output_mem_config);
-    Tensor t1 = ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
     t_a_plus_param.deallocate();
     Tensor t_a_minus_param = ttnn::subtract(a, param, std::nullopt, output_mem_config);
-    Tensor t2 = ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param, std::nullopt, output_mem_config);
     t_a_minus_param.deallocate();
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
@@ -706,12 +706,10 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
             where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)
             )
         );
-    t_eps.deallocate();
-    t1m_eps.deallocate();
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
-    Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config));
+    Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity());
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor logit_result = where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
@@ -771,7 +769,7 @@ Tensor _glu(const Tensor& input_a, int32_t dim , const std::optional<MemoryConfi
 
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
     Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
-    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b);
+    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
 
