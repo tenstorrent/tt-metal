@@ -66,7 +66,6 @@ def test_mamba_conv(
 
     tt_depthwise_conv = MambaConv(device, loader.get_tensor_loader(LAYER_NUM), mamba_conv_config)
     torch_input = torch_input.permute(0, 2, 1)
-    print("Torch input shape : ", torch_input.shape)
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
@@ -77,17 +76,13 @@ def test_mamba_conv(
     with torch.no_grad():
         tt_output = tt_depthwise_conv(tt_input)
     ttnn.deallocate(tt_input)
-    print("first conv done")
     tt_output = ttnn.to_torch(tt_output).squeeze(0)
     tt_output = tt_output.permute(0, 2, 1)
-
-    print(tt_output[:, 0, :])
-    print(reference_output[:, :, 0])
     logger.info(comp_allclose(reference_output, tt_output))
 
     does_pass, output_pcc = comp_pcc(reference_output, tt_output, pcc)
     logger.info(f"PCC value: {output_pcc}")
 
     if not does_pass:
-        logger.warning("Mamba block output failed")
+        logger.warning("Mamba Conv output failed")
         assert does_pass, f"PCC value is lower than {pcc}"
