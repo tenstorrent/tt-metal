@@ -251,7 +251,6 @@ class Device {
     friend class SystemMemoryManager;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    static constexpr uint32_t max_num_hw_cqs = 2;
     chip_id_t id_;
     uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;

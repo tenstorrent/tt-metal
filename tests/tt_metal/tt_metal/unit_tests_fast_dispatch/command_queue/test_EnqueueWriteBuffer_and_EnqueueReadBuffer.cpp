@@ -375,7 +375,7 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPa
 TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
     for (Device *device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
         const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1,
@@ -389,7 +389,7 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) 
 TEST_F(CommandQueueSingleCardFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
     for (Device *device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
         const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
         uint32_t unaligned_page_size = max_prefetch_command_size + 4;
         TestBufferConfig config = {
