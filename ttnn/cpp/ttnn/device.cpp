@@ -29,6 +29,10 @@ void close_device(Device &device) {
     tt::DevicePool::instance().close_device(device.id());
 }
 
+bool is_wormhole_or_blackhole(tt::ARCH arch) {
+    return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE;
+}
+
 }  // namespace device
 
 using namespace device;

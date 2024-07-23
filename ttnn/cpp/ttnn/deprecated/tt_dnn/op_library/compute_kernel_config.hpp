@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -20,6 +21,8 @@ struct WormholeComputeKernelConfig {
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
 };
+
+using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
 
 using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig>;
 
@@ -44,7 +47,7 @@ inline DeviceComputeKernelConfig init_device_compute_kernel_config(
                     defaultConfig = GrayskullComputeKernelConfig{
                         .math_fidelity = math_fidelity, .math_approx_mode = math_approx_mode};
                 } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                    TT_ASSERT(arch == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+                    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
                     MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
                     bool math_approx_mode = compute_kernel_config.math_approx_mode;
                     bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -109,7 +112,7 @@ inline std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_ASSERT(arch == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+                TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

@@ -16,6 +16,7 @@ Device &open_device(int device_id, size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
 void close_device(Device &device);
 void enable_program_cache(Device &device);
 void disable_and_clear_program_cache(Device &device);
+bool is_wormhole_or_blackhole(tt::ARCH arch);
 
 }  // namespace device
 
