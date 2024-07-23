@@ -22,7 +22,7 @@ namespace detail {
 
 //OpHandler_binary_bw : get_function_binary_bw
 template <typename binary_backward_operation_t>
-void bind_binary_backward_type_1(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
+void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
@@ -417,12 +417,12 @@ Example:
 
 
 void py_module(py::module& module) {
-    detail::bind_binary_backward_type_1(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::atan2_bw,
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward_type_1(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::embedding_bw,
         R"doc(Performs backward operations for embedding_bw function and it returns specific indices of the embedding table specified by the :attr:`grad_tensor`.
@@ -446,22 +446,22 @@ void py_module(py::module& module) {
         "Weight", "Float or Tensor weight value",
         R"doc(Performs backward operations for lerp on :attr:`input_tensor_a` , attr:`input_tensor_b`, attr:`weight` with given attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::hypot_bw,
         R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::ldexp_bw,
         R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::logaddexp_bw,
         R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
@@ -482,7 +482,7 @@ void py_module(py::module& module) {
         "dim", "Dimension to concatenate", 0,
         R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward_type_1(
+    detail::bind_binary_backward_ops(
         module,
         ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given attr:`grad_tensor` (reversed order of subtraction operator).)doc");
