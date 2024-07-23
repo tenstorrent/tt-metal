@@ -356,8 +356,8 @@ bool assign_runtime_args_to_program(
 
 bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *device){
     bool pass = true;
-    int num_cores_r = device->logical_grid_size().y - 1;
-    int num_cores_c = device->logical_grid_size().x;
+    int num_cores_r = device->compute_with_storage_grid_size().y;
+    int num_cores_c = device->compute_with_storage_grid_size().x;
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;

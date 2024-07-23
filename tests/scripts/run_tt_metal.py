@@ -21,6 +21,7 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
+    void_for_bh,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -83,7 +84,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         "tt_metal/tests/test_generic_binary_reader_matmul_large_block",
         "test_generic_binary_reader_matmul_large_block",
     ),
-    TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
+    void_for_bh(TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc")),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
     # TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
     TestEntry("tt_metal/tests/test_multiple_programs", "test_multiple_programs"),
