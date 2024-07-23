@@ -37,10 +37,7 @@ CHECK_COMPILERS()
 # Setting build type flags
 #   Will default to assert build, unless CONFIG env variable is set or manually set -DCMAKE_BUILD_TYPE
 ############################################################################################################################
-if(DEFINED ENV{CONFIG})
-    message(STATUS "CONFIG is set, CMAKE_BUILD_TYPE being set to $ENV{CONFIG}")
-    set(CMAKE_BUILD_TYPE $ENV{CONFIG})
-elseif(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Setting build type to 'Release' as none was specified.")
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
 endif()

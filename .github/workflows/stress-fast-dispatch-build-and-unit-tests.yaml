@@ -31,7 +31,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
       TT_METAL_WATCHER: 60
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
