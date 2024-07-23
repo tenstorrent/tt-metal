@@ -276,7 +276,7 @@ def detail(ctx):
                     source["status"][11:],
                     detail,
                     source["git_hash"],
-                    source["e2e_perf"] + " ms" if "e2e_perf" in source else "None",
+                    source["e2e_perf"] + " ms" if source["e2e_perf"] != "None" else "None",
                 ],
                 result["_id"],
             )

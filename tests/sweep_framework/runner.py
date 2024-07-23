@@ -72,11 +72,13 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+            result["e2e_perf"] = None
             result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             results.append(result)
             suite_pbar.update()
             continue
         else:
+            test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
         if p is None:
@@ -103,6 +105,8 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 result["exception"] = message
             if e2e_perf and MEASURE_PERF:
                 result["e2e_perf"] = e2e_perf
+            else:
+                result["e2e_perf"] = None
         except Empty as e:
             print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
             p.terminate()

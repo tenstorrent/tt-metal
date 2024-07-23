@@ -32,6 +32,7 @@ def generate_vectors(module_name):
         for v in suite_vectors:
             v["suite_name"] = suite
             v["validity"] = VectorValidity.VALID
+            v["invalid_reason"] = ""
             v["status"] = VectorStatus.CURRENT
             v["sweep_name"] = module_name
 
