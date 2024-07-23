@@ -9,7 +9,7 @@
 #include "ttnn/experimental/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/operations/upsample/upsample_op.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 #include <ranges>
 

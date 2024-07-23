@@ -6,7 +6,7 @@
 
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
