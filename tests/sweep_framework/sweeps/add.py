@@ -11,12 +11,15 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 30
+
 # Parameters provided to the test vector generator are defined here.
-# They are defined as dict-type batches that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each batch has a key name (in this case "dram" and "l1") which will associate the test vectors to this specific batch of inputs.
+# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
+# Each suite has a key name (in this case "dram" and "l1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "dram": {
+    "suite_1": {
         "batch_sizes": [(1,)],
         "height": [384, 1024],
         "width": [1024, 4096],
@@ -29,9 +32,9 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
-    "l1": {
+    "suite_2": {
         "batch_sizes": [(1,)],
-        "height": [1024, 1024],
+        "height": [1024, 4096],
         "width": [1024, 2048],
         "broadcast": [None, "h", "hw"],
         "input_a_dtype": [ttnn.bfloat16],
@@ -48,7 +51,7 @@ parameters = {
                     ttnn.CoreRangeSet(
                         {
                             ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(1, 4)),
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 5)),
                         }
                     ),
                     [64, 64],
@@ -62,7 +65,7 @@ parameters = {
 
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be expected to fail.
+# If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["broadcast"] in {"w", "hw"} and test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
