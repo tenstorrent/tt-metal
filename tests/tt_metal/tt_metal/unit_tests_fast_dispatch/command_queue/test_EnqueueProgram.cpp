@@ -57,8 +57,24 @@ void initialize_dummy_semaphores(Program& program, const std::variant<CoreRange,
     }
 }
 
-bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
+std::vector<CBHandle> initialize_dummy_circular_buffers(Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
+{
+    std::vector<CBHandle> cb_handles;
+    for (uint32_t i = 0; i < cb_configs.size(); i++) {
+        const CBConfig& cb_config = cb_configs[i];
+        const uint32_t cb_id = cb_config.cb_id;
+        const uint32_t cb_num_pages = cb_config.num_pages;
+        const uint32_t page_size = cb_config.page_size;
+        const uint32_t cb_size = cb_num_pages * page_size;
+        const tt::DataFormat data_format = cb_config.data_format;
+        const CircularBufferConfig circular_buffer_config = CircularBufferConfig(cb_size, {{cb_id, data_format}}).set_page_size(cb_id, page_size);
+        const CBHandle cb_handle = CreateCircularBuffer(program, cr_set, circular_buffer_config);
+        cb_handles.push_back(cb_handle);
+    }
+    return cb_handles;
+}
 
+bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
     bool pass = true;
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
@@ -68,17 +84,16 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
             uint32_t cb_addr = L1_UNRESERVED_BASE;
             for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-                uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
-                uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-                bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
-                bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
-                bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
+                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+                const bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
+                const bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
+                const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
                 pass &= (addr_match and size_match and num_pages_match);
 
                 cb_addr += cb_size;
@@ -90,66 +105,40 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
-
     Program program;
 
-
-    for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-        uint32_t cb_id = program_config.cb_config_vector[i].cb_id;
-        uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-        uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-        auto df = program_config.cb_config_vector[i].data_format;
-        uint32_t page_size = program_config.cb_config_vector[i].page_size;
-        CircularBufferConfig cb_config = CircularBufferConfig(cb_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
-        auto cb = CreateCircularBuffer(program, program_config.cr_set, cb_config);
-    }
-
+    initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
-    EnqueueProgram(cq, program, false);
+    const bool is_blocking_op = false;
+    EnqueueProgram(cq, program, is_blocking_op);
     Finish(cq);
-    return cb_config_successful(device, program_config);
 
+    return cb_config_successful(device, program_config);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
-
     Program program;
 
-
-    std::vector<CBHandle> cb_ids;
-    for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-        uint32_t cb_id = program_config.cb_config_vector[i].cb_id;
-        uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-        uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-        auto df = program_config.cb_config_vector[i].data_format;
-        uint32_t page_size = program_config.cb_config_vector[i].page_size;
-        CircularBufferConfig cb_config = CircularBufferConfig(cb_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
-        auto cb = CreateCircularBuffer(program, program_config.cr_set, cb_config);
-        cb_ids.push_back(cb);
-    }
-
+    const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    auto pass_1 = cb_config_successful(device, program_config);
+    const bool is_cb_config_before_update_successful = cb_config_successful(device, program_config);
 
     DummyProgramMultiCBConfig program_config_2 = program_config;
-    for (auto & cb_config: program_config_2.cb_config_vector)
-        cb_config.num_pages *=2;
-    for (uint32_t buffer_id = 0; buffer_id < program_config.cb_config_vector.size(); buffer_id++) {
-        auto cb_size = program_config_2.cb_config_vector[buffer_id].num_pages * program_config_2.cb_config_vector[buffer_id].page_size;
-        UpdateCircularBufferTotalSize(program, cb_ids[buffer_id], cb_size);
+    for (uint32_t cb_id = 0; cb_id < program_config.cb_config_vector.size(); cb_id++) {
+        CBConfig& cb_config = program_config_2.cb_config_vector[cb_id];
+        cb_config.num_pages *= 2;
+        const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
+        UpdateCircularBufferTotalSize(program, cb_handles[cb_id], cb_size);
     }
-
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-
-    auto pass_2 = cb_config_successful(device, program_config_2);
-    return pass_1 && pass_2;
-
+    const bool is_cb_config_after_update_successful = cb_config_successful(device, program_config_2);
+    return is_cb_config_before_update_successful && is_cb_config_after_update_successful;
 }
 
 bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program& program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
@@ -832,46 +821,6 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentMultiCore) {
-    for (Device *device : devices_)
-    {
-        CoreRange first_cr({0, 0}, {1, 1});
-
-        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-
-        CoreRangeSet cr_set({first_cr, second_cr});
-
-        Program program;
-        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
-
-        vector<vector<uint32_t>> expected_semaphore_vals;
-
-        uint32_t semaphore_val = 0;
-        vector<uint32_t> initial_semaphore_vals;
-        for (uint32_t i = 0; i < config.num_sems; i++)
-        {
-            initial_semaphore_vals.push_back(semaphore_val);
-            semaphore_val++;
-        }
-
-        local_test_functions::initialize_dummy_semaphores(program, first_cr, initial_semaphore_vals);
-        expected_semaphore_vals.push_back(initial_semaphore_vals);
-
-        initial_semaphore_vals.clear();
-        for (uint32_t i = 0; i < config.num_sems; i++)
-        {
-            initial_semaphore_vals.push_back(semaphore_val);
-            semaphore_val++;
-        }
-
-        local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
-        expected_semaphore_vals.push_back(initial_semaphore_vals);
-
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), program, config, expected_semaphore_vals));
-    }
-}
-
 TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
         Program program;
@@ -1016,6 +965,70 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
     }
 }
 
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+    CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+
+    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for(int i = 0; i < NUM_CIRCULAR_BUFFERS; i++)
+        cb_config_vector[i].cb_id = i;
+
+    for (Device *device : devices_) {
+        CoreRange cr0({0, 0}, {1, 1});
+
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+
+        CoreRangeSet core_ranges({cr0, cr1});
+
+        DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
+
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+    CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+
+    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for(int i = 0; i < NUM_CIRCULAR_BUFFERS; i++)
+        cb_config_vector[i].cb_id = i;
+
+    for (Device *device : devices_) {
+        CoreRange cr0({0, 0}, {1, 1});
+
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+
+        CoreRangeSet core_ranges({cr0, cr1});
+
+        DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
+
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+    CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+
+    std::vector <CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
+
+    for (Device *device : devices_) {
+        CoreRange cr0({0, 0}, {1, 1});
+
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+
+        CoreRangeSet core_ranges({cr0, cr1});
+
+        DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
+
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    }
+}
+
 TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1026,6 +1039,46 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+    for (Device *device : devices_)
+    {
+        CoreRange first_cr({0, 0}, {1, 1});
+
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+
+        CoreRangeSet cr_set({first_cr, second_cr});
+
+        Program program;
+        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+
+        vector<vector<uint32_t>> expected_semaphore_vals;
+
+        uint32_t semaphore_val = 0;
+        vector<uint32_t> initial_semaphore_vals;
+        for (uint32_t i = 0; i < config.num_sems; i++)
+        {
+            initial_semaphore_vals.push_back(semaphore_val);
+            semaphore_val++;
+        }
+
+        local_test_functions::initialize_dummy_semaphores(program, first_cr, initial_semaphore_vals);
+        expected_semaphore_vals.push_back(initial_semaphore_vals);
+
+        initial_semaphore_vals.clear();
+        for (uint32_t i = 0; i < config.num_sems; i++)
+        {
+            initial_semaphore_vals.push_back(semaphore_val);
+            semaphore_val++;
+        }
+
+        local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
+        expected_semaphore_vals.push_back(initial_semaphore_vals);
+
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), program, config, expected_semaphore_vals));
     }
 }
 
