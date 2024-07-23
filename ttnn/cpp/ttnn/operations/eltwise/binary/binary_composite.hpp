@@ -52,14 +52,14 @@ struct ExecuteBinaryCompositeOpsIsClose
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsOverload
+struct ExecuteDivLikeOps
 {
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_divnonan_floordiv<binary_comp_op_type>();
+            auto op_type = get_binary_div_like_ops<binary_comp_op_type>();
             return op_type(input_tensor_a, input_tensor_b, memory_config);
         }
 
@@ -68,7 +68,7 @@ struct ExecuteBinaryCompositeOpsOverload
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_divnonan_floordiv_overload<binary_comp_op_type>();
+            auto op_type = get_binary_div_like_ops_overload<binary_comp_op_type>();
             return op_type(input_tensor_a, value, memory_config);
         }
 };
@@ -83,7 +83,7 @@ struct ExecuteBinaryCompositeOpsDiv
         string round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_div<binary_comp_op_type>();
+            auto op_type = get_binary_div<binary_comp_op_type>();
             return op_type(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
         }
 
@@ -94,7 +94,7 @@ struct ExecuteBinaryCompositeOpsDiv
         string round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_div_overload<binary_comp_op_type>();
+            auto op_type = get_binary_div_overload<binary_comp_op_type>();
             return op_type(input_tensor_a, value, accurate_mode, round_mode, memory_config);
         }
 };

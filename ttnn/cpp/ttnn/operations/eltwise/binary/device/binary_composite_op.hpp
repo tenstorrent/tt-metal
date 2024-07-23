@@ -26,6 +26,8 @@ enum class BinaryCompositeOpType {
     DIV,
     DIV_NO_NAN,
     FLOOR_DIV,
+    LOGICAL_AND_,
+    LOGICAL_OR_,
 
 };
 
@@ -47,6 +49,8 @@ Tensor _div_no_nan(const Tensor&, const Tensor&, const std::optional<MemoryConfi
 Tensor _div_no_nan_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _logical_or_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _logical_and_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <BinaryCompositeOpType OpType>
@@ -140,22 +144,22 @@ struct OpHandler<BinaryCompositeOpType::ISCLOSE> {
 using HandleFunctionPtr1 = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 using HandleFunctionPtr2 = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
 template <BinaryCompositeOpType OpType>
-auto get_function_divnonan_floordiv() -> HandleFunctionPtr1 {
+auto get_binary_div_like_ops() -> HandleFunctionPtr1 {
     return &OpHandler_Overload<OpType>::handle;
 }
 template <BinaryCompositeOpType OpType>
-auto get_function_divnonan_floordiv_overload() -> HandleFunctionPtr2 {
+auto get_binary_div_like_ops_overload() -> HandleFunctionPtr2 {
     return &OpHandler_Overload<OpType>::handle;
 }
 
 using HandleFunctionPtr3 = Tensor (*)(const Tensor&, const Tensor&, bool, std::string, const std::optional<MemoryConfig>&);
 using HandleFunctionPtr4 = Tensor (*)(const Tensor&, float, bool, std::string, const std::optional<MemoryConfig>&);
 template <BinaryCompositeOpType OpType>
-auto get_function_div() -> HandleFunctionPtr3 {
+auto get_binary_div() -> HandleFunctionPtr3 {
     return &OpHandler_Div<OpType>::handle;
 }
 template <BinaryCompositeOpType OpType>
-auto get_function_div_overload() -> HandleFunctionPtr4 {
+auto get_binary_div_overload() -> HandleFunctionPtr4 {
     return &OpHandler_Div<OpType>::handle;
 }
 

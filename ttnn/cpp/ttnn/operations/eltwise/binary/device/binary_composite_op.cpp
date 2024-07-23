@@ -8,7 +8,10 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -24,7 +27,7 @@ Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const std::optional<
 
 // xlogy(x,y)=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_nan = ttnn::full_like(input_b, std::nanf(" "));
+    Tensor t_nan = full_like(input_b, std::nanf(" "));
     Tensor result = ttnn::multiply(input_a, ttnn::log(input_b, output_mem_config), std::nullopt, output_mem_config);
     result = where(
         ttnn::logical_or(
@@ -85,15 +88,15 @@ Tensor _isclose(
     Tensor value1 = input_a;
     Tensor value2 = input_b;
     if (!equal_nan) {
-        value1 = tt::tt_metal::where(ttnn::isnan(value1, output_mem_config), 1.0f, value1);
-        value2 = tt::tt_metal::where(ttnn::isnan(value2, output_mem_config), 0.0f, value2);
+        value1 = where(ttnn::isnan(value1, output_mem_config), 1.0f, value1);
+        value2 = where(ttnn::isnan(value2, output_mem_config), 0.0f, value2);
     }
     Tensor is_close_lhs = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
     Tensor is_close_rhs = input_b;
     Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
     is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
     mul_result.deallocate();
-    Tensor result = tt::tt_metal::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.0, 0.0);
+    Tensor result = where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.0, 0.0);
     return result;
 }
 
@@ -155,7 +158,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, str
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     if(round_mode == "trunc"){
-        result = trunc(result);
+        result = ttnn::trunc(result);
     }
     else if(round_mode == "floor"){
         result = ttnn::floor(result);
@@ -173,7 +176,7 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, st
         Tensor result = ttnn::divide(a, b);
 
         if(round_mode == "trunc"){
-            result = trunc(result);
+            result = ttnn::trunc(result);
         }
         else if(round_mode == "floor"){
             result = ttnn::floor(result);
@@ -197,7 +200,7 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, st
         Tensor result = ttnn::divide(input_a, input_b);
 
         if(round_mode == "trunc"){
-            result = trunc(result);
+            result = ttnn::trunc(result);
         }
         else if(round_mode == "floor"){
             result = ttnn::floor(result);
@@ -227,30 +230,32 @@ Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optio
 }
 
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor div_result = div(input_a, input_b);
+    Tensor div_result = ttnn::div(input_a, input_b);
     return where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
 }
 
+// Binary remainder will be overloaded by unary remainder in another PR
 Tensor _binary_remainder(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(b, div(input_a, input_b, true, "floor"), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(b, ttnn::div(input_a, input_b, true, "floor"), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
     result = where(ttnn::ltz(b), ttnn::add(result, b), result);
     result = where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
 }
 
+// Binary FMOD will be overloaded by unary FMOD in another PR
 Tensor _binary_fmod(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(div(input_a, input_b, true, "trunc"), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(ttnn::div(input_a, input_b, true, "trunc"), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
 }
@@ -273,8 +278,8 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor temp = div(input_a, input_b, true);
-    Tensor result = div(input_a, input_b, true, "floor");
+    Tensor temp = ttnn::div(input_a, input_b, true);
+    Tensor result = ttnn::div(input_a, input_b, true, "floor");
     // floor(nan, inf, -inf) = nan, inf, -inf
     return where(
         ttnn::logical_or(
@@ -284,6 +289,14 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
                 ttnn::eq(temp, -std::numeric_limits<float>::infinity()))),
         temp,
         result);
+}
+
+Tensor _logical_and_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::logical_and(input_a, input_b, std::nullopt, output_mem_config, input_a);
+}
+
+Tensor _logical_or_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::logical_or(input_a, input_b, std::nullopt, output_mem_config, input_a);
 }
 
 } // namespace ttnn::operations::binary

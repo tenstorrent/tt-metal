@@ -232,7 +232,7 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_with_overload(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_div_like_ops(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
@@ -518,6 +518,18 @@ void py_module(py::module& module) {
         R"doc(Compute fmod :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
+    detail::bind_binary_composite(
+        module,
+        ttnn::logical_or_,
+        R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+
+    detail::bind_binary_composite(
+        module,
+        ttnn::logical_and_,
+        R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::addalpha,
@@ -542,17 +554,18 @@ void py_module(py::module& module) {
         R"doc(Compute div :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite_with_overload(
+    detail::bind_div_like_ops(
         module,
         ttnn::div_no_nan,
         R"doc(Compute div_no_nan :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite_with_overload(
+    detail::bind_div_like_ops(
         module,
         ttnn::floor_div,
         R"doc(Compute floor division :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+
 }
 
 }  // namespace binary

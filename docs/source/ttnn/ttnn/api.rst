@@ -281,6 +281,8 @@ Pointwise Binary
    ttnn/floor_div
    ttnn/binary_remainder
    ttnn/binary_fmod
+   ttnn/logical_and_
+   ttnn/logical_or_
    ttnn/pow
    ttnn/ldexp
    ttnn/logical_and

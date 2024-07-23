@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -113,19 +113,19 @@ ttnn.attach_golden_function(ttnn.le, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.logical_and(input_tensor_a, input_tensor_b)
+    return input_tensor_a.logical_and_(input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn.logical_and, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_and_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.logical_or(input_tensor_a, input_tensor_b)
+    return input_tensor_a.logical_or_(input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn.logical_or, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_or_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -263,26 +263,6 @@ def _golden_function_nextafter(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.nextafter, golden_function=_golden_function_nextafter)
 
 
-def _golden_function_binary_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return torch.remainder(input_tensor_a, input_tensor_b)
-
-
-ttnn.attach_golden_function(
-    ttnn._ttnn.operations.binary.binary_remainder, golden_function=_golden_function_binary_remainder
-)
-
-
-def _golden_function_binary_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return torch.fmod(input_tensor_a, input_tensor_b)
-
-
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.binary_fmod, golden_function=_golden_function_binary_fmod)
-
-
 def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
     import torch
 
@@ -325,6 +305,26 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.floor_div, golden_function=_golden_function_floor_div)
+
+
+def _golden_function_binary_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.remainder(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.binary.binary_remainder, golden_function=_golden_function_binary_remainder
+)
+
+
+def _golden_function_binary_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.fmod(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.binary_fmod, golden_function=_golden_function_binary_fmod)
 
 
 def torch_squared_difference(x, y, *args, **kwargs):
