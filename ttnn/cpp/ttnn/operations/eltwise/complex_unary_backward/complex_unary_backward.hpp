@@ -17,31 +17,23 @@ using ComplexTensor = complex_binary::ComplexTensor;
 //OpHandler_complex : get_function_complex
 template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackward {
-
-    static std::vector<ComplexTensor> execute_on_main_thread(
+    static std::vector<ComplexTensor> operator()(
         const ComplexTensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_arg,
-        const MemoryConfig& memory_config) {
-
+        const MemoryConfig &memory_config) {
         auto op_type = get_function_complex<complex_unary_backward_op_type>();
         return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
-        }
-
+    }
 };
 
 //OpHandler_tensor_complex : get_function_tensor_complex
 template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackwardTensor {
-
-    static std::vector<ComplexTensor> execute_on_main_thread(
-        const Tensor &grad_tensor_arg,
-        const ComplexTensor &input_tensor_arg,
-        const MemoryConfig& memory_config) {
-
+    static std::vector<ComplexTensor> operator()(
+        const Tensor &grad_tensor_arg, const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         auto op_type = get_function_tensor_complex<complex_unary_backward_op_type>();
         return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
-        }
-
+    }
 };
 
 }

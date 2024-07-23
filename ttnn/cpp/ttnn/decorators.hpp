@@ -19,22 +19,6 @@ using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 
 namespace detail {
 
-template <class T, class... args_t>
-using execute_on_worker_thread_return_t = decltype(T::execute_on_worker_thread(std::declval<args_t>()...));
-
-template <class T, class... args_t>
-constexpr bool has_execute_on_worker_thread() {
-    return std::experimental::is_detected_v<execute_on_worker_thread_return_t, T, args_t&&...>;
-}
-
-template <class T, class... args_t>
-using execute_on_main_thread_return_t = decltype(T::execute_on_main_thread(std::declval<args_t>()...));
-
-template <class T, class... args_t>
-constexpr bool has_execute_on_main_thread() {
-    return std::experimental::is_detected_v<execute_on_main_thread_return_t, T, args_t&&...>;
-}
-
 template <typename Tuple, typename T>
 constexpr bool is_homogenous_tuple() {
     return []<std::size_t... Ns>(std::index_sequence<Ns...>) {
@@ -184,84 +168,93 @@ static const std::string python_fully_qualified_name(const char* cpp_fully_quali
 
 }  // namespace detail
 
+template <typename concrete_operation_t>
+concept SyncOperation = requires { [](auto&&... args) { concrete_operation_t::operator()(args...); }; };
+
+template <typename concrete_operation_t>
+concept AsyncOperation = requires { [](auto&&... args) { concrete_operation_t::execute_on_worker_thread(args...); }; };
+
 template <auto id, typename concrete_operation_t>
+    requires(static_cast<bool>(SyncOperation<concrete_operation_t> xor AsyncOperation<concrete_operation_t>))
 struct operation_t {
     const char* cpp_fully_qualified_name;  // TODO: move this to template args when C++20 is available
 
     template <typename... args_t>
+        requires SyncOperation<concrete_operation_t>
     auto operator()(args_t&&... args) const {
-        ZoneScopedN("Run ttnn operation (struct-based)");
+        ZoneScopedN("Run ttnn operation ");
         ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
-        static_assert(
-            detail::has_execute_on_worker_thread<concrete_operation_t, args_t&&...>() xor
-                detail::has_execute_on_main_thread<concrete_operation_t, args_t&&...>(),
-            "Operation must either implement execute_on_worker_thread or execute_on_main_thread.");
-
-        if constexpr (detail::has_execute_on_worker_thread<concrete_operation_t, args_t&&...>()) {
-            using execute_on_worker_thread_return_t =
-                detail::execute_on_worker_thread_return_t<concrete_operation_t, args_t&&...>;
-            const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
-            const OptionalConstTensors optional_input_tensors =
-                detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
-
-            auto output_tensors =
-                detail::create_async_output_tensors<concrete_operation_t, execute_on_worker_thread_return_t>(
-                    input_tensors, optional_input_tensors);
-
-
-            const OptionalTensors optional_output_tensors =
-                detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
-
-            bool enable_autoformat = false;
-            operation::launch_op(
-                [cpp_fully_qualified_name = this->cpp_fully_qualified_name, args...](
-                    const Tensors& input_tensors,
-                    const OptionalConstTensors& optional_input_tensors,
-                    const OptionalTensors& optional_output_tensors) mutable -> Tensors {
-                    auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                        input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
-                    return std::apply(
-                        [cpp_fully_qualified_name](auto&&... args) -> Tensors {
-                            return detail::map_execute_on_worker_thread_return_to_launch_op_return<
-                                concrete_operation_t>(
-                                concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
-                        },
-                        execute_on_worker_thread_args);
-                },
-                input_tensors,
-                output_tensors,
-                optional_input_tensors,
-                optional_output_tensors,
-                enable_autoformat);
-
-            tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-
-            if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-                return output_tensors.at(0);
-            } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
-                return output_tensors;
-            } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
-                return detail::make_tuple_from_vector<execute_on_worker_thread_return_t>(output_tensors);
-            } else {
-                static_assert(
-                    tt::stl::concepts::always_false_v<concrete_operation_t>,
-                    "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a "
-                    "vector of "
-                    "Tensor(s).");
-            }
-
-        } else {
-            auto output = concrete_operation_t::execute_on_main_thread(std::forward<decltype(args)>(args)...);
-            tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-            return output;
-        }
+        auto output = concrete_operation_t::operator()(std::forward<decltype(args)>(args)...);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        return output;
     }
 
+    template <typename... args_t>
+        requires AsyncOperation<concrete_operation_t>
+    auto operator()(args_t&&... args) const {
+        ZoneScopedN("Run ttnn operation (using auto async)");
+        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+
+        // #8479: Fix and re-enable logging in cpp operation decorator
+        // detail::log("Arguments: ", std::forward<args_t>(args)...);
+
+        using execute_on_worker_thread_return_t =
+            decltype(concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
+
+        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
+        const OptionalConstTensors optional_input_tensors =
+            detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
+
+        auto output_tensors =
+            detail::create_async_output_tensors<concrete_operation_t, execute_on_worker_thread_return_t>(
+                input_tensors, optional_input_tensors);
+
+        const OptionalTensors optional_output_tensors =
+            detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
+
+        bool enable_autoformat = false;
+        operation::launch_op(
+            [cpp_fully_qualified_name = this->cpp_fully_qualified_name, args...](
+                const Tensors& input_tensors,
+                const OptionalConstTensors& optional_input_tensors,
+                const OptionalTensors& optional_output_tensors) mutable -> Tensors {
+                auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
+                    input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
+                return std::apply(
+                    [cpp_fully_qualified_name](auto&&... args) -> Tensors {
+                        return detail::map_execute_on_worker_thread_return_to_launch_op_return<concrete_operation_t>(
+                            concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
+                    },
+                    execute_on_worker_thread_args);
+            },
+            input_tensors,
+            output_tensors,
+            optional_input_tensors,
+            optional_output_tensors,
+            enable_autoformat);
+
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+
+        if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
+            return output_tensors.at(0);
+        } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
+            return output_tensors;
+        } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
+            return detail::make_tuple_from_vector<execute_on_worker_thread_return_t>(output_tensors);
+        } else {
+            static_assert(
+                tt::stl::concepts::always_false_v<concrete_operation_t>,
+                "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a "
+                "vector of "
+                "Tensor(s).");
+        }
+    }
 
     // Get "add" from "ttnn::add"
     const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }
@@ -283,7 +276,7 @@ constexpr auto register_operation(const char* cpp_fully_qualified_name) {
 namespace detail {
 template <auto lambda_t>
 struct lambda_operation_t {
-    static auto execute_on_main_thread(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
+    static auto operator()(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
 };
 }  // namespace detail
 

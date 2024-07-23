@@ -19,28 +19,19 @@ template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryType1 {
 
     //Type 1: 1 input tensor
-    static Tensor execute_on_main_thread(
-        const ComplexTensor &input_tensor_arg,
-        const MemoryConfig &memory_config) {
-
+    static Tensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         auto op_type = get_function_complex_unary<complex_unary_op_type>();
         return op_type(input_tensor_arg, memory_config);
-        }
-
+    }
 };
 
 //OpHandler_complex_type2 = get_function_complex_unary_type2 --> ComplexTensor return type
 template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryType2 {
-
-    static ComplexTensor execute_on_main_thread(
-        const ComplexTensor &input_tensor_arg,
-        const MemoryConfig &memory_config) {
-
+    static ComplexTensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         auto op_type = get_function_complex_unary_type2<complex_unary_op_type>();
         return op_type(input_tensor_arg, memory_config);
-        }
-
+    }
 };
 
 }

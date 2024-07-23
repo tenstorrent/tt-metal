@@ -12,8 +12,7 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteAllGather {
-
-    static ttnn::Tensor execute_on_main_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,

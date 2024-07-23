@@ -12,7 +12,7 @@ namespace ttnn::operations::examples {
 // This is the main operation that will be called by the user
 struct ExampleOperation {
     // This how the user can call the operation
-    static Tensor execute_on_main_thread(uint8_t queue_id, const Tensor &input_tensor) {
+    static Tensor operator()(uint8_t queue_id, const Tensor &input_tensor) {
         return ttnn::device_operation::run<ExampleDeviceOperation>(
             queue_id,
             ExampleDeviceOperation::operation_attributes_t{.attribute = true, .some_other_attribute = 42},
@@ -20,15 +20,15 @@ struct ExampleOperation {
     }
 
     // This how the user can call the operation
-    static Tensor execute_on_main_thread(const Tensor &input_tensor) { return execute_on_main_thread(0, input_tensor); }
+    static Tensor operator()(const Tensor &input_tensor) { return operator()(0, input_tensor); }
 
-    // execute_on_main_thread can be overloaded to take any number of arguments
+    // operator() can be overloaded to take any number of arguments
 
-    // execute_on_main_thread doesn't imply anything about async or sync execution and the user needs to be aware of
+    // operator() doesn't imply anything about async or sync execution and the user needs to be aware of
     // that
 
-    // If the user wants to make the operation async, automatically, then `execute_on_main_thread` should renamed to
-    // `execute_on_worker_thread`
+    // If the user wants to make the operation async automatically, then `execute_on_worker_thread` should be used
+    // instead of `operator()`
 };
 
 }  // namespace ttnn::operations::examples

@@ -11,40 +11,32 @@
 
 namespace ttnn {
 namespace operations::data_movement {
-    
+
 constexpr uint32_t TransposeDefaultQueueID = 0;
 
 
 struct ExecuteTranspose {
-    static inline ttnn::Tensor execute_on_main_thread(
+    static inline ttnn::Tensor operator()(
         uint8_t queue_id,
-        const ttnn::Tensor &input_tensor,
+        const ttnn::Tensor& input_tensor,
         const int64_t& dim1,
         const int64_t& dim2,
         const std::optional<MemoryConfig>& memory_config) {
-
-        return tt::tt_metal::transpose((tt::tt_metal::Tensor)input_tensor, dim1, dim2, memory_config.value_or(input_tensor.memory_config()));
-    
+        return tt::tt_metal::transpose(
+            (tt::tt_metal::Tensor)input_tensor, dim1, dim2, memory_config.value_or(input_tensor.memory_config()));
     }
 
-    static inline ttnn::Tensor execute_on_main_thread(
-        const ttnn::Tensor &input_tensor,
+    static inline ttnn::Tensor operator()(
+        const ttnn::Tensor& input_tensor,
         const int64_t& dim1,
         const int64_t& dim2,
         const std::optional<MemoryConfig>& memory_config) {
-
-        return execute_on_main_thread(TransposeDefaultQueueID, input_tensor, dim1, dim2, memory_config);
+        return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, memory_config);
     }
 
-    static inline ttnn::Tensor execute_on_main_thread(
-        const ttnn::Tensor &input_tensor,
-        const int64_t& dim1,
-        const int64_t& dim2) {
-
-        return execute_on_main_thread(TransposeDefaultQueueID, input_tensor, dim1, dim2, std::nullopt);
+    static inline ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
+        return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, std::nullopt);
     }
-
-
 };
 
 }  // namespace operations::data_movement
