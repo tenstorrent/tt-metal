@@ -56,12 +56,14 @@ show_help() {
     echo "  -h  Show this help message."
     echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c  Enable ccache for the build."
+    echo "  -t  Set the build type. Default is Release. Other options are Debug and RelWithDebInfo."
 }
 
 # Parse CLI options
 export_compile_commands="OFF"
 enable_ccache="OFF"
-while getopts "hec" opt; do
+build_type="Release"
+while getopts "hect:" opt; do
     case ${opt} in
         h )
             show_help
@@ -72,6 +74,9 @@ while getopts "hec" opt; do
             ;;
         c )
             enable_ccache="ON"
+            ;;
+        t )
+            build_type="$OPTARG"
             ;;
         \? )
             show_help
@@ -84,27 +89,17 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
-if [ -z "$CONFIG" ]; then
-    echo "Build type defaulted to Release"
-else
-    VALID_CONFIGS="RelWithDebInfo Debug Release ci"
-    if [[ $VALID_CONFIGS =~ (^|[[:space:]])"$CONFIG"($|[[:space:]]) ]]; then
-        echo "CONFIG set to $CONFIG"
-    else
-        echo "Invalid config "$CONFIG" given.. Valid configs are: $VALID_CONFIGS"
-        exit 1
-    fi
-fi
-
-echo "Building tt-metal"
-cmake_args="-B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+echo "Building tt-metal in $build_type mode"
+mkdir -p build_$build_type
+ln -nsf build_$build_type build
+cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
 fi
 
 cmake $cmake_args
-cmake --build build --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
+cmake --build build_$build_type --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
 
 echo "Building cpp tests"
-cmake --build build --target tests      # <- can also just run `ninja tests -C build`
+cmake --build build_$build_type --target tests      # <- can also just run `ninja tests -C build`
