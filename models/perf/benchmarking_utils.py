@@ -71,6 +71,7 @@ class BenchmarkData:
         device_power: float = None,
         device_temperature: float = None,
     ):
+        assert None not in [profiler, iteration, step_name, measurement_name, value], "Missing required fields"
         assert profiler.contains_step(
             step_name, iteration
         ), f"Completed step '{step_name}' for iteration {iteration} not found in profiler"
@@ -105,6 +106,7 @@ class BenchmarkData:
         output_sequence_length: int = None,
         image_dimension: int = None,
     ):
+        assert None not in [profiler, run_type, ml_model_name], "Missing required fields"
         assert profiler.contains_step("run"), "Run step not found in profiler"
         run_start_ts = profiler.get_str_start("run")
         run_end_ts = profiler.get_str_end("run")
