@@ -676,7 +676,21 @@ Example:
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
             py::arg("input_b_grad") = std::nullopt,
-            py::arg("queue_id") = 0}
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const float alpha,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(grad_tensor, input_tensor, alpha, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("alpha"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt}
 );
 
 }
