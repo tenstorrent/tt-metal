@@ -25,15 +25,8 @@ def test_bw_lerp(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight_tensor)
 
-    in_data.retain_grad()
-    end_data.retain_grad()
-
-    pyt_y = torch.lerp(in_data, end_data, weight_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, end_data.grad]
-
+    golden_function = ttnn.get_golden_function(ttnn.lerp_bw)
+    golden_tensor = golden_function(grad_data, in_data, end_data, weight_data)
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
 
@@ -54,14 +47,8 @@ def test_bw_lerp_weight_scalar(input_shapes, weight, device):
 
     tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight)
 
-    in_data.retain_grad()
-    end_data.retain_grad()
-
-    pyt_y = torch.lerp(in_data, end_data, weight)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, end_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.lerp_bw)
+    golden_tensor = golden_function(grad_data, in_data, end_data, weight)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

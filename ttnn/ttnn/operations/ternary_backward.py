@@ -47,4 +47,25 @@ def _golden_function(grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, 
 
 ttnn.attach_golden_function(ttnn.addcdiv_bw, golden_function=_golden_function)
 
+
+def _golden_function(grad_tensor, input_tensor, end_tensor, weight, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.lerp(input_tensor, end_tensor, weight)
+    if isinstance(weight, (float, int)):
+        input_tensor.retain_grad()
+        end_tensor.retain_grad()
+        pyt_y.backward(gradient=grad_tensor)
+        golden_tensor = [input_tensor.grad, end_tensor.grad]
+        return golden_tensor
+    input_tensor.retain_grad()
+    end_tensor.retain_grad()
+    weight.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad, end_tensor.grad, weight.grad]
+    return golden_tensor
+
+
+ttnn.attach_golden_function(ttnn.lerp_bw, golden_function=_golden_function)
+
 __all__ = []
