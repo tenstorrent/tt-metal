@@ -7,15 +7,15 @@
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tt_numpy/functions.hpp"
+#include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "unary_composite_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 
 namespace ttnn::operations::unary{
 

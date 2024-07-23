@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

@@ -7,7 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 
 #include <ranges>
 

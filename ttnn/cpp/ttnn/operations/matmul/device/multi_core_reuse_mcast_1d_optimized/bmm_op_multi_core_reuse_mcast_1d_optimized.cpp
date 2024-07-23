@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 #include "ttnn/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_metal/common/constants.hpp"

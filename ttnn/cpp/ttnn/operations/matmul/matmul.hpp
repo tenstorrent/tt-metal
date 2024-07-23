@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"

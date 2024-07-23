@@ -8,7 +8,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 namespace ttnn::operations::binary{
 

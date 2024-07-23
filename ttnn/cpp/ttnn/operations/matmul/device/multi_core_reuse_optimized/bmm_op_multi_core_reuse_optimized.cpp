@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/operation.hpp"
 
 #include "tt_metal/host_api.hpp"

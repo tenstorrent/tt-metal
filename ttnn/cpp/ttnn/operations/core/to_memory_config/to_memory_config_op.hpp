@@ -7,9 +7,9 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

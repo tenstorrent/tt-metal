@@ -7,12 +7,12 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/embedding/embedding/embedding.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 
 #include "tt_metal/common/constants.hpp"

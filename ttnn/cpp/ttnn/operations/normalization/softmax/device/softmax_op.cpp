@@ -6,8 +6,8 @@
 #include "tt_metal/common/assert.hpp"
 #include "common/base_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"

@@ -8,7 +8,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
 

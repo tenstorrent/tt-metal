@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace ttnn::operations::normalization {
 
