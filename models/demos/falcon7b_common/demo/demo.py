@@ -349,12 +349,12 @@ def run_falcon_demo_kv(
     profiler.start("inference_prefill")
     time_prefill_inference = 0
     if not perf_mode:
-        N = num_users // num_devices
+        N_prefill = num_users // num_devices
         N_warmup_prefill = 0
     else:
-        N = 15
+        N_prefill = 15
         N_warmup_prefill = N_warmup_iter["inference_prefill"]
-    for i in tqdm(range(N)):
+    for i in tqdm(range(N_prefill)):
         user_id = i if not perf_mode else 0
         time_prefill_inference_start = time.time()
         (
@@ -402,7 +402,7 @@ def run_falcon_demo_kv(
 
     profiler.end("inference_prefill")
     logger.info("Finished inference prefill stage!")
-    num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup_prefill) * num_devices
+    num_users_generated_prefill = num_users if not perf_mode else (N_prefill - N_warmup_prefill) * num_devices
 
     if not perf_mode:
         generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
@@ -423,15 +423,17 @@ def run_falcon_demo_kv(
     profiler.start("inference_decode")
     time_decode_inference = 0
     if not perf_mode:
-        N = max_seq_len - num_input_tokens
+        N_decode = max_seq_len - num_input_tokens
         N_warmup_decode = 0
     else:
-        N = 30
+        N_decode = 30
         N_warmup_decode = N_warmup_iter["inference_decode"]
     print_per_generated_token = (
         expected_greedy_output_path is None
     )  # print per generated token if not verifying outputs
-    for output_token_index in range(N) if print_per_generated_token else tqdm(range(N), desc="Generating tokens"):
+    for output_token_index in (
+        range(N_decode) if print_per_generated_token else tqdm(range(N_decode), desc="Generating tokens")
+    ):
         time_decode_inference_start = time.time()
         (
             tt_decode_input_ids,
@@ -514,6 +516,8 @@ def run_falcon_demo_kv(
         "inference_prefill": time_prefill_inference,
         "inference_decode": time_decode_inference,
         "inference_total": time_prefill_inference + time_decode_inference,
+        "prefill_time_to_token": time_prefill_inference
+        / (N_prefill - N_warmup_prefill),  # time to first output token (1 user)
         "inference_user_throughput_prefill": num_users_generated_prefill / time_prefill_inference,  # users/s
         "prefill_t/s": num_users_generated_prefill / time_prefill_inference * prefill_ids.shape[1],  # tokens/s
         "decode_t/s": num_tokens_generated_decode / time_decode_inference,  # tokens/s
@@ -537,6 +541,7 @@ def run_falcon_demo_kv(
     logger.info(f"prefill inference time: {round(measurements['inference_prefill'], 5)} s")
     logger.info(f"decode inference time: {round(measurements['inference_decode'], 5)} s")
     logger.info(f"total inference time: {round(measurements['inference_total'], 5)} s")
+    logger.info(f"time to first token (prefill, 1st user): {round(measurements['prefill_time_to_token'], 5)} s")
     logger.info(f"inference throughput prefill: {round(measurements['inference_user_throughput_prefill'], 5)} users/s")
     logger.info(
         f"inference throughput prefill | seq_len={prefill_ids.shape[1]} : {round(measurements['prefill_t/s'], 5)} tok/s"
