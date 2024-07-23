@@ -1,0 +1,49 @@
+name: For Moreh users
+description: Suggest an idea, change for this project, or report a bug
+title: "[Request or Bug] ..."
+labels: ["moreh"]
+projects: ["tenstorrent/37"]
+assignees: []  # Assignees should be an array or string, an empty array is acceptable
+
+body:
+  - type: textarea
+    attributes:
+      label: Contents
+      description: "Propose a feature or Report a bug. Please delete the section you are not using."
+      value: |
+        ### Propose a feature
+        **Is your feature request related to a problem? Please describe.**
+        A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+
+        **Describe the solution you'd like**
+        A clear and concise description of what you want to happen.
+
+        **Describe alternatives you've considered**
+        A clear and concise description of any alternative solutions or features you've considered.
+
+        **Additional context**
+        Add any other context or screenshots about the feature request here.
+
+        ### Report a bug
+        **Describe the bug**
+        A clear and concise description of what the bug is.
+
+        **To Reproduce**
+        Steps to reproduce the behavior:
+        1. Go to '...'
+        2. Click on '....'
+        3. Scroll down to '....'
+        4. See error
+
+        **Expected behavior**
+        A clear and concise description of what you expected to happen.
+
+        **Screenshots**
+        If applicable, add screenshots to help explain your problem.
+
+        **Please complete the following environment information:**
+        - OS: [e.g. Ubuntu 20.04]
+        - Version of software (eg. commit)
+
+        **Additional context**
+        Add any other context about the problem here.
