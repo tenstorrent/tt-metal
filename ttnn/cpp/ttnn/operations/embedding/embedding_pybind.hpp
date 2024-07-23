@@ -8,12 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/embedding/embedding/embedding.hpp"
+#include "ttnn/operations/embedding/embedding.hpp"
 
-namespace ttnn::operations::embedding::detail {
+namespace ttnn::operations::embedding {
 namespace py = pybind11;
 
-void bind_embedding(py::module& module) {
+void py_module(py::module& module) {
     py::enum_<ttnn::operations::embedding::EmbeddingsType>(module, "EmbeddingsType")
         .value("GENERIC", ttnn::operations::embedding::EmbeddingsType::GENERIC)
         .value("PADDED", ttnn::operations::embedding::EmbeddingsType::PADDED)
@@ -32,7 +32,7 @@ void bind_embedding(py::module& module) {
                 * :attr:`padding_idx`: the padding token. Default is None.
                 * :attr:`layout`: the layout of the output tensor. Default is ttnn.ROW_MAJOR_LAYOUT.
                 * :attr:`embeddings_type`: the type of embeddings. Default is ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC.
-                * :attr:`output_dtype`: the data type for the output tensor. Default is None.
+                * :attr:`dtype`: the data type for the output tensor. Default is None.
                 * :attr:`output_tensor`: the optional output tensor. Default is None.
                 * :attr:`memory_config`: the memory configuration of the output tensor. Default is input tensor memory config.
                 * :attr:`queue_id`: the command queue id. Default is 0.
@@ -64,11 +64,11 @@ void bind_embedding(py::module& module) {
             const std::optional<int>& padding_idx,
             const ttnn::Layout& layout,
             EmbeddingsType embeddings_type,
-            const std::optional<const DataType> output_dtype,
+            const std::optional<const DataType> dtype,
             std::optional<ttnn::Tensor> &optional_output_tensor,
             const std::optional<ttnn::MemoryConfig>& memory_config,
             uint8_t queue_id) {
-                return self(queue_id, input_tensor, weight, padding_idx, layout, embeddings_type, output_dtype, memory_config, optional_output_tensor);
+                return self(queue_id, input_tensor, weight, padding_idx, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight").noconvert(),
@@ -76,10 +76,10 @@ void bind_embedding(py::module& module) {
             py::arg("padding_idx") = std::nullopt,
             py::arg("layout") = ttnn::ROW_MAJOR_LAYOUT,
             py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
-            py::arg("output_dtype").noconvert() = std::nullopt,
+            py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0});
 }
 
-}  // namespace ttnn::operations::embedding::detail
+}  // namespace ttnn::operations::embedding

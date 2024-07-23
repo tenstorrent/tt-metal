@@ -608,8 +608,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_global
 
-.. autofunction:: tt_lib.tensor.embeddings
-
 .. autofunction:: tt_lib.tensor.nextafter
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
