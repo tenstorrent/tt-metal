@@ -103,7 +103,7 @@ void EnqueueReadBufferCommand::process() {
 
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
-    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
+    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size, false);
 
     this->add_prefetch_relay(command_sequence);
 
@@ -1342,7 +1342,7 @@ void EnqueueRecordEventCommand::process() {
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
-        flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, event_payload.data());
+        flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, true, event_payload.data());
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
@@ -2251,6 +2251,7 @@ void HWCommandQueue::read_completion_queue() {
                                 channel);
                             uint32_t event_completed =
                                 dispatch_cmd_and_event.at(sizeof(CQDispatchCmd) / sizeof(uint32_t));
+
                             TT_ASSERT(
                                 event_completed == read_descriptor.event_id,
                                 "Event Order Issue: expected to read back completion signal for event {} but got {}!",

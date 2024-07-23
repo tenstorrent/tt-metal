@@ -321,12 +321,13 @@ class DeviceCommand {
     }
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr) {
+    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void *data = nullptr) {
         uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
         auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
             write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+            write_cmd->write_linear_host.is_event = is_event;
             write_cmd->write_linear_host.length =
                 sizeof(CQDispatchCmd) + data_sizeB;  // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
         };
