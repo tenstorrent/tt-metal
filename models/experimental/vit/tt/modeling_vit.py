@@ -142,12 +142,8 @@ class TtViTSelfAttention(nn.Module):
         key_layer_T = ttnn.transpose(key_layer, -2, -1, self.out_mem_config_l1)
         attention_scores = ttnn.matmul(query_layer, key_layer_T, memory_config=self.out_mem_config_l1)
 
-        attention_scores = tt_lib.tensor.bcast(
-            attention_scores,
-            self.recip_sqrt_attention_head_size_tensor,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
-            self.out_mem_config_l1,
+        attention_scores = ttnn.multiply(
+            attention_scores, self.recip_sqrt_attention_head_size_tensor, memory_config=self.out_mem_config_l1
         )
 
         # Normalize the attention scores to probabilities.

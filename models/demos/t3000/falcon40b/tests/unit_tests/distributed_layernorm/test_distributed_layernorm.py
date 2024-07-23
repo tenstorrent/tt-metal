@@ -235,29 +235,19 @@ class TtDistributedLayernorm:
 
         nominators = []
         for i in range(num_devices):
-            nominators.append(
-                ttl.tensor.bcast(xs[i], mean[i], math_op=ttl.tensor.BcastOpMath.SUB, dim=ttl.tensor.BcastOpDim.W)
-            )
+            nominators.append(ttnn.subtract(xs[i], mean[i]))
 
         x_hat = []
         for i in range(num_devices):
-            x_hat.append(
-                ttl.tensor.bcast(
-                    nominators[i], denominators[i], math_op=ttl.tensor.BcastOpMath.MUL, dim=ttl.tensor.BcastOpDim.W
-                )
-            )
+            x_hat.append(ttnn.multiply(nominators[i], denominators[i]))
             nominators[i].deallocate(True)
             denominators[i].deallocate(True)
 
         # Scale and shift: x_hat = self.gammas * x_hat + self.betas_torch
         for i in range(num_devices):
-            x_hat[i] = ttl.tensor.bcast(
-                x_hat[i], self.ln_gamma[i], math_op=ttl.tensor.BcastOpMath.MUL, dim=ttl.tensor.BcastOpDim.H
-            )
+            x_hat[i] = ttnn.multiply(x_hat[i], self.ln_gamma[i])
         for i in range(num_devices):
-            x_hat[i] = ttl.tensor.bcast(
-                x_hat[i], self.ln_beta[i], math_op=ttl.tensor.BcastOpMath.ADD, dim=ttl.tensor.BcastOpDim.H
-            )
+            x_hat[i] = ttnn.add(x_hat[i], self.ln_beta[i])
 
         return x_hat
 

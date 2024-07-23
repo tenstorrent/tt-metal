@@ -248,7 +248,7 @@ class TtLlamaAttention(nn.Module):
         mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = ttnn.multiply(mul, self.scalar)
 
         if attn_weights.get_legacy_shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(

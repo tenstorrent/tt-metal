@@ -98,17 +98,15 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             return retilized
 
     def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
+        return ttnn.multiply(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
         )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
         qkv = ttnn.matmul(activation, qkv_weight)
-        qkv = ttl.tensor.bcast(qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        qkv = ttnn.add(qkv, qkv_bias)
         # profiler.end("___op1_qkv_fused")
 
         return qkv
@@ -172,11 +170,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
 
         if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
+            attention_score_input = ttnn.add(
                 attention_score_input,
                 attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
             )
 
         attention_scores = softmax(attention_score_input)

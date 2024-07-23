@@ -690,7 +690,7 @@ op_map = {
         "pytorch_op": pytorch_ops.mul,
     },
     "bcast-mul-hw": {
-        "tt_op": tt_lib_ops.bcast_mul_hw,
+        "tt_op": tt_lib_ops.bcast_mul_h,
         "pytorch_op": pytorch_ops.mul,
     },
     # Reduce
