@@ -24,9 +24,9 @@ Notes:
         agnostic of the build system (Ninja or Make)
 
 Different configs: to change build type or use tracy, you have to change the configuration cmake step (step #2)
-    - changing build types: `CONFIG=<type> cmake -B build -G Ninja`
-        - valid build_types: `Release`, `Debug`, `RelWithDebInfo`
-        - Release is the default if you do not set CONFIG
+    - changing build types: `cmake -B build -DCMAKE_BUILD_TYPE=<type> -G Ninja`
+        - valid CMAKE_BUILD_TYPE values: `Release`, `Debug`, `RelWithDebInfo`, `CI`
+        - Release is the default if you do not set CMAKE_BUILD_TYPE
     - tracy: `cmake -B build -G Ninja -DENABLE_TRACY=ON`
 
 Now you can have multiple build folders with different configs, if you want to switch just run `ninja install -C <your_build_folder` to install different pybinds
@@ -37,7 +37,7 @@ Now you can have multiple build folders with different configs, if you want to s
 Example:
     ./create_venv.sh
     cmake -B build -G Ninja && ninja -C build                       # <- build in Release, inside folder called `build`
-    CONFIG=Debug cmake -B build_debug -G Ninja && ninja -C build    # <- build in Debug, inside folder called `build_debug`
+    cmake -DCMAKE_BUILD_TYPE=Debug -B build_debug -G Ninja && ninja -C build    # <- build in Debug, inside folder called `build_debug`
     source python_env/bin/activate                                  # <- you can not run pytests yet since pybinds have not been installed
     ninja install -C build                                          # <- install Release pybinds
     <run a pytest>                                                  # <- this test ran in Release config
