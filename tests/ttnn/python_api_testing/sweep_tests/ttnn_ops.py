@@ -3528,7 +3528,6 @@ def eltwise_rdiv(
     t1 = ttnn.rdiv(t0, factor, memory_config=output_mem_config, queue_id=queue_id)
 
     return ttnn_tensor_to_torch(t1)
-<<<<<<< HEAD
 
 
 def neg_bw(
@@ -3566,7 +3565,3 @@ def log_bw(
     t2 = ttnn.log_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
-
-
-=======
->>>>>>> #10147: Reformating
