@@ -267,7 +267,6 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
         )

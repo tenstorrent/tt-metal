@@ -12,7 +12,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ConcatMesh2DToTensor,
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    get_flash_decode_chunk_size,
     num_to_corerange,
 )
 
@@ -437,12 +436,10 @@ class TtLlamaAttention_galaxy:
         ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-
         program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
-            q_chunk_size=self.padded_local_heads,
-            k_chunk_size=k_chunk_size,
+            q_chunk_size=0,  # unused
+            k_chunk_size=0,  # unused
         )
 
         attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
