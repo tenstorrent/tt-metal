@@ -115,8 +115,7 @@ struct ExampleDeviceOperation {
     static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // Optional methods
 
@@ -128,9 +127,9 @@ struct ExampleDeviceOperation {
     // In case the operation needs a custom create_op_performance_model, this method can be implemented
     /*
     static operation::OpPerformanceModel create_op_performance_model(
-        const operation_attributes_t& attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&);
     */
 };
 

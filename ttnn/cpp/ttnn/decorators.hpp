@@ -7,8 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
-
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "ttnn/core.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -261,6 +261,7 @@ struct operation_t {
             return output;
         }
     }
+
 
     // Get "add" from "ttnn::add"
     const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }

@@ -13,6 +13,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "ttnn/config.hpp"
 
 namespace tt::tt_metal {
     std::atomic<uint32_t> operation_id_atomic_count = 0;

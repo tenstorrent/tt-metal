@@ -40,7 +40,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def pre_and_post(request):
-    original_config = copy.copy(ttnn.CONFIG)
+    original_config = ttnn.Config(ttnn.CONFIG)
     if ttnn.CONFIG_PATH is not None:
         ttnn.load_config_from_json_file(ttnn.CONFIG_PATH)
     if ttnn.CONFIG_OVERRIDES is not None:

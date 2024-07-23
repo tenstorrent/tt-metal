@@ -732,14 +732,14 @@ def export_operation(python_fully_qualified_name, operation, is_method):
     module_path = module_path[1:]  # ["ttnn", "add"] -> ["add"]
 
     def recursive_helper(module, path):
-        current, *rest = path
+        submodule_name, *rest = path
         if not rest:
-            setattr(module, current, operation)
+            setattr(module, submodule_name, operation)
             return
 
-        current_module = getattr(module, current, types.ModuleType("module_name"))
-        setattr(module, current, current_module)
-        recursive_helper(current_module, rest)
+        submodule = getattr(module, submodule_name, types.ModuleType(submodule_name))
+        setattr(module, submodule_name, submodule)
+        recursive_helper(submodule, rest)
 
     recursive_helper(ttnn, module_path)
 
