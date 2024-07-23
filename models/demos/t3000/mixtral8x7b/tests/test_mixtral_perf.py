@@ -33,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
@@ -132,6 +133,7 @@ def test_mixtral_model_perf(
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "prefill_seqlen, expected_compile_time, expected_inference_time",
     (
