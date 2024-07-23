@@ -23,14 +23,8 @@ def test_bw_add(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, other_tensor)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.add(in_data, other_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.add_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -69,14 +63,8 @@ def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
         queue_id=cq_id,
     )
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.add(in_data, other_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.add_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = True
     for i in range(len(are_required_outputs)):
@@ -100,13 +88,8 @@ def test_bw_unary_add(input_shapes, alpha, device):
 
     tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, alpha=alpha)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.add(in_data, torch.tensor(alpha))
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.add_bw)
+    golden_tensor = golden_function(grad_data, in_data, alpha)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

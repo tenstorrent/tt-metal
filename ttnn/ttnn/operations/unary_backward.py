@@ -54,10 +54,30 @@ def _golden_function_unary_backward_with_two_float(torch_op, grad_tensor, input_
     return golden_tensor
 
 
+def _golden_function_backward_with_reverse_string(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, **kwargs
+):
+    if torch_op == torch.div:
+        pyt_y = torch_op(input_tensor_b, input_tensor_a, rounding_mode=value)
+    else:
+        pyt_y = torch_op(input_tensor_b, input_tensor_a)
+    input_tensor_a.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad]
+    return golden_tensor
+
+
 ttnn.attach_golden_function(
     ttnn.atanh_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
         torch.atanh, grad, input, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.rdiv_bw,
+    golden_function=lambda grad, input, value=None, *args, **kwargs: _golden_function_backward_with_reverse_string(
+        torch.div, grad, input, value, *args, **kwargs
     ),
 )
 

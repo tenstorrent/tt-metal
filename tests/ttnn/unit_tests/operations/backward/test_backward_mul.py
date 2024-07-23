@@ -23,14 +23,8 @@ def test_bw_mul(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.mul_bw(grad_tensor, input_tensor_a, input_tensor_b)
 
-    in_data_a.retain_grad()
-    in_data_b.retain_grad()
-
-    pyt_y = torch.mul(in_data_a, in_data_b)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data_a.grad, in_data_b.grad]
+    golden_function = ttnn.get_golden_function(ttnn.mul_bw)
+    golden_tensor = golden_function(grad_data, in_data_a, in_data_b)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -80,14 +74,8 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
             input_b_grad=input_b_grad,
         )
 
-    in_data_a.retain_grad()
-    in_data_b.retain_grad()
-
-    pyt_y = torch.mul(in_data_a, in_data_b)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data_a.grad, in_data_b.grad]
+    golden_function = ttnn.get_golden_function(ttnn.mul_bw)
+    golden_tensor = golden_function(grad_data, in_data_a, in_data_b)
 
     status = True
     for i in range(len(are_required_outputs)):
@@ -111,13 +99,8 @@ def test_bw_unary_mul(input_shapes, scalar, device):
 
     tt_output_tensor_on_device = ttnn.mul_bw(grad_tensor, input_tensor, scalar)
 
-    in_data.retain_grad()
-
-    pyt_y = in_data * torch.tensor(scalar)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.mul_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
