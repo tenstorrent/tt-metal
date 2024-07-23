@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

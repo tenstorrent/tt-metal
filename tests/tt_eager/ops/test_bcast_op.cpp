@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include <tt_numpy/functions.hpp>

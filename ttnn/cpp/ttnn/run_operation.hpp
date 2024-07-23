@@ -7,7 +7,7 @@
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operation_history.hpp"
 #include "tt_stl/concepts.hpp"

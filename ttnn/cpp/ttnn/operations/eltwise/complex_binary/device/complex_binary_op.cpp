@@ -6,7 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 
 namespace ttnn::operations::complex_binary {
