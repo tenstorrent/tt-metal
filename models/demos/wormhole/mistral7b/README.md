@@ -69,7 +69,7 @@ Mistral-7B is running on a single chip. If you are running on a T3000 please set
 Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warning.
 
 ```
-# Run the demo with a pre-written batch of 32 user prompts:
+# Run the demo with a pre-written batch of 8 user prompts:
 
 # Prefill & Decode demo
 pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[general_weights]
