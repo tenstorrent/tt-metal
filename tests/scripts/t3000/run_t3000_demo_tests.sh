@@ -31,7 +31,7 @@ run_t3000_llama3_70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
   # Llama3 70B demo (output verification)
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_enabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3] --timeout=900
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3] --timeout=900
 
 
   # Record the end time

@@ -10,7 +10,6 @@ from models.demos.t3000.llama2_70b.tests.test_llama_attention import run_test_Ll
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@skip_for_wormhole_b0("See GH Issue #10317")
 @pytest.mark.parametrize(
     "llama_version",
     (("llama3"),),
@@ -23,12 +22,12 @@ from models.demos.t3000.llama2_70b.tests.test_llama_attention import run_test_Ll
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
     (
-        # (32, 2048),
-        (16, 8192),
+        (32, 2048),
+        # (16, 8192),
     ),
     ids=(
-        # "short_context",
-        "long_context",
+        "short_context",
+        # "long_context",
     ),
 )
 def test_LlamaAttention_inference_t3000(
@@ -41,14 +40,14 @@ def test_LlamaAttention_inference_t3000(
     llama_version,
     use_program_cache,
 ):
-    if batch > max_batch_size:
-        pytest.skip(f"Decode with {batch} users is not supported with large context")
+    if seq_len == 1 and batch != max_batch_size:
+        pytest.skip(f"Input batch size should match max_batch_size")
 
     if batch == 1 and seq_len > max_context_len:
-        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
+        pytest.skip(f"Prefill with seq_len={seq_len} is not supported with short context")
 
     if llama_version == "llama2" and seq_len > 2048:
-        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
+        pytest.skip(f"Llama2 with seq_len={seq_len} is not supported (max 2048)")
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,

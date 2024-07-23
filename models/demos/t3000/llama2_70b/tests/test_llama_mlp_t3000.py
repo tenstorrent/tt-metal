@@ -22,12 +22,12 @@ from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
     (
-        # (32, 2048),
-        (16, 8192),
+        (32, 2048),
+        # (16, 8192),
     ),
     ids=(
-        # "short_context",
-        "long_context",
+        "short_context",
+        # "long_context",
     ),
 )
 def test_LlamaMLP_inference_t3000(

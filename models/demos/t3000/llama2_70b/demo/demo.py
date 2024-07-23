@@ -384,6 +384,14 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ("models/demos/t3000/llama2_70b/demo/data/llama2_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        (32, 2048),
+        (16, 8192),
+    ),
+    ids=("short_context", "long_context"),
+)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -403,6 +411,8 @@ def test_LlamaModel_demo(
     decode_only,
     llama_version,
     ground_truth,
+    max_batch_size,
+    max_context_len,
     use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
@@ -425,6 +435,8 @@ def test_LlamaModel_demo(
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
         num_layers=num_layers,
+        max_batch_size=max_batch_size,
+        max_kv_context_len=max_context_len,
         max_output_tokens=max_output_tokens,
         prompts_file=prompts_file,
         output_at_end=output_at_end,
