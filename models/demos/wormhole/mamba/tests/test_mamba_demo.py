@@ -23,6 +23,7 @@ def test_demo(user_input, model_version, device, use_program_cache, get_tt_cache
 
 
 @pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "user_input, model_version, max_gen_len",
     (

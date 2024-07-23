@@ -29,6 +29,7 @@ class PytorchMambaBlock(torch.nn.Module):
         return result
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, pcc",
     (

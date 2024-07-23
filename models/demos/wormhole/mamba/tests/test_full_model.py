@@ -105,6 +105,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 
 
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, num_layers, iterations, pcc",
