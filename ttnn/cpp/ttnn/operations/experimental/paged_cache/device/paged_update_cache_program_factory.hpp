@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::paged_cache::detail {
 using namespace tt::constants;
 using namespace tt;
 
-bool enable_fp32_dest(const DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
+bool enable_fp32_dest(const tt_metal::Device * device, const DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
     bool fp32_dest_acc_en;
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    bool fp32_dest_acc_en = enable_fp32_dest(compute_kernel_config, input_cb_data_format);
+    bool fp32_dest_acc_en = enable_fp32_dest(device, compute_kernel_config, input_cb_data_format);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_cb_data_format);
