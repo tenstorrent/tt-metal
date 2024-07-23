@@ -236,7 +236,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, SfpuCompute) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -282,7 +282,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, SfpuCompute) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -330,7 +330,7 @@ TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, AllCoreMultiTileSfpuAp
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});

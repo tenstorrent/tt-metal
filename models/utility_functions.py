@@ -1017,6 +1017,11 @@ def is_x2_harvested(device):
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
 
 
+def is_blackhole():
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "blackhole" in ARCH_NAME
+
+
 def is_wormhole_b0():
     ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
     return "wormhole_b0" in ARCH_NAME
