@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 namespace ttnn::operations::binary {
 
