@@ -23,7 +23,7 @@
 namespace ttnn::operations::unary_backward {
 
 std::vector<ttnn::Tensor> _mul_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -319,7 +319,7 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
 }
 
 std::vector<Tensor> _add_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -333,8 +333,9 @@ std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<Memor
 }
 
 std::vector<Tensor> _eq_bw(
-    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    return _unary_comp_bw(grad, output_memory_config);
 }
 
 std::vector<Tensor> _gt_bw(
@@ -1705,12 +1706,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_float(UnaryBackwardOpType OpType){
     switch (OpType) {
-        case UnaryBackwardOpType::MUL_BW:
-            return _mul_bw;
-        case UnaryBackwardOpType::ADD_BW:
-            return _add_bw;
-        case UnaryBackwardOpType::EQ_BW:
-            return _eq_bw;
         case UnaryBackwardOpType::LT_BW:
             return _lt_bw;
         case UnaryBackwardOpType::LE_BW:

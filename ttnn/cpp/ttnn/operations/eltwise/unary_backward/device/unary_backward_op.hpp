@@ -128,6 +128,11 @@ std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const st
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+//OpHandler_float : get_function_type1_w_float
+std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _mul_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
 //OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -333,6 +338,27 @@ struct OpHandler<UnaryBackwardOpType::PROD_BW> {
     }
 };
 
+template <>
+struct OpHandler_float<UnaryBackwardOpType::ADD_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _add_bw(grad, input, alpha, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_float<UnaryBackwardOpType::MUL_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _mul_bw(grad, input, scalar, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_float<UnaryBackwardOpType::EQ_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _eq_bw(grad, input, other, output_mem_config);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
@@ -347,6 +373,11 @@ auto get_function_type1_w_float() {
 template <UnaryBackwardOpType OpType>
 auto get_function_type1() {
     return &OpHandler<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_w_float() {
+    return &OpHandler_float<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>

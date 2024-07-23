@@ -368,6 +368,22 @@ constexpr auto acosh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
 
+//ExecuteUnaryBackwardFloat : get_function_type1_w_float
+constexpr auto mul_bw = ttnn::register_operation<
+    "ttnn::mul_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloat<
+        operations::unary_backward::UnaryBackwardOpType::MUL_BW>>();
+
+constexpr auto add_bw = ttnn::register_operation<
+    "ttnn::add_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloat<
+        operations::unary_backward::UnaryBackwardOpType::ADD_BW>>();
+
+constexpr auto eq_bw = ttnn::register_operation<
+    "ttnn::eq_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloat<
+        operations::unary_backward::UnaryBackwardOpType::EQ_BW>>();
+
 //OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
