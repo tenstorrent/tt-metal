@@ -57,13 +57,13 @@ def get_timeout(test_module):
     return timeout
 
 
-def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
+def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
     timeout = get_timeout(test_module)
-    batch_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Batch: {batch_name}", leave=False)
+    suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     for test_vector in test_vectors:
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
@@ -74,7 +74,7 @@ def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             results.append(result)
-            batch_pbar.update()
+            suite_pbar.update()
             continue
         else:
             test_vector.pop("status")
@@ -114,17 +114,17 @@ def execute_batch(test_module, test_vectors, pbar_manager, batch_name):
             result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        batch_pbar.update()
+        suite_pbar.update()
         results.append(result)
     if p is not None:
         p.join()
 
-    batch_pbar.close()
+    suite_pbar.close()
     return results
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "batch_name", "vector_id"]
+    info_field_names = ["sweep_name", "suite_name", "vector_id"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -135,10 +135,10 @@ def sanitize_inputs(test_vectors):
     return header_info, test_vectors
 
 
-def get_batch_vectors(client, vector_index, batch):
+def get_suite_vectors(client, vector_index, suite):
     response = client.search(
         index=vector_index,
-        query={"bool": {"must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"batch_name": batch}}]}},
+        query={"bool": {"must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name": suite}}]}},
         size=10000,
     )
     test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
@@ -149,7 +149,7 @@ def get_batch_vectors(client, vector_index, batch):
     return header_info, test_vectors
 
 
-def run_sweeps(module_name, batch_name, vector_id):
+def run_sweeps(module_name, suite_name, vector_id):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
@@ -164,20 +164,18 @@ def run_sweeps(module_name, batch_name, vector_id):
             try:
                 response = client.search(
                     index=vector_index,
-                    aggregations={"batches": {"terms": {"field": "batch_name.keyword", "size": 10000}}},
+                    aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                 )
-                batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
-                if len(batches) == 0:
+                suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                if len(suites) == 0:
                     continue
 
-                print(batches)
-
-                module_pbar = pbar_manager.counter(total=len(batches), desc=f"Module: {sweep_name}", leave=False)
-                for batch in batches:
-                    print(f"SWEEPS: Executing tests for module {sweep_name}, batch {batch}.")
-                    header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
-                    results = execute_batch(test_module, test_vectors, pbar_manager, batch)
-                    print(f"SWEEPS: Completed tests for module {sweep_name}, batch {batch}.")
+                module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
+                for suite in suites:
+                    print(f"SWEEPS: Executing tests for module {sweep_name}, suite {suite}.")
+                    header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                    print(f"SWEEPS: Completed tests for module {sweep_name}, suite {suite}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
                     module_pbar.update()
@@ -201,32 +199,32 @@ def run_sweeps(module_name, batch_name, vector_id):
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
-            results = execute_batch(test_module, test_vectors, pbar_manager, "Single Vector")
+            results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector")
             export_test_results(header_info, results)
         else:
             try:
-                if not batch_name:
+                if not suite_name:
                     response = client.search(
                         index=vector_index,
-                        aggregations={"batches": {"terms": {"field": "batch_name.keyword", "size": 10000}}},
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                         size=10000,
                     )
-                    batches = [batch["key"] for batch in response["aggregations"]["batches"]["buckets"]]
-                    if len(batches) == 0:
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                    if len(suites) == 0:
                         return
 
-                    for batch in batches:
-                        print(f"SWEEPS: Executing tests for module {module_name}, batch {batch}.")
-                        header_info, test_vectors = get_batch_vectors(client, vector_index, batch)
-                        results = execute_batch(test_module, test_vectors, pbar_manager, batch)
-                        print(f"SWEEPS: Completed tests for module {module_name}, batch {batch}.")
+                    for suite in suites:
+                        print(f"SWEEPS: Executing tests for module {module_name}, suite {suite}.")
+                        header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
+                        results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                        print(f"SWEEPS: Completed tests for module {module_name}, suite {suite}.")
                         print(f"SWEEPS: Tests Executed - {len(results)}")
                         export_test_results(header_info, results)
                 else:
-                    print(f"SWEEPS: Executing tests for module {module_name}, batch {batch_name}.")
-                    header_info, test_vectors = get_batch_vectors(client, vector_index, batch_name)
-                    results = execute_batch(test_module, test_vectors, pbar_manager, batch_name)
-                    print(f"SWEEPS: Completed tests for module {module_name}, batch {batch_name}.")
+                    print(f"SWEEPS: Executing tests for module {module_name}, suite {suite_name}.")
+                    header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
+                    print(f"SWEEPS: Completed tests for module {module_name}, suite {suite_name}.")
                     print(f"SWEEPS: Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
             except Exception as e:
@@ -278,7 +276,7 @@ if __name__ == "__main__":
         "--elastic", required=False, help="Elastic Connection String for the vector and results database."
     )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
-    parser.add_argument("--batch-name", required=False, help="Batch of Test Vectors to run, or all tests if omitted.")
+    parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
     )
@@ -307,9 +305,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    if not args.module_name and args.batch_name:
+    if not args.module_name and args.suite_name:
         parser.print_help()
-        print("ERROR: Module name is required if batch name is specified.")
+        print("ERROR: Module name is required if suite name is specified.")
         exit(1)
 
     if not args.module_name and args.vector_id:
@@ -334,7 +332,7 @@ if __name__ == "__main__":
     from ttnn import *
     from serialize import *
 
-    run_sweeps(args.module_name, args.batch_name, args.vector_id)
+    run_sweeps(args.module_name, args.suite_name, args.vector_id)
 
     if args.watcher:
         disable_watcher()

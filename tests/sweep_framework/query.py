@@ -16,17 +16,19 @@ ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
 @click.group()
 @click.option("--module-name", default=None, help="Name of the module to be queried.")
-@click.option("--batch-name", default=None, help="Batch name to filter by.")
+@click.option("--suite-name", default=None, help="Suite name to filter by.")
 @click.option("--vector-id", default=None, help="Individual Vector ID to filter by.")
 @click.option("--run-id", default=None, help="Individual Run ID to filter by.")
 @click.option("--elastic", default="http://localhost:9200", help="Elastic Connection String")
-@click.option("--all", default=False, help="Displays total run statistics instead of the most recent run.")
+@click.option(
+    "--all", is_flag=True, default=False, help="Displays total run statistics instead of the most recent run."
+)
 @click.pass_context
-def cli(ctx, module_name, batch_name, vector_id, run_id, elastic, all):
+def cli(ctx, module_name, suite_name, vector_id, run_id, elastic, all):
     ctx.ensure_object(dict)
 
     ctx.obj["module_name"] = module_name
-    ctx.obj["batch_name"] = batch_name
+    ctx.obj["suite_name"] = suite_name
     ctx.obj["vector_id"] = vector_id
     ctx.obj["run_id"] = run_id
     ctx.obj["elastic"] = elastic
@@ -106,15 +108,15 @@ def summary(ctx):
                     row.append(client.count(index=results_index, query={"match": {"status": str(status)}})["count"])
 
             table.rows.append(row, module_name)
-    elif ctx.obj["batch_name"] is None:
+    elif ctx.obj["suite_name"] is None:
         results_index = ctx.obj["module_name"] + "_test_results"
         if not ctx.obj["all"]:
             response = client.search(
                 index=results_index,
                 size=0,
                 aggs={
-                    "group_by_batch_name": {
-                        "terms": {"field": "batch_name.keyword", "size": 50},
+                    "group_by_suite_name": {
+                        "terms": {"field": "suite_name.keyword", "size": 50},
                         "aggs": {
                             "group_by_vector_id": {
                                 "terms": {"field": "vector_id.keyword", "size": 10000},
@@ -127,7 +129,7 @@ def summary(ctx):
                         },
                     }
                 },
-            )["aggregations"]["group_by_batch_name"]["buckets"]
+            )["aggregations"]["group_by_suite_name"]["buckets"]
             for bucket in response:
                 row = []
                 for status in TestStatus:
@@ -142,22 +144,22 @@ def summary(ctx):
             response = client.search(
                 index=results_index,
                 size=0,
-                aggs={"group_by_batch_name": {"terms": {"field": "batch_name.keyword", "size": 50}}},
+                aggs={"group_by_suite_name": {"terms": {"field": "suite_name.keyword", "size": 50}}},
             )
-            batches = [bucket["key"] for bucket in response["aggregations"]["group_by_batch_name"]["buckets"]]
-            for batch in batches:
+            suites = [bucket["key"] for bucket in response["aggregations"]["group_by_suite_name"]["buckets"]]
+            for suite in suites:
                 row = []
                 for status in TestStatus:
                     row.append(
                         client.count(
                             index=results_index,
                             query={
-                                "bool": {"must": [{"match": {"status": str(status)}}, {"match": {"batch_name": batch}}]}
+                                "bool": {"must": [{"match": {"status": str(status)}}, {"match": {"suite_name": suite}}]}
                             },
                         )["count"]
                     )
 
-                table.rows.append(row, batch)
+                table.rows.append(row, suite)
 
     else:
         results_index = ctx.obj["module_name"] + "_test_results"
@@ -165,7 +167,7 @@ def summary(ctx):
             response = client.search(
                 index=results_index,
                 size=0,
-                query={"match": {"batch_name": ctx.obj["batch_name"]}},
+                query={"match": {"suite_name": ctx.obj["suite_name"]}},
                 aggs={
                     "group_by_vector_id": {
                         "terms": {"field": "vector_id.keyword", "size": 10000},
@@ -186,7 +188,7 @@ def summary(ctx):
             response = client.search(
                 index=results_index,
                 size=10000,
-                query={"match": {"batch_name": ctx.obj["batch_name"]}},
+                query={"match": {"suite_name": ctx.obj["suite_name"]}},
                 aggs={
                     "group_by_vector_id": {
                         "terms": {"field": "vector_id.keyword", "size": 10000},
@@ -220,7 +222,7 @@ def detail(ctx):
     table.set_style(STYLE_COMPACT)
     table.columns.header = [
         colored("Sweep", "light_red"),
-        colored("Batch", "light_red"),
+        colored("Suite", "light_red"),
         colored("Vector ID", "light_red"),
         colored("Timestamp", "light_red"),
         colored("Status", "light_red"),
@@ -233,8 +235,8 @@ def detail(ctx):
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     matches = []
-    if ctx.obj["batch_name"]:
-        matches.append({"match": {"batch_name": ctx.obj["batch_name"]}})
+    if ctx.obj["suite_name"]:
+        matches.append({"match": {"suite_name": ctx.obj["suite_name"]}})
     if ctx.obj["vector_id"]:
         matches.append({"match": {"vector_id": ctx.obj["vector_id"]}})
 
@@ -255,7 +257,7 @@ def detail(ctx):
             table.rows.append(
                 [
                     module_name,
-                    source["batch_name"],
+                    source["suite_name"],
                     source["vector_id"],
                     source["timestamp"],
                     source["status"][11:],

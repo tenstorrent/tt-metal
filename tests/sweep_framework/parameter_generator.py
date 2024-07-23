@@ -8,7 +8,6 @@ import importlib
 import pathlib
 import datetime
 import os
-import zlib
 import hashlib
 
 from permutations import *
@@ -27,17 +26,17 @@ def generate_vectors(module_name):
     test_module = importlib.import_module("sweeps." + module_name)
     parameters = test_module.parameters
 
-    for batch in parameters:
-        print(f"SWEEPS: Generating test vectors for batch {batch}.")
-        batch_vectors = list(permutations(parameters[batch]))
-        for v in batch_vectors:
-            v["batch_name"] = batch
+    for suite in parameters:
+        print(f"SWEEPS: Generating test vectors for suite {suite}.")
+        suite_vectors = list(permutations(parameters[suite]))
+        for v in suite_vectors:
+            v["suite_name"] = suite
             v["validity"] = VectorValidity.VALID
             v["status"] = VectorStatus.CURRENT
             v["sweep_name"] = module_name
 
-        invalidate_vectors(test_module, batch_vectors)
-        export_batch_vectors(module_name, batch, batch_vectors)
+        invalidate_vectors(test_module, suite_vectors)
+        export_suite_vectors(module_name, suite, suite_vectors)
 
 
 # Perform any post-gen validation to the resulting vectors.
@@ -52,7 +51,7 @@ def invalidate_vectors(test_module, vectors) -> None:
 
 
 # Output the individual test vectors.
-def export_batch_vectors(module_name, batch_name, vectors):
+def export_suite_vectors(module_name, suite_name, vectors):
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
 
@@ -63,7 +62,7 @@ def export_batch_vectors(module_name, batch_name, vectors):
             index=index_name,
             query={
                 "bool": {
-                    "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"batch_name": batch_name}}]
+                    "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name": suite_name}}]
                 }
             },
             size=10000,
@@ -88,12 +87,12 @@ def export_batch_vectors(module_name, batch_name, vectors):
 
     if old_vector_ids == new_vector_ids:
         print(
-            f"SWEEPS: Vectors generated for module {module_name}, batch {batch_name} already exist, and have not changed. Skipping..."
+            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist, and have not changed. Skipping..."
         )
         return
     else:
         print(
-            f"SWEEPS: New vectors found for module {module_name}, batch {batch_name}. Archiving old vectors and saving new batch."
+            f"SWEEPS: New vectors found for module {module_name}, suite {suite_name}. Archiving old vectors and saving new suite."
         )
         for old_vector_id in old_vector_ids:
             client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
@@ -107,7 +106,7 @@ def export_batch_vectors(module_name, batch_name, vectors):
             except:
                 pass
             client.index(index=index_name, id=new_vector_id, body=serialized_vectors[new_vector_id])
-        print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for batch {batch_name}.")
+        print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for suite {suite_name}.")
 
 
 # Generate one or more sets of test vectors depending on module_name
