@@ -342,13 +342,6 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn.lerp_bw,
-    golden_function=lambda grad, a, b, weight, *args, **kwargs: _golden_function_backward_with_float(
-        torch.add, grad, a, b, weight, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
     ttnn.mul_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
         torch.mul, grad, a, b, *args, **kwargs
