@@ -133,11 +133,9 @@ class TtBertEncoder(torch.nn.Module):
     def op11_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
         # profiler.start("__op11_mm_plus_bias")
         output = ttnn.matmul(mha_res, attention_output_weight)
-        mha_out = ttnn.experimental.tensor.bcast(
+        mha_out = ttnn.add(
             output,
             attention_output_bias,
-            ttnn.experimental.tensor.BcastOpMath.ADD,
-            ttnn.experimental.tensor.BcastOpDim.H,
         )
         # profiler.end("__op11_mm_plus_bias")
 

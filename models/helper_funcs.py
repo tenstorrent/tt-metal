@@ -34,15 +34,10 @@ def Linear(
     weight_T = ttnn.transpose(weight, -2, -1)
 
     def linear_(activation):
+        nonlocal bias
         assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"
-        output = ttnn.matmul(activation, weight_T, memory_config=output_mem_config)
-
-        if bias is not None:
-            output_plus_bias = tensor.bcast(
-                output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output_mem_config
-            )
-            return output_plus_bias
-
-        return output
+        if bias is not None and bias.get_layout() != ttnn.TILE_LAYOUT:
+            bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
+        return ttnn.linear(activation, weight_T, bias=bias, memory_config=output_mem_config)
 
     return linear_

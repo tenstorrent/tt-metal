@@ -65,5 +65,5 @@ class TtSqueezeExcitation(torch.nn.Module):
         scale = self.activation(scale)
         scale = self.fc2(scale)
         scale = self.scale_activation(scale)
-        final_out = tt_lib.tensor.bcast(input, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        final_out = ttnn.multiply(input, scale)
         return final_out
