@@ -70,8 +70,8 @@ set(TTNN_SRCS
 )
 
 ### Setup TTNN as a shared library with optional Python bindings
-add_subdirectory(cpp/ttnn/experimental)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
+add_subdirectory(cpp/ttnn/deprecated)
 set(TTNN_FINAL_SRC
     ${TTNN_SRCS}
     ${QUEUE_SRCS}
