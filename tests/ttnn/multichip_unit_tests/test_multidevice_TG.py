@@ -196,7 +196,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
     assert out_pass
 
 
-@pytest.skip("DRAM-SHARDED Matmuls gives ND PCC")
+@pytest.mark.skip("DRAM-SHARDED Matmuls gives ND PCC")
 @pytest.mark.parametrize(
     "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
