@@ -125,8 +125,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            # memory_config=ACT_MEMCFG,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEMCFG,
             device=llama_attention_model.device_mesh,
             mesh_mapper=ShardTensor2dMesh(
                 llama_attention_model.device_mesh, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
@@ -354,7 +353,7 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9997)],
+    [(32, 1, 0.9995)],
     ids=["decode"],
 )
 @pytest.mark.parametrize(

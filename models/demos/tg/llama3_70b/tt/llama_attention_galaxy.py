@@ -352,6 +352,7 @@ class TtLlamaAttention_galaxy:
             xs,
             self.qkv,
             # program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
+            core_grid=ttnn.CoreGrid(y=5, x=8),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
@@ -528,16 +529,10 @@ class TtLlamaAttention_galaxy:
             attn_output,
             self.wo,
             core_grid=ttnn.CoreGrid(y=4, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )
-
-        # attn_output = self.tt_all_gather(
-        #     attn_output,
-        #     dim=3,
-        #     cluster_axis=1,
-        #     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        # )
 
         return attn_output
