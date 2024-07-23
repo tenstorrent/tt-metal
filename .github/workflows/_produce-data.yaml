@@ -97,6 +97,7 @@ jobs:
           path: |
             if-no-files-found: warn
             path: |
+              pipeline_*.json
               workflow.json
               workflow_jobs.json
   test-produce-benchmark-environment:
