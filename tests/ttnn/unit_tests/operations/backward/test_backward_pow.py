@@ -82,13 +82,8 @@ def test_bw_unary_pow(input_shapes, exponent_and_pcc, device):
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.pow(in_data, exponent)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=pcc)
     assert status
@@ -104,14 +99,8 @@ def test_bw_unary_pow_test_inf(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 9, device)
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
-
-    in_data.retain_grad()
-
-    pyt_y = torch.pow(in_data, exponent)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -128,13 +117,8 @@ def test_bw_unary_pow_test_neg_inf(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.pow(in_data, exponent)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -180,11 +164,8 @@ def test_bw_unary_pow_output(input_shapes, exponent_and_pcc, device):
 
     in_data.retain_grad()
 
-    pyt_y = torch.pow(in_data, exponent)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=pcc)
     assert status

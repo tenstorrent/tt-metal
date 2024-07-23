@@ -32,14 +32,8 @@ def test_bw_where(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.where(condition_data, in_data, other_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.where_bw)
+    golden_tensor = golden_function(grad_data, condition_data, in_data, other_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -88,14 +82,8 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
 
     output_tensor = [input_grad, other_grad]
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.where(condition_data, in_data, other_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.where_bw)
+    golden_tensor = golden_function(grad_data, condition_data, in_data, other_data)
 
     status = True
     for i in range(len(are_required_outputs)):
