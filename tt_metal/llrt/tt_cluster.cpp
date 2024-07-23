@@ -790,6 +790,10 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // TODO (abhullar): Uplift with #9823
+        return active_ethernet_cores;
+    }
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
         for (const auto &eth_core : eth_cores) {
@@ -806,6 +810,10 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // TODO (abhullar): Uplift with #9823
+        return inactive_ethernet_cores;
+    }
     std::unordered_set<int> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.

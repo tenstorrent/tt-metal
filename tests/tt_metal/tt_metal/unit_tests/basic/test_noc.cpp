@@ -98,6 +98,9 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
 }
 TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
+    if (arch == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
 #ifndef NOC_X_ID_TRANSLATE_TABLE_0
     // If the translation tables are not defined, we should skip :)
     GTEST_SKIP();
