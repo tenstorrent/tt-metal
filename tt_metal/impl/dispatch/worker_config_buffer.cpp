@@ -122,8 +122,6 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
 // Repeatedly move free_index up until it catches up w/ the reserved sync_counts or alloc_index
 void WorkerConfigBufferMgr::free(uint32_t free_up_to_sync_count) {
 
-    TT_ASSERT(this->alloc_index_ != this->free_index_);
-
     size_t num_core_types = this->reservation_.size();
     for (uint32_t idx = 0; idx < num_core_types; idx++) {
         uint32_t free_index = this->free_index_[idx];
