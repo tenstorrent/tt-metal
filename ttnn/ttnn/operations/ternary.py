@@ -11,6 +11,10 @@ import ttnn._ttnn.deprecated as ttl
 __all__ = []
 
 
+def _is_scalar(value):
+    return isinstance(value, (float))
+
+
 def torch_mac(input, tensor1, tensor2):
     import torch
 
@@ -94,109 +98,31 @@ for ternary_function_name, ttl_ternary_function in TTL_TERNARY_FUNCTIONS:
     register_ttl_ternary_function(ternary_function_name, ttl_ternary_function)
 
 
-def _is_scalar(value):
-    return isinstance(value, (float))
-
-
-def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name, param):
-    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
-        import torch
-
-        name_to_golden_function_function = {
-            "addcmul": torch.addcmul,
-            "addcdiv": torch.addcdiv,
-        }
-        torch_function = name_to_golden_function_function[name]
-        return torch_function(input_tensor, parameter)
-
-    doc = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
-
-            .. math::
-                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`input_tensor1`
-                * :attr:`input_tensor2`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
-
-            """
-
-    @ttnn.register_python_operation(
-        name=f"ttnn.{name}",
-        golden_function=_golden_function,
-        doc=doc,
-    )
-    def ternary_function(
-        input_tensor: ttnn.Tensor,
-        input_tensor1: ttnn.Tensor,
-        input_tensor2: ttnn.Tensor,
-        parameter: float,
-        *,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        input_tensor1 = ttnn.unsqueeze_to_4D(input_tensor1)
-        input_tensor2 = ttnn.unsqueeze_to_4D(input_tensor2)
-
-        if (
-            not isinstance(input_tensor, ttnn.Tensor)
-            or not isinstance(input_tensor1, ttnn.Tensor)
-            or not isinstance(input_tensor2, ttnn.Tensor)
-        ):
-            raise TypeError("Expected 3 arguments to be a ttnn.Tensor")
-
-        if not _is_scalar(parameter):
-            raise TypeError("Expected one argument to be a float")
-
-        if (
-            not ttnn.is_tensor_storage_on_device(input_tensor)
-            or not ttnn.is_tensor_storage_on_device(input_tensor1)
-            or not ttnn.is_tensor_storage_on_device(input_tensor2)
-        ):
-            raise RuntimeError("input_tensor must be on device!")
-
-        output_tensor = ttl_ternary_function(
-            input_tensor, input_tensor1, input_tensor2, value=parameter, output_mem_config=memory_config
-        )
-
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
-
-
-TTL_TERNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("addcmul", ttl.tensor.addcmul, "addcmul", "value"),
-    ("addcdiv", ttl.tensor.addcdiv, "addcdiv", "value"),
-]
-
-for ternary_function_name, ttl_ternary_function, name, param in TTL_TERNARY_FUNCTIONS_WITH_FLOAT_PARAM:
-    register_ttl_ternary_function_with_float(ternary_function_name, ttl_ternary_function, name, param)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, **_):
+def _golden_function_addcmul(input_tensor_a, input_tensor_b, input_tensor_c, *args, value=1, **kwargs):
     import torch
 
-    name_to_golden_function_function = {
-        "where": torch.where,
-    }
-    torch_function = name_to_golden_function_function[name]
-    return torch_function(input_tensor)
+    return torch.addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
 
 
-ttnn.attach_golden_function(
-    ttnn.where,
-    golden_function=_golden_function,
-)
+ttnn.attach_golden_function(ttnn.addcmul, golden_function=_golden_function_addcmul)
+
+
+def _golden_function_addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, *args, value=1, **kwargs):
+    import torch
+
+    return torch.addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
+
+
+ttnn.attach_golden_function(ttnn.addcdiv, golden_function=_golden_function_addcdiv)
+
+
+def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args, **kwargs):
+    import torch
+
+    return torch.where(input_tensor_a, input_tensor_b, input_tensor_c)
+
+
+ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)
 
 
 def _golden_function(

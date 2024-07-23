@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/ternary/device/ternary_composite_op.hpp"
+#include "ternary_composite_op.hpp"
 
 namespace ttnn {
 
@@ -24,7 +24,7 @@ struct ExecuteTernaryCompositeOps
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
         {
-            auto op_type = get_function_type0<ternary_comp_op_type>();
+            auto op_type = get_ternary_fn_float<ternary_comp_op_type>();
             return op_type(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
         }
 };
@@ -32,9 +32,7 @@ struct ExecuteTernaryCompositeOps
 }  // namespace ternary
 }  // namespace operations
 
-// newly imported
 constexpr auto addcmul = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>("ttnn::addcmul");
 constexpr auto addcdiv = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>("ttnn::addcdiv");
-
 
 }  // namespace ttnn

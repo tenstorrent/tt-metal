@@ -14,11 +14,11 @@
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/kv_cache.hpp"
-#include "pybind11/operations/ternary.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
