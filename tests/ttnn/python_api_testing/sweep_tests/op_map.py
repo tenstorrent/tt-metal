@@ -721,4 +721,12 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_rdiv,
         "pytorch_op": pytorch_ops.eltwise_rdiv,
     },
+    "log-bw": {
+        "tt_op": ttnn_ops.log_bw,
+        "pytorch_op": pytorch_ops.log_bw,
+    },
+    "neg-bw": {
+        "tt_op": ttnn_ops.neg_bw,
+        "pytorch_op": pytorch_ops.neg_bw,
+    },
 }
