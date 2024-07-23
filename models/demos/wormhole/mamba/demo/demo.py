@@ -153,14 +153,16 @@ def run_mamba_prefill_decode_demo(
 
     logger.info(f"Running Mamba demo (weights='{model_version}') with batch={batch_size}")
     logger.info(f"Using tensor cache at '{cache_dir}'")
+
+    prefill_chunk_size = 32
     model = get_tt_metal_model(
-        model_version, device, cache_dir, batch_size=1, mode=ModelMode.PREFILL, seq_len=prefill_length
+        model_version, device, cache_dir, batch_size=1, mode=ModelMode.PREFILL, seq_len=prefill_chunk_size
     )
     model.eval()
 
     # Prefill
     model.to_prefill()
-    prefill_chunk_size = 32
+
     num_users = sequences.shape[0]
 
     prefill_tokens = sequences[:, :-1]  # Omit the last token in the sequence (B, L - 1)
