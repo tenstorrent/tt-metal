@@ -5,13 +5,10 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
+#include "ttnn/cpp/ttnn/operations/experimental/argmax/argmax.hpp"
 namespace ttnn {
 
-namespace operations {
-
-namespace unary {
-
+namespace operations::experimental {
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     auto& padded_shape = input_a.get_legacy_shape();
     auto& unpadded_shape = padded_shape.without_padding();
@@ -23,7 +20,8 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor Argmax::_argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
     operation::launch_with_autoformat(
@@ -132,6 +130,6 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optiona
 
 }
 
-}  // namespace unary
+
 }  // namespace operations
 }  // namespace ttnn

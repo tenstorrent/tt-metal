@@ -83,7 +83,7 @@ Tensor _hardsigmoid(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f,
 Tensor _hardtanh(const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _clip(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _clamp(const Tensor&, float, float, const std::optional<MemoryConfig>& );
-Tensor _selu(const Tensor&, float scale = 1.0507009873554804934193349852946, float alpha = 1.6732632423543772848170429916717, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _selu(const Tensor&, float scale = 1.0507, float alpha = 1.67326, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );

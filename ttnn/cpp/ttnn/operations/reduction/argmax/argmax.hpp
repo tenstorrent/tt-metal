@@ -8,7 +8,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/operations/reduction/argmax/argmax_composite.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -34,13 +33,6 @@ struct ExecuteArgMax {
         return operator()(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
-        const Tensor& input_tensor,
-        int64_t dim,
-        bool all,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return ttnn::operations::unary::_argmax(input_tensor, dim, all, memory_config);
-    }
 };
 
 }  // namespace operations::reduction

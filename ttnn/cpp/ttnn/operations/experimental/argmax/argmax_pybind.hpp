@@ -9,13 +9,13 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/experimental/argmax/argmax.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::experimental::detail {
 namespace py = pybind11;
-void bind_reduction_argmax_operation(py::module& module) {
+void bind_argmax_operation(py::module& module) {
     auto doc =
-        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt, output_tensor : Optional[ttnn.Tensor] = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
+        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
@@ -36,30 +36,26 @@ void bind_reduction_argmax_operation(py::module& module) {
             Keyword Args:
                 * :attr:`dim`: the dimension to reduce. If None, the argmax of the flattened input is returned
                 * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
         )doc";
 
-    using OperationType = decltype(ttnn::argmax);
+    using OperationType = decltype(ttnn::experimental::argmax);
     bind_registered_operation(
         module,
-        ttnn::argmax,
+        ttnn::experimental::argmax,
         doc,
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                const std::optional<int> dim,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                std::optional<ttnn::Tensor> optional_output_tensor,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dim, memory_config, optional_output_tensor);
-                },
+                int64_t dim,
+                bool all,
+                const std::optional<ttnn::MemoryConfig>& memory_config) {
+                    return self(input_tensor, dim, all, memory_config);
+            },
                 py::arg("input_tensor").noconvert(),
+                py::arg("dim"),
                 py::kw_only(),
-                py::arg("dim") = std::nullopt,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0});
+                py::arg("all") = false,
+                py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::experimental::argmax::detail

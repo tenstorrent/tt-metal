@@ -1274,8 +1274,8 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_two_float_with_default(
         module,
         ttnn::selu,
-        "scale", "Scale value", 1.0507009873554804934193349852946,
-        "alpha", "Alpha value", 1.6732632423543772848170429916717,
+        "scale", "Scale value", 1.0507,
+        "alpha", "Alpha value", 1.67326,
         R"doc(Performs selu function on :attr:`input_tensor`, :attr:`scale`, :attr:`alpha`.)doc");
     detail::bind_unary_composite_two_float(
         module,

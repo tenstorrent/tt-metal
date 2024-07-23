@@ -15,8 +15,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
-
+#include "ttnn/operations/experimental/argmax/argmax.hpp"
 namespace ttnn::operations::unary{
 
 Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
@@ -660,7 +659,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 
 Tensor _argmin(const Tensor& input_a, int32_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor neg_input = ttnn::neg(input_a, output_mem_config);
-    return (ttnn::argmax(neg_input, _dim, all));
+    return (ttnn::experimental::argmax(neg_input, _dim, all));
 }
 
 }  // namespace ttnn::operations::unary
