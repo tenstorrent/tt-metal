@@ -40,7 +40,7 @@ class TtLlamaModelForGeneration:
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
             self.device_mesh,
-            self.cluter_shape,
+            self.cluster_shape,
             state_dict,
             BASE_URL,
             n_layers,

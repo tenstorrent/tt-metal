@@ -109,7 +109,6 @@ def run_test_LlamaModel_inference(
         model_config,
         configuration,
         cache_path=cache_path,
-        read_cache=True,
     )
 
     if model_config["LLM_MODE"] == "prefill":
@@ -117,7 +116,7 @@ def run_test_LlamaModel_inference(
         generation_length = 1
     else:
         generation_start_pos = UNIT_TEST_START_POS
-        generation_length = 100
+        generation_length = UNIT_TEST_GENERATION_LENGTH
 
     # Pre-process inputs in prompt mode
     if prompt:
