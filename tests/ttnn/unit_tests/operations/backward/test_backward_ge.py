@@ -21,8 +21,9 @@ def test_bw_binary_ge(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
     tt_output_tensor_on_device = ttnn.ge_bw(grad_tensor, input_tensor, input_tensor)
-    pt_y = torch.zeros_like(grad_data)
-    golden_tensor = [pt_y, pt_y]
+    golden_function = ttnn.get_golden_function(ttnn.ge_bw)
+    golden_tensor = golden_function(grad_data, in_data, in_data)
+
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
 
@@ -41,9 +42,8 @@ def test_bw_unary_ge(input_shapes, other, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     tt_output_tensor_on_device = ttnn.ge_bw(grad_tensor, input_tensor, other)
 
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = [pyt_y]
+    golden_function = ttnn.get_golden_function(ttnn.ge_bw)
+    golden_tensor = golden_function(grad_data, in_data, other)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

@@ -23,14 +23,8 @@ def test_bw_sub(input_shapes, device):
 
     tt_output_tensor_on_device = ttnn.sub_bw(grad_tensor, input_tensor, other_tensor)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    pyt_y = torch.sub(in_data, other_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, other_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.sub_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -51,13 +45,8 @@ def test_bw_unary_sub(input_shapes, scalar, device):
 
     tt_output_tensor_on_device = ttnn.sub_bw(grad_tensor, input_tensor, scalar)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.sub(in_data, torch.tensor(scalar))
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.sub_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
