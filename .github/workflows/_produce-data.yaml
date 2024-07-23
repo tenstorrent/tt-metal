@@ -87,8 +87,8 @@ jobs:
         run: python3 .github/scripts/data_analysis/create_pipeline_csvs.py
       - name: Show directory to see output files
         run: ls -hal
-      - name: Show CSVs output
-        run: cat *.csv
+      - name: Show JSON output
+        run: cat *.json
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
