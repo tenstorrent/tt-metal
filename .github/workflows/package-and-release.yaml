@@ -182,3 +182,8 @@ jobs:
           tags: ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-20.04-amd64:${{ needs.create-tag.outputs.version }}-dev
           context: .
           file: dockerfile/ubuntu-20.04-amd64.Dockerfile
+  build-docs:
+    needs: create-and-upload-draft-release
+    uses: ./.github/workflows/docs-deployment.yaml
+    secrets: inherit
+      uses: ./.github/workflows/docs-deployment.yaml

@@ -1,5 +1,4 @@
-name: "[post-commit] Docs build and deploy to GitHub pages on main"
-
+name: "Release Docs: package the docs and publish to Docs the repo"
 on:
   workflow_dispatch:
 
