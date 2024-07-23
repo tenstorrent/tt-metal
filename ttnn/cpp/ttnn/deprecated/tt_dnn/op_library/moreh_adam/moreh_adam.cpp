@@ -109,10 +109,10 @@ operation::ProgramWithCallbacks moreh_adam_(
         static_cast<uint32_t>(is_dram(max_exp_avg_sq_out))};
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_adam/kernels/"
         "reader_moreh_adam.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_adam/kernels/"
         "writer_moreh_adam.cpp";
 
     std::map<std::string, std::string> data_movement_defines{};
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_adam/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_adam/kernels/"
         "moreh_adam.cpp";
 
     auto compute_kernel_1_id = CreateComputeKernel(

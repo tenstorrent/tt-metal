@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) dst_is_dram};
 
     tt_metal::KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
-        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fill_rm/kernels/dataflow/fill_rm_interleaved.cpp",
+        program, "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fill_rm/kernels/dataflow/fill_rm_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

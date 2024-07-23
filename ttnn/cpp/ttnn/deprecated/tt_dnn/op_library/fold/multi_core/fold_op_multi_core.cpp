@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks fold_multi_core(
     // Setup kernel
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fold/kernels/dataflow/writer_cb2s_row_major.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fold/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
         WriterDataMovementConfig({cb_src0_index, cb_dst0_index}));
 

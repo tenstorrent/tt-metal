@@ -86,13 +86,13 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     };
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     reader_compile_time_args[6] = 2;  // read the second phase
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));
 

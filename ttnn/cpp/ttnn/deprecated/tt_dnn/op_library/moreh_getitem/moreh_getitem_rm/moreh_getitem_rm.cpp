@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/kernels/reader_moreh_getitem.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/kernels/reader_moreh_getitem.cpp",
         all_cores,
         {
             src_is_dram,
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/kernels/writer_moreh_getitem.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/kernels/writer_moreh_getitem.cpp",
         all_cores,
         {dst_is_dram},
         writer_defines);

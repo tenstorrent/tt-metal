@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -202,13 +202,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );

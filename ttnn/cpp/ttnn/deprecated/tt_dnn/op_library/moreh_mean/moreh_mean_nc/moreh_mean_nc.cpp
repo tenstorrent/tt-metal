@@ -92,8 +92,8 @@ operation::ProgramWithCallbacks moreh_mean_nc(const Tensor &input, const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_compile_time_args;
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/writer_moreh_mean_nc.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_nc.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/writer_moreh_mean_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks moreh_mean_nc(const Tensor &input, const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_nc.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 

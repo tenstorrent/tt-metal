@@ -77,13 +77,13 @@ operation::ProgramWithCallbacks fold_single_core(
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         core,
         ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/fold/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fold/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
         core,
         WriterDataMovementConfig(writer_compile_time_args));
 

@@ -106,10 +106,10 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
         "reader_moreh_clip_grad_norm_step1.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, core_group_1);
@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
         "moreh_clip_grad_norm_step1_kernel.cpp";
 
     const auto compute_kernels_id =

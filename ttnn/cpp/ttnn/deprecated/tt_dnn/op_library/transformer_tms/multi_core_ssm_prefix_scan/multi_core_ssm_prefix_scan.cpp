@@ -117,19 +117,19 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_prefix_scan.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

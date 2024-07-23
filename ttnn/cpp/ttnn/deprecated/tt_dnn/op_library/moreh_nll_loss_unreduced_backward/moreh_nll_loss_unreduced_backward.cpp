@@ -89,14 +89,14 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_2d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_2d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp",
         all_cores,
         writer_compile_time_args,
@@ -221,14 +221,14 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_3d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_3d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp",
         all_cores,
         writer_compile_time_args,
@@ -351,14 +351,14 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_4d(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_4d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp",
         all_cores,
         writer_compile_time_args,

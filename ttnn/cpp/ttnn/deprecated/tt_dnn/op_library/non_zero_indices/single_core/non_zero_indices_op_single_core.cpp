@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
 
     auto kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/non_zero_indices/kernels/dataflow/non_zero_indices_sc_reader.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/non_zero_indices/kernels/dataflow/non_zero_indices_sc_reader.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(
             compile_time_args, defines));

@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/"
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     if (convert_df) {
         compute_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/compute/eltwise_copy.cpp",
             all_cores,
             tt_metal::ComputeConfig{});
     }
@@ -414,7 +414,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
@@ -428,7 +428,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/"
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -438,7 +438,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }
@@ -901,13 +901,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/reshard_same_width_reader.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reshard_same_width_reader.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig({dst_cb_index}));
 
     tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/reshard_same_width_reader.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reshard_same_width_reader.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig({dst_cb_index}));
 
@@ -1020,13 +1020,13 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
 
     tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
 

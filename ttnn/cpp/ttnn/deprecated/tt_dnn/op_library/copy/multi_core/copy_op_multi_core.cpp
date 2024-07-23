@@ -91,13 +91,13 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
     }
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
         };
         auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args=compute_kernel_args_group_1}
         );
@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             };
             auto eltwise_unary_kernel_group_2 = tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/eltwise_copy.cpp",
+                "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
                 core_group_2,
                 tt_metal::ComputeConfig{.compile_args=compute_kernel_args_group_2}
             );

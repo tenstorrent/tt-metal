@@ -66,9 +66,9 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_c_large.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_c_large.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_c_large.cpp", all_cores, {dst_is_dram}, writer_defines);
+        program, "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_c_large.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     auto outer_stride = Ht * Wt;
     for(int i = dim ; i < shape.rank() - 2; i++ ) {
@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     // create compute kernel
     CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax/kernels/moreh_softmax_c_large.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax/kernels/moreh_softmax_c_large.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, dim_size}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, dim_size}},

@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(
             embedding_compile_time_args,
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         };
         auto tilize_kernel_id_1 = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
@@ -186,7 +186,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         };
         auto tilize_kernel_id_2 = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
@@ -406,7 +406,7 @@ operation::ProgramWithCallbacks embeddings_rm(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(
             embedding_compile_time_args,
@@ -423,7 +423,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     // Tilized writer
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

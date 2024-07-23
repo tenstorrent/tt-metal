@@ -190,13 +190,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file = use_large_algorithm ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+    const auto reader_kernel_file = use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                                           "reader_moreh_layernorm_backward_input_grad_large.cpp"
-                                                        : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+                                                        : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                                           "reader_moreh_layernorm_backward_input_grad_small.cpp";
 
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/writer_moreh_layernorm_backward_input_grad.cpp";
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/writer_moreh_layernorm_backward_input_grad.cpp";
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
@@ -211,9 +211,9 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+                                         ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                            "moreh_layernorm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+                                         : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                            "moreh_layernorm_backward_input_grad_small_kernel.cpp";
 
     CreateComputeKernel(

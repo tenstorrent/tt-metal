@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& o
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& o
 
     auto reduce_compute_kernel_id = tt_metal::CreateKernel(
         program,
-         "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp",
+         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)}
     );

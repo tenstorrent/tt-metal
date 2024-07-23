@@ -76,7 +76,7 @@ namespace primary {
         bool math_approx_mode = true;
         auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/prod/kernels/compute/prod_all.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/prod/kernels/compute/prod_all.cpp",
             core,
             tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

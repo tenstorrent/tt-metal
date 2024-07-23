@@ -492,7 +492,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, is_q_sharded, !do_reduce, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y});
         auto reader_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_all.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_all.cpp",
             core,
             tt_metal::ReaderDataMovementConfig(
                 reader_compile_time_args,
@@ -506,7 +506,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, is_output_sharded});
             writer_kernels_id = CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer.cpp",
+                "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer.cpp",
                 core,
                 tt_metal::WriterDataMovementConfig(
                     writer_compile_time_args,
@@ -516,7 +516,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, (uint32_t)reduce_core_physical.x, (uint32_t)reduce_core_physical.y, cur_batch, worker_id});
             writer_kernels_id = CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_worker.cpp",
+                "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_worker.cpp",
                 core,
                 tt_metal::WriterDataMovementConfig(
                     writer_compile_time_args,
@@ -529,7 +529,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         compute_compile_time_args.insert(compute_compile_time_args.end(), {do_reduce});
         auto compute_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/compute/sdpa_flash_decode.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/compute/sdpa_flash_decode.cpp",
             core,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,

@@ -103,9 +103,9 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     }
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
     const auto reader_kernel_file{
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_int_sum_h.cpp"};
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_int_sum_h.cpp"};
     const auto writer_kernel_file{
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_int_sum_h.cpp"};
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_int_sum_h.cpp"};
     const auto reader_kernel_id{
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
     const auto writer_kernel_id{CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file{"ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_int_sum_h.cpp"};
+    const auto compute_kernel_file{"ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_int_sum_h.cpp"};
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
         math_fidelity,
@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     // auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
     //     split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
-    // string compute_kernel_name = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h_int.cpp";
+    // string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h_int.cpp";
 
     // uint32_t src0_cb_index = CB::c_in0;
     // uint32_t num_input_tiles = 2;
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     // }
     // reader_kernel_id = tt_metal::CreateKernel(
     //     program,
-    //     "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_sum_h_int.cpp",
+    //     "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_sum_h_int.cpp",
     //     all_cores,
     //     tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -311,7 +311,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
 
     // writer_kernel_id = tt_metal::CreateKernel(
     //     program,
-    //     "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_sum_h_int.cpp",
+    //     "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_sum_h_int.cpp",
     //     all_cores,
     //     tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     // std::map<string, string> reduce_defines;

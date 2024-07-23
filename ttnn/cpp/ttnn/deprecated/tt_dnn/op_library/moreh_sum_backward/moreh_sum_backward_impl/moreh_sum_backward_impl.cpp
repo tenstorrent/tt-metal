@@ -151,8 +151,8 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     { static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
     std::vector<uint32_t> writer_compile_time_args =
     { static_cast<uint32_t>(is_dram(input_grad)) };
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/writer_moreh_sum_backward.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/moreh_sum_backward.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/moreh_sum_backward.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
         math_fidelity,

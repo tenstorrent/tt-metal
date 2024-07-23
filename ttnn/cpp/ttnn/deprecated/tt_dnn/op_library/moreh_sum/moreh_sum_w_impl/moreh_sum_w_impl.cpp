@@ -72,7 +72,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
-    string compute_kernel_name = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/moreh_sum_w.cpp";
+    string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/moreh_sum_w.cpp";
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -124,13 +124,13 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     }
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/reader_moreh_sum_w.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/reader_moreh_sum_w.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/writer_moreh_sum_w.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/writer_moreh_sum_w.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

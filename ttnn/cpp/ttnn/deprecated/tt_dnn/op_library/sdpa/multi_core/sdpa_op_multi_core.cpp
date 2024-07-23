@@ -297,7 +297,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        is_causal ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/reader_interleaved.cpp" : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/reader_noncausal_interleaved.cpp",
+        is_causal ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/reader_interleaved.cpp" : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/reader_noncausal_interleaved.cpp",
         core_grid,
         tt_metal::ReaderDataMovementConfig(
             reader_compile_time_args,
@@ -306,7 +306,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto writer_kernels_id = CreateKernel(
         program,
-        is_causal ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/writer_interleaved.cpp" : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/dataflow/writer_noncausal_interleaved.cpp",
+        is_causal ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/writer_interleaved.cpp" : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/dataflow/writer_noncausal_interleaved.cpp",
         core_grid,
         tt_metal::WriterDataMovementConfig(
             writer_compile_time_args,
@@ -315,7 +315,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        is_causal ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/compute/sdpa.cpp" : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sdpa/kernels/compute/sdpa_noncausal.cpp",
+        is_causal ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/compute/sdpa.cpp" : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sdpa/kernels/compute/sdpa_noncausal.cpp",
         core_grid,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,

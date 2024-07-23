@@ -241,9 +241,9 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     }
 
     const auto reader_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_large.cpp"
-                            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_small.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/writer_moreh_layernorm.cpp";
+        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_large.cpp"
+                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_small.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/writer_moreh_layernorm.cpp";
 
     const auto reader_kernels_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
@@ -263,8 +263,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
-                            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
+        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
+                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
 
     CreateComputeKernel(
         program,

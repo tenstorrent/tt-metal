@@ -67,8 +67,8 @@ operation::ProgramWithCallbacks moreh_arange_(
 
     auto kernel_id = CreateWriteKernel(
         program,
-        untilize_out ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
-                     : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
+        untilize_out ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
+                     : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
         all_cores,
         {dst_is_dram},
         writer_defines);

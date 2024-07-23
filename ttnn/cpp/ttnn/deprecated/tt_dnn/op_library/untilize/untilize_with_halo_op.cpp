@@ -282,7 +282,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     };
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
         all_cores,
         WriterDataMovementConfig{writer_ct_args});
 
@@ -295,7 +295,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     };
     KernelHandle untilize_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{.compile_args=compute_args});
 
@@ -913,7 +913,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     };
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
         all_cores,
         WriterDataMovementConfig{writer_ct_args});
 
@@ -926,7 +926,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     };
     KernelHandle untilize_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{.compile_args=compute_args});
 

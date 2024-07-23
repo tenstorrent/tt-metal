@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -112,7 +112,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/bcast/kernels/compute/bcast_h_sharded_optimised.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_h_sharded_optimised.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );

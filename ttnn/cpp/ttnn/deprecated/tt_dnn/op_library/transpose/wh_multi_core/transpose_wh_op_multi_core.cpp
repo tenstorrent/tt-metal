@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved_start_id.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -160,7 +160,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transpose/kernels/compute/transpose_wh.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/compute/transpose_wh.cpp",
         total_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en}
     );
@@ -312,14 +312,14 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         total_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transpose/kernels/compute/transpose_wh_sharded.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transpose/kernels/compute/transpose_wh_sharded.cpp",
         total_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_compile_time_args}
     );

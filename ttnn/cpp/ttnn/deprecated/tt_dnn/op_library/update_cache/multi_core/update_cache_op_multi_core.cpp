@@ -173,13 +173,13 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -198,7 +198,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     auto compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
@@ -207,7 +207,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         compute_kernel_args[6] = num_batched_heads_per_core_group_2;
         auto compute_kernel_group_2_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_2,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/update_cache/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/update_cache/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
 

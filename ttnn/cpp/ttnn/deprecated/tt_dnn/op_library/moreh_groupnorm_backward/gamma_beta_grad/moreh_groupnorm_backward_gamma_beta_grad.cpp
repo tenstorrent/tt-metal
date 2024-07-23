@@ -139,10 +139,10 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::string reader_kernel_file(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
         "reader_moreh_groupnorm_backward_gamma_beta_grad.cpp");
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
         "writer_moreh_groupnorm_backward_gamma_beta_grad.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
@@ -156,7 +156,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const std::string compute_kernel_file(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp");
 
     const std::vector<uint32_t> compute_args_group_1{

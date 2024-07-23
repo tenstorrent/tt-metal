@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt_metal::NOC::NOC_1 : tt_metal::NOC::NOC_0;
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -239,7 +239,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_transformer_group_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -258,7 +258,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_group_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );

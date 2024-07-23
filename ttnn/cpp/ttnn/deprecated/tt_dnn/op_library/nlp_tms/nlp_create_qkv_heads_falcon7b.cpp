@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/nlp_tms/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads_falcon7b.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads_falcon7b.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

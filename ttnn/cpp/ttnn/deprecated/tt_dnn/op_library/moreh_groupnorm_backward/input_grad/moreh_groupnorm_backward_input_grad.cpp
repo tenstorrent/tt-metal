@@ -155,13 +155,13 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
+        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
                               "reader_moreh_groupnorm_backward_input_grad_large.cpp"
-                            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
+                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
                               "reader_moreh_groupnorm_backward_input_grad_small.cpp";
 
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
         "writer_moreh_groupnorm_backward_input_grad.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
@@ -175,9 +175,9 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+                                         ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                            "moreh_layernorm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+                                         : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
                                            "moreh_layernorm_backward_input_grad_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{

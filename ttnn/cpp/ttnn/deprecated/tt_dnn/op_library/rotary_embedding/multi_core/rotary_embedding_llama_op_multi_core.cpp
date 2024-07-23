@@ -188,13 +188,13 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_llama_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_llama_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding_llama.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding_llama.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = kernel_defines});
 

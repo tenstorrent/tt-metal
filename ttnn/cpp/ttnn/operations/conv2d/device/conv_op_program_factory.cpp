@@ -416,7 +416,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     } else {
         reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
-        compute_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
     }
     if (use_fast_reader && rn50_first_conv) {
         assert(pad_h == 0 && pad_w == 0);
@@ -1253,7 +1253,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     string writer_kernel;
     vector<uint32_t> writer_rt_args;
     if (untilize_out) {
-        writer_kernel = "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
+        writer_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_rt_args = {
             out_dram_addr,
             act_block_h_datums,
@@ -1322,7 +1322,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
-    string compute_kernel_name = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_h.cpp";
+    string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_h.cpp";
 
     uint32_t src0_cb_index = CB::c_in0;
     CBHandle cb_src0;
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
     }
     reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_h.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_h.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
 
     writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_mean/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);

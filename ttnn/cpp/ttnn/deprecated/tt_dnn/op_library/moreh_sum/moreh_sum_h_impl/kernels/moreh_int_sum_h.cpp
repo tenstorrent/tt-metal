@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
-#include "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {

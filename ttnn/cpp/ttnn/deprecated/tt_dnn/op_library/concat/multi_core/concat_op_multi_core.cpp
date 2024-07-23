@@ -124,14 +124,14 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(compile_time_args_0));
 
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
@@ -228,13 +228,13 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
 
-    std::string kernel_1 = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/writer_height_s2s_width_concat.cpp";
+    std::string kernel_1 = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/writer_height_s2s_width_concat.cpp";
     if(not writer) {
-        kernel_1 = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp";
+        kernel_1 = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp";
     }
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
@@ -411,13 +411,13 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_s2i_width.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_s2i_width.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/writer_s2i_width.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/writer_s2i_width.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -654,14 +654,14 @@ operation::ProgramWithCallbacks concat_multi_core(
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout
-            ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
+            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_stick_layout_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, concat_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        rm_layout ? "ttnn/cpp/ttnn/experimental/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+        rm_layout ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
                   : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));

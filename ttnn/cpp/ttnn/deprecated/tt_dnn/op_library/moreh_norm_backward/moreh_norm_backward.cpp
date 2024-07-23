@@ -204,10 +204,10 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "reader_moreh_norm_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args =
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_norm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "moreh_norm_backward_kernel.cpp";
     std::map<std::string, std::string> compute_defines{};
     if (fp32_dest_acc_en) {

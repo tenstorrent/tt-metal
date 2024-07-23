@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_transformer_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_transformer_attn_matmul.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_attn_matmul.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );

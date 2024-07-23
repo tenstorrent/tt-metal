@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks scan_impl(const Tensor &input, ScanOpDirection d
     // Reader kernel
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/scan/kernels/dataflow/reader_scan_sharded.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/scan/kernels/dataflow/reader_scan_sharded.cpp",
         all_cores,
         WriterDataMovementConfig(ct_args));
     SetRuntimeArgs(program, reader_kernel_id, all_cores, runtime_args);
@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks scan_impl(const Tensor &input, ScanOpDirection d
     // Compute kernel
     tt_metal::KernelHandle compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/scan/kernels/compute/untilize_scan_tilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/scan/kernels/compute/untilize_scan_tilize.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = ct_args});
     tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, runtime_args);

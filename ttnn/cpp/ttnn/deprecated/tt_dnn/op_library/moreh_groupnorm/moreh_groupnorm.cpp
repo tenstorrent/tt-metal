@@ -189,11 +189,11 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
         use_large_algorithm
-            ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_large.cpp"
-            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_small.cpp";
+            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_large.cpp"
+            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_small.cpp";
 
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/writer_moreh_groupnorm.cpp");
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/writer_moreh_groupnorm.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
@@ -206,8 +206,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
-                            : "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
+        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
+                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,

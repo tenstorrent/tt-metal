@@ -155,10 +155,10 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "reader_moreh_layernorm_backward_gamma_beta_grad.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "writer_moreh_layernorm_backward_gamma_beta_grad.cpp";
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
@@ -176,7 +176,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp";
 
     CreateComputeKernel(

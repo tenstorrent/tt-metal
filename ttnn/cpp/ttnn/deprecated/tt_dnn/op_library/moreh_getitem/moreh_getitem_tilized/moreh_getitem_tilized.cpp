@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize_w.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize_w.cpp",
             all_cores,
             {
                 src_is_dram,
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize_w.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize_w.cpp",
             all_cores,
             {dst_is_dram},
             writer_defines);
@@ -396,7 +396,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/reader_moreh_getitem_tilize.cpp",
             all_cores,
             {
                 src_is_dram,
@@ -408,7 +408,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/kernels/writer_moreh_getitem_tilize.cpp",
             all_cores,
             {dst_is_dram},
             writer_defines);

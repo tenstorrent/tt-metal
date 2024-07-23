@@ -91,8 +91,8 @@ operation::ProgramWithCallbacks moreh_cumsum_nc(
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_compile_time_args;
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_cumsum/kernels/reader_moreh_cumsum_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_cumsum/kernels/writer_moreh_cumsum_nc.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/kernels/reader_moreh_cumsum_nc.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/kernels/writer_moreh_cumsum_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks moreh_cumsum_nc(
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_cumsum/kernels/moreh_cumsum_nc.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/kernels/moreh_cumsum_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 

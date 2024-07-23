@@ -92,13 +92,13 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/writer_moreh_nll_loss_step1.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/writer_moreh_nll_loss_step1.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);

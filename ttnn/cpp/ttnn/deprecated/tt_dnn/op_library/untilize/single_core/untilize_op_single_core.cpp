@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     // Untilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -122,10 +122,10 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
     };
 
-    std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(LogOp, "Using slow untilize.");
-        compute_kernel = std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
     } else {
         log_debug(LogOp, "Using fast pack untilize.");
     }
@@ -314,7 +314,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     // Untilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_dims_split_rows.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_dims_split_rows.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -323,10 +323,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         uint32_t(num_tiles_per_block)
     };
 
-    std::string compute_kernel("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(LogOp, "Using slow untilize.");
-        compute_kernel = std::string("ttnn/cpp/ttnn/experimental/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
     } else {
         log_debug(LogOp, "Using fast pack untilize.");
     }

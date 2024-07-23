@@ -56,7 +56,7 @@ static inline operation::ProgramWithCallbacks create_qkv_separate(const Tensor &
     }
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_create_qkv_heads_sharded_separate.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_create_qkv_heads_sharded_separate.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -66,7 +66,7 @@ static inline operation::ProgramWithCallbacks create_qkv_separate(const Tensor &
         };
         auto compute_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/transformer_tms/kernels/compute/transpose_wh_sharded.cpp",
+            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/transpose_wh_sharded.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_args});
     }

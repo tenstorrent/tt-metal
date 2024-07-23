@@ -262,14 +262,14 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     TT_FATAL(use_row_major_kernel, "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/layernorm_distributed/kernels/dataflow/reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/kernels/dataflow/reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines)
     );
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/layernorm_distributed/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
@@ -278,7 +278,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/layernorm_distributed/kernels/compute/layernorm_post_allgather.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/kernels/compute/layernorm_post_allgather.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = compute_defines}
     );

@@ -252,9 +252,9 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         {static_cast<uint32_t>(is_dram(output))};
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_moreh_matmul.cpp";
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_moreh_matmul.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_moreh_matmul.cpp";
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_moreh_matmul.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     std::map<string, string> compute_defines;
 
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp";
     std::vector<uint32_t> compute_args_group_1 = {
         num_output_tiles_per_core_group_1,  // num_output_tiles
         Mt,

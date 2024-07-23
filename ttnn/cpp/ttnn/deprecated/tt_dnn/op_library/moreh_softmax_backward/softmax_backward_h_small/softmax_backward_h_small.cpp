@@ -92,9 +92,9 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax_backward/kernels/reader_moreh_softmax_backward_h.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
+        program, "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/kernels/reader_moreh_softmax_backward_h.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax_backward/kernels/writer_moreh_softmax_h.cpp", all_cores, {dx_is_dram}, writer_defines);
+        program, "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/kernels/writer_moreh_softmax_h.cpp", all_cores, {dx_is_dram}, writer_defines);
 
     std::map<string, string> compute_defines;
     if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     // create compute kernel
     CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/experimental/tt_dnn/op_library/moreh_softmax_backward/kernels/moreh_softmax_backward_h.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/kernels/moreh_softmax_backward_h.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
