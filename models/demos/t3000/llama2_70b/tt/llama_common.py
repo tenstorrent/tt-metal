@@ -470,24 +470,6 @@ def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_
     return test_passed
 
 
-def get_flash_decode_chunk_size(s):
-    if s <= 32:
-        return 32
-    if s <= 64:
-        return 32
-    if s <= 128:
-        return 32
-    if s <= 256:
-        return 256
-    if s <= 2048:
-        return 512
-    return 512
-
-
-def get_padded_layer_len(token_idx, chunk_size):
-    return ((token_idx + chunk_size - 1) // chunk_size) * chunk_size
-
-
 def num_to_corerange(x):
     assert x < 8 or x % 8 == 0
     num_x = min(x, 8)

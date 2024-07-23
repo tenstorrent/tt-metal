@@ -13,7 +13,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_flash_decode_chunk_size,
-    get_padded_layer_len,
     num_to_corerange,
 )
 
