@@ -9,7 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -305,12 +305,12 @@ std::vector<Tensor> split_dim_two_chunks_tiled(
     if (dim == 3) {
         return split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }
-    Tensor ref_input_tensor = transpose(input_tensor, dim, 3, mem_config);
+    Tensor ref_input_tensor = ttnn::transpose(input_tensor, dim, 3, mem_config);
     auto transposed_result = split_last_dim_two_chunks_tiled(ref_input_tensor, mem_config);
     std::vector<Tensor> results;
     results.reserve(transposed_result.size());
     for (Tensor &t : transposed_result) {
-        results.emplace_back(transpose(t, dim, 3, mem_config));
+        results.emplace_back(ttnn::transpose(t, dim, 3, mem_config));
     }
     return results;
 }

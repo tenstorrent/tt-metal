@@ -9,7 +9,6 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
