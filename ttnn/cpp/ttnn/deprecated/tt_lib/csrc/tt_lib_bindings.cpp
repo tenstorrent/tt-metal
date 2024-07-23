@@ -25,7 +25,8 @@ namespace tt_metal {
 void DeviceModule(py::module &m_device) {
     py::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
-        .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
+        .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
+        .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
 
     auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
@@ -65,6 +66,7 @@ void DeviceModule(py::module &m_device) {
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;
+    m_device.attr("EPS_BH") = EPS_BH;
 
     pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
         Machine epsilon value for current device.
