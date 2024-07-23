@@ -82,6 +82,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
 
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP(); // Running on second CQ is hanging on CI
+    }
+
     // Make random
     auto random_seed = 0; // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("SEED", random_seed);

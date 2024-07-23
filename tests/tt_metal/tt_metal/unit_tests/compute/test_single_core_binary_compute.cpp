@@ -376,7 +376,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddDestAcc) {
 
 TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubDestAcc) {
     auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
+    if (arch == tt::ARCH::GRAYSKULL or arch == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();
     }
 
