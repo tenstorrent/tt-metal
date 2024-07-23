@@ -312,19 +312,32 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 }
 
 void EnqueueProgramCommand::assemble_preamble_commands(
-    bool prefetch_stall,
     uint32_t tensix_l1_config_base,
     uint32_t eth_l1_config_base) {
+
+    constexpr uint32_t uncached_cmd_sequence_sizeB =
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+
+    this->cached_program_command_sequences[program.id].preamble_command_sequence =
+        HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
+
+    // Send write offsets
+    this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
+        0, tensix_l1_config_base, eth_l1_config_base);
+}
+
+void EnqueueProgramCommand::assemble_stall_commands(
+    bool prefetch_stall) {
+
     if (prefetch_stall) {
         // Wait command so previous program finishes
         // Wait command with barrier for binaries to commit to DRAM
         // Prefetch stall to prevent prefetcher picking up incomplete binaries from DRAM
         constexpr uint32_t uncached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_STALL
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        this->cached_program_command_sequences[program.id].preamble_command_sequence =
+        this->cached_program_command_sequences[program.id].stall_command_sequence =
             HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
@@ -333,23 +346,18 @@ void EnqueueProgramCommand::assemble_preamble_commands(
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
         this->cached_program_command_sequences[program.id]
-            .preamble_command_sequence.add_dispatch_wait_with_prefetch_stall(
+            .stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
                 true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         constexpr uint32_t cached_cmd_sequence_sizeB =
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-        this->cached_program_command_sequences[program.id].preamble_command_sequence =
+        this->cached_program_command_sequences[program.id].stall_command_sequence =
             HostMemDeviceCommand(cached_cmd_sequence_sizeB);
-        this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_wait(
+        this->cached_program_command_sequences[program.id].stall_command_sequence.add_dispatch_wait(
             false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     }
-
-    // Send write offsets
-    this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
-        0, tensix_l1_config_base, eth_l1_config_base);
 }
 
 template <typename PackedSubCmd>
@@ -1185,10 +1193,11 @@ void EnqueueProgramCommand::process() {
 
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         this->manager.get_config_buffer_mgr().reserve(program.program_config_sizes_);
+    bool stall_first = reservation.first.need_sync;
+    // Note: since present implementation always stalls, we always free up to "now"
     this->manager.get_config_buffer_mgr().free(reservation.first.sync_count);
     this->manager.get_config_buffer_mgr().alloc(this->expected_num_workers_completed +
                                                 program.program_transfer_info.num_active_cores);
-
     uint32_t tensix_l1_write_offset = reservation.second[0].addr;
     uint32_t eth_l1_write_offset = reservation.second[1].addr;
 
@@ -1196,21 +1205,23 @@ void EnqueueProgramCommand::process() {
     // Preamble, some waits and stalls
     // can be written directly to the issue queue
     if (not is_cached) {
-        this->assemble_preamble_commands(true, tensix_l1_write_offset, eth_l1_write_offset);
+        this->assemble_preamble_commands(tensix_l1_write_offset, eth_l1_write_offset);
+        this->assemble_stall_commands(true);
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands();
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE + (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
+            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
         static constexpr uint32_t eth_l1_write_offset_offset =
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE + (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
+            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
         TT_ASSERT(
             this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(),
             "Program cache hit, but no stored command sequence");
 
-        this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
+        this->cached_program_command_sequences[program.id].stall_command_sequence.update_cmd_sequence(
             wait_count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
+
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
             tensix_l1_write_offset_offset, &tensix_l1_write_offset, sizeof(uint32_t));
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
@@ -1224,12 +1235,14 @@ void EnqueueProgramCommand::process() {
 
     uint32_t preamble_fetch_size_bytes = cached_program_command_sequence.preamble_command_sequence.size_bytes();
 
+    uint32_t stall_fetch_size_bytes = cached_program_command_sequence.stall_command_sequence.size_bytes();
+
     uint32_t runtime_args_fetch_size_bytes = cached_program_command_sequence.runtime_args_fetch_size_bytes;
 
     uint32_t program_fetch_size_bytes = cached_program_command_sequence.program_command_sequence.size_bytes();
 
     uint32_t total_fetch_size_bytes =
-        preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
+        stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
@@ -1241,9 +1254,23 @@ void EnqueueProgramCommand::process() {
             cached_program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
         write_ptr += preamble_fetch_size_bytes;
 
+        if (stall_first) {
+            // Must stall before writing runtime args
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            write_ptr += stall_fetch_size_bytes;
+        }
+
         for (const auto& cmds : cached_program_command_sequence.runtime_args_command_sequences) {
             this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
             write_ptr += cmds.size_bytes();
+        }
+
+        if (not stall_first) {
+            // Didn't stall before runtime args, stall before remaining commands
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            write_ptr += stall_fetch_size_bytes;
         }
 
         this->manager.cq_write(
@@ -1264,6 +1291,18 @@ void EnqueueProgramCommand::process() {
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
         this->manager.fetch_queue_write(preamble_fetch_size_bytes, this->command_queue_id);
 
+        if (stall_first) {
+            // Must stall before writing runtime args
+            this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
+            uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            this->manager.fetch_queue_reserve_back(this->command_queue_id);
+            this->manager.fetch_queue_write(stall_fetch_size_bytes, this->command_queue_id);
+        }
+
         // TODO: We can pack multiple RT args into one fetch q entry
         for (const auto& cmds : cached_program_command_sequence.runtime_args_command_sequences) {
             uint32_t fetch_size_bytes = cmds.size_bytes();
@@ -1276,6 +1315,18 @@ void EnqueueProgramCommand::process() {
             this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
         }
 
+        if (not stall_first) {
+            // Must stall before writing runtime args
+            this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
+            uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            this->manager.fetch_queue_reserve_back(this->command_queue_id);
+            this->manager.fetch_queue_write(stall_fetch_size_bytes, this->command_queue_id);
+        }
+
         this->manager.issue_queue_reserve(program_fetch_size_bytes, this->command_queue_id);
         write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         this->manager.cq_write(
@@ -1286,9 +1337,9 @@ void EnqueueProgramCommand::process() {
         this->manager.fetch_queue_write(program_fetch_size_bytes, this->command_queue_id);
     }
 
-    // Front load generating and caching preamble without stall during program loading stage
+    // Front load generating and caching stall_commands without stall during program loading stage
     if (not is_cached) {
-        this->assemble_preamble_commands(false, 0, 0);
+        this->assemble_stall_commands(false);
     }
 }
 
