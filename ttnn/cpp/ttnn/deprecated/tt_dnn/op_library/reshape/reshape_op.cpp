@@ -8,7 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include <ttnn/experimental/tt_numpy/functions.hpp>
+#include <ttnn/deprecated/tt_numpy/functions.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
