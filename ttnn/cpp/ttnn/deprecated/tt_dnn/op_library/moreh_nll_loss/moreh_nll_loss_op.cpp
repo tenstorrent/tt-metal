@@ -317,10 +317,10 @@ Tensor moreh_nll_loss(
             reduction_mean,
             output_dtype,
             channel_size,
-            output_mem_config,
+            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor.value());
+        moreh_sum(step1_result, std::nullopt, false, divisor_tensor.value(), operation::DEFAULT_OUTPUT_MEMORY_CONFIG, compute_kernel_config);
 
         const Tensor& step2_result = moreh_nll_loss_step2(
             input_tensor,
@@ -329,9 +329,9 @@ Tensor moreh_nll_loss(
             divisor_tensor,
             ignore_index,
             reduction_mean,
-            output_mem_config,
+            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor);
+        return moreh_sum(step2_result, std::nullopt, false, output_tensor, output_mem_config, compute_kernel_config);
     } else {
         const Tensor& step2_result = moreh_nll_loss_step2(
             input_tensor,
@@ -340,10 +340,10 @@ Tensor moreh_nll_loss(
             std::nullopt,
             ignore_index,
             reduction_mean,
-            output_mem_config,
+            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config);
 
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor);
+        return moreh_sum(step2_result, std::nullopt, false, output_tensor, output_mem_config, compute_kernel_config);
     }
 }
 
