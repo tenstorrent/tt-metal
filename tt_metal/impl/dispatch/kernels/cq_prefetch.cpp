@@ -28,24 +28,25 @@ constexpr uint32_t pcie_size = get_compile_time_arg_val(6);
 constexpr uint32_t prefetch_q_base = get_compile_time_arg_val(7);
 constexpr uint32_t prefetch_q_size = get_compile_time_arg_val(8);
 constexpr uint32_t prefetch_q_rd_ptr_addr = get_compile_time_arg_val(9);
+constexpr uint32_t prefetch_q_pcie_rd_ptr_addr = get_compile_time_arg_val(10);
 
-constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(10);
-constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(11);
+constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(11);
+constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
 
 // unused for prefetch_h
-constexpr uint32_t scratch_db_base = get_compile_time_arg_val(12);
-constexpr uint32_t scratch_db_size = get_compile_time_arg_val(13);
-constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(14);
+constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
+constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
+constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(15);
 
 // prefetch_d specific
-constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(15);
-constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(16);
-constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(17);
-constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(18);
-constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(19);
+constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
+constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(17);
+constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(18);
+constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(19);
+constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(20);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(20);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(21);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
 
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -171,6 +172,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
 
     // Tell host we read
     *(volatile tt_l1_ptr uint32_t *) prefetch_q_rd_ptr_addr = (uint32_t)prefetch_q_rd_ptr;
+    *(volatile tt_l1_ptr uint32_t *) prefetch_q_pcie_rd_ptr_addr = (uint32_t)pcie_read_ptr;
 
     prefetch_q_rd_ptr++;
 

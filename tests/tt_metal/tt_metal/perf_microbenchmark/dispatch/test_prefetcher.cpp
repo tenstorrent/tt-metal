@@ -1614,6 +1614,7 @@ void configure_for_single_chip(Device *device,
         prefetch_q_base,
         prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
         prefetch_q_rd_ptr_addr,
+        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
         cmddat_q_base, // overridden for split below
         cmddat_q_size_g, // overridden for split below
         0, // scratch_db_base filled in below if used
@@ -1636,9 +1637,9 @@ void configure_for_single_chip(Device *device,
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[10] = prefetch_d_buffer_base;
-        prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[11] = prefetch_d_buffer_base;
+        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_compile_args[13] = scratch_db_base;
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
@@ -1656,9 +1657,9 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[2] = prefetch_d_buffer_pages;
         prefetch_compile_args[3] = prefetch_downstream_cb_sem;
         prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[10] = cmddat_q_base;
-        prefetch_compile_args[11] = cmddat_q_size_g;
-        prefetch_compile_args[12] = 0;
+        prefetch_compile_args[11] = cmddat_q_base;
+        prefetch_compile_args[12] = cmddat_q_size_g;
+        prefetch_compile_args[13] = 0;
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
@@ -1821,7 +1822,7 @@ void configure_for_single_chip(Device *device,
     } else {
         uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(
             program,
@@ -2200,6 +2201,7 @@ void configure_for_multi_chip(Device *device,
         prefetch_q_base,
         prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
         prefetch_q_rd_ptr_addr,
+        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
         cmddat_q_base, // overridden for split below
         cmddat_q_size_g, // overridden for split below
         0, // scratch_db_base filled in below if used
@@ -2222,9 +2224,9 @@ void configure_for_multi_chip(Device *device,
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[10] = prefetch_d_buffer_base;
-        prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[11] = prefetch_d_buffer_base;
+        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_compile_args[13] = scratch_db_base;
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
@@ -2242,9 +2244,9 @@ void configure_for_multi_chip(Device *device,
         prefetch_compile_args[2] = prefetch_d_buffer_pages;
         prefetch_compile_args[3] = prefetch_downstream_cb_sem;
         prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[10] = cmddat_q_base;
-        prefetch_compile_args[11] = cmddat_q_size_g;
-        prefetch_compile_args[12] = 0;
+        prefetch_compile_args[11] = cmddat_q_base;
+        prefetch_compile_args[12] = cmddat_q_size_g;
+        prefetch_compile_args[13] = 0;
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
@@ -2492,7 +2494,7 @@ void configure_for_multi_chip(Device *device,
     } else {
         uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(
             program,

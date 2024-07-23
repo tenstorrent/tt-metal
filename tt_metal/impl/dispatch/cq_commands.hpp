@@ -29,6 +29,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
     CQ_PREFETCH_CMD_WAIT_FOR_EVENT = 10,      // wait_for_event: stall until dispatcher signals event completion
     CQ_PREFETCH_CMD_TERMINATE = 11,           // quit
+    CQ_PREFETCH_CMD_MAX_COUNT,                // for checking legal IDs
 };
 
 // Dispatcher CMD ID enums
@@ -48,6 +49,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_EXEC_BUF_END = 12,      // dispatch_d notify prefetch_h that exec_buf has completed
     CQ_DISPATCH_CMD_REMOTE_WRITE = 13,      // dispatch_d issues write to address on L-Chip through dispatch_h
     CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
+    CQ_DISPATCH_CMD_MAX_COUNT,              // for checking legal IDs
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -156,10 +158,10 @@ struct CQDispatchWriteCmd {
 } __attribute__((packed));
 
 struct CQDispatchWriteHostCmd {
-    uint8_t pad1;
-    uint16_t pad2;
+    uint8_t is_event; // one flag, false=read buffer
+    uint16_t pad1;
+    uint32_t pad2;
     uint32_t pad3;
-    uint32_t pad4;
     uint32_t length;
 } __attribute__((packed));
 

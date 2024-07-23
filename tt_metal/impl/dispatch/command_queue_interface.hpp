@@ -40,6 +40,7 @@ struct dispatch_constants {
 
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
     static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
+    static constexpr uint32_t ISSUE_Q_ALIGNMENT = PCIE_ALIGNMENT;
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
@@ -169,6 +170,18 @@ inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t c
 }
 
 template <bool addr_16B>
+inline uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+    uint32_t recv;
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_WRITE_PTR + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    if (not addr_16B) {
+        return recv << 4;
+    }
+    return recv;
+}
+
+template <bool addr_16B>
 inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
@@ -180,6 +193,18 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
         HOST_CQ_COMPLETION_WRITE_PTR + channel_offset + get_relative_cq_offset(cq_id, cq_size),
         mmio_device_id,
         channel);
+    if (not addr_16B) {
+        return recv << 4;
+    }
+    return recv;
+}
+
+template <bool addr_16B>
+inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+    uint32_t recv;
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_READ_PTR + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -260,7 +285,8 @@ struct SystemMemoryCQInterface {
             ((CQ_START + this->command_issue_region_size) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4),
         completion_fifo_size(command_completion_region_size >> 4),
         completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
-        offset(get_absolute_cq_offset(channel, cq_id, cq_size)) {
+        offset(get_absolute_cq_offset(channel, cq_id, cq_size)),
+        id(cq_id) {
         TT_ASSERT(
             this->command_completion_region_size % PCIE_ALIGNMENT == 0 and
                 this->command_issue_region_size % PCIE_ALIGNMENT == 0,
@@ -284,6 +310,7 @@ struct SystemMemoryCQInterface {
     static constexpr float default_issue_queue_split = 0.75;
     const uint32_t command_completion_region_size;
     const uint32_t command_issue_region_size;
+    const uint8_t id;
 
     uint32_t issue_fifo_size;
     uint32_t issue_fifo_limit;  // Last possible FIFO address
@@ -490,6 +517,10 @@ class SystemMemoryManager {
 
     uint32_t get_cq_size() const { return this->cq_size; }
 
+    chip_id_t get_device_id() const { return this->device_id; }
+
+    vector<SystemMemoryCQInterface>& get_cq_interfaces() { return this->cq_interfaces; }
+
     void *issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
             uint32_t curr_size = this->bypass_buffer.size();
@@ -548,7 +579,7 @@ class SystemMemoryManager {
         }
 
         // All data needs to be 32B aligned
-        uint32_t push_size_16B = align(push_size_B, 32) >> 4;
+        uint32_t push_size_16B = align(push_size_B, dispatch_constants::ISSUE_Q_ALIGNMENT) >> 4;
 
         SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
 
@@ -558,6 +589,17 @@ class SystemMemoryManager {
         } else {
             cq_interface.issue_fifo_wr_ptr += push_size_16B;
         }
+
+        // Also store this data in hugepages, so if a hang happens we can see what was written by host.
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
+        tt::Cluster::instance().write_sysmem(
+            &cq_interface.issue_fifo_wr_ptr,
+            sizeof(uint32_t),
+            HOST_CQ_ISSUE_WRITE_PTR + get_relative_cq_offset(cq_id, this->cq_size),
+            mmio_device_id,
+            channel
+        );
     }
 
     void completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
@@ -581,6 +623,17 @@ class SystemMemoryManager {
             cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
         this->fast_write_callable(
             this->completion_byte_addrs[cq_id], 4, (uint8_t *)&read_ptr_and_toggle, this->m_dma_buf_size);
+
+        // Also store this data in hugepages in case we hang and can't get it from the device.
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
+        tt::Cluster::instance().write_sysmem(
+            &read_ptr_and_toggle,
+            sizeof(uint32_t),
+            HOST_CQ_COMPLETION_READ_PTR + get_relative_cq_offset(cq_id, this->cq_size),
+            mmio_device_id,
+            channel
+        );
     }
 
     void wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
@@ -616,13 +669,18 @@ class SystemMemoryManager {
         if (this->bypass_enable)
             return;
 
-        // Wait for space in the FetchQ
+        // Helper to wait for fetch queue space, if needed
         uint32_t fence;
-        while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-            tt::Cluster::instance().read_core(
-                &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
-            this->prefetch_q_dev_fences[cq_id] = fence;
-        }
+        auto wait_for_fetch_q_space = [&]() {
+            // Loop until space frees up
+            while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
+                tt::Cluster::instance().read_core(
+                    &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
+                this->prefetch_q_dev_fences[cq_id] = fence;
+            }
+        };
+
+        wait_for_fetch_q_space();
 
         // Wrap FetchQ if possible
         CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
@@ -631,12 +689,7 @@ class SystemMemoryManager {
                                                           sizeof(dispatch_constants::prefetch_q_entry_type);
         if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-
-            while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-                tt::Cluster::instance().read_core(
-                    &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
-                this->prefetch_q_dev_fences[cq_id] = fence;
-            }
+            wait_for_fetch_q_space();
         }
     }
 
