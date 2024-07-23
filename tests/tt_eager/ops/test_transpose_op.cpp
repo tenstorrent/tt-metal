@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include <tt_numpy/functions.hpp>
 
 #include <algorithm>
@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
 
-        tt_metal::Tensor c = tt_metal::transpose(a, -2, -1);
+        tt_metal::Tensor c = ttnn::transpose(a, -2, -1);
 
         tt_metal::Tensor d = c.cpu();
 

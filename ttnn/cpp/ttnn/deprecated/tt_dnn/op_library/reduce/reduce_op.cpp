@@ -5,7 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/run_operation.hpp"
@@ -258,9 +258,9 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
-        Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
+        Tensor output = ttnn::transpose(formatted_input_tensor, 1, -2, output_mem_config);
         output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
-        output = transpose(output, 1, -2, output_mem_config);
+        output = ttnn::transpose(output, 1, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
         // Pad before running the op to only pay cost of formatting once
@@ -272,9 +272,9 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
-        Tensor output = transpose(input_tensor, 0, -2, output_mem_config);
+        Tensor output = ttnn::transpose(input_tensor, 0, -2, output_mem_config);
         output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
-        output = transpose(output, 0, -2, output_mem_config);
+        output = ttnn::transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
 }
