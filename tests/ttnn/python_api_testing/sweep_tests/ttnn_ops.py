@@ -3373,10 +3373,11 @@ def unary_add_bw(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    
+
     t3 = ttnn.add_bw(t0, t1, alpha=scalar, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t3[0])
+
 
 def clamp_bw(
     x,  # grad_tensor
@@ -3392,7 +3393,7 @@ def clamp_bw(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    
+
     if scalar >= 0:
         max = scalar
         min = -scalar
@@ -3446,7 +3447,7 @@ def eltwise_scale_mask_softmax_in_place(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.scale_mask_softmax_in_place(t0, scale, t1)
-    
+
     return ttnn_tensor_to_torch(t2)
 
 
@@ -3527,6 +3528,7 @@ def eltwise_rdiv(
     t1 = ttnn.rdiv(t0, factor, memory_config=output_mem_config, queue_id=queue_id)
 
     return ttnn_tensor_to_torch(t1)
+<<<<<<< HEAD
 
 
 def neg_bw(
@@ -3566,3 +3568,5 @@ def log_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+=======
+>>>>>>> #10147: Reformating
