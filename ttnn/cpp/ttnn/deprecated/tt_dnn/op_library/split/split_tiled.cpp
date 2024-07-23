@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/split/split_tiled.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/split/split_tiled.hpp"
 
 #include <iostream>
 

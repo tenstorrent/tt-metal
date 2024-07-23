@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_dot_backward/moreh_dot_backward_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_dot_backward/moreh_dot_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

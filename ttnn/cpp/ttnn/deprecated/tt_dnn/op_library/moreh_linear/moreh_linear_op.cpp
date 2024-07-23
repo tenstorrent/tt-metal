@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
 
 #include <type_traits>
 
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

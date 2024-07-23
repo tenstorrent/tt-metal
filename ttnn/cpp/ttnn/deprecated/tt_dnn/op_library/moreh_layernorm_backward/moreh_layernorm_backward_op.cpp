@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 
 namespace tt {
 

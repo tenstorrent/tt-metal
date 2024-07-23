@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 
 #include <iostream>
 
 #include "tt_metal/common/constants.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 

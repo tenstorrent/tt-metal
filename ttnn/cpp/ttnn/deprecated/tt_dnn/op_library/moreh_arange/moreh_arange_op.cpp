@@ -4,8 +4,8 @@
 
 #include <cmath>
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/detail/util.hpp"

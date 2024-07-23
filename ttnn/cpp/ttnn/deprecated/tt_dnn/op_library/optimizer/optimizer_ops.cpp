@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

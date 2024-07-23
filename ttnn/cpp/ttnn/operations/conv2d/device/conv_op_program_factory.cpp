@@ -11,7 +11,7 @@
 
 #include "tt_metal/tt_stl/reflection.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 using namespace tt::constants;
 
 namespace conv_op_utils {

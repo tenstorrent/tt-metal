@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/loss/loss_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 

@@ -5,9 +5,9 @@
 #include <algorithm>
 
 #include "tt_metal/common/assert.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

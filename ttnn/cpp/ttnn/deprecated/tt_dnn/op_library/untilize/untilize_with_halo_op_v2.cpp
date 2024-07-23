@@ -7,11 +7,11 @@
 #include <algorithm>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sharding_utilities.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/detail/util.hpp"

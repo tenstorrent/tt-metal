@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
 
 #include <numeric>
 
-#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"

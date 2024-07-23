@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 
 #include "ttnn/run_operation.hpp"
 

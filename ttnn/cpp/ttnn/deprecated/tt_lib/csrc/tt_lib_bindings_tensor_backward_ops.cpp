@@ -4,7 +4,7 @@
 
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 
 namespace tt::tt_metal::detail{
     void TensorModuleBackwardOPs( py::module & m_tensor){

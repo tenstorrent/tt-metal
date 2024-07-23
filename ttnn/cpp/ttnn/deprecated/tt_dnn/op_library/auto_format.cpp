@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

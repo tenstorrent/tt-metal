@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/concat/concat_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

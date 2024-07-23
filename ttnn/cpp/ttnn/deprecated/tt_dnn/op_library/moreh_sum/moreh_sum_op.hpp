@@ -12,7 +12,7 @@
 #include <tuple>
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt {

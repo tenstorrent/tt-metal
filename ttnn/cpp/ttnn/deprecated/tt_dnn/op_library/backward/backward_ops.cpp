@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/operations/embedding/embedding/embedding.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_numpy/functions.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

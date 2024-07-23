@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/experimental/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sdpa/sdpa_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sdpa/sdpa_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>

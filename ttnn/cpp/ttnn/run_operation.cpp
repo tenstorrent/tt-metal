@@ -7,7 +7,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"

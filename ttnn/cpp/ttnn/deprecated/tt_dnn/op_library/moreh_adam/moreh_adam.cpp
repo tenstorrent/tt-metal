@@ -5,13 +5,13 @@
 #include <optional>
 #include <utility>
 
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

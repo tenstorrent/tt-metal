@@ -6,10 +6,10 @@
 
 #include <math.h>
 
-#include "ttnn/experimental/tt_dnn/op_library/cb_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

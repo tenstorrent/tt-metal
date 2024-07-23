@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/move/move_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 
 namespace move_op_utils {
 using namespace tt::tt_metal;
