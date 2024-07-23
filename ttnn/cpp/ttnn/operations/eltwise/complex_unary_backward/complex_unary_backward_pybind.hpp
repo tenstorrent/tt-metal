@@ -19,6 +19,7 @@ namespace operations {
 namespace complex_unary_backward {
 
 namespace detail {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 //OpHandler_complex : get_function_complex
 template <typename complex_unary_backward_operation_t>

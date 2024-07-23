@@ -16,6 +16,7 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 // polar
 // grad_abs = torch.real(grad_conj * torch.sgn(result))

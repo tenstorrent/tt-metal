@@ -11,8 +11,10 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::complex_unary {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return input[0];

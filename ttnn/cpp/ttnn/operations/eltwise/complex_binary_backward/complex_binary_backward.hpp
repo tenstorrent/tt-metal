@@ -12,6 +12,7 @@
 namespace ttnn {
 
 namespace operations::complex_binary_backward {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 template <ComplexBinaryBackwardOpType complex_binary_backward_op_type>
 struct ExecuteComplexBinaryBackwardWFloat {
