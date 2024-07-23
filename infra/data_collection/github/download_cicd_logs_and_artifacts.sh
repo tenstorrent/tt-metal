@@ -16,7 +16,7 @@ set_up_dirs() {
 download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
-    gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts $workflow_run_id
+    gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
 }
 
 download_logs_for_all_jobs() {

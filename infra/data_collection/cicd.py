@@ -1,5 +1,6 @@
 import json
 from pprint import pprint
+from loguru import logger
 
 from infra.data_collection.github.utils import get_pipeline_row_from_github_info, get_job_rows_from_github_info
 from infra.data_collection.github.workflows import (
@@ -48,6 +49,8 @@ def create_cicd_json_for_data_analysis(
             tests = get_tests_from_test_report_path(test_report_path)
         else:
             tests = []
+
+        logger.info(f"Found {len(tests)} tests for job {github_job_id}")
 
         job = pydantic_models.Job(
             **raw_job,
