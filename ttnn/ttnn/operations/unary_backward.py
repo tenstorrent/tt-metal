@@ -789,4 +789,58 @@ def _golden_function_tanhshrink(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.tanhshrink_bw, golden_function=_golden_function_tanhshrink)
 
 
+def _golden_function(grad_tensor, input_tensor, exponent, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+
+    pyt_y = torch.pow(input_tensor, exponent)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.pow_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, n, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+
+    pyt_y = torch.polygamma(n, input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.polygamma_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, sizes, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+
+    pyt_y = input_tensor.repeat(sizes)
+    pyt_y.backward(gradient=grad_tensor)
+
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.repeat_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.zeros_like(grad_tensor)
+    grad_sum = grad_tensor.sum()
+    pyt_y.fill_(grad_sum)
+
+    return [pyt_y]
+
+
+ttnn.attach_golden_function(ttnn.fill_bw, golden_function=_golden_function)
+
 __all__ = []
