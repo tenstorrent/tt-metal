@@ -13,7 +13,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/device/binary_device_operation.hpp"
 

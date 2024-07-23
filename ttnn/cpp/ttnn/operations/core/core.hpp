@@ -15,9 +15,9 @@
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/op_library/to_layout/to_layout_op.hpp"
-#include "ttnn/op_library/to_dtype/to_dtype_op.hpp"
-#include "ttnn/op_library/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

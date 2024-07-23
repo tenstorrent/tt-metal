@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "tt_metal/common/constants.hpp"
 
 namespace tt {

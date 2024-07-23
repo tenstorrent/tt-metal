@@ -14,7 +14,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
+#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 
 #include <limits>

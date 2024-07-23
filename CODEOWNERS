@@ -116,7 +116,7 @@ ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation_history.*pp @arakhmati @e
 ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/experimental/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/experimental/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/experimental/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
