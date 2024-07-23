@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
@@ -85,8 +84,6 @@ void TensorModule(py::module& m_tensor) {
         .value("L1", BufferType::L1)
         .value("L1_SMALL", BufferType::L1_SMALL);
 
-
-    detail::export_enum<EmbeddingsType>(m_tensor);
 
     auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
@@ -473,32 +470,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
-    )doc");
-
-    // input embeddings
-    m_tensor.def(
-        "embeddings",
-        &embeddings,
-        py::arg("input").noconvert(),
-        py::arg("weights").noconvert(),
-        py::arg("tilized").noconvert() = false,
-        py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
-        py::arg("pad_token").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        R"doc(
-        Returns specific indices of the embedding table specified by the input tensor
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, 1, num_rows]", "Yes"
-            "weights", "Entire embedding table", "Tensor", "Tensor shape is [1,1, num_embeddings, num_columns]. Num_columns must be divisible by 32.", "Yes"
-            "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No",
-            "embeddings_type", "Version of optimized embeddings to run. PADDED requires passing pad_token. BINARY expects the indices to only be 0, 1 and weights to have 2 rows", "EmbeddingsType", "GENERIC, PADDED, BINARY", "No"
-            "pad_token", "pad_token used in token ids", "uint32_t", "Default is None", "No"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-            "output_dtype", "DataType of output tensor", "DataType", "Default is weights dtype", "No"
     )doc");
 
     // TMs

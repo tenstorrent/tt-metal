@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/embedding/embedding/device/embeddings_program_factory.hpp"
+#include "ttnn/operations/embedding/device/embedding_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -75,4 +75,4 @@ operation::ProgramWithCallbacks Embeddings::create_program(
     return detail::embeddings_(a, weights, output_tensor, this->tilized, this->embeddings_type, this->pad_token);
 }
 
-}  // namespace ttnn::operations::embedding::detail
+}  // namespace ttnn::operations::embedding

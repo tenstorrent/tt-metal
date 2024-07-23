@@ -6,6 +6,7 @@
 import pytest
 import torch
 
+import ttnn
 import tt_lib as ttl
 
 from loguru import logger
@@ -32,7 +33,8 @@ def run_embeddings_tests(
     input_tensor = tensor.Tensor(input_rows_torch, ttl.tensor.DataType.UINT32).to(dev, in0_mem_config)
     weights_tensor = tensor.Tensor(weights_torch, dtype).to(dev, in0_mem_config)
 
-    ttz = tensor.embeddings(input_tensor, weights_tensor, tilized, output_mem_config=out_mem_config)
+    out_layout = ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT
+    ttz = ttnn.embedding(input_tensor, weights_tensor, layout=out_layout, memory_config=out_mem_config)
 
     if tilized:
         tt_data = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
