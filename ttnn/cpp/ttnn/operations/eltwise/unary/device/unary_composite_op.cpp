@@ -13,8 +13,9 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -655,6 +656,11 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
     }
     fact_val *= pos_neg;
     return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
+}
+
+Tensor _argmin(const Tensor& input_a, int32_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor neg_input = ttnn::neg(input_a, output_mem_config);
+    return (ttnn::argmax(neg_input, _dim, all));
 }
 
 }  // namespace ttnn::operations::unary

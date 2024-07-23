@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc, compare_pcc_argmax
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import skip_for_grayskull
 
 
@@ -365,10 +365,10 @@ def test_unary_composite_rad2deg_ttnn(input_shapes, device):
 )
 def test_unary_composite_round_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.round(input_tensor1)
+    decimal = 1
+    output_tensor = ttnn.round(input_tensor1, decimals=decimal)
     golden_function = ttnn.get_golden_function(ttnn.round)
-    golden_tensor = golden_function(in_data1)
+    golden_tensor = golden_function(in_data1, decimal)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

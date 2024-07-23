@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -57,7 +57,6 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optiona
                     tindex = tindex.to(input_a.device());
                     max_val.deallocate();
                     Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
-                    max_tensor.deallocate();
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
                     cmp_results.deallocate();
                     Tensor result = where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);
@@ -99,11 +98,9 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optiona
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);
                     Tensor result = where(ttnn::eqz(max_indices), midx, max_indices, output_memory_config);
-                    max_indices.deallocate();
                     result = min(result, dim, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
                     result = where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
-                    res_index.deallocate();
                     if (is_channel) {
                         std::vector<int64_t> permute_dims = {1, 0, 2, 3};
                         Tensor transpose_res = ttnn::permute(result, permute_dims, output_memory_config);
@@ -122,7 +119,6 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optiona
             max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
             max_val.deallocate();
             Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
-            max_tensor.deallocate();
             Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
             cmp_results.deallocate();
             Tensor result = where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);

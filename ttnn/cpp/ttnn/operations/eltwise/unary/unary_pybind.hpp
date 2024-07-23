@@ -671,17 +671,14 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite(py::module& module, const unary_operation_t& operation) {
+void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "") {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            Applies {0} to :attr:`input_tensor` element-wise.
-
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        {2}
 
             Args:
-                * :attr:`input_tensor`
+                * :attr:`input_tensor` {3}
 
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
@@ -692,7 +689,9 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
                 >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name());
+        operation.python_fully_qualified_name(),
+        description,
+        range);
 
     bind_registered_operation(
         module,
@@ -842,6 +841,51 @@ void bind_unary_composite_one_int(py::module& module, const unary_operation_t& o
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+//OpHandler_two_float_with_default
+template <typename unary_operation_t>
+void bind_unary_composite_one_int_bool(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, {2}: int, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {4}
+
+        Args:
+            * :attr:`input_tensor`
+
+        Keyword args:
+            * :attr:`{2}` (int): {3}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               int32_t parameter_a,
+               bool all,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, all, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()),
+            py::kw_only(),
+            py::arg("all") = false,
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -1173,28 +1217,29 @@ void py_module(py::module& module) {
     detail::bind_identity(module, ttnn::identity);
     detail::bind_power(module, ttnn::pow);
 
-
+// it is only supporetd for range -9 to 9
+// not supported for grayskull
     // unary composite imported into ttnn
-    detail::bind_unary_composite(module, ttnn::deg2rad);
-    detail::bind_unary_composite(module, ttnn::rad2deg);
-    detail::bind_unary_composite(module, ttnn::tanhshrink);
-    detail::bind_unary_composite(module, ttnn::acosh);
-    detail::bind_unary_composite(module, ttnn::asinh);
-    detail::bind_unary_composite(module, ttnn::atanh);
-    detail::bind_unary_composite(module, ttnn::cbrt);
-    detail::bind_unary_composite(module, ttnn::cosh);
-    detail::bind_unary_composite(module, ttnn::digamma);
-    detail::bind_unary_composite(module, ttnn::lgamma);
-    detail::bind_unary_composite(module, ttnn::log1p);
-    detail::bind_unary_composite(module, ttnn::mish);
-    detail::bind_unary_composite(module, ttnn::multigammaln);
-    detail::bind_unary_composite(module, ttnn::sinh);
-    detail::bind_unary_composite(module, ttnn::softsign);
-    detail::bind_unary_composite(module, ttnn::swish);
-    detail::bind_unary_composite(module, ttnn::trunc);
-    detail::bind_unary_composite(module, ttnn::var_hw);
-    detail::bind_unary_composite(module, ttnn::std_hw);
-    detail::bind_unary_composite(module, ttnn::normalize_hw);
+    detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::rad2deg, R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::tanhshrink, R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::acosh, R"doc(Performs acosh function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::asinh, R"doc(Performs asinh function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::atanh, R"doc(Performs atanh function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::cosh, R"doc(Performs cosh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]");
+    detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
+    detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
+    detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]");
+    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`, not supported for grayskull.)doc");
+    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]");
+    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]");
+    detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::trunc, R"doc(Performs trunc function on :attr:`input_tensor`, not supported for grayskull.)doc");
+    detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc");
 
     detail::bind_unary_composite_two_float_with_default(
         module,
@@ -1252,12 +1297,17 @@ void py_module(py::module& module) {
         module,
         ttnn::round,
         "decimals", "decimals value", 0,
-        R"doc(Performs round function on :attr:`input_tensor`, :attr:`decimals`.)doc");
+        R"doc(Performs round function on :attr:`input_tensor`, not supported for grayskull, :attr:`decimals`.)doc");
     detail::bind_unary_composite_one_int(
         module,
         ttnn::polygamma,
         "k", "k value",
         R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
+    detail::bind_unary_composite_one_int_bool(
+        module,
+        ttnn::argmin,
+        "dim", "dim value",
+        R"doc(Performs Argmin function on :attr:`input_tensor`, :attr:`dim`.)doc");
 
 }
 
