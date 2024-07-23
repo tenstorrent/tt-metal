@@ -379,8 +379,64 @@ def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_not, golden_function=_golden_function_bitwise_not)
 
 
-def _is_scalar(value):
-    return isinstance(value, (int, float))
+def _golden_function_glu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.glu(input_tensor_a, dim)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.glu, golden_function=_golden_function_glu)
+
+
+def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.relu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.reglu, golden_function=_golden_function_reglu)
+
+
+def _golden_function_geglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.gelu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.geglu, golden_function=_golden_function_geglu)
+
+
+def _golden_function_swiglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.silu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.swiglu, golden_function=_golden_function_swiglu)
+
+
+def _golden_function_logical_not_(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.logical_not(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.logical_not_, golden_function=_golden_function_logical_not_)
 
 
 def _golden_function_hardshrink(input_tensor_a, param, *args, **kwargs):
@@ -424,7 +480,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
         import torch
 
         name_to_golden_function = {
-            # "logit": torch.logit,
             "polygamma": torch.special.polygamma,
         }
         torch_function = name_to_golden_function[name]
@@ -468,7 +523,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    # ("logit", ttl.tensor.logit, "eps"),  # composite
     ("polygamma", ttl.tensor.polygamma, "parameter"),  # composite
 ]
 

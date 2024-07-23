@@ -57,7 +57,7 @@ enum class UnaryCompositeOpType {
     SOFTSHRINK,
     LOGIT,
     CELU,
-    GLU,
+    LOGICAL_NOT_,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -105,7 +105,7 @@ Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _logit(const Tensor& a, float param, const std::optional<MemoryConfig>& );
 Tensor _celu(const Tensor& a, float param, const std::optional<MemoryConfig>& );
-Tensor _glu(const Tensor& a, int32_t dim, const std::optional<MemoryConfig>& );
+Tensor _logical_not_ (const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -399,5 +399,13 @@ struct OpHandler<UnaryCompositeOpType::POWER_INT> {
     static Tensor handle(uint8_t q_id, const Tensor& input, uint32_t exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
+}
+
+template <>
+struct OpHandler<UnaryCompositeOpType::LOGICAL_NOT_> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _logical_not_(t1, mem_cfg);
+    }
 };
+
 }

@@ -76,19 +76,6 @@ struct ExecuteUnaryCompositeOpWithFloat {
         return op_type(input_tensor, param1, output_memory_config);
         }
 };
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithDim
-{
-    static ttnn::Tensor execute_on_worker_thread(
-        const Tensor& input_tensor,
-        int32_t dim,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt)
-        {
-            auto op_type = get_function_type_dim<unary_comp_op_type>();
-            return op_type(input_tensor, dim, memory_config);
-        }
-
-};
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithDim
@@ -289,6 +276,7 @@ constexpr auto swiglu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
 constexpr auto tanhshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>("ttnn::tanhshrink");
+constexpr auto logical_not_ = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>("ttnn::logical_not_");
 constexpr auto deg2rad= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>("ttnn::deg2rad");
 constexpr auto rad2deg= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>("ttnn::rad2deg");
 constexpr auto acosh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>("ttnn::acosh");
@@ -312,7 +300,6 @@ constexpr auto hardshrink = ttnn::register_operation<operations::unary::ExecuteU
 constexpr auto softshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>("ttnn::softshrink");
 constexpr auto logit = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>("ttnn::logit");
 constexpr auto celu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>("ttnn::celu");
-constexpr auto glu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>("ttnn::glu");
 constexpr auto hardswish= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSWISH>>("ttnn::hardswish");
 constexpr auto hardsigmoid = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>("ttnn::hardsigmoid");
 constexpr auto hardtanh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::HARDTANH>>("ttnn::hardtanh");

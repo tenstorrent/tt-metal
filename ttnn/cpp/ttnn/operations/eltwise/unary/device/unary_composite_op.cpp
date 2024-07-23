@@ -734,43 +734,8 @@ Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfi
     return result;
 }
 
-std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> t_split;
-    TT_FATAL(((input_a.get_legacy_shape()[dim] / 2) % TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-
-    std::vector<uint32_t> start_index = {0, 0, 0, 0};
-    std::vector<uint32_t> end_index = {
-        input_a.get_legacy_shape()[0] - 1,
-        input_a.get_legacy_shape()[1] - 1,
-        input_a.get_legacy_shape()[2] - 1,
-        input_a.get_legacy_shape()[3]/ 2 -1 };
-
-    std::vector<uint32_t> start_index_2 = {0, 0, 0,  (input_a.get_legacy_shape()[3]/2)};
-    std::vector<uint32_t> end_index_2 = {
-        input_a.get_legacy_shape()[0] - 1,
-        input_a.get_legacy_shape()[1] - 1,
-        input_a.get_legacy_shape()[2] - 1,
-        input_a.get_legacy_shape()[3] - 1};
-
-    Tensor t_a = ttnn::slice(0, input_a, start_index, end_index, std::nullopt);
-    Tensor t_b = ttnn::slice(0, input_a, start_index_2, end_index_2, std::nullopt);
-
-    t_split.emplace_back(t_a);
-    t_split.emplace_back(t_b);
-
-    return t_split;
+// // tanhshrink(x) = x - tanh(x)
+Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::logical_not(x, output_mem_config, x);
 }
-
-// Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor _glu(const Tensor& input_a, int32_t dim , const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
-    if (dim == -1)
-        dim = 3;
-
-    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
-    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
-    return glu_result;
-}
-
 }  // namespace ttnn::operations::unary

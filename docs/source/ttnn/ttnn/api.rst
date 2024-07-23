@@ -130,6 +130,7 @@ Pointwise Unary
    ttnn/log2
    ttnn/log_sigmoid
    ttnn/logical_not
+   ttnn/logical_not_
    ttnn/logit
    ttnn/mish
    ttnn/multigammaln
@@ -155,7 +156,6 @@ Pointwise Unary
    ttnn/softmax
    ttnn/softplus
    ttnn/softshrink
-   ttnn/bias_gelu_unary
    ttnn/softsign
    ttnn/swish
    ttnn/tan
