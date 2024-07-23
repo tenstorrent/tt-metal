@@ -1234,18 +1234,6 @@ op_map = {
         "tt_op": tt_lib_ops.binary_le_bw,
         "pytorch_op": pytorch_ops.binary_le_bw,
     },
-    "clamp-max-bw": {
-        "tt_op": tt_lib_ops.clamp_max_bw,
-        "pytorch_op": pytorch_ops.clamp_max_bw,
-    },
-    "clamp-min-bw": {
-        "tt_op": tt_lib_ops.clamp_min_bw,
-        "pytorch_op": pytorch_ops.clamp_min_bw,
-    },
-    "clamp-bw": {
-        "tt_op": tt_lib_ops.clamp_bw,
-        "pytorch_op": pytorch_ops.clamp_bw,
-    },
     "interleaved_to_sharded_partial": {
         "tt_op": tt_lib_ops.interleaved_to_sharded_partial,
         "pytorch_op": pytorch_ops.interleaved_to_sharded_partial,
