@@ -6,7 +6,7 @@ import click
 import os
 import pathlib
 import pprint
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, NotFoundError
 from tests.sweep_framework.statuses import TestStatus
 from beautifultable import BeautifulTable, STYLE_COMPACT
 from termcolor import colored
@@ -79,13 +79,15 @@ def summary(ctx):
         for file in sorted(sweeps_path.glob("*.py")):
             module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
             results_index = module_name + "_test_results"
+            if not client.indices.exists(index=results_index):
+                continue
             if not ctx.obj["all"]:
                 response = client.search(
                     index=results_index,
                     size=0,
                     aggs={
                         "latest_runs": {
-                            "terms": {"field": "vector_id.keyword"},
+                            "terms": {"field": "vector_id.keyword", "size": 10000},
                             "aggs": {
                                 "latest_timestamp": {
                                     "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
@@ -109,7 +111,11 @@ def summary(ctx):
 
             table.rows.append(row, module_name)
     elif ctx.obj["suite_name"] is None:
-        results_index = ctx.obj["module_name"] + "_test_results"
+        module_name = ctx.obj["module_name"]
+        results_index = module_name + "_test_results"
+        if not client.indices.exists(index=results_index):
+            print(f"SWEEPS: There are no results for module {module_name}.")
+            return
         if not ctx.obj["all"]:
             response = client.search(
                 index=results_index,
@@ -162,12 +168,17 @@ def summary(ctx):
                 table.rows.append(row, suite)
 
     else:
-        results_index = ctx.obj["module_name"] + "_test_results"
+        module_name = ctx.obj["module_name"]
+        results_index = module_name + "_test_results"
+        suite_name = ctx.obj["suite_name"]
+        if not client.indices.exists(index=results_index):
+            print(f"SWEEPS: There are no results for module {module_name}.")
+            return
         if not ctx.obj["all"]:
             response = client.search(
                 index=results_index,
                 size=0,
-                query={"match": {"suite_name": ctx.obj["suite_name"]}},
+                query={"match": {"suite_name": suite_name}},
                 aggs={
                     "group_by_vector_id": {
                         "terms": {"field": "vector_id.keyword", "size": 10000},
@@ -179,6 +190,8 @@ def summary(ctx):
                     }
                 },
             )["aggregations"]["group_by_vector_id"]["buckets"]
+            if len(response) == 0:
+                print(f"SWEEPS: There are no results for module {module_name}, suite {suite_name}")
             for bucket in response:
                 row = []
                 for status in TestStatus:
@@ -188,7 +201,7 @@ def summary(ctx):
             response = client.search(
                 index=results_index,
                 size=10000,
-                query={"match": {"suite_name": ctx.obj["suite_name"]}},
+                query={"match": {"suite_name": suite_name}},
                 aggs={
                     "group_by_vector_id": {
                         "terms": {"field": "vector_id.keyword", "size": 10000},
@@ -218,7 +231,7 @@ def summary(ctx):
 @cli.command()
 @click.pass_context
 def detail(ctx):
-    table = BeautifulTable(maxwidth=200)
+    table = BeautifulTable(maxwidth=400)
     table.set_style(STYLE_COMPACT)
     table.columns.header = [
         colored("Sweep", "light_red"),
