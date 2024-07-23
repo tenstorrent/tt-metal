@@ -133,7 +133,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
                 moreh_matmul(output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_mem_config);
             TT_ASSERT(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             std::vector<int64_t> dims = find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());
-            moreh_sum(temp_weight_grad, dims, true, weight_grad.value());
+            moreh_sum(temp_weight_grad, dims, true, weight_grad.value(), weight_grad_mem_config, compute_kernel_config);
         }
         result[1] = weight_grad_tensor;
     }
