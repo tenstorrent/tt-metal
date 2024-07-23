@@ -153,6 +153,7 @@ models/demos/grayskull @boris-drazic @eyonland
 models/demos/resnet @mywoodstock @tt-aho
 models/demos/ttnn_resnet @mywoodstock @tt-aho
 models/perf/ @boris-drazic @tt-rkim
+models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
