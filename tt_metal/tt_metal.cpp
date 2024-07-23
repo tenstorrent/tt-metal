@@ -734,6 +734,7 @@ Device *CreateDevice(
 
 Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
     ZoneScoped;
+    tt::tt_metal::dispatch_core_manager::initialize();
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
