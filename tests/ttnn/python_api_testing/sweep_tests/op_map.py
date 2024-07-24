@@ -764,7 +764,7 @@ op_map = {
     "addcdiv-bw": {
         "tt_op": ttnn_ops.addcdiv_bw,
         "pytorch_op": pytorch_ops.addcdiv_bw,
-    }.
+    },
     "addalpha-bw": {
         "tt_op": ttnn_ops.addalpha_bw,
         "pytorch_op": pytorch_ops.addalpha_bw,
