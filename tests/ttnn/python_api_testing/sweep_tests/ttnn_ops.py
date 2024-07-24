@@ -3316,7 +3316,6 @@ def eltwise_relu_max(
     return ttnn_tensor_to_torch(t1)
 
 
-<<<<<<< HEAD
 def unpad(
     x,
     *args,
@@ -3472,7 +3471,6 @@ def addcmul_bw(
     return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1]), ttnn_tensor_to_torch(t4[2])]
 
 
-
 def eltwise_add_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -3609,6 +3607,7 @@ def where_bw(
 
     return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1])]
 
+
 def addcdiv_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -3669,4 +3668,3 @@ def rsqrt_bw(
     t2 = ttnn.rsqrt_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
-
