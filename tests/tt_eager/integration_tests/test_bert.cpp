@@ -49,7 +49,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     );
 
 
-    auto&& [query, key, value] = tt::operations::primary::transformers::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto&& [query, key, value] = ttnn::experimental::transformer::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
     fused_qkv_matmul_output.deallocate();
 
 
