@@ -15,7 +15,7 @@ namespace copy {
 
 namespace detail {
 
-inline Tensor execute_on_worker_thread(
+inline Tensor copy_impl(
     uint8_t queue_id,
     const Tensor& input_tensor,
     const std::vector<ttnn::operations::unary::UnaryWithParam>& op_chain,
@@ -39,59 +39,68 @@ inline Tensor execute_on_worker_thread(
 }  // namespace detail
 
 struct Typecast {
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const uint8_t queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-
-        if(optional_output_tensor.has_value()){
-            TT_FATAL(output_dtype == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
+        if (optional_output_tensor.has_value()) {
+            TT_FATAL(
+                output_dtype == optional_output_tensor.value().get_dtype(),
+                "If both output dtype and output tensor provided dtype should match");
         }
         DataType input_dtype = input.get_dtype();
-        return detail::execute_on_worker_thread(
+        return detail::copy_impl(
             queue_id,
             input,
-            {ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)})},
+            {ttnn::operations::unary::UnaryWithParam(
+                ttnn::operations::unary::UnaryOpType::TYPECAST,
+                {static_cast<float>(input_dtype), static_cast<float>(output_dtype)})},
             memory_config_arg,
             optional_output_tensor);
     }
 
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
+        return operator()(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
     }
 
-// eltwise_typecast implementation in tt_eager :
-// ---------------------------------------------
-// inline Tensor eltwise_typecast(
-//     const Tensor& input_tensor,
-//     uint32_t tt_input_dtype,
-//     uint32_t tt_output_dtype,
-//     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
+    // eltwise_typecast implementation in tt_eager :
+    // ---------------------------------------------
+    // inline Tensor eltwise_typecast(
+    //     const Tensor& input_tensor,
+    //     uint32_t tt_input_dtype,
+    //     uint32_t tt_output_dtype,
+    //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const uint8_t queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,
         const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        TT_ASSERT(input_tensor.device()->arch() != tt::ARCH::GRAYSKULL, "eltwise_typecast is not currently supported on Grayskull");
-        TT_FATAL(tt_input_dtype == input_tensor.get_dtype(), "input dtype and input tensor's dtype provided should match");
-        if(optional_output_tensor.has_value()){
-            TT_FATAL(tt_output_dtype == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
+        TT_ASSERT(
+            input_tensor.device()->arch() != tt::ARCH::GRAYSKULL,
+            "eltwise_typecast is not currently supported on Grayskull");
+        TT_FATAL(
+            tt_input_dtype == input_tensor.get_dtype(), "input dtype and input tensor's dtype provided should match");
+        if (optional_output_tensor.has_value()) {
+            TT_FATAL(
+                tt_output_dtype == optional_output_tensor.value().get_dtype(),
+                "If both output dtype and output tensor provided dtype should match");
         }
-        return detail::execute_on_worker_thread(
+        return detail::copy_impl(
             queue_id,
             input_tensor,
-            {ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::TYPECAST, {static_cast<float>(tt_input_dtype), static_cast<float>(tt_output_dtype)})},
+            {ttnn::operations::unary::UnaryWithParam(
+                ttnn::operations::unary::UnaryOpType::TYPECAST,
+                {static_cast<float>(tt_input_dtype), static_cast<float>(tt_output_dtype)})},
             memory_config,
             optional_output_tensor);
     }
@@ -99,6 +108,6 @@ struct Typecast {
 }  // namespace copy
 }  // namespace operations
 
-constexpr auto typecast = ttnn::register_operation<ttnn::operations::copy::Typecast>("ttnn::typecast");
+constexpr auto typecast = ttnn::register_operation_with_auto_launch_op<"ttnn::typecast", ttnn::operations::copy::Typecast>();
 
 }  // namespace ttnn

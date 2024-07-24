@@ -7,14 +7,6 @@ import json
 from time import time
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 import pytest
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
@@ -26,7 +18,6 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 
@@ -94,22 +85,28 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     return emb_inputs, pt_tokenized_inputs, input_mask, rot_emb_matrix_list
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode):
-    assert batch_size == 32, "Batch size must be 32"
+def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
+    # Set Mistral flags for CI
+    if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
+        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 
     embed_on_device = False
     dtype = ttnn.bfloat8_b
-
-    logger.info(f"Reading inputs...")
-    if len(user_input) == 1:
-        input_prompts = user_input * 32  # Always process 32 users
-    else:
-        input_prompts = load_inputs(user_input, 32)
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
+    logger.info(f"Reading inputs...")
+    if len(user_input) == 1:
+        input_prompts = user_input * model_args.max_batch_size  # Always process 32 users
+    else:
+        input_prompts = load_inputs(user_input, model_args.max_batch_size)
     model_args.n_layers = 32
 
     logger.info("Loading weights...")
@@ -138,7 +135,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
     )
 
     logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype)
+    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
 
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -186,7 +183,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
 
         # Run ttnn mistral model
         tt_out = tt_model(decode_input, current_pos)
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [batch, seq, hidden_dim]
+        tt_output_torch = (
+            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+        )  # [batch, seq, hidden_dim]
 
         # If temperature is 0, does greedy decoding (top-1)
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
@@ -209,16 +208,17 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Save output token to print out later
         for user in range(batch_size):
             user_tok = tt_out_tok[user].tolist()
-            if user_tok[0] != tokenizer.eos_id:  # Stop saving the ouput after hitting the EOS token
+            if user_tok[0] != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
                 all_outputs[user].append(user_tok[0])
             else:
+                user_done[user] = True
                 if (
                     iteration < input_mask.shape[1]
                 ):  # Still in prefill, so ignore EOS token and save the generated token
-                    all_outputs[user].append(user_tok[0])
+                    # all_outputs[user].append(user_tok[0])
+                    pass
                 else:
                     logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                    user_done[user] = True
                     if all(user_done):
                         users_decoding = False
 
@@ -231,15 +231,18 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
         tokens_per_second_per_user = 1 / iteration_time
-        if len(user_input) == 1:
-            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-        else:
-            for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                if len(text) > 100:
-                    text = "..." + text[-97:]
-                text = text.replace("\n", " ")
-                logger.info("[User {}] {}".format(user, text))
+        if not is_ci_env:
+            if len(user_input) == 1:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            else:
+                for user in range(batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    if len(text) > 100:
+                        text = "..." + text[-97:]
+                    text = text.replace("\n", " ")
+                    logger.info("[User {}] {}".format(user, text))
+
+        # Always print perf at every iteration
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
@@ -250,6 +253,15 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
         if iteration >= max_generated_tokens:
             users_decoding = False
 
+    # In CI only print the final generated output to avoid spamming the logs
+    if is_ci_env:
+        if len(user_input) == 1:
+            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        else:
+            for user in range(batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                logger.info("[User {}] {}".format(user, text))
+
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
@@ -259,5 +271,10 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_demo(device, use_program_cache, input_prompts, instruct_weights):
-    return run_mistral_demo(user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights)
+def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+    if is_ci_env and instruct_weights == False:
+        pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
+
+    return run_mistral_demo(
+        user_input=input_prompts, batch_size=8, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+    )

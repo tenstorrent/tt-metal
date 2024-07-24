@@ -568,26 +568,6 @@ def div_bw(
 
 
 @setup_host_and_device
-def rsqrt_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t3 = ttl.tensor.rsqrt_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t3)
-
-
-@setup_host_and_device
 def unary_mul_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -647,54 +627,6 @@ def binary_assign_bw(
     t3 = ttl.tensor.binary_assign_bw(t0, t1, t2, output_mem_config)
 
     return tt2torch_tensor(t3[0])
-
-
-@setup_host_and_device
-def addcdiv_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    w,  # other_tensor2
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttl.tensor.addcdiv_bw(t0, t1, t2, t3, scalar, output_mem_config)
-
-    return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1]), tt2torch_tensor(t4[2])]
-
-
-@setup_host_and_device
-def addalpha_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t3 = ttl.tensor.addalpha_bw(t0, t1, t2, scalar, output_mem_config)
-
-    return [tt2torch_tensor(t3[0]), tt2torch_tensor(t3[1])]
 
 
 @setup_host_and_device
@@ -2273,24 +2205,6 @@ def untilize_with_unpadding(
 
 
 @setup_host_and_device
-def eltwise_rsub(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    factor = kwargs["factor"]
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rsub(t0, factor, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_identity(
     x,
     *args,
@@ -2807,7 +2721,7 @@ def unpad_from_tile(
 def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.glu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.glu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2816,7 +2730,7 @@ def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem
 def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.geglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.geglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2825,7 +2739,7 @@ def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_m
 def activation_reglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.reglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2834,7 +2748,7 @@ def activation_reglu(x, *args, device, dtype, layout, input_mem_config, output_m
 def activation_swiglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.swiglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.swiglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2947,7 +2861,7 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
 
     t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 
-    t2 = ttl.tensor.embeddings(t0, t1, False, output_mem_config=output_mem_config)
+    t2 = ttnn.embedding(t0, t1, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
 
     tt_data = t2.cpu().to_torch()
 
@@ -3093,26 +3007,6 @@ def abs_bw(
 
 
 @setup_host_and_device
-def sqrt_bw(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttl.tensor.sqrt_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def relu_bw(
     x,
     y,
@@ -3184,28 +3078,6 @@ def ne_bw(
     t1 = ttl.tensor.ne_bw(t0, output_mem_config)[0]
 
     return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def rsub_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t3 = ttl.tensor.rsub_bw(t0, t1, t2, output_mem_config)[0]
-
-    return tt2torch_tensor(t3)
 
 
 @setup_host_and_device
@@ -3451,31 +3323,6 @@ def fill_zero_bw(
     t1 = ttl.tensor.fill_zero_bw(t0, output_mem_config=output_mem_config)[0]
 
     return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def where_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    w,  # other_tensor2
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    y = y > 0
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttl.tensor.where_bw(t0, t1, t2, t3, output_mem_config=output_mem_config)
-
-    return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1])]
 
 
 @setup_host_and_device

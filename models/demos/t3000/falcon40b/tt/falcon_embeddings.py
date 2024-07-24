@@ -33,12 +33,13 @@ class TtFalconEmbeddings(torch.nn.Module):
         self.model_config = model_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.experimental.tensor.embeddings(
+        x = ttnn.embedding(
             x,
             self.embd_weights,
-            tilized=True,
-            output_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
         )
+        x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
 
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
             x = ttnn.experimental.tensor.interleaved_to_sharded(

@@ -226,8 +226,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 };
 
 struct ExecuteConcatenateHeads {
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+    static inline ttnn::Tensor operator()(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
         return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor})
             .at(0);
@@ -235,8 +234,7 @@ struct ExecuteConcatenateHeads {
 };
 
 struct ExecuteRotaryEmbedding {
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+    static inline ttnn::Tensor operator()(
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
@@ -261,12 +259,12 @@ struct ExecuteRotaryEmbedding {
 
 template <bool in_place>
 struct ExecuteAttentionSoftmax {
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
-        const ttnn::operations::normalization::SoftmaxProgramConfig& program_config = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
+        const ttnn::operations::normalization::SoftmaxProgramConfig& program_config =
+            ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
         float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
@@ -306,18 +304,21 @@ constexpr auto split_query_key_value_and_split_heads = REGISTER_OPERATION_FROM_F
     "ttnn::transformer::split_query_key_value_and_split_heads",
     ttnn::operations::transformer::split_query_key_value_and_split_heads);
 
-constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
-    "ttnn::transformer::concatenate_heads");
+constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::transformer::concatenate_heads",
+    ttnn::operations::transformer::ExecuteConcatenateHeads>();
 
-constexpr auto rotary_embedding = ttnn::register_operation<ttnn::operations::transformer::ExecuteRotaryEmbedding>(
-    "ttnn::transformer::rotary_embedding");
+constexpr auto rotary_embedding = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::transformer::rotary_embedding",
+    ttnn::operations::transformer::ExecuteRotaryEmbedding>();
 
-constexpr auto attention_softmax =
-    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(
-        "ttnn::transformer::attention_softmax");
-constexpr auto attention_softmax_ =
-    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
-        "ttnn::transformer::attention_softmax_");
+constexpr auto attention_softmax = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::transformer::attention_softmax",
+    ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>();
+
+constexpr auto attention_softmax_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::transformer::attention_softmax_",
+    ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>();
 
 }  // namespace transformer
 

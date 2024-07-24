@@ -5,13 +5,14 @@ import torch
 import pytest
 import json
 from pathlib import Path
+import os
 
 # import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
 )
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import Transformer
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 # from transformers.generation.utils import top_k_top_p_filtering
