@@ -38,6 +38,10 @@ enum class UnaryCompositeOpType {
     CLAMP,
     SELU,
     THRESHOLD,
+    GLU,
+    REGLU,
+    GEGLU,
+    SWIGLU,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -71,6 +75,10 @@ Tensor _clip(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _clamp(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _selu(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
+Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -87,6 +95,9 @@ struct OpHandler_low_high;
 
 template <UnaryCompositeOpType OpType>
 struct OpHandler_threshold_value;
+
+template <UnaryCompositeOpType OpType>
+struct OpHandler_dim;
 
 template <>
 struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
@@ -277,6 +288,35 @@ struct OpHandler_threshold_value<UnaryCompositeOpType::THRESHOLD> {
     }
 };
 
+//glu (geglu, reglu, swiglu, glu) varinats are supported only for last dimension.
+template <>
+struct OpHandler_dim<UnaryCompositeOpType::GLU> {
+    static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
+    return _glu(t1, dim, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_dim<UnaryCompositeOpType::REGLU> {
+    static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _reglu(t1, dim, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_dim<UnaryCompositeOpType::GEGLU> {
+    static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _geglu(t1, dim, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler_dim<UnaryCompositeOpType::SWIGLU> {
+    static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
+    return _swiglu(t1, dim, mem_cfg);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryCompositeOpType OpType>
 auto get_function_type1() {
@@ -303,4 +343,8 @@ auto get_function_type5() {
     return &OpHandler_threshold_value<OpType>::handle;
 }
 
+template <UnaryCompositeOpType OpType>
+auto get_glu_fn() {
+    return &OpHandler_dim<OpType>::handle;
+}
 }
