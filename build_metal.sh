@@ -24,9 +24,9 @@ Notes:
         agnostic of the build system (Ninja or Make)
 
 Different configs: to change build type or use tracy, you have to change the configuration cmake step (step #2)
-    - changing build types: `CONFIG=<type> cmake -B build -G Ninja`
-        - valid build_types: `Release`, `Debug`, `RelWithDebInfo`
-        - Release is the default if you do not set CONFIG
+    - changing build types: `cmake -B build -DCMAKE_BUILD_TYPE=<type> -G Ninja`
+        - valid CMAKE_BUILD_TYPE values: `Release`, `Debug`, `RelWithDebInfo`, `CI`
+        - Release is the default if you do not set CMAKE_BUILD_TYPE
     - tracy: `cmake -B build -G Ninja -DENABLE_TRACY=ON`
 
 Now you can have multiple build folders with different configs, if you want to switch just run `ninja install -C <your_build_folder` to install different pybinds
@@ -37,7 +37,7 @@ Now you can have multiple build folders with different configs, if you want to s
 Example:
     ./create_venv.sh
     cmake -B build -G Ninja && ninja -C build                       # <- build in Release, inside folder called `build`
-    CONFIG=Debug cmake -B build_debug -G Ninja && ninja -C build    # <- build in Debug, inside folder called `build_debug`
+    cmake -DCMAKE_BUILD_TYPE=Debug -B build_debug -G Ninja && ninja -C build    # <- build in Debug, inside folder called `build_debug`
     source python_env/bin/activate                                  # <- you can not run pytests yet since pybinds have not been installed
     ninja install -C build                                          # <- install Release pybinds
     <run a pytest>                                                  # <- this test ran in Release config
@@ -56,12 +56,14 @@ show_help() {
     echo "  -h  Show this help message."
     echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c  Enable ccache for the build."
+    echo "  -t  Set the build type. Default is Release. Other options are Debug and RelWithDebInfo."
 }
 
 # Parse CLI options
 export_compile_commands="OFF"
 enable_ccache="OFF"
-while getopts "hec" opt; do
+build_type="Release"
+while getopts "hecb:" opt; do
     case ${opt} in
         h )
             show_help
@@ -72,6 +74,9 @@ while getopts "hec" opt; do
             ;;
         c )
             enable_ccache="ON"
+            ;;
+        b )
+            build_type="$OPTARG"
             ;;
         \? )
             show_help
@@ -84,27 +89,17 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
-if [ -z "$CONFIG" ]; then
-    echo "Build type defaulted to Release"
-else
-    VALID_CONFIGS="RelWithDebInfo Debug Release ci"
-    if [[ $VALID_CONFIGS =~ (^|[[:space:]])"$CONFIG"($|[[:space:]]) ]]; then
-        echo "CONFIG set to $CONFIG"
-    else
-        echo "Invalid config "$CONFIG" given.. Valid configs are: $VALID_CONFIGS"
-        exit 1
-    fi
-fi
-
-echo "Building tt-metal"
-cmake_args="-B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+echo "Building tt-metal in $build_type mode"
+mkdir -p build_$build_type
+ln -nsf build_$build_type build
+cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
 fi
 
 cmake $cmake_args
-cmake --build build --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
+cmake --build build_$build_type --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
 
 echo "Building cpp tests"
-cmake --build build --target tests      # <- can also just run `ninja tests -C build`
+cmake --build build_$build_type --target tests      # <- can also just run `ninja tests -C build`

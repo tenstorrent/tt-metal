@@ -35,14 +35,21 @@ CHECK_COMPILERS()
 
 ############################################################################################################################
 # Setting build type flags
-#   Will default to assert build, unless CONFIG env variable is set or manually set -DCMAKE_BUILD_TYPE
+#   Will default to Release build unless manually set with -DCMAKE_BUILD_TYPE
 ############################################################################################################################
-if(DEFINED ENV{CONFIG})
-    message(STATUS "CONFIG is set, CMAKE_BUILD_TYPE being set to $ENV{CONFIG}")
-    set(CMAKE_BUILD_TYPE $ENV{CONFIG})
-elseif(NOT CMAKE_BUILD_TYPE)
+# Define valid build types
+set(VALID_BUILD_TYPES Debug Release RelWithDebInfo CI)
+
+if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Setting build type to 'Release' as none was specified.")
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
+endif()
+
+# Check if the specified build type is valid
+list(FIND VALID_BUILD_TYPES ${CMAKE_BUILD_TYPE} _build_type_index)
+
+if(_build_type_index EQUAL -1)
+    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${VALID_BUILD_TYPES}")
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
