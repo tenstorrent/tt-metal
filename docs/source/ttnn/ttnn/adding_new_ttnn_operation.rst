@@ -31,8 +31,6 @@ What steps are needed to add ttnn operation in Python?
 Example of Adding a new Device Operation
 ****************************************
 
-Let's implement `ttnn.example` (It will just copy the input tensor to the output tensor on the device)
-
 C++ Implementation
 ------------------
 
