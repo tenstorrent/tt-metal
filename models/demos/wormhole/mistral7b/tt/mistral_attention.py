@@ -345,8 +345,8 @@ class TtMistralAttention(nn.Module):
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            ttnn.kv_cache.fill_cache_for_user_(keys, k_heads, current_pos)
-            ttnn.kv_cache.fill_cache_for_user_(values, v_heads, current_pos)
+            ttnn.kv_cache.update_cache_for_token_(keys, k_heads, current_pos)
+            ttnn.kv_cache.update_cache_for_token_(values, v_heads, current_pos)
             self.layer_past_list[i] = [keys, values]
 
             ttnn.deallocate(k_heads)
