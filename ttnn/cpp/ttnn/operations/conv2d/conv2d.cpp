@@ -343,10 +343,15 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             tt::round_up(tensor_width, conv_config.input_channels_alignment);
         TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
 
-        auto input_padded_shape = Shape({1, 1, input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                                                                                         // tt::tt_metal::Shape issue to clean up next line
+        auto input_padded_shape = Shape(std::array<uint32_t, 4>{
+            1,
+            1,
+            input_tensor_height_snapped_to_tile,
+            input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
+                                                                 // tt::tt_metal::Shape issue to clean up next line
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
+            Shape(std::array<uint32_t, 4>{
+                input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
             parallel_config,
             32);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
@@ -379,11 +384,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             // reshape to [1, 1, N*H*W, C]
             input_tensor = ttnn::operations::core::reshape(
                 input_tensor,
-                Shape(
-                    {1,
-                     1,
-                     input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
-                     input_tensor.get_shape()[3]}));
+                Shape(std::array<uint32_t, 4>{
+                    1,
+                    1,
+                    input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
+                    input_tensor.get_shape()[3]}));
         }
 
         uint32_t tensor_height = input_tensor.get_shape()[2];
@@ -597,7 +602,9 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         conv_config.deallocate_activation = true;
     }
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        Shape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}), parallel_config, 32);
+        Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        parallel_config,
+        32);
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config));
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
