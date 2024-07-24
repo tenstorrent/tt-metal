@@ -10,8 +10,7 @@ namespace ttnn {
 namespace operations::normalization {
 
 struct ExecuteLayerNorm {
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+    static inline ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
@@ -20,7 +19,6 @@ struct ExecuteLayerNorm {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
-
         auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
         return operation::run(
@@ -33,12 +31,11 @@ struct ExecuteLayerNorm {
                     {input_tensor},
                     {residual_input_tensor, weight, bias}).at(0);
     }
-
 };
 
 }  // namespace operations::normalization
 
 constexpr auto layer_norm =
-    ttnn::register_operation<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
 
 }  // namespace ttnn

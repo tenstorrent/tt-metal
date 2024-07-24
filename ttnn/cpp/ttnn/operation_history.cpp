@@ -39,12 +39,7 @@ void write_row(std::ofstream& output_file_stream, const std::size_t num_columns,
 std::size_t write_header(
     std::ofstream& output_file_stream, const std::size_t num_attributes, const std::size_t num_input_tensors) {
     auto column_names = std::vector<std::string>{
-        "ttnn_operation_id",
-        "operation_type",
-        "operation_name",
-        "composite_parent_names",
-        "program_cache_hit",
-        "program_hash"};
+        "ttnn_operation_id", "operation_type", "operation_name", "program_cache_hit", "program_hash"};
 
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
         column_names.push_back(fmt::format("attribute_{}_name", attribute_index));
@@ -75,7 +70,6 @@ void write_record(
     row.push_back(fmt::format("{}", record.ttnn_operation_id));
     row.push_back(record.operation_type);
     row.push_back(record.operation_name);
-    row.push_back(fmt::format("{}", record.composite_parent_names));
     row.push_back(fmt::format("{}", record.program_cache_hit));
     row.push_back(fmt::format("{}", record.program_hash));
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
@@ -139,7 +133,6 @@ void OperationHistory::dump_to_json(const char* file_name) {
         record_json["ttnn_operation_id"] = tt::stl::json::to_json(record.ttnn_operation_id);
         record_json["operation_type"] = tt::stl::json::to_json(record.operation_type);
         record_json["operation_name"] = tt::stl::json::to_json(record.operation_name);
-        record_json["composite_parent_names"] = tt::stl::json::to_json(record.composite_parent_names);
         record_json["program_cache_hit"] = tt::stl::json::to_json(record.program_cache_hit);
         record_json["program_hash"] = tt::stl::json::to_json(record.program_hash);
 

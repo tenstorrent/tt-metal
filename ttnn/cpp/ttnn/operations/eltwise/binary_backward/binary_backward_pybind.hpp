@@ -267,7 +267,6 @@ void bind_binary_backward_float(py::module& module, const binary_backward_operat
         parameter_doc,
         description);
 
-
     bind_registered_operation(
         module,
         operation,
@@ -286,26 +285,7 @@ void bind_binary_backward_float(py::module& module, const binary_backward_operat
             py::arg("input_tensor_b"),
             py::arg(parameter_name.c_str()),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
-
-        ttnn::pybind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const ttnn::Tensor& weight,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-                using TernaryBackwardOp = ttnn::operations::ternary_backward::ExecuteTernaryBackward<ternary_backward::TernaryBackwardOpType::LERP_BW>;
-                return TernaryBackwardOp::execute_on_worker_thread(grad_tensor, input_tensor_a, input_tensor_b, weight, output_memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("input_tensor_c"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt}
-    );
+            py::arg("memory_config") = std::nullopt});
 }
 template <typename binary_backward_operation_t>
 void bind_binary_backward(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
@@ -343,15 +323,13 @@ Example:
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-                return self(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
+                return self(grad_tensor, input_tensor_a, memory_config, input_tensor_b);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
-
 
         ttnn::pybind_overload_t{
             [](const binary_backward_operation_t& self,
@@ -368,7 +346,6 @@ Example:
             py::arg("mode"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
-
 
         ttnn::pybind_overload_t{
             [](const binary_backward_operation_t& self,
