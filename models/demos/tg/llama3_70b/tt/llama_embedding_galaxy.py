@@ -33,7 +33,7 @@ class TtLlamaEmbedding_galaxy:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.emb_weights, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.embedding(x, self.emb_weights, layout=ttnn.TILE_LAYOUT)  # , dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
 
         return x
