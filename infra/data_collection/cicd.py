@@ -71,6 +71,6 @@ def create_cicd_json_for_data_analysis(
     with open(cicd_json_filename, "w") as f:
         f.write(pipeline.model_dump_json())
 
-    cicd_json_copy_filename = f"pipeline_copy_{github_pipeline_id}"
+    cicd_json_copy_filename = f"pipelinecopy_{github_pipeline_id}"
     with open(cicd_json_copy_filename, "w") as f:
         f.write(pipeline.model_dump_json())

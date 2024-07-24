@@ -102,7 +102,7 @@ jobs:
           path: |
             if-no-files-found: warn
             path: |
-              pipeline_copy_*.json
+              pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
   test-produce-benchmark-environment:
