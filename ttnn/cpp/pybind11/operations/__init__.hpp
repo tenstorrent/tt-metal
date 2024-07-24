@@ -114,6 +114,9 @@ void py_module(py::module& module) {
 
     auto m_experimental = module.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
+
+    auto m_test = module.def_submodule("test_ops", "Test operations");
+    test_ops::py_module(m_test);
 }
 
 }  // namespace operations
