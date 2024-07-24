@@ -108,6 +108,48 @@ struct UnaryBackwardFunction{
 
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
+std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _atan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _rad2deg_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _frac_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _trunc_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _log_sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _fill_zero_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _tan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _rsqrt_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _neg_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _reciprocal_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+
+std::vector<Tensor> _rpow_bw( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _div_no_nan_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _polygamma_bw( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _le_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _ge_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _ne_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _remainder_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _fmod_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
@@ -132,6 +174,20 @@ std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _mul_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+std::vector<Tensor> _hardshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _softshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _leaky_relu_bw( const Tensor& grad, const Tensor& input, float negative_slope = 0.01, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _elu_bw( const Tensor& grad, const Tensor& input, float alpha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _celu_bw( const Tensor& grad, const Tensor& input, float aplha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float eps = 0.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+std::vector<Tensor> _hardshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _softshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _leaky_relu_bw( const Tensor& grad, const Tensor& input, float negative_slope = 0.01, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _elu_bw( const Tensor& grad, const Tensor& input, float alpha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _celu_bw( const Tensor& grad, const Tensor& input, float aplha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float eps = 0.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
