@@ -3552,6 +3552,23 @@ def eltwise_rdiv(
     return ttnn_tensor_to_torch(t1)
 
 
+def eltwise_rsub(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    factor = kwargs["factor"]
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.rsub(t0, factor, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def neg_bw(
     x,
     y,
