@@ -113,9 +113,6 @@ struct OpHandler<BinaryBackwardOpType::HYPOT_BW> {
 template <BinaryBackwardOpType OpType>
 struct OpHandler_binary_bw_opt;
 
-template <BinaryBackwardOpType OpType>
-struct OpHandler_binary_bw_opt_wo_qid;
-
 template <>
 struct OpHandler<BinaryBackwardOpType::LDEXP_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
@@ -221,27 +218,6 @@ struct OpHandler_binary_bw_opt<BinaryBackwardOpType::EQ_BW> {
     }
 };
 
-template <>
-struct OpHandler_binary_bw_opt_wo_qid<BinaryBackwardOpType::ADD_BW> {
-    static std::vector<std::optional<Tensor>> handle(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
-        return _add_bw_overload(grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-    }
-};
-
-template <>
-struct OpHandler_binary_bw_opt_wo_qid<BinaryBackwardOpType::MUL_BW> {
-    static std::vector<std::optional<Tensor>> handle(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
-        return _mul_bw_overload(grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-    }
-};
-
-template <>
-struct OpHandler_binary_bw_opt_wo_qid<BinaryBackwardOpType::EQ_BW> {
-    static std::vector<std::optional<Tensor>> handle(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
-        return _eq_bw_overload(grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-    }
-};
-
 // Template functions to get the function pointers
 template <BinaryBackwardOpType OpType>
 auto get_function_binary_bw() {
@@ -276,11 +252,6 @@ auto get_function_binary_bw_float() {
 template <BinaryBackwardOpType OpType>
 auto get_function_binary_bw_opt() {
     return &OpHandler_binary_bw_opt<OpType>::handle;
-}
-
-template <BinaryBackwardOpType OpType>
-auto get_function_binary_bw_opt_wo_qid() {
-    return &OpHandler_binary_bw_opt_wo_qid<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::binary_backward
