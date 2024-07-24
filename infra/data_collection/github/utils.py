@@ -186,6 +186,15 @@ def get_job_row_from_github_job(github_job):
 
     job_start_ts = github_job["started_at"]
 
+    job_submission_ts_dt = get_datetime_from_github_datetime(job_submission_ts)
+    job_start_ts_dt = get_datetime_from_github_datetime(job_start_ts)
+
+    if job_submission_ts_dt > job_start_ts_dt:
+        logger.warning(
+            f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting equal for data"
+        )
+        job_submission_ts = job_start_ts
+
     job_end_ts = github_job["completed_at"]
 
     job_success = github_job["conclusion"] == "success"
