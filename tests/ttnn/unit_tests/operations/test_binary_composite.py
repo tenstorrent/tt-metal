@@ -399,7 +399,7 @@ def test_binary_fmod_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_logical_and_ttnn(input_shapes, device):
+def test_binary_logical_and__ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     ttnn.logical_and_(input_tensor1, input_tensor2)
@@ -418,11 +418,30 @@ def test_binary_logical_and_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_logical_or_ttnn(input_shapes, device):
+def test_binary_logical_or__ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     ttnn.logical_or_(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.logical_or_)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([input_tensor1], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_binary_logical_xor__ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    ttnn.logical_xor_(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.logical_xor_)
     golden_tensor = golden_function(in_data1, in_data2)
 
     comp_pass = compare_pcc([input_tensor1], [golden_tensor])

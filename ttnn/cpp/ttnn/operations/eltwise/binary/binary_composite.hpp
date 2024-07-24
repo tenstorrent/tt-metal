@@ -148,6 +148,15 @@ constexpr auto div_no_nan = ttnn::register_operation<
 constexpr auto floor_div = ttnn::register_operation<
     "ttnn::floor_div",
     operations::binary::ExecuteBinaryCompositeOpsOverload<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
+constexpr auto logical_and_ = ttnn::register_operation<
+    "ttnn::logical_and_",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_AND_>>();
+constexpr auto logical_or_ = ttnn::register_operation<
+    "ttnn::logical_or_",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_OR_>>();
+constexpr auto logical_xor_ = ttnn::register_operation<
+    "ttnn::logical_xor_",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
 // newly imported
 
 }  // namespace ttnn

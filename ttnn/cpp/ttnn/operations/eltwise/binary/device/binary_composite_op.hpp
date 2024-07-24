@@ -28,7 +28,7 @@ enum class BinaryCompositeOpType {
     FLOOR_DIV,
     LOGICAL_AND_,
     LOGICAL_OR_,
-
+    LOGICAL_XOR_,
 };
 
 Tensor _hypot(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -51,6 +51,7 @@ Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig
 Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _logical_or_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_and_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _logical_xor_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <BinaryCompositeOpType OpType>

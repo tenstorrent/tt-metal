@@ -283,6 +283,7 @@ Pointwise Binary
    ttnn/binary_fmod
    ttnn/logical_and_
    ttnn/logical_or_
+   ttnn/logical_xor_
    ttnn/pow
    ttnn/ldexp
    ttnn/logical_and

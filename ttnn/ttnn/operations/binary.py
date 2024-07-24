@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -126,6 +126,15 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.logical_or_, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.logical_xor_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.logical_xor_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):

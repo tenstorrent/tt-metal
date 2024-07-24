@@ -11,7 +11,6 @@
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 #include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -158,7 +157,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, str
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     if(round_mode == "trunc"){
-        result = ttnn::trunc(result);
+        result = trunc(result);
     }
     else if(round_mode == "floor"){
         result = ttnn::floor(result);
@@ -176,7 +175,7 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, st
         Tensor result = ttnn::divide(a, b);
 
         if(round_mode == "trunc"){
-            result = ttnn::trunc(result);
+            result = trunc(result);
         }
         else if(round_mode == "floor"){
             result = ttnn::floor(result);
@@ -200,7 +199,7 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, st
         Tensor result = ttnn::divide(input_a, input_b);
 
         if(round_mode == "trunc"){
-            result = ttnn::trunc(result);
+            result = trunc(result);
         }
         else if(round_mode == "floor"){
             result = ttnn::floor(result);
@@ -297,6 +296,14 @@ Tensor _logical_and_(const Tensor& input_a, const Tensor& input_b, const std::op
 
 Tensor _logical_or_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_or(input_a, input_b, std::nullopt, output_mem_config, input_a);
+}
+
+Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
+    Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
+    in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
+    Tensor result = ttnn::where(input_a, input_b, in_b_eq_zero, output_mem_config, input_a);
+    return result;
 }
 
 } // namespace ttnn::operations::binary
