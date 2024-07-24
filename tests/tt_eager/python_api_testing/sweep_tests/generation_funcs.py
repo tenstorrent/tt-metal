@@ -2045,7 +2045,6 @@ def gen_fmod_args(
         yield input_info
 
 
-
 def gen_dtype_layout_device_coregrid(
     input_shapes,
     dtypes=[supported_tt_dtypes],
