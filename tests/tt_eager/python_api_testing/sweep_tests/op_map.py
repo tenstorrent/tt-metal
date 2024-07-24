@@ -1194,17 +1194,9 @@ op_map = {
         "tt_op": tt_lib_ops.addalpha_bw,
         "pytorch_op": pytorch_ops.addalpha_bw,
     },
-    "rsqrt-bw": {
-        "tt_op": tt_lib_ops.rsqrt_bw,
-        "pytorch_op": pytorch_ops.rsqrt_bw,
-    },
     "abs-bw": {
         "tt_op": tt_lib_ops.abs_bw,
         "pytorch_op": pytorch_ops.abs_bw,
-    },
-    "sqrt-bw": {
-        "tt_op": tt_lib_ops.sqrt_bw,
-        "pytorch_op": pytorch_ops.sqrt_bw,
     },
     "relu-bw": {
         "tt_op": tt_lib_ops.relu_bw,

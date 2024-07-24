@@ -749,4 +749,12 @@ op_map = {
         "tt_op": ttnn_ops.where_bw,
         "pytorch_op": pytorch_ops.where_bw,
     },
+    "rsqrt-bw": {
+        "tt_op": ttnn_ops.rsqrt_bw,
+        "pytorch_op": pytorch_ops.rsqrt_bw,
+    },
+    "sqrt-bw": {
+        "tt_op": ttnn_ops.sqrt_bw,
+        "pytorch_op": pytorch_ops.sqrt_bw,
+    },
 }
