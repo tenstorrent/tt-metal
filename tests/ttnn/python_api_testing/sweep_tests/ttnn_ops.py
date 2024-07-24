@@ -1035,9 +1035,6 @@ def matmul(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     if xcoregrid != -1 and ycoregrid != -1:
-        print("DEFINITIVE")
-        print(xcoregrid)
-        print(ycoregrid)
         t2 = ttnn.matmul(
             t0,
             t1,
