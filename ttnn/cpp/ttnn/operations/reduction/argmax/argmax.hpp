@@ -36,6 +36,6 @@ struct ExecuteArgMax {
 
 }  // namespace operations::reduction
 
-constexpr auto argmax = ttnn::register_operation<ttnn::operations::reduction::ExecuteArgMax>("ttnn::argmax");
+constexpr auto argmax = ttnn::register_operation<"ttnn::argmax", ttnn::operations::reduction::ExecuteArgMax>();
 
 }  // namespace ttnn

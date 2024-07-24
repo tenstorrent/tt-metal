@@ -111,8 +111,17 @@ struct ExecuteTernaryBackwardOptional {
 }  // operations::ternary_backward
 
 //type 1
-constexpr auto addcmul_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardFloat<operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>("ttnn::addcmul_bw");
-constexpr auto addcdiv_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardFloat<operations::ternary_backward::TernaryBackwardOpType::ADDCDIV_BW>>("ttnn::addcdiv_bw");
-constexpr auto where_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardOptional<operations::ternary_backward::TernaryBackwardOpType::WHERE_BW>>("ttnn::where_bw");
+constexpr auto addcmul_bw = ttnn::register_operation<
+    "ttnn::addcmul_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardFloat<
+        operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>();
+constexpr auto addcdiv_bw = ttnn::register_operation<
+    "ttnn::addcdiv_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardFloat<
+        operations::ternary_backward::TernaryBackwardOpType::ADDCDIV_BW>>();
+constexpr auto where_bw = ttnn::register_operation<
+    "ttnn::where_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardOptional<
+        operations::ternary_backward::TernaryBackwardOpType::WHERE_BW>>();
 
 }  // namespace ttnn

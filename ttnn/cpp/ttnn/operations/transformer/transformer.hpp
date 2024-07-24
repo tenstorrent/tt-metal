@@ -306,18 +306,20 @@ constexpr auto split_query_key_value_and_split_heads = REGISTER_OPERATION_FROM_F
     "ttnn::transformer::split_query_key_value_and_split_heads",
     ttnn::operations::transformer::split_query_key_value_and_split_heads);
 
-constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
-    "ttnn::transformer::concatenate_heads");
+constexpr auto concatenate_heads = ttnn::register_operation<
+    "ttnn::transformer::concatenate_heads",
+    ttnn::operations::transformer::ExecuteConcatenateHeads>();
 
-constexpr auto rotary_embedding = ttnn::register_operation<ttnn::operations::transformer::ExecuteRotaryEmbedding>(
-    "ttnn::transformer::rotary_embedding");
+constexpr auto rotary_embedding = ttnn::
+    register_operation<"ttnn::transformer::rotary_embedding", ttnn::operations::transformer::ExecuteRotaryEmbedding>();
 
-constexpr auto attention_softmax =
-    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(
-        "ttnn::transformer::attention_softmax");
-constexpr auto attention_softmax_ =
-    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
-        "ttnn::transformer::attention_softmax_");
+constexpr auto attention_softmax = ttnn::register_operation<
+    "ttnn::transformer::attention_softmax",
+    ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>();
+
+constexpr auto attention_softmax_ = ttnn::register_operation<
+    "ttnn::transformer::attention_softmax_",
+    ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>();
 
 }  // namespace transformer
 

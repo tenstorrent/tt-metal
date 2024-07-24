@@ -84,6 +84,7 @@ struct ExecuteGroupNorm {
 }  // namespace normalization
 }  // namespace operations
 
-constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::ExecuteGroupNorm>("ttnn::group_norm");
+constexpr auto group_norm =
+    ttnn::register_operation<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
 
 }  // namespace ttnn

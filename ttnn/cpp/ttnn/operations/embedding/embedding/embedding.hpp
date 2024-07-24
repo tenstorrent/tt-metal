@@ -72,6 +72,6 @@ struct Embedding {
 }  // namespace embedding
 }  // namespace operations
 
-constexpr auto embedding = ttnn::register_operation<ttnn::operations::embedding::Embedding>("ttnn::embedding");
+constexpr auto embedding = ttnn::register_operation<"ttnn::embedding", ttnn::operations::embedding::Embedding>();
 
 }  // namespace ttnn

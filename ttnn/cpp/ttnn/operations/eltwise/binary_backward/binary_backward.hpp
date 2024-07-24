@@ -180,30 +180,30 @@ struct ExecuteBinaryBackward {
 }  // operations::binary
 
 //OpHandler_binary_bw : get_function_binary_bw
-constexpr auto atan2_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>("ttnn::atan2_bw");
-constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
-constexpr auto embedding_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::EMBEDDING_BW>>("ttnn::embedding_bw");
-constexpr auto xlogy_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::XLOGY_BW>>("ttnn::xlogy_bw");
-constexpr auto hypot_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::HYPOT_BW>>("ttnn::hypot_bw");
-constexpr auto ldexp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LDEXP_BW>>("ttnn::ldexp_bw");
-constexpr auto logaddexp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP_BW>>("ttnn::logaddexp_bw");
+constexpr auto atan2_bw = ttnn::register_operation<"ttnn::atan2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>();
+constexpr auto rsub_bw = ttnn::register_operation<"ttnn::rsub_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>();
+constexpr auto embedding_bw = ttnn::register_operation<"ttnn::embedding_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::EMBEDDING_BW>>();
+constexpr auto xlogy_bw = ttnn::register_operation<"ttnn::xlogy_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::XLOGY_BW>>();
+constexpr auto hypot_bw = ttnn::register_operation<"ttnn::hypot_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::HYPOT_BW>>();
+constexpr auto ldexp_bw = ttnn::register_operation<"ttnn::ldexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LDEXP_BW>>();
+constexpr auto logaddexp_bw = ttnn::register_operation<"ttnn::logaddexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP_BW>>();
 
 //OpHandler_binary_bw_opt_float_default : get_function_binary_bw_opt_float_default
-constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardOptionalFloatDefault<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
+constexpr auto addalpha_bw = ttnn::register_operation<"ttnn::addalpha_bw", operations::binary_backward::ExecuteBinaryBackwardOptionalFloatDefault<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>();
 
 //OpHandler_binary_bw_float_default : get_function_binary_bw_float_default
-constexpr auto subalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardFloatDefault<operations::binary_backward::BinaryBackwardOpType::SUBALPHA_BW>>("ttnn::subalpha_bw");
+constexpr auto subalpha_bw = ttnn::register_operation<"ttnn::subalpha_bw", operations::binary_backward::ExecuteBinaryBackwardFloatDefault<operations::binary_backward::BinaryBackwardOpType::SUBALPHA_BW>>();
 
 //OpHandler_binary_bw_int_default : get_function_binary_bw_int_default
-constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>("ttnn::concat_bw");
+constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
 
 //OpHandler_binary_bw_float : get_function_binary_bw_float
-constexpr auto lerp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>("ttnn::lerp_bw");
+constexpr auto lerp_bw = ttnn::register_operation<"ttnn::lerp_bw", operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>();
 
 //type 1
-constexpr auto logaddexp2_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP2_BW>>("ttnn::logaddexp2_bw");
-constexpr auto squared_difference_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>("ttnn::squared_difference_bw");
-constexpr auto min_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>("ttnn::min_bw");
-constexpr auto max_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>("ttnn::max_bw");
+constexpr auto logaddexp2_bw = ttnn::register_operation<"ttnn::logaddexp2_bw", operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP2_BW>>();
+constexpr auto squared_difference_bw = ttnn::register_operation<"ttnn::squared_difference_bw", operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>();
+constexpr auto min_bw = ttnn::register_operation<"ttnn::min_bw", operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>();
+constexpr auto max_bw = ttnn::register_operation<"ttnn::max_bw", operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>();
 
 }  // namespace ttnn

@@ -213,7 +213,7 @@ Tensor triu(
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
-constexpr auto pow = ttnn::register_operation<ttnn::operations::unary::Power>("ttnn::pow");
+constexpr auto pow = ttnn::register_operation<"ttnn::pow", ttnn::operations::unary::Power>();
 
 // Other unaries
 
@@ -262,39 +262,101 @@ constexpr auto tril = REGISTER_OPERATION_FROM_FUNCTION("ttnn::tril", WRAP_WITH_R
 constexpr auto triu = REGISTER_OPERATION_FROM_FUNCTION("ttnn::triu", WRAP_WITH_RESHAPE(ttnn::operations::unary::triu));
 
 // newly imported
-constexpr auto tanhshrink = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>("ttnn::tanhshrink");
-constexpr auto deg2rad= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>("ttnn::deg2rad");
-constexpr auto rad2deg= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>("ttnn::rad2deg");
-constexpr auto acosh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>("ttnn::acosh");
-constexpr auto asinh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ASINH>>("ttnn::asinh");
-constexpr auto atanh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ATANH>>("ttnn::atanh");
-constexpr auto cbrt = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>("ttnn::cbrt");
-constexpr auto cosh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>("ttnn::cosh");
-constexpr auto digamma = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>("ttnn::digamma");
-constexpr auto lgamma = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LGAMMA>>("ttnn::lgamma");
-constexpr auto log1p = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>("ttnn::log1p");
-constexpr auto mish = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MISH>>("ttnn::mish");
-constexpr auto multigammaln = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>("ttnn::multigammaln");
-constexpr auto sinh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>("ttnn::sinh");
-constexpr auto softsign= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>("ttnn::softsign");
-constexpr auto swish = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>("ttnn::swish");
-constexpr auto trunc = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TRUNC>>("ttnn::trunc");
-constexpr auto var_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>("ttnn::var_hw");
-constexpr auto std_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>>("ttnn::std_hw");
-constexpr auto normalize_hw = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>("ttnn::normalize_hw");
+constexpr auto tanhshrink = ttnn::register_operation<
+    "ttnn::tanhshrink",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
+constexpr auto deg2rad = ttnn::register_operation<
+    "ttnn::deg2rad",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>();
+constexpr auto rad2deg = ttnn::register_operation<
+    "ttnn::rad2deg",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>();
+constexpr auto acosh = ttnn::register_operation<
+    "ttnn::acosh",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>();
+constexpr auto asinh = ttnn::register_operation<
+    "ttnn::asinh",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ASINH>>();
+constexpr auto atanh = ttnn::register_operation<
+    "ttnn::atanh",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ATANH>>();
+constexpr auto cbrt = ttnn::register_operation<
+    "ttnn::cbrt",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
+constexpr auto cosh = ttnn::register_operation<
+    "ttnn::cosh",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
+constexpr auto digamma = ttnn::register_operation<
+    "ttnn::digamma",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
+constexpr auto lgamma = ttnn::register_operation<
+    "ttnn::lgamma",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LGAMMA>>();
+constexpr auto log1p = ttnn::register_operation<
+    "ttnn::log1p",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
+constexpr auto mish = ttnn::register_operation<
+    "ttnn::mish",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MISH>>();
+constexpr auto multigammaln = ttnn::register_operation<
+    "ttnn::multigammaln",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
+constexpr auto sinh = ttnn::register_operation<
+    "ttnn::sinh",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
+constexpr auto softsign = ttnn::register_operation<
+    "ttnn::softsign",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
+constexpr auto swish = ttnn::register_operation<
+    "ttnn::swish",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
+constexpr auto trunc = ttnn::register_operation<
+    "ttnn::trunc",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TRUNC>>();
+constexpr auto var_hw = ttnn::register_operation<
+    "ttnn::var_hw",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>();
+constexpr auto std_hw = ttnn::register_operation<
+    "ttnn::std_hw",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>>();
+constexpr auto normalize_hw = ttnn::register_operation<
+    "ttnn::normalize_hw",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
 
-constexpr auto hardswish= ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSWISH>>("ttnn::hardswish");
-constexpr auto hardsigmoid = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>("ttnn::hardsigmoid");
+constexpr auto hardswish = ttnn::register_operation<
+    "ttnn::hardswish",
+    operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
+constexpr auto hardsigmoid = ttnn::register_operation<
+    "ttnn::hardsigmoid",
+    operations::unary::ExecuteUnaryCompositeOpWithScaleShift<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>();
 
-constexpr auto hardtanh = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::HARDTANH>>("ttnn::hardtanh");
-constexpr auto clip = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLIP>>("ttnn::clip");
-constexpr auto clamp = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLAMP>>("ttnn::clamp");
-constexpr auto selu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleAlpha<operations::unary::UnaryCompositeOpType::SELU>>("ttnn::selu");
-constexpr auto threshold = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithThresholdValue<operations::unary::UnaryCompositeOpType::THRESHOLD>>("ttnn::threshold");
+constexpr auto hardtanh = ttnn::register_operation<
+    "ttnn::hardtanh",
+    operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::HARDTANH>>();
+constexpr auto clip = ttnn::register_operation<
+    "ttnn::clip",
+    operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLIP>>();
+constexpr auto clamp = ttnn::register_operation<
+    "ttnn::clamp",
+    operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLAMP>>();
+constexpr auto selu = ttnn::register_operation<
+    "ttnn::selu",
+    operations::unary::ExecuteUnaryCompositeOpWithScaleAlpha<operations::unary::UnaryCompositeOpType::SELU>>();
+constexpr auto threshold = ttnn::register_operation<
+    "ttnn::threshold",
+    operations::unary::ExecuteUnaryCompositeOpWithThresholdValue<operations::unary::UnaryCompositeOpType::THRESHOLD>>();
 
-constexpr auto glu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>("ttnn::glu");
-constexpr auto reglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>("ttnn::reglu");
-constexpr auto geglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>("ttnn::geglu");
-constexpr auto swiglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>("ttnn::swiglu");
+constexpr auto glu = ttnn::register_operation<
+    "ttnn::glu",
+    operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
+constexpr auto reglu = ttnn::register_operation<
+    "ttnn::reglu",
+    operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>();
+constexpr auto geglu = ttnn::register_operation<
+    "ttnn::geglu",
+    operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>();
+constexpr auto swiglu = ttnn::register_operation<
+    "ttnn::swiglu",
+    operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
 
 }  // namespace ttnn

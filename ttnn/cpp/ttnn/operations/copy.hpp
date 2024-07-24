@@ -99,6 +99,6 @@ struct Typecast {
 }  // namespace copy
 }  // namespace operations
 
-constexpr auto typecast = ttnn::register_operation<ttnn::operations::copy::Typecast>("ttnn::typecast");
+constexpr auto typecast = ttnn::register_operation<"ttnn::typecast", ttnn::operations::copy::Typecast>();
 
 }  // namespace ttnn

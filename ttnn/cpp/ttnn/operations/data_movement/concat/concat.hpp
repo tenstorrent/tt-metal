@@ -109,6 +109,6 @@ struct Concat {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto concat = ttnn::register_operation<ttnn::operations::data_movement::Concat>("ttnn::concat");
+constexpr auto concat = ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::Concat>();
 
 }  // namespace ttnn

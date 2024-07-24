@@ -112,7 +112,6 @@ struct ExecuteTernaryWhere
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto where = ttnn::register_operation<operations::ternary::ExecuteTernaryWhere>("ttnn::where");
-
+constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::ExecuteTernaryWhere>();
 
 }  // namespace ttnn
