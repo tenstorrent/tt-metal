@@ -17,6 +17,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -1473,7 +1474,7 @@ std::vector<Tensor> _prod_bw(
     const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = prod(input, all_dimensions, dim, output_memory_config);
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, output_memory_config);
     if(prod_result.get_layout()==Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE){
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
         }
@@ -1489,7 +1490,7 @@ std::vector<Tensor> _prod_bw(
     }
     // all_dimensions = False
     Tensor updated_grad = prod_result;
-    if (prod_result.get_legacy_shape() != grad.get_legacy_shape()) {
+    if (prod_result.get_legacy_shape().without_padding() != grad.get_legacy_shape()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
@@ -1499,14 +1500,11 @@ std::vector<Tensor> _prod_bw(
             Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-            Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
-            pad_updated_grad = pad_updated_grad.to(Layout::TILE);
-            pad_prod_result = pad_prod_result.to(Layout::TILE);
-            updated_grad = pad_updated_grad.to(input.device());
-            prod_result = pad_prod_result.to(input.device());
-            pad_updated_grad.deallocate();
-            pad_prod_result.deallocate();
+            if(updated_grad.storage_type() != StorageType::DEVICE && updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
+                Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
+                pad_updated_grad = pad_updated_grad.to(Layout::TILE);
+                updated_grad = pad_updated_grad.to(input.device());
+            }
         } else if (dim == 2 || dim == -2) {
             std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);

@@ -8,6 +8,7 @@ from loguru import logger
 from functools import partial
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -53,7 +54,7 @@ def test_prod(shapes, device):
 
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
-        ttl.operations.primary.prod_all(tt_input).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+        ttnn.prod(tt_input, all_dimensions=True).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
     )
     N, C, H, W = tt_output_cpu.shape
     torch.set_printoptions(threshold=10000, precision=5, sci_mode=False)

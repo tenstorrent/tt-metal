@@ -354,6 +354,7 @@ Reduction
    ttnn/sum
    ttnn/var
    ttnn/argmax
+   ttnn/prod
    ttnn/topk
 
 Data Movement

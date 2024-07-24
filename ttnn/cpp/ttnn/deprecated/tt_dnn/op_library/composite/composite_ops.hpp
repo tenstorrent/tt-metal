@@ -236,12 +236,6 @@ Tensor logical_noti(
     float immediate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// prod
-Tensor prod(
-    const Tensor& input_a,
-    bool all_dimensions = false,
-    int64_t dim = 0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 /*
 Returns a new tensor with the signed angles in radians between vectors

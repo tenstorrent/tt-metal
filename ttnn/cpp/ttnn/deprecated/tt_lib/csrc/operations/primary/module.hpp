@@ -39,8 +39,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/prod/prod_nc_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/prod/prod_op_all.hpp"
 
 namespace py = pybind11;
 
@@ -100,13 +98,6 @@ void py_module(py::module& m_primary) {
             Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
         )doc");
 
-    // prod along all dimensions
-    m_primary.def(
-        "prod_all",
-        &prod_all,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Computes prod along along dimensions of the tensor.");
 
     // moreh_adam
     m_primary.def(
@@ -511,16 +502,6 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum operation. Returns an output tensor.");
-
-    m_primary.def(
-        "prod_nc",
-        &prod_nc,
-        py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
-        py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs product operation. Returns an output tensor.");
 
     m_primary.def(
         "moreh_sum_backward",
