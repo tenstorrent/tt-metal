@@ -11,6 +11,7 @@ import numpy as np
 import tt_lib as ttl
 from models.utility_functions import comp_pcc, skip_for_grayskull
 import torch
+import ttnn
 
 
 def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config):
@@ -35,8 +36,8 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
         .to(device, in0_mem_config)
     )
 
-    q, k, v = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
-        a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config
+    q, k, v = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
+        a_t, ttl.tensor.CoreCoord(12, 9), memory_config=out_mem_config
     )
 
     # Check memory of inputs and outputs
