@@ -8,7 +8,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/prod/prod_nc_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
