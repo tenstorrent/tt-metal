@@ -352,7 +352,7 @@ namespace ckernel::unpacker
       }
       */
       // Workaround for HW bug (int32 dest and movd2a/b is used with srcA/B configured as int8)
-      if (int8_math_enabled) {
+      if (int8_math_enabled || (fp32_dest_acc_en && ((uint)unpA_dst_format == (uint)DataFormat::UInt16))) {
           reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
                                                                  // workaround for bug tenstorrent/budabackend#1948
       }
@@ -418,8 +418,8 @@ namespace ckernel::unpacker
    }
 
    inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
-       const uint input_df = unpack_src_format;
-       const uint output_df = unpack_dst_format;
+       const uint input_df = unpack_src_format & 0xF;
+       const uint output_df = unpack_dst_format & 0xF;
        return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
               ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
    }

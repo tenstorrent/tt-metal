@@ -212,8 +212,8 @@ inline void set_dest_section_base()
 }
 
 inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::uint32_t dst_format) {
-    const uint input_df = src_format;
-    const uint output_df = dst_format;
+    const uint input_df = src_format & 0xF;
+    const uint output_df = dst_format & 0xF;
     return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
            ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
 }

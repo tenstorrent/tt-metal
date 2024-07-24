@@ -37,3 +37,4 @@
 #include "sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 #include "sfpu/ckernel_sfpu_trigonometry.h"
+#include "sfpu/ckernel_sfpu_typecast.h"
