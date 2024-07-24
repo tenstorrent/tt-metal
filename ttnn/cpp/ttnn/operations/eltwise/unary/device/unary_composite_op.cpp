@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "unary_composite_op.hpp"
 
 #include <functional>
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
-#include "unary_composite_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -748,7 +749,8 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
-    Tensor y_hw = reshape(y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+    Tensor y_hw = tt::tt_metal::reshape(
+        y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
@@ -756,7 +758,8 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     y_hw.deallocate();
 
     // reformat
-    Tensor z_1 = reshape(z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+    Tensor z_1 = tt::tt_metal ::reshape(
+        z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
     z_0.deallocate();
 
     return z_1;

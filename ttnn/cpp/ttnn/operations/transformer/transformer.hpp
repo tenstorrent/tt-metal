@@ -200,7 +200,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 
         std::array<uint32_t, 3> intended_output_shape = {batch_size, sequence_size, num_heads * head_size};
         std::array<uint32_t, 3> padded_output_shape = {batch_size, padded_sequence_size, num_heads * padded_head_size};
-        return {ttnn::types::Shape(intended_output_shape, padded_output_shape).value()};
+        return {ttnn::Shape(intended_output_shape, padded_output_shape).value};
     }
 
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
