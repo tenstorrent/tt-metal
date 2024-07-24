@@ -6,21 +6,14 @@ import torch
 import pytest
 import math
 from loguru import logger
+from torch import nn
 
 import tt_lib as ttl
 import ttnn
-from models.demos.t3000.falcon40b.tt.ops.distributed_layernorm_dlnp1 import TtDistributedLayernormDLNP1
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
 
 
 class PytorchDistributedLayernormDLNP1(torch.nn.Module):
@@ -52,6 +45,53 @@ class PytorchDistributedLayernormDLNP1(torch.nn.Module):
             output.append(
                 torch.concat([meanxs[i], torch.zeros([1, 1, S, 31]), meanx2s[i], torch.zeros([1, 1, S, 31])], dim=-1)
             )
+
+        return output
+
+
+class TtDistributedLayernormDLNP1:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, xs: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+        num_devices = len(xs)
+
+        counts = []
+        total_count = 0
+        meanxs = []
+
+        # Each device computes local statistics mean(x) and mean(x^2)
+        # meanx = torch.mean(xs, dim=-1, keepdim=True)
+        for i in range(num_devices):
+            count_local = xs[i].shape[-1]
+            total_count += count_local
+            counts.append(count_local)
+
+            meanx_local = ttl.tensor.reduce(
+                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            )
+            meanxs.append(meanx_local)
+
+        # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
+        meanx2s = []
+        for i in range(num_devices):
+            x2_local = ttl.tensor.pow(xs[i], 2)
+            meanx2_local = ttl.tensor.reduce(
+                x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            )
+            meanx2s.append(meanx2_local)
+
+        # Weighted meanx to number of samples per device
+        for i in range(num_devices):
+            meanxs[i] = ttnn.multiply(meanxs[i], counts[i])
+
+        # Weighted meanx2 to number of samples per device
+        for i in range(num_devices):
+            meanx2s[i] = ttnn.multiply(meanx2s[i], counts[i])
+
+        output = []
+        for i in range(num_devices):
+            output.append(ttl.tensor.concat([meanxs[i], meanx2s[i]], 3))
 
         return output
 
