@@ -125,3 +125,43 @@ Use the Copy-and-Swap idiom to avoid duplicating code between different construc
 The Copy-and-Swap idiom is a robust and elegant method to implement copy assignment operators. It leverages the copy constructor and the swap method to provide strong exception safety and reduce code duplication.
 
 ### Motivation
+
+## 11. Avoid Global Classes, Especially with Mutexes or Locks
+
+### Practice
+Avoid creating global classes, especially those with mutexes or other locks, except for specific debug purposes.
+
+### Explanation
+Global classes can lead to issues with concurrency and resource management, especially when they involve mutexes or other synchronization mechanisms. Such global resources can create hidden dependencies and make the code harder to reason about and maintain.
+
+### Motivation
+- **Concurrency Safety**: Reduces the risk of deadlocks and race conditions.
+- **Maintainability**: Avoids hidden dependencies and makes the code easier to understand and maintain.
+- **Predictability**: Improves the predictability of resource management and execution flow.
+
+## 12. Move Function Implementations to `.cpp` Files
+
+### Practice
+Move function implementations from header files to `.cpp` files.
+
+### Explanation
+Implementing functions in `.cpp` files rather than in headers reduces compilation dependencies and improves encapsulation. It also leads to faster compile times and reduces the chances of multiple definition errors.
+
+### Motivation
+- **Compilation Time**: Reduces compilation times by minimizing dependencies.
+- **Encapsulation**: Improves encapsulation by hiding implementation details.
+- **Maintainability**: Simplifies code maintenance by separating interface from implementation.
+
+## 13. Avoid `using namespace std;` in Headers
+
+### Practice
+Never write `using namespace std;` in header files.
+
+### Explanation
+Including `using namespace std;` in header files can lead to namespace pollution and conflicts, making the codebase harder to manage and increasing the risk of name collisions.
+
+### Motivation
+- **Namespace Pollution**: Prevents namespace pollution and reduces the risk of name collisions.
+- **Code Clarity**: Improves code clarity by explicitly specifying the namespace.
+- **Maintainability**: Enhances maintainability by avoiding unintended interactions between different parts of the code.
+
