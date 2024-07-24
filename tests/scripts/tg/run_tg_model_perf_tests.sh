@@ -1,15 +1,23 @@
-
 #/bin/bash
-set -eo pipefail
 
 run_tg_llm_tests() {
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python models/perf/merge_perf_results.py; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_model_perf_tests failed"
+    exit 1
+  fi
 }
 
 run_tg_cnn_tests() {
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python models/perf/merge_perf_results.py; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_model_perf_tests failed"
+    exit 1
+  fi
 }
 
 main() {
@@ -27,7 +35,7 @@ main() {
     esac
     shift
   done
-    
+
   if [[ -z "$TT_METAL_HOME" ]]; then
     echo "Must provide TT_METAL_HOME in environment" 1>&2
     exit 1
