@@ -249,7 +249,7 @@ def eltwise_hardtanh(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.hardtanh(t0, low, high, output_mem_config=output_mem_config)
+    t1 = ttnn.hardtanh(t0, min=low, max=high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -507,7 +507,7 @@ def eltwise_addcmul(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = ttl.tensor.addcmul(t0, t1, t2, scalar, output_mem_config=output_mem_config)
+    t3 = ttnn.addcmul(t0, t1, t2, value=scalar, memory_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
@@ -529,7 +529,7 @@ def eltwise_addcdiv(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
+    t3 = ttnn.addcdiv(t0, t1, t2, value=scalar, memory_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
@@ -873,7 +873,7 @@ def eltwise_addalpha(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.addalpha(t0, t1, alpha, output_mem_config=output_mem_config)
+    t2 = ttnn.addalpha(t0, t1, alpha, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -898,9 +898,9 @@ def eltwise_addalpha_optional(
     cq_id = 0
 
     if queue_id:
-        ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2, queue_id=cq_id)
+        ttnn.addalpha(t0, t1, alpha, output_tensor=t2, queue_id=cq_id)
     else:
-        ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2)
+        ttnn.addalpha(t0, t1, alpha, output_tensor=t2)
 
     return tt2torch_tensor(t2)
 
@@ -1622,7 +1622,7 @@ def clip(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.clip(t0, low, high, output_mem_config=output_mem_config)
+    t1 = ttnn.clip(t0, low, high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2491,12 +2491,12 @@ eltwise_erfc = make_unary_op_optional_output_with_fast_approx(ttnn.erfc)
 eltwise_gelu = make_unary_op_optional_output_with_fast_approx(ttnn.gelu)
 eltwise_exp = make_unary_op_optional_output_with_fast_approx(ttnn.exp)
 eltwise_softplus = make_unary_op_optional_output(ttnn.softplus)
-eltwise_atanh = make_unary_op(ttl.tensor.atanh)
-eltwise_cosh = make_unary_op(ttl.tensor.cosh)
-eltwise_sinh = make_ttnn_unary_op(ttnn.sinh)
+eltwise_atanh = make_ttnn_unary_op(ttnn.atanh)
+eltwise_cosh = make_ttnn_unary_op(ttnn.cosh)
+eltwise_sinh = make_unary_op(ttl.tensor.sinh)
 eltwise_tanh = make_unary_op_optional_output(ttnn.tanh)
-eltwise_asinh = make_unary_op(ttl.tensor.asinh)
-eltwise_acosh = make_unary_op(ttl.tensor.acosh)
+eltwise_asinh = make_ttnn_unary_op(ttnn.asinh)
+eltwise_acosh = make_ttnn_unary_op(ttnn.acosh)
 eltwise_tanhshrink = make_ttnn_unary_op(ttnn.tanhshrink)
 eltwise_lgamma = make_ttnn_unary_op(ttnn.lgamma)
 eltwise_multigammaln = make_ttnn_unary_op(ttnn.multigammaln)
@@ -2504,7 +2504,7 @@ eltwise_softsign = make_ttnn_unary_op(ttnn.softsign)
 eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
-eltwise_cbrt = make_unary_op(ttl.tensor.cbrt)
+eltwise_cbrt = make_ttnn_unary_op(ttnn.cbrt)
 eltwise_rad2deg = make_unary_op_composite_ttnn(ttnn.rad2deg)
 eltwise_deg2rad = make_unary_op_composite_ttnn(ttnn.deg2rad)
 eltwise_sign = make_unary_op_optional_output(ttnn.sign)
@@ -2522,7 +2522,7 @@ eltwise_log1p = make_ttnn_unary_op(ttnn.log1p)
 eltwise_mish = make_ttnn_unary_op(ttnn.mish)
 eltwise_hardswish = make_ttnn_unary_op(ttnn.hardswish)
 eltwise_hardsigmoid = make_ttnn_unary_op(ttnn.hardsigmoid)
-eltwise_digamma = make_unary_op(ttl.tensor.digamma)
+eltwise_digamma = make_ttnn_unary_op(ttnn.digamma)
 eltwise_silu = make_unary_op_optional_output(ttnn.silu)
 eltwise_square = make_unary_op_optional_output(ttnn.square)
 eltwise_heaviside = make_unary_op_optional_output_with_scalar(ttnn.heaviside)
@@ -2614,8 +2614,8 @@ eltwise_logical_and = make_binary_op_ttnn(ttnn.logical_and)
 eltwise_logical_or = make_binary_op_ttnn(ttnn.logical_or)
 eltwise_bias_gelu = make_binary_op_ttnn(ttnn.bias_gelu)
 
-eltwise_min = make_binary_op(ttl.tensor.min)
-eltwise_max = make_binary_op(ttl.tensor.max)
+eltwise_min = make_binary_op_ttnn(ttnn.minimum)
+eltwise_max = make_binary_op_ttnn(ttnn.maximum)
 
 matmul = make_binary_op_ttnn(ttnn.matmul)
 outer = make_binary_op_ttnn(ttnn.outer)

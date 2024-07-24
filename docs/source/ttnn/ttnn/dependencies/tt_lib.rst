@@ -276,12 +276,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div_no_nan
 
-.. autofunction:: tt_lib.tensor.clip
-
-.. autofunction:: tt_lib.tensor.hardtanh
-
-.. autofunction:: tt_lib.tensor.cbrt
-
 .. autofunction:: tt_lib.tensor.polyval
 
 .. autofunction:: tt_lib.tensor.mac
@@ -290,29 +284,19 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.hardshrink
 
-.. autofunction:: tt_lib.tensor.cosh
-
 .. autofunction:: tt_lib.tensor.remainder
 
 .. autofunction:: tt_lib.tensor.fmod
 
-.. autofunction:: tt_lib.tensor.atanh
-
-.. autofunction:: tt_lib.tensor.atan2
-
 .. autofunction:: tt_lib.tensor.logical_xori
 
 .. autofunction:: tt_lib.tensor.celu
-
-.. autofunction:: tt_lib.tensor.addalpha
 
 .. autofunction:: tt_lib.tensor.logit
 
 .. autofunction:: tt_lib.tensor.logical_andi
 
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.digamma
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
@@ -535,10 +519,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.asinh
-
-.. autofunction:: tt_lib.tensor.acosh
-
 .. autofunction:: tt_lib.tensor.lerp
 
 .. autofunction:: tt_lib.tensor.fill_rm
@@ -546,10 +526,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.fill_ones_rm
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
-
-.. autofunction:: tt_lib.tensor.addcmul
-
-.. autofunction:: tt_lib.tensor.addcdiv
 
 .. autofunction:: tt_lib.tensor.mean_hw
 
