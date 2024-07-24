@@ -721,6 +721,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_rdiv,
         "pytorch_op": pytorch_ops.eltwise_rdiv,
     },
+    "eltwise-rsub": {
+        "tt_op": ttnn_ops.eltwise_rsub,
+        "pytorch_op": pytorch_ops.eltwise_rsub,
+    },
     "log-bw": {
         "tt_op": ttnn_ops.log_bw,
         "pytorch_op": pytorch_ops.log_bw,
