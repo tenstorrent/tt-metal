@@ -15,7 +15,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -399,7 +400,6 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
 // PyTorch version:
 // hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
 Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-//    std::cout<<"\n\n hit in ttnn hardsigmoid";
 
    Tensor a_t = ttnn::full_like(a,value_1);
    Tensor b_t = ttnn::full_like(a,value_2);
@@ -413,7 +413,6 @@ Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::op
 // Ref: PyTorch
 // hard swish(x) = x*hardsigmoid(x,scale,shift)
 Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-//    std::cout<<"\n\n hit in ttnn hardswish";
    Tensor a_sigmoid = _hardsigmoid(a, value_1, value_2, output_mem_config);
    Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt);
    return result_sq;
@@ -496,4 +495,83 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
     Tensor t2 = ttnn::multiply(ttnn::gtz(t0, output_mem_config), input_tensor, std::nullopt, output_mem_config);
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
+
+
+std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> t_split;
+    Shape inshape(input_a.get_legacy_shape());
+    TT_FATAL(((inshape[dim] / 2) % TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
+    std::vector<uint32_t> s_a = {0, 0, 0, 0};
+    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
+
+    std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
+
+    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, output_mem_config);
+
+    t_split.emplace_back(t_a);
+    t_split.emplace_back(t_b);
+
+    return t_split;
+}
+
+// Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
+ Tensor _glu(const Tensor& input_a, int32_t dim , const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
+    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
+    return glu_result;
+}
+
+// ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
+Tensor _reglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+    Tensor relu_b = ttnn::relu(ab[1], output_mem_config);
+    Tensor reglu_result = ttnn::multiply(ab[0], relu_b, std::nullopt, output_mem_config);
+    return reglu_result;
+}
+
+// Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
+Tensor _geglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config ) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
+    constexpr bool fast_appx = true;
+    Tensor gelu_b = ttnn::gelu(ab[1], fast_appx, output_mem_config);
+    Tensor geglu_result = ttnn::multiply(ab[0], gelu_b, std::nullopt, output_mem_config);
+    return geglu_result;
+}
+
+// Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
+Tensor _swiglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config ) {
+    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
+    if (dim == -1)
+        dim = 3;
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
+    Tensor swish_b = _swish(ab[1], output_mem_config);
+    Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
+    return swiglu_result;
+}
+
 }  // namespace ttnn::operations::unary

@@ -143,6 +143,20 @@ struct ExecuteUnaryCompositeOpWithScaleAlpha
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithDim
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        int32_t dim,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_glu_fn<unary_comp_op_type>();
+            return op_type(input_tensor, dim, memory_config);
+        }
+};
+
+
+template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithThresholdValue
 {
     static ttnn::Tensor execute_on_worker_thread(
@@ -277,5 +291,10 @@ constexpr auto clip = ttnn::register_operation<operations::unary::ExecuteUnaryCo
 constexpr auto clamp = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithLowHigh<operations::unary::UnaryCompositeOpType::CLAMP>>("ttnn::clamp");
 constexpr auto selu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithScaleAlpha<operations::unary::UnaryCompositeOpType::SELU>>("ttnn::selu");
 constexpr auto threshold = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithThresholdValue<operations::unary::UnaryCompositeOpType::THRESHOLD>>("ttnn::threshold");
+
+constexpr auto glu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>("ttnn::glu");
+constexpr auto reglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>("ttnn::reglu");
+constexpr auto geglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>("ttnn::geglu");
+constexpr auto swiglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>("ttnn::swiglu");
 
 }  // namespace ttnn

@@ -376,6 +376,57 @@ def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.bitwise_not, golden_function=_golden_function_bitwise_not)
 
 
+def _golden_function_glu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.glu(input_tensor_a, dim)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.glu, golden_function=_golden_function_glu)
+
+
+def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.relu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.reglu, golden_function=_golden_function_reglu)
+
+
+def _golden_function_geglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.gelu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.geglu, golden_function=_golden_function_geglu)
+
+
+def _golden_function_swiglu(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    assert isinstance(dim, int), "dim must be an integer"
+    assert dim in [-1, 3], "dim must be -1 or 3"
+    split_size = input_tensor_a.size(-1) // 2
+    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
+    tensA, tensB = split_tensors[0], split_tensors[1]
+    return tensA * torch.nn.functional.silu(tensB)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.swiglu, golden_function=_golden_function_swiglu)
+
+
 def _is_scalar(value):
     return isinstance(value, (int, float))
 
@@ -524,103 +575,5 @@ for (
     register_ttl_activation_function_with_two_float_params(
         activation_function_name, ttl_activation_function, param1, param2
     )
-
-
-def torch_reglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
-
-
-def torch_swiglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.silu(tensB)
-
-
-def torch_geglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.gelu(tensB)
-
-
-def register_ttl_activation_function_glu(name, ttl_activation_function, param):
-    def _golden_function(input_tensor: ttnn.Tensor, dim: int = -1, **_):
-        import torch
-
-        name_to_torch_function = {
-            "glu": torch.nn.functional.glu,
-            "reglu": torch_reglu,
-            "swiglu": torch_swiglu,
-            "geglu": torch_geglu,
-        }
-        torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
-
-        return torch_function(input_tensor, dim=dim)
-
-    doc = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
-
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-
-            """
-
-    @ttnn.register_python_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)
-    def activation_function(
-        input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        input_shape = tuple(input_tensor.shape)
-        last_dim = input_shape[-1]
-        glu_shape = input_shape[:-1] + (int(last_dim / 2),)
-
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not _is_scalar(dim):
-            raise TypeError("Expected second argument to be a float")
-
-        if not ttnn.is_tensor_storage_on_device(input_tensor):
-            raise RuntimeError("input_tensor must be on device!")
-
-        output_tensor = ttl_activation_function(input_tensor, dim, output_mem_config=memory_config)
-
-        output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(glu_shape))
-        return output_tensor
-
-
-TTL_ACTIVATION_FUNCTIONS_GLU = [
-    ("glu", ttl.tensor.glu, "dim"),  # composite
-    ("reglu", ttl.tensor.reglu, "dim"),  # composite
-    ("swiglu", ttl.tensor.swiglu, "dim"),  # composite
-    ("geglu", ttl.tensor.geglu, "dim"),  # composite
-]
-
-
-for activation_function_name, ttl_activation_function, param in TTL_ACTIVATION_FUNCTIONS_GLU:
-    register_ttl_activation_function_glu(activation_function_name, ttl_activation_function, param)
-
 
 __all__ = []

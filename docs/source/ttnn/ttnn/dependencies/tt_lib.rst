@@ -608,14 +608,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_global
 
-.. autofunction:: tt_lib.tensor.glu
-
-.. autofunction:: tt_lib.tensor.geglu
-
-.. autofunction:: tt_lib.tensor.reglu
-
-.. autofunction:: tt_lib.tensor.swiglu
-
 .. autofunction:: tt_lib.tensor.embeddings
 
 .. autofunction:: tt_lib.tensor.nextafter
