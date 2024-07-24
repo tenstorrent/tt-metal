@@ -7,7 +7,6 @@ import math
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
-import ttnn.experimental_operations
 
 
 class TtLlamaAttention_optimized:
