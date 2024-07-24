@@ -2846,7 +2846,7 @@ def unpad_from_tile(
 def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.glu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.glu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2855,7 +2855,7 @@ def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem
 def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.geglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.geglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2864,7 +2864,7 @@ def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_m
 def activation_reglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.reglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2873,7 +2873,7 @@ def activation_reglu(x, *args, device, dtype, layout, input_mem_config, output_m
 def activation_swiglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.swiglu(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.swiglu(t0, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
