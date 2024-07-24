@@ -144,18 +144,6 @@ std::vector<ttnn::Tensor> _add_bw_inter(
     return output_tensors;
 }
 
-std::vector<std::optional<Tensor>> _add_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return _addalpha_bw(default_queue_id, grad, input, other, 1.0f, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
 std::vector<ttnn::Tensor> _xlogy_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -320,18 +308,6 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
         }
     }
     return output_tensors;
-}
-
-std::vector<std::optional<Tensor>> _eq_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return _eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<Tensor> _assign_bw(
@@ -580,19 +556,6 @@ std::vector<ttnn::Tensor> _mul_bw_inter(
     }
     return output_tensors;
 }
-
-std::vector<std::optional<Tensor>> _mul_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-        uint8_t default_queue_id = 0;
-    return _mul_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {

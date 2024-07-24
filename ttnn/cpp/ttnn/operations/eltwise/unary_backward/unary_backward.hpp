@@ -451,15 +451,6 @@ constexpr auto prod_bw = ttnn::register_operation<
     "ttnn::prod_bw",
     operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>();
 
-constexpr auto mul_bw = ttnn::register_operation<
-    "ttnn::mul_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::MUL_BW>>();
-constexpr auto add_bw = ttnn::register_operation<
-    "ttnn::add_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ADD_BW>>();
-constexpr auto eq_bw = ttnn::register_operation<
-    "ttnn::eq_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::EQ_BW>>();
 constexpr auto lt_bw = ttnn::register_operation<
     "ttnn::lt_bw",
     operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LT_BW>>();

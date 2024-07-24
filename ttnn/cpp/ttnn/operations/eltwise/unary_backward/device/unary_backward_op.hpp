@@ -339,21 +339,21 @@ struct OpHandler<UnaryBackwardOpType::PROD_BW> {
 };
 
 template <>
-struct OpHandler_float<UnaryBackwardOpType::ADD_BW> {
+struct OpHandler<UnaryBackwardOpType::ADD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
         return _add_bw(grad, input, alpha, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_float<UnaryBackwardOpType::MUL_BW> {
+struct OpHandler<UnaryBackwardOpType::MUL_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
         return _mul_bw(grad, input, scalar, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_float<UnaryBackwardOpType::EQ_BW> {
+struct OpHandler<UnaryBackwardOpType::EQ_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _eq_bw(grad, input, other, output_mem_config);
     }
@@ -373,11 +373,6 @@ auto get_function_type1_w_float() {
 template <UnaryBackwardOpType OpType>
 auto get_function_type1() {
     return &OpHandler<OpType>::handle;
-}
-
-template <UnaryBackwardOpType OpType>
-auto get_function_type1_w_float() {
-    return &OpHandler_float<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
