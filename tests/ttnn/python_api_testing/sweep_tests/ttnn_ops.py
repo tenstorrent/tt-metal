@@ -3565,3 +3565,49 @@ def log_bw(
     t2 = ttnn.log_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def rsub_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(y, device, layout[2], input_mem_config[2], dtype[2])
+
+    t3 = ttnn.rsub_bw(t0, t1, t2, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t3)
+
+
+def where_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor1
+    w,  # other_tensor2
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    y = y > 0
+
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(y, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_ttnn_tensor(y, device, layout[3], input_mem_config[3], dtype[3])
+
+    t4 = ttnn.where_bw(t0, t1, t2, t3, memory_config=output_mem_config)
+
+    return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1])]
