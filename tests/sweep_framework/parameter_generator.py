@@ -98,14 +98,6 @@ def export_suite_vectors(module_name, suite_name, vectors):
         for old_vector_id in old_vector_ids:
             client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
         for new_vector_id in serialized_vectors.keys():
-            try:
-                existing = client.get(index=index_name, id=new_vector_id)
-                print(existing)
-                print(new_vector_id)
-                print(serialized_vectors[new_vector_id])
-                exit(0)
-            except:
-                pass
             client.index(index=index_name, id=new_vector_id, body=serialized_vectors[new_vector_id])
         print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for suite {suite_name}.")
 
