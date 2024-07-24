@@ -92,7 +92,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     sorted_jobs_start_times = sorted(jobs_start_times)
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
-    pipeline_end_ts = github_pipeline_json["created_at"]
+    pipeline_end_ts = github_pipeline_json["updated_at"]
     name = github_pipeline_json["name"]
 
     logger.warning("Using hardcoded value tt-metal for project value")
