@@ -34,6 +34,13 @@ jobs:
               timeout: 40,
             },
             {
+              name: "Common models N150 WH BO",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
               name: "GS-only ttnn nightly",
               arch: grayskull,
               runs-on: ["grayskull", "cloud-virtual-machine"],
@@ -55,9 +62,16 @@ jobs:
               timeout: 50
             },
             {
+              name: "N150 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 40
+            },
+            {
               name: "API tests GS",
               arch: grayskull,
-              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              runs-on: ["grayskull", "cloud-virtual-machine"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
               timeout: 40
             },
@@ -65,6 +79,13 @@ jobs:
               name: "API tests N300 WH B0",
               arch: wormhole_b0,
               runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N150 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
               timeout: 40
             },
