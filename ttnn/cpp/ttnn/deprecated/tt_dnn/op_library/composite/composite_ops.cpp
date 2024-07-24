@@ -178,11 +178,6 @@ Tensor lerp(
     return operation::decorate_as_composite(__func__, _lerp_overload)(input_a, input_b, input_c, output_mem_config);
 }
 
-// ldexp(input,other)=input * (2^other)
-Tensor _ldexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor result = ttnn::multiply(input_a, ttnn::exp2(input_b, output_mem_config), std::nullopt, output_mem_config);
-    return result;
-}
 
 Tensor _unary_rdiv_trunc(
     float value,
@@ -218,92 +213,12 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
     ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);
 
-    Tensor index = ttnn::pad(0, ones_like(input_tensor_4D, output_mem_config), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor index = ttnn::pad(0, ttnn::full_like(input_tensor_4D, 1.0f), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     Tensor temp_a = ttnn::pad(0, input_tensor_4D,input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     return ttnn::where(index, temp_a, input_b, output_mem_config);
 }
 Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _scatter)(input_a, input_b, output_mem_config);
-}
-
-// on-device tensor creation 0s like @reference_tensor
-Tensor zeros_like(
-    uint8_t queue_id,
-    const Tensor& reference_tensor,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return mk_zero_tensor_like(reference_tensor, output_mem_config, output_tensor);
-}
-Tensor zeros_like(
-    const Tensor& reference_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
-    uint8_t default_queue_id = 0;
-    return mk_zero_tensor_like(default_queue_id, reference_tensor, output_mem_config, output_tensor);
-}
-
-// on-device tensor creation 1s like @reference_tensor
-Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
-    return mk_filled_tensor_like(reference_tensor, 1.0f, output_mem_config);
-}
-
-// on-device tensor creation with value like @reference_tensor
-Tensor full_like(
-    const Tensor& reference_tensor,
-    float value,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    uint8_t default_queue_id = 0;
-    return mk_filled_tensor_like(reference_tensor, value, output_mem_config, output_tensor, default_queue_id);
-}
-Tensor full_like(
-    uint8_t queue_id,
-    const Tensor& reference_tensor,
-    float value,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return mk_filled_tensor_like(reference_tensor, value, output_mem_config, output_tensor, queue_id);
-}
-
-// hardtanh
-Tensor _hardtanh(
-    const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const MemoryConfig& output_mem_config) {
-    return ttnn::clip(a, low, high, output_mem_config);
-}
-Tensor hardtanh(
-    const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardtanh)(a, low, high, output_mem_config);
-}
-
-// on-device tensor creation 0s with shape
-Tensor zeros(
-    const Shape shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::zeros(shape, data_type, layout, device, output_mem_config);
-}
-
-Tensor empty(
-    const Shape shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return create_device_tensor(shape, data_type, layout, device, output_mem_config);
-}
-
-// on-device tensor creation 1s with shape
-Tensor ones(
-    const Shape shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::ones(shape, data_type, layout, device, output_mem_config);
-}
-
-// on-device tensor creation with shape and filled with value
-Tensor full(
-    const Shape shape,
-    float value,
-    DataType data_type,
-    Layout layout,
-    Device* device,
-    const MemoryConfig& output_mem_config) {
-    return tt::numpy::full(shape, value, data_type, layout, device, output_mem_config);
-}
-
-// on-device with increment
-Tensor arange(int32_t start, int32_t end, int32_t step, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device, output_mem_config);
 }
 
 /**
@@ -364,25 +279,6 @@ Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);
 }
 
-// on-device tensor creation with shape and filled with value
-Tensor _sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    float value = device->sfpu_eps();
-    return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
-}
-Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sfpu_eps)(shape, layout, device, output_mem_config);
-}
-
-Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    auto& padded_shape = input_a.get_legacy_shape();
-    auto& unpadded_shape = padded_shape.without_padding();
-    if (padded_shape == unpadded_shape)
-        return input_a;
-    float t_inf = -std::numeric_limits<float>::infinity();
-    Tensor masked_input = tt::numpy::mask_padded_input<bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
-    masked_input = ttnn::where(masked_input, input_a, t_inf, output_mem_config);
-    return masked_input;
-}
 
 }  // namespace tt_metal
 

@@ -86,32 +86,6 @@ def _golden_function(start: int, end: int, step: int, **_):
     return torch.arange(start, end, step)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.arange",
-    golden_function=_golden_function,
-)
-def arange(
-    start: int,
-    end: int,
-    step: int,
-    device,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    arange(start: int, end: int, step: int, device, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step.
-
-    Args:
-        * :attr:`start`
-        * :attr:`end`
-        * :attr:`step`
-    """
-
-    output_tensor = ttnn.experimental.tensor.arange(start, end, step, device, output_mem_config=memory_config)
-
-    return output_tensor
-
+ttnn.attach_golden_function(ttnn.arange, golden_function=_golden_function)
 
 __all__ = []
