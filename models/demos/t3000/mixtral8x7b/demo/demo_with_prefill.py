@@ -312,7 +312,7 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
 
 
 # CI only runs general-weights demo
-@pytest.mark.skipif(os.getenv("CI") == "False", reason="CI-only test")
+@pytest.mark.skipif(not os.getenv("CI") == "true", reason="CI-only test")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [

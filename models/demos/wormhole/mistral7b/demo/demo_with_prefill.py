@@ -15,6 +15,9 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     cache_attention,
+    get_prefill_rot_mat,
+    prepare_inputs_ttnn_prefill,
+    get_rot_transformation_mat,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
@@ -42,7 +45,7 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
-def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruct, device):
+def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct, device):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
@@ -54,21 +57,51 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
 
     prompt_lens = [len(x) for x in encoded_prompts]
 
-    # Pad the inputs to the max length prompt
+    min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
-    input_tokens = torch.full((len(input_prompts), max_prompt_len), tokenizer.pad_id, dtype=torch.long)
+    assert (
+        max_prompt_len <= model_args.max_seq_len
+    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
+    assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
+
+    if min_prompt_len < 128:
+        prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
+    else:
+        prefill_seq_len = (
+            1024 if min_prompt_len > 1024 else (512 if min_prompt_len > 512 else 128)
+        )  # TODO Only supports prefill lengths of 128, 512, 1024
+        # Initial prefill tensor full of pad tokens
+        input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
+
+    # Initial decode tensor full of pad tokens
+    input_tokens_decode = torch.full(
+        (len(input_prompts), max_prompt_len - prefill_seq_len), tokenizer.pad_id, dtype=torch.long
+    )
 
     for i, encoded in enumerate(encoded_prompts):
-        input_tokens[i, : len(encoded)] = torch.tensor(encoded).to(input_tokens)
-    input_mask = input_tokens != tokenizer.pad_id
+        if prefill_seq_len > 0:
+            input_tokens_prefill[i] = torch.tensor(encoded[:prefill_seq_len]).to(input_tokens_prefill)
+        input_tokens_decode[i, : len(encoded[prefill_seq_len:])] = torch.tensor(encoded[prefill_seq_len:]).to(
+            input_tokens_decode
+        )
+
+    input_mask = (input_tokens_decode != tokenizer.pad_id).to(torch.bool)
 
     num_users = len(encoded_prompts)
     logger.info(f"# of users: {num_users}")
 
-    seqlen = 1  # Generating one token per user at a time
     # Select the first token from the prompts for initial decoding
-    pt_tokenized_inputs = torch.tensor(input_tokens)
-    emb_inputs = embd(pt_tokenized_inputs[:, 0]).view(model_args.max_batch_size, seqlen, -1)
+    pt_tokenized_inputs_decode = torch.tensor(input_tokens_decode)
+    pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
+    emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(model_args.max_batch_size, 1, -1)
+    if prefill_seq_len > 0:
+        emb_prefill_inputs = [
+            embd(pt_tokenized_inputs_prefill[b, :]).view(1, prefill_seq_len, -1)
+            for b in range(model_args.max_batch_size)
+        ]
+    else:
+        emb_prefill_inputs = None
 
     # Return the rotational embedding matrix on device
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
@@ -82,7 +115,15 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
             )
         )  # ttnn.bfloat16
 
-    return emb_inputs, pt_tokenized_inputs, input_mask, rot_emb_matrix_list
+    return (
+        emb_inputs_decode,
+        pt_tokenized_inputs_decode,
+        emb_prefill_inputs,
+        input_mask,
+        rot_emb_matrix_list,
+        prefill_seq_len,
+        encoded_prompts,
+    )
 
 
 def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
@@ -91,22 +132,22 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
         os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
         os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
-
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 
     embed_on_device = False
     dtype = ttnn.bfloat8_b
 
+    logger.info(f"Reading inputs...")
+    if len(user_input) == 1:
+        input_prompts = user_input * batch_size
+    else:
+        input_prompts = load_inputs(user_input, batch_size)
+
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    logger.info(f"Reading inputs...")
-    if len(user_input) == 1:
-        input_prompts = user_input * model_args.max_batch_size  # Always process 32 users
-    else:
-        input_prompts = load_inputs(user_input, model_args.max_batch_size)
     model_args.n_layers = 32
 
     logger.info("Loading weights...")
@@ -125,15 +166,19 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     embd = Emb()
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
-    generation_start_pos = 0
+    # Preprocess initial prompt inputs
+    (
+        pt_encoded_input,
+        tt_decode_input,
+        pt_prefill_input,
+        input_mask,
+        rot_emb_matrix_list,
+        prefill_seq_len,
+        encoded_prompts,
+    ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device)
+    generation_start_pos = prefill_seq_len
     max_generated_tokens = 120
     users_decoding = True
-
-    # Preprocess initial prompt inputs
-    tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
-    )
-
     logger.info("Caching attention ops...")
     cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
 
@@ -161,8 +206,41 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     )
     logger.info("Finished loading weights to device. Starting inference...")
 
+    if prefill_seq_len > 0:
+        logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
+        rot_mats_prefill = get_prefill_rot_mat(
+            model_args.head_dim, model_args.max_seq_len, device, seq_len=prefill_seq_len
+        )
+        head_dim = model_args.dim // model_args.n_heads
+        transformation_mat_torch = get_rot_transformation_mat(head_dim)
+        transformation_mats = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for batch_id in range(batch_size):
+            prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+                pt_prefill_input[batch_id],
+                device,
+            )
+            tt_out = tt_model(
+                prefill_input,
+                0,  # Current position
+                attn_mask,
+                rot_mats_prefill,
+                transformation_mats,
+                user_id=batch_id,
+                mode="prefill",
+            )
+
+        logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
+
+    logger.info("Starting decode...")
+
     # Keep track of generated outputs to print out every iteration
-    all_outputs = [[] for _ in range(batch_size)]
+    all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     iteration = 0
@@ -174,7 +252,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
         # TODO Move the attn mask to device
         decode_input, current_pos = prepare_inputs_ttnn(
-            tt_decode_input,
+            pt_encoded_input,
             curr_pos,
             model_args.dim,
             model_args.sliding_window,
@@ -184,7 +262,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         # Run ttnn mistral model
         tt_out = tt_model(decode_input, current_pos)
         tt_output_torch = (
-            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
         )  # [batch, seq, hidden_dim]
 
         # If temperature is 0, does greedy decoding (top-1)
@@ -202,7 +280,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         if iteration < input_mask.shape[1]:  # If prefill
             # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
             tt_out_tok = torch.where(
-                input_mask[:, iteration], pt_encoded_input[:, iteration], tt_out_tok[:, 0]
+                input_mask[:, iteration], tt_decode_input[:, iteration], tt_out_tok[:, 0]
             ).unsqueeze(1)
 
         # Save output token to print out later
@@ -224,13 +302,14 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 
         if embed_on_device:
             tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_decode_input = tt_embd(tt_out_tok)
+            pt_encoded_input = tt_embd(tt_out_tok)
         else:
-            tt_decode_input = embd(tt_out_tok)
+            pt_encoded_input = embd(tt_out_tok)
 
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
         tokens_per_second_per_user = 1 / iteration_time
+        # Print out generated outputs for each user at the end of every iteration
         if not is_ci_env:
             if len(user_input) == 1:
                 logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
@@ -266,8 +345,8 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/wormhole/mistral7b/demo/input_data.json", False),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True),
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True),
     ],
     ids=["general_weights", "instruct_weights"],
 )

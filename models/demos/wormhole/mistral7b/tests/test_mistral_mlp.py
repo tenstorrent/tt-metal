@@ -6,16 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import FeedForward
 from models.utility_functions import (
     comp_pcc,
@@ -25,7 +18,14 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_mistral_mlp_inference(device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "seq_len",
+    (
+        4096,
+        128,
+    ),
+)
+def test_mistral_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(device=device)
     state_dict = torch.load(model_args.consolidated_weights_path)
@@ -46,7 +46,7 @@ def test_mistral_mlp_inference(device, use_program_cache, reset_seeds):
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, 17, 4096)
+    torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT

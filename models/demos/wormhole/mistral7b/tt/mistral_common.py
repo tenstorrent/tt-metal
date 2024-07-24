@@ -130,6 +130,11 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
             x, (batch, seq_len, 1, hidden_size)
         )  # [batch, seqlen, hidden_dim] -> [batch, seqlen, 1, hidden_dim]
         x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
+    # Pad small batches to 32
+    if batch < 32:
+        zeros = torch.zeros(1, seq_len, 32, hidden_size)
+        zeros[:, :, :batch, :] = x
+        x = zeros
 
     current = current_pos % sliding_window
 
@@ -177,7 +182,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 
 
-def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
+def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
     attention_input = ttnn.from_torch(
         torch.randn(1, 1, 32, 4096),
         dtype=ttnn.bfloat16,
@@ -195,7 +200,7 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
         rot_mat=rot_emb_matrix_list,
         start_pos=0,
     )
-    for iter in range(1024):
+    for iter in range(iterations):
         pos = iter
         tt_out = tt_model(
             [attention_input],
@@ -211,3 +216,82 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
     ttnn.deallocate(tt_model.reduce_8D_D[0])
     ttnn.deallocate(tt_model.mask_Q_8D[0])
     ttnn.deallocate(attention_input)
+
+
+def gather_cos_sin(position_ids, cos, sin):
+    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
+    cos = cos.gather(0, position_id_expanded)
+    sin = sin.gather(0, position_id_expanded)
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin
+
+
+def get_prefill_rot_mat(head_dim, max_seq_len, device, seq_len):
+    cos, sin = precompute_freqs(head_dim, max_seq_len * 2)
+    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
+    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
+    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
+
+    cos_gathereds = ttnn.from_torch(
+        cos_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    sin_gathereds = ttnn.from_torch(
+        sin_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    rot_mats = [cos_gathereds, sin_gathereds]
+    return rot_mats
+
+
+#  Add-Multiply method of rotary embeddings for prefill
+def get_rot_transformation_mat(dhead):
+    # ROPE op uses a single tile
+    dhead = 32
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def prepare_inputs_ttnn_prefill(x_bsh, device):
+    """
+    Prepare inputs for prefill mode.
+    x: (batch, seq, hidden_dim)
+    B: batch (32)
+    S: sequence len (1)
+    H: dim (4096)
+    """
+    batch = x_bsh.size(0)
+    seq_len = x_bsh.size(1)
+
+    x_1BSH = x_bsh.unsqueeze(0)
+
+    # Attention mask
+    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len).expand(8, 1, seq_len, seq_len)
+
+    attn_mask = ttnn.from_torch(
+        attn_mask,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # input goes to L1
+    xs_1BSH = ttnn.from_torch(
+        x_1BSH,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return xs_1BSH, attn_mask, attn_mask_torch

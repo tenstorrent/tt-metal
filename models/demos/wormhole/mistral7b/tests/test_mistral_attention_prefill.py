@@ -9,11 +9,11 @@ import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
-    precompute_freqs,
-    prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
+    get_prefill_rot_mat,
+    prepare_inputs_ttnn_prefill,
+    get_rot_transformation_mat,
 )
-from models.demos.wormhole.mistral7b.reference.model import Attention
+from models.demos.wormhole.mistral7b.reference.model import Attention, precompute_freqs_cis
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -22,7 +22,14 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "seq_len",
+    (
+        4096,
+        128,
+    ),
+)
+def test_mistral_attention_inference(seq_len, device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
@@ -31,25 +38,21 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
-
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = model_args.max_batch_size
-    seq_len = 1
+    batch = 1
 
     # pre-compute the rotational embedding matrix and send to device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
-
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, device, seq_len=seq_len)
+    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mats = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     generation_start_pos = 0
     generation_length = 3
     all_tests_pass = True
@@ -61,41 +64,27 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
         layer_num=0,
         dtype=dtype,
         configuration=model_args,
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=generation_start_pos,
     )
-
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input.clone()
-        current_pos = generation_start_pos + i
-        attention_input, pos = prepare_inputs_ttnn(
+        attention_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_attention_input,
-            current_pos,
-            model_args.dim,
-            model_args.sliding_window,
             device,
         )
 
-        tt_out = tt_model(
-            [attention_input],
-            pos,
-        )
+        tt_out = tt_model([attention_input], 0, [attn_mask], rot_mats, transformation_mats, user_id=0, mode="prefill")
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
-        tt_output_torch = ttnn.to_torch(tt_out).permute(1, 0, 2)[
-            : model_args.max_batch_size, :, :
-        ]  # [ batch, seq, hidden_dim]
+        tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [ batch, seq, hidden_dim]
 
-        freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
-        positions = torch.tensor([current_pos])
-        # mask = torch.randn(1, 1)
-
-        reference_output = reference_model(pt_attention_input, freqs_cis_i, positions, mask=None)
+        positions = torch.LongTensor(range(seq_len))
+        freqs_cis_i = precompute_freqs_cis(model_args.head_dim, 128_000)[positions]
+        reference_output = reference_model(pt_attention_input, freqs_cis_i, positions, attn_mask_torch)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
@@ -103,9 +92,9 @@ def test_mistral_attention_inference(device, use_program_cache, reset_seeds):
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[pos={current_pos}] Mistral_Attention Passed!")
+            logger.info(f"Mistral_Attention Passed!")
         else:
-            logger.warning(f"[pos={current_pos}] Mistral_Attention Failed!")
+            logger.warning(f"Mistral_Attention Failed!")
             all_tests_pass = False
 
         if False:  # FIXME: Issue #10648
