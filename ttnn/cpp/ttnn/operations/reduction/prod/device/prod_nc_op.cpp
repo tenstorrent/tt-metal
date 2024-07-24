@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/prod/prod_nc_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "prod_nc_op.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
+
 using namespace constants;
 namespace operations {
 namespace primary {
