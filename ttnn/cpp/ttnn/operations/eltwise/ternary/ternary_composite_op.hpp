@@ -30,18 +30,18 @@ Tensor _addcdiv(const Tensor&, const Tensor&, const Tensor&, float, const std::o
 
 
 template <TernaryCompositeOpType OpType>
-struct OpHandler_Float;
+struct OpHandler;
 
 
 template <>
-struct OpHandler_Float<TernaryCompositeOpType::ADDCMUL> {
+struct OpHandler<TernaryCompositeOpType::ADDCMUL> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, float value, const std::optional<MemoryConfig>& mem_cfg) {
         return _addcmul(t1, t2, t3, value, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_Float<TernaryCompositeOpType::ADDCDIV> {
+struct OpHandler<TernaryCompositeOpType::ADDCDIV> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, float value, const std::optional<MemoryConfig>& mem_cfg) {
         return _addcdiv(t1, t2, t3, value, mem_cfg);
     }
@@ -49,7 +49,7 @@ struct OpHandler_Float<TernaryCompositeOpType::ADDCDIV> {
 
 template <TernaryCompositeOpType OpType>
 auto get_ternary_fn_float() {
-    return &OpHandler_Float<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 }

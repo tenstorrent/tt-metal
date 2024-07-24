@@ -40,10 +40,10 @@ template <BinaryCompositeOpType OpType>
 struct OpHandler;
 
 template <BinaryCompositeOpType OpType>
-struct OpHandler_Float;
+struct OpHandler;
 
 template <BinaryCompositeOpType OpType>
-struct OpHandler_IsClose;
+struct OpHandler;
 
 
 template <>
@@ -96,14 +96,14 @@ struct OpHandler<BinaryCompositeOpType::LOGICAL_XOR> {
 };
 
 template <>
-struct OpHandler_Float<BinaryCompositeOpType::ADDALPHA> {
+struct OpHandler<BinaryCompositeOpType::ADDALPHA> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
         return _addalpha(t1, t2, alpha, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_Float<BinaryCompositeOpType::SUBALPHA> {
+struct OpHandler<BinaryCompositeOpType::SUBALPHA> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
         return _subalpha(t1, t2, alpha, mem_cfg);
     }
@@ -111,26 +111,11 @@ struct OpHandler_Float<BinaryCompositeOpType::SUBALPHA> {
 
 
 template <>
-struct OpHandler_IsClose<BinaryCompositeOpType::ISCLOSE> {
+struct OpHandler<BinaryCompositeOpType::ISCLOSE> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, float rtol, float atol, const bool equal_nan, const std::optional<MemoryConfig>& mem_cfg) {
         return _isclose(t1, t2, rtol, atol, equal_nan, mem_cfg);
     }
 };
 
-// Template functions to get the function pointers
-template <BinaryCompositeOpType OpType>
-auto get_function_type0() {
-    return &OpHandler<OpType>::handle;
-}
-
-template <BinaryCompositeOpType OpType>
-auto get_function_type1() {
-    return &OpHandler_Float<OpType>::handle;
-}
-
-template <BinaryCompositeOpType OpType>
-auto get_function_type2() {
-    return &OpHandler_IsClose<OpType>::handle;
-}
 
 }
