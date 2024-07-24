@@ -143,8 +143,9 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return unknown location")
+        logger.debug("Detected null host_name, so will return unknown location and host_name")
         location = "unknown"
+        host_name = "unknown"
     elif "GitHub Actions " in host_name:
         location = "github"
     else:
