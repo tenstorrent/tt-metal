@@ -57,7 +57,7 @@ class TtLlamaMLP_galaxy:
                     )
                 }
             )
-            M, K, N = 32, 8192, 32768
+            M, K, N = 32, 8192, 28 * 1024
 
             K = K // self.cluster_shape[0]
             N = N // self.cluster_shape[1]
@@ -103,31 +103,24 @@ class TtLlamaMLP_galaxy:
         # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard.weight"
         # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard.weight"
         # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard.weight"
-        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy.weight"
-        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy.weight"
-        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy.weight"
+        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
+        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
+        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
         w3_dtype = ttnn.bfloat4_b
 
-        padded_w1 = None
-        padded_w2 = None
-        padded_w3 = None
+        w1 = None
+        w2 = None
+        w3 = None
         if not self.read_cache:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            w1 = self.state_dict[w1_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w2 = self.state_dict[w2_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w3 = self.state_dict[w3_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
 
         self.w1 = ttnn.as_tensor(
-            padded_w1,
+            w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
@@ -138,7 +131,7 @@ class TtLlamaMLP_galaxy:
         )
 
         self.w3 = ttnn.as_tensor(
-            padded_w3,
+            w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
@@ -149,7 +142,7 @@ class TtLlamaMLP_galaxy:
         )
 
         self.w2 = ttnn.as_tensor(
-            padded_w2,
+            w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
