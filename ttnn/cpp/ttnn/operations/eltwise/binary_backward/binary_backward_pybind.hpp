@@ -695,12 +695,6 @@ void py_module(py::module& module) {
         ttnn::atan2_bw,
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward_ops(
-        module,
-        ttnn::embedding_bw,
-        R"doc(Performs backward operations for embedding_bw function and it returns specific indices of the embedding table specified by the :attr:`grad_tensor`.
-        The input tensor( :attr:`input_tensor_a`, :attr:`input_tensor_b`) should be unique.)doc");
-
     detail::bind_binary_backward_float_default(
         module,
         ttnn::subalpha_bw,
