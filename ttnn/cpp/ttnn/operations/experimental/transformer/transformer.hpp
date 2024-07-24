@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct ConcatenateHeadsOperation {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const CoreCoord& compute_with_storage_grid_size,
@@ -24,12 +24,13 @@ struct ConcatenateHeadsOperation {
             .at(0);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const Tensor& input_tensor,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
+        return operator()(
+            DefaultQueueId, input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
     }
 };
 
@@ -37,7 +38,7 @@ struct ConcatenateHeadsOperation {
 
 namespace experimental::transformer {
 
-constexpr auto concatenate_heads = ttnn::register_operation<
+constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::transformer::concatenate_heads",
     ttnn::operations::experimental::transformer::ConcatenateHeadsOperation>();
 

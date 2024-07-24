@@ -41,87 +41,9 @@ auto generic_create_output_tensors(
     return output_tensors;
 }
 
-namespace run_operation_state {
-namespace detail {
-
-struct RunOperationState {
-
-    RunOperationState() {}
-
-    void push_composite_parent_name(const char* parent_name) {
-        std::scoped_lock<std::mutex> lock(parent_name_mutex);
-        this->composite_parent_names.push_back(parent_name);
-    }
-
-    void pop_composite_parent_name() {
-        std::scoped_lock<std::mutex> lock(parent_name_mutex);
-        this->composite_parent_names.pop_back();
-    }
-
-    bool is_composite_operation() const {
-        std::scoped_lock<std::mutex> lock(parent_name_mutex);
-        return not composite_parent_names.empty();
-    }
-
-    const auto& get_composite_parent_names() const {
-        std::scoped_lock<std::mutex> lock(parent_name_mutex);
-        return this->composite_parent_names;
-    }
-
-  private:
-    mutable std::mutex parent_name_mutex;
-    std::vector<const char*> composite_parent_names{};
-};
-
-inline RunOperationState OPERATION_STATE{};
-
-}  // namespace detail
-
-inline void push_composite_parent_name(const char* parent_name) {
-    detail::OPERATION_STATE.push_composite_parent_name(parent_name);
-}
-
-inline void pop_composite_parent_name() {
-    detail::OPERATION_STATE.pop_composite_parent_name();
-}
-
-inline bool is_composite_operation() {
-    return detail::OPERATION_STATE.is_composite_operation();
-}
-
-inline const auto& get_composite_parent_names() {
-    return detail::OPERATION_STATE.get_composite_parent_names();
-}
-
-}  // namespace run_operation_state
-
-
-namespace detail {
-
-template<typename ReturnType, typename... Args>
-struct CompositeOperation {
-
-    const char* name;
-    std::function<ReturnType(Args...)> function;
-
-    constexpr ReturnType operator()(Args... args) const {
-        run_operation_state::push_composite_parent_name(this->name);
-        ReturnType output = this->function(args...);
-        run_operation_state::pop_composite_parent_name();
-        return output;
-    }
-};
-
-}  // namespace detail
-
-template<typename ReturnType, typename... Args>
-constexpr auto decorate_as_composite(const char* name, std::function<ReturnType(Args...)>&& function) {
-  return detail::CompositeOperation<ReturnType, Args...>{.name=name, .function=function};
-}
-
-template<typename FunctionType>
-constexpr auto decorate_as_composite(const char* name, FunctionType function) {
-  return decorate_as_composite(name, std::function(function));
+// TODO: delete all uses of decorate_as_composite
+constexpr auto decorate_as_composite(const char* name, auto function) {
+    return function;
 }
 
 #ifdef DEBUG
@@ -179,7 +101,6 @@ static void append_operation_to_operation_history(
         operation.get_type_name(),
         operation.attributes(),
         input_tensor_records,
-        run_operation_state::get_composite_parent_names(),
         program_cache_hit,
         program_hash,
     });
@@ -198,10 +119,6 @@ inline void log_operation(
         "Launching Operation: \"{}\" ({})",
         operation.get_type_name(),
         detail::operation_type_to_string<OperationType>());
-
-    if (run_operation_state::is_composite_operation()) {
-        tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
-    }
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {

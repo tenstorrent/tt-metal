@@ -200,7 +200,6 @@ static void append_operation_to_operation_history(
         std::string{tt::stl::get_type_name<device_operation_t>()},
         tt::stl::reflection::get_attributes(operation_attributes),
         input_tensor_records,
-        {},
         program_cache_hit,
         program_hash,
     });

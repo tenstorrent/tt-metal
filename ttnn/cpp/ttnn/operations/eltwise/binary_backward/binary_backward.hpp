@@ -112,10 +112,11 @@ struct ExecuteBinaryBackward {
     static std::vector<ttnn::Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
-        const MemoryConfig &memory_config,
+        const std::optional<MemoryConfig> &memory_config,
         const Tensor &input_tensor_b_arg) {
         auto op_type = BinaryBackwardFunction::get_function_type1(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
     }
 
         // Type 1: Type 1 with 1 string
