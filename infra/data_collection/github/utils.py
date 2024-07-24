@@ -143,8 +143,9 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return unknown location")
+        logger.debug("Detected null host_name, so will return unknown location and host_name")
         location = "unknown"
+        host_name = "unknown"
     elif "GitHub Actions " in host_name:
         location = "github"
     else:
@@ -185,6 +186,15 @@ def get_job_row_from_github_job(github_job):
     job_submission_ts = github_job["created_at"]
 
     job_start_ts = github_job["started_at"]
+
+    job_submission_ts_dt = get_datetime_from_github_datetime(job_submission_ts)
+    job_start_ts_dt = get_datetime_from_github_datetime(job_start_ts)
+
+    if job_submission_ts_dt > job_start_ts_dt:
+        logger.warning(
+            f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting equal for data"
+        )
+        job_submission_ts = job_start_ts
 
     job_end_ts = github_job["completed_at"]
 
