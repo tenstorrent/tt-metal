@@ -2,18 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
+namespace ttnn::operations::experimental::transformer::detail {
+
 using namespace tt::constants;
 using namespace tt;
-
-namespace tt {
-namespace operations {
-namespace primary {
-namespace transformers {
+using namespace tt_metal;
 
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
@@ -117,12 +114,12 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -288,7 +285,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     };
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     // writer
@@ -304,7 +301,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     };
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads_sharded.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     // compute kernel
@@ -365,7 +362,4 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace transformers
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // ttnn::operations::experimental::transformer::detail

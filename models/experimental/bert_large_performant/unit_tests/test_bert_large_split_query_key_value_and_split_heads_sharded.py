@@ -4,6 +4,7 @@
 
 from loguru import logger
 import numpy as np
+import ttnn
 
 import tt_lib as ttl
 from tt_lib.utils import (
@@ -61,8 +62,11 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
-    q, k, v = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
-        in0_t_shard, ttl.tensor.CoreCoord(grid_size[0], grid_size[1]), sharded_mem_config, num_heads
+    q, k, v = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
+        in0_t_shard,
+        ttl.tensor.CoreCoord(grid_size[0], grid_size[1]),
+        memory_config=sharded_mem_config,
+        num_heads=num_heads,
     )
 
     tt_q = ttl.tensor.sharded_to_interleaved(q, out_mem_config)
