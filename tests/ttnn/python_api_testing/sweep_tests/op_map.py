@@ -748,5 +748,5 @@ op_map = {
     "where-bw": {
         "tt_op": ttnn_ops.where_bw,
         "pytorch_op": pytorch_ops.where_bw,
-    },    
+    },
 }
