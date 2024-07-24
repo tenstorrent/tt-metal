@@ -26,6 +26,7 @@ struct ExecuteReduceScatter {
 }  // namespace ccl
 }  // namespace operations
 
-constexpr auto reduce_scatter = ttnn::register_operation<ttnn::operations::ccl::ExecuteReduceScatter>("ttnn::reduce_scatter");
+constexpr auto reduce_scatter =
+    ttnn::register_operation<"ttnn::reduce_scatter", ttnn::operations::ccl::ExecuteReduceScatter>();
 
 }  // namespace ttnn

@@ -38,6 +38,7 @@ struct ExecuteLayerNorm {
 
 }  // namespace operations::normalization
 
-constexpr auto layer_norm = ttnn::register_operation<ttnn::operations::normalization::ExecuteLayerNorm>("ttnn::layer_norm");
+constexpr auto layer_norm =
+    ttnn::register_operation<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
 
 }  // namespace ttnn

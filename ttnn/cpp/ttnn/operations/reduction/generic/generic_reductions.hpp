@@ -157,28 +157,28 @@ struct Reduce {
 }  // namespace operations::reduction
 
 // Generic reductions
-constexpr auto sum =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Sum>>(
-        "ttnn::sum");
+constexpr auto sum = ttnn::register_operation<
+    "ttnn::sum",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Sum>>();
 
-constexpr auto mean =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Mean>>(
-        "ttnn::mean");
+constexpr auto mean = ttnn::register_operation<
+    "ttnn::mean",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Mean>>();
 
-constexpr auto max =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Max>>(
-        "ttnn::max");
+constexpr auto max = ttnn::register_operation<
+    "ttnn::max",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Max>>();
 
-constexpr auto min =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Min>>(
-        "ttnn::min");
+constexpr auto min = ttnn::register_operation<
+    "ttnn::min",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Min>>();
 
-constexpr auto std =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Std>>(
-        "ttnn::std");
+constexpr auto std = ttnn::register_operation<
+    "ttnn::std",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Std>>();
 
-constexpr auto var =
-    ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Var>>(
-        "ttnn::var");
+constexpr auto var = ttnn::register_operation<
+    "ttnn::var",
+    ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Var>>();
 
 }  // namespace ttnn

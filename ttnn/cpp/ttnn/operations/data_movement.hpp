@@ -105,8 +105,9 @@ struct RepeatInterleave {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto upsample = ttnn::register_operation<ttnn::operations::data_movement::UpSample>("ttnn::upsample");
-constexpr auto repeat = ttnn::register_operation<ttnn::operations::data_movement::Repeat>("ttnn::repeat");
-constexpr auto repeat_interleave = ttnn::register_operation<ttnn::operations::data_movement::RepeatInterleave>("ttnn::repeat_interleave");
+constexpr auto upsample = ttnn::register_operation<"ttnn::upsample", ttnn::operations::data_movement::UpSample>();
+constexpr auto repeat = ttnn::register_operation<"ttnn::repeat", ttnn::operations::data_movement::Repeat>();
+constexpr auto repeat_interleave =
+    ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::RepeatInterleave>();
 
 }  // namespace ttnn

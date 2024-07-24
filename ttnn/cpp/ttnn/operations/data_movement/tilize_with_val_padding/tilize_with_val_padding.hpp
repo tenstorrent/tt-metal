@@ -78,11 +78,11 @@ struct ExecuteTilizeWithZeroPadding {
 }  // namespace operations::data_movement
 
 constexpr auto tilize_with_val_padding =
-    ttnn::register_operation<ttnn::operations::data_movement::ExecuteTilizeWithValPadding>(
-        "ttnn::tilize_with_val_padding");
+    ttnn::register_operation<"ttnn::tilize_with_val_padding", ttnn::operations::data_movement::ExecuteTilizeWithValPadding>(
+        );
 
 constexpr auto tilize_with_zero_padding =
-    ttnn::register_operation<ttnn::operations::data_movement::ExecuteTilizeWithZeroPadding>(
-        "ttnn::tilize_with_zero_padding");
+    ttnn::register_operation<"ttnn::tilize_with_zero_padding", ttnn::operations::data_movement::ExecuteTilizeWithZeroPadding>(
+        );
 
 }  // namespace ttnn

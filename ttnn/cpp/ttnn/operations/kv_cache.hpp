@@ -41,9 +41,9 @@ struct ExecuteUpdateCache {
 
 namespace kv_cache {
 constexpr auto fill_cache_for_user_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteFillCache>("ttnn::kv_cache::fill_cache_for_user_");
-constexpr auto update_cache_for_token_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteUpdateCache>("ttnn::kv_cache::update_cache_for_token_");
+    ttnn::register_operation<"ttnn::kv_cache::fill_cache_for_user_", ttnn::operations::kv_cache::ExecuteFillCache>();
+constexpr auto update_cache_for_token_ = ttnn::
+    register_operation<"ttnn::kv_cache::update_cache_for_token_", ttnn::operations::kv_cache::ExecuteUpdateCache>();
 }  // namespace kv_cache
 
 }  // namespace ttnn

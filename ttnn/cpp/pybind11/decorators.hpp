@@ -61,12 +61,17 @@ void define_call_operator(T& py_operation, const pybind_overload_t<function_t, p
         overload.args.value);
 }
 
-auto bind_registered_operation_helper(
-    py::module& module, const auto& operation, const std::string& doc, auto attach_call_operator) {
+template <
+    auto id,
+    reflect::fixed_string cpp_fully_qualified_name,
+    typename concrete_operation_t,
+    typename... overload_t>
+auto bind_registered_operation(
+    py::module& module,
+    const operation_t<id, cpp_fully_qualified_name, concrete_operation_t>& operation,
+    const std::string& doc,
+    overload_t&&... overloads) {
     using registered_operation_t = std::decay_t<decltype(operation)>;
-
-    const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
-
     py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
 
     py_operation.doc() = doc;
@@ -85,30 +90,15 @@ auto bind_registered_operation_helper(
         return std::nullopt;
     });  // Attribute to identify of ttnn operations
 
-    attach_call_operator(py_operation);
+    (
+        [&py_operation](auto&& overload) {
+            define_call_operator<registered_operation_t, concrete_operation_t>(py_operation, overload);
+        }(overloads),
+        ...);
 
     module.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module
 
     return py_operation;
-}
-
-template <auto id, typename concrete_operation_t, typename... overload_t>
-auto bind_registered_operation(
-    py::module& module,
-    const operation_t<id, concrete_operation_t>& operation,
-    const std::string& doc,
-    overload_t&&... overloads) {
-    using registered_operation_t = operation_t<id, concrete_operation_t>;
-
-    auto attach_call_operator = [&](auto& py_operation) {
-        (
-            [&py_operation](auto&& overload) {
-                define_call_operator<registered_operation_t, concrete_operation_t>(py_operation, overload);
-            }(overloads),
-            ...);
-    };
-
-    return bind_registered_operation_helper(module, operation, doc, attach_call_operator);
 }
 
 }  // namespace decorators

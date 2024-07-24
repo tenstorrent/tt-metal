@@ -335,6 +335,6 @@ struct ExecutePad {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::ExecutePad>("ttnn::pad");
+constexpr auto pad = ttnn::register_operation<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
 
 }  // namespace ttnn

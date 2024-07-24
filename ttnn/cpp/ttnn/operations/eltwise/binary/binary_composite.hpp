@@ -60,16 +60,36 @@ struct ExecuteBinaryCompositeOpsIsClose
 }  // namespace binary
 }  // namespace operations
 
-// newly imported
-constexpr auto hypot = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>("ttnn::hypot");
-constexpr auto xlogy = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>("ttnn::xlogy");
-constexpr auto minimum = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MINIMUM>>("ttnn::minimum");
-constexpr auto maximum = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MAXIMUM>>("ttnn::maximum");
-constexpr auto atan2 = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>("ttnn::atan2");
-constexpr auto logical_xor = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR>>("ttnn::logical_xor");
-constexpr auto nextafter = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>("ttnn::nextafter");
-constexpr auto addalpha = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>("ttnn::addalpha");
-constexpr auto subalpha = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>("ttnn::subalpha");
-constexpr auto isclose = ttnn::register_operation<operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>("ttnn::isclose");
+    // newly imported
+    constexpr auto hypot = ttnn::register_operation<
+        "ttnn::hypot",
+        operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
+constexpr auto xlogy = ttnn::register_operation<
+    "ttnn::xlogy",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
+constexpr auto minimum = ttnn::register_operation<
+    "ttnn::minimum",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MINIMUM>>();
+constexpr auto maximum = ttnn::register_operation<
+    "ttnn::maximum",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MAXIMUM>>();
+constexpr auto atan2 = ttnn::register_operation<
+    "ttnn::atan2",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
+constexpr auto logical_xor = ttnn::register_operation<
+    "ttnn::logical_xor",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR>>();
+constexpr auto nextafter = ttnn::register_operation<
+    "ttnn::nextafter",
+    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
+constexpr auto addalpha = ttnn::register_operation<
+    "ttnn::addalpha",
+    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>();
+constexpr auto subalpha = ttnn::register_operation<
+    "ttnn::subalpha",
+    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>();
+constexpr auto isclose = ttnn::register_operation<
+    "ttnn::isclose",
+    operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
 
 }  // namespace ttnn

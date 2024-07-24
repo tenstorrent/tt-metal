@@ -63,6 +63,6 @@ struct ExecuteTopK {
 
 }  // namespace operations::reduction
 
-constexpr auto topk = ttnn::register_operation<ttnn::operations::reduction::ExecuteTopK>("ttnn::topk");
+constexpr auto topk = ttnn::register_operation<"ttnn::topk", ttnn::operations::reduction::ExecuteTopK>();
 
 }  // namespace ttnn

@@ -32,7 +32,11 @@ struct ExecuteTernaryCompositeOps
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto addcmul = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>("ttnn::addcmul");
-constexpr auto addcdiv = ttnn::register_operation<operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>("ttnn::addcdiv");
+constexpr auto addcmul = ttnn::register_operation<
+    "ttnn::addcmul",
+    operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>();
+constexpr auto addcdiv = ttnn::register_operation<
+    "ttnn::addcdiv",
+    operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>();
 
 }  // namespace ttnn

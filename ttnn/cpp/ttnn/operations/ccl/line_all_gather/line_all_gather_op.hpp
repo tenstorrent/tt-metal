@@ -24,6 +24,6 @@ struct ExecuteLineAllGather {
 }  // namespace ccl
 }  // namespace operations
 
-constexpr auto line_all_gather = ttnn::register_operation<ttnn::operations::ccl::ExecuteLineAllGather>("ttnn::line_all_gather");
+constexpr auto line_all_gather = ttnn::register_operation<"ttnn::line_all_gather", ttnn::operations::ccl::ExecuteLineAllGather>();
 
 }  // namespace ttnn
