@@ -143,8 +143,8 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return null location")
-        location = None
+        logger.debug("Detected null host_name, so will return unknown location")
+        location = "unknown"
     elif "GitHub Actions " in host_name:
         location = "github"
     else:
@@ -158,13 +158,13 @@ def get_job_row_from_github_job(github_job):
             logger.error(f"{labels} for a GitHub runner seem to not specify an ubuntu version")
             raise e
         if ubuntu_version == "ubuntu-latest":
-            logger.warning("Found ubuntu-latest, replacing with ubuntu-22.04 but may not be case for long")
-            ubuntu_version = "ubuntu-22.04"
+            logger.warning("Found ubuntu-latest, replacing with ubuntu-24.04 but may not be case for long")
+            ubuntu_version = "ubuntu-24.04"
     elif location == "tt_cloud":
         logger.warning("Assuming ubuntu-20.04 for tt cloud, but may not be the case soon")
         ubuntu_version = "ubuntu-20.04"
     else:
-        ubuntu_version = None
+        ubuntu_version = "unknown"
 
     os = ubuntu_version
 

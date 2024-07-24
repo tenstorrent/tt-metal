@@ -16,13 +16,19 @@ set_up_dirs() {
 download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
-    gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
+
+    if gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq '.artifacts[] | .name' | grep -q "test_reports_"; then
+        gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
+    else
+        echo "[Warning] Test reports not found for workflow run $workflow_run_id"
+    fi
 }
 
 download_logs_for_all_jobs() {
     local repo=$1
     local workflow_run_id=$2
     local attempt_number=$3
+
 
     gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
         echo "[Info] Download logs for job with ID $job_id"

@@ -102,8 +102,14 @@ jobs:
           path: |
             if-no-files-found: warn
             path: |
+              pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U014XCQ9CF8 # tt-rkim
   test-produce-benchmark-environment:
     runs-on: ubuntu-latest
     steps:
