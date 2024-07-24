@@ -1323,7 +1323,7 @@ void py_module(py::module& module) {
         module,
         ttnn::logit,
         "eps", "eps", 0.0f,
-        R"doc(Performs logit function on :attr:`input_tensor`, :attr:`eps`.)doc");
+        R"doc(Performs logit function on :attr:`input_tensor`, :attr:`eps`. Not available for Wormhole_B0.)doc");
 
 
 }

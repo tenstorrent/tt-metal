@@ -686,11 +686,6 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
 
-// Function: bias gelu
-// Ref: http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnxops/onnx_commicrosoft_BiasGelu.html
-Tensor _bias_gelu_unary(const Tensor& a, float bias, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::gelu(ttnn::add(a, bias), true, output_mem_config);
-}
 
 
 // logit(input, eps)=log(input / 1 - input)

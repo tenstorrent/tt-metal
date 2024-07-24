@@ -62,11 +62,11 @@ struct ExecuteUnaryCompositeOp {
     }
 };
 
-//OpHandler_two_float : get_function_type_float
+//OpHandler_float : get_function_type_float
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloat {
 
-    //Type 1: 1 inputs, 2 float
+    //Type : 1 inputs, 1 float
     static ttnn::Tensor execute_on_main_thread(
         const Tensor &input_tensor,
         float param1,

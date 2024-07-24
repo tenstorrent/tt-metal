@@ -439,37 +439,37 @@ def _golden_function_logical_not_(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.logical_not_, golden_function=_golden_function_logical_not_)
 
 
-def _golden_function_hardshrink(input_tensor_a, param, *args, **kwargs):
+def _golden_function_hardshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
     import torch
 
-    return torch.nn.functional.hardshrink(input_tensor_a, param)
+    return torch.nn.functional.hardshrink(input_tensor_a, lambd=lambd)
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.hardshrink, golden_function=_golden_function_hardshrink)
 
 
-def _golden_function_softshrink(input_tensor_a, param, *args, **kwargs):
+def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
     import torch
 
-    return torch.nn.functional.softshrink(input_tensor_a, param)
+    return torch.nn.functional.softshrink(input_tensor_a, lambd=lambd)
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, param, *args, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
-    return torch.special.logit(input_tensor_a, eps=param)
+    return torch.special.logit(input_tensor_a, eps=eps)
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.logit, golden_function=_golden_function_logit)
 
 
-def _golden_function_celu(input_tensor_a, param, *args, **kwargs):
+def _golden_function_celu(input_tensor_a, *args, alpha=1.0, **kwargs):
     import torch
 
-    return torch.celu(input_tensor_a, alpha=param)
+    return torch.celu(input_tensor_a, alpha=alpha)
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.celu, golden_function=_golden_function_celu)
