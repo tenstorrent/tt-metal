@@ -77,3 +77,90 @@ class DeviceSingleCardFixture : public ::testing::Test {
     tt::ARCH arch_;
     size_t num_devices_;
 };
+
+class GalaxyFixture : public ::testing::Test {
+   protected:
+    void SkipTestSuiteIfSlowDispatchNotSet()
+    {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            GTEST_SKIP();
+        }
+    }
+
+    void SkipTestSuiteIfNotGalaxyMotherboard()
+    {
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (!(arch == tt::ARCH::WORMHOLE_B0 && num_devices >= 32))
+        {
+            GTEST_SKIP();
+        }
+    }
+
+    void InitializeDevices()
+    {
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        vector<chip_id_t> ids;
+        for (uint32_t id = 0; id < num_devices; id++)
+        {
+            ids.push_back(id);
+        }
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        this->devices_ = tt::DevicePool::instance().get_all_active_devices();
+    }
+
+    void SetUp() override
+    {
+        this->SkipTestSuiteIfSlowDispatchNotSet();
+        this->SkipTestSuiteIfNotGalaxyMotherboard();
+        this->InitializeDevices();
+    }
+
+    std::vector<tt::tt_metal::Device*> devices_;
+};
+
+class TGFixture : public GalaxyFixture
+{
+   protected:
+    void SkipTestSuiteIfNotTG()
+    {
+        this->SkipTestSuiteIfNotGalaxyMotherboard();
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+        if (!(num_devices == 36 && num_pcie_devices == 4))
+        {
+            GTEST_SKIP();
+        }
+    }
+
+    void SetUp() override
+    {
+        this->SkipTestSuiteIfSlowDispatchNotSet();
+        this->SkipTestSuiteIfNotTG();
+        this->InitializeDevices();
+    }
+};
+
+class TGGFixture : public GalaxyFixture
+{
+   protected:
+    void SkipTestSuiteIfNotTGG()
+    {
+        this->SkipTestSuiteIfNotGalaxyMotherboard();
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+        if (!(num_devices == 72 && num_pcie_devices == 8))
+        {
+            GTEST_SKIP();
+        }
+    }
+
+    void SetUp() override
+    {
+        this->SkipTestSuiteIfSlowDispatchNotSet();
+        this->SkipTestSuiteIfNotTGG();
+        this->InitializeDevices();
+    }
+};
