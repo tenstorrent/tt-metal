@@ -149,6 +149,7 @@ models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic
 models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
+models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
 models/demos/resnet @mywoodstock @tt-aho
 models/demos/ttnn_resnet @mywoodstock @tt-aho
