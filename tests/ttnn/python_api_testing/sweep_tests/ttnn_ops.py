@@ -1144,30 +1144,6 @@ def attention_softmax(
     return ttnn_tensor_to_torch(t2)
 
 
-def addcmul_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    w,  # other_tensor2
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_ttnn_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttnn.addcmul_bw(t0, t1, t2, t3, scalar, memory_config=output_mem_config)
-
-    return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1]), ttnn_tensor_to_torch(t4[2])]
-
-
 def rmsnorm(
     x,
     y,
@@ -3471,6 +3447,30 @@ def clamp_max_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+def addcmul_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor1
+    w,  # other_tensor2
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_ttnn_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
+
+    t4 = ttnn.addcmul_bw(t0, t1, t2, t3, scalar, memory_config=output_mem_config)
+
+    return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1]), ttnn_tensor_to_torch(t4[2])]
+
+
 def eltwise_add_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -3589,11 +3589,6 @@ def rsub_bw(
 
 
 def where_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    z,  # other_tensor1
-    w,  # other_tensor2
-    *args,
     device,
     dtype,
     layout,
@@ -3611,6 +3606,30 @@ def where_bw(
     t4 = ttnn.where_bw(t0, t1, t2, t3, memory_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1])]
+
+
+def addcdiv_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor1
+    w,  # other_tensor2
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_ttnn_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
+
+    t4 = ttnn.addcdiv_bw(t0, t1, t2, t3, scalar, memory_config=output_mem_config)
+
+    return [ttnn_tensor_to_torch(t4[0]), ttnn_tensor_to_torch(t4[1]), ttnn_tensor_to_torch(t4[2])]
 
 
 def sqrt_bw(

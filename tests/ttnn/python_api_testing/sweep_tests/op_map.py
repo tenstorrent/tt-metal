@@ -757,4 +757,12 @@ op_map = {
         "tt_op": ttnn_ops.sqrt_bw,
         "pytorch_op": pytorch_ops.sqrt_bw,
     },
+    "addcmul-bw": {
+        "tt_op": ttnn_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
+    "addcdiv-bw": {
+        "tt_op": ttnn_ops.addcdiv_bw,
+        "pytorch_op": pytorch_ops.addcdiv_bw,
+    },
 }
