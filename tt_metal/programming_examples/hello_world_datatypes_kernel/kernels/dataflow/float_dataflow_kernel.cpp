@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         float* data = (float*) l1_addr;
-        DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. It is: " << F32(*data) << ENDL();
+        DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: " << F32(*data) << ENDL();
 
         cb_push_back(cb_id, 0);
 

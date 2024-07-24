@@ -1,16 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 void kernel_main() {
-    uint32_t src0_dram  = get_arg_val<uint32_t>(0);
-    uint32_t src1_dram  = get_arg_val<uint32_t>(1);
-    uint32_t dst_dram  = get_arg_val<uint32_t>(2);
+    uint32_t dram_noc_x = get_arg_val<uint32_t>(0);
+    uint32_t dram_noc_y = get_arg_val<uint32_t>(1);
+    uint32_t src0_dram  = get_arg_val<uint32_t>(2);
+    uint32_t src1_dram  = get_arg_val<uint32_t>(3);
+    uint32_t dst_dram  = get_arg_val<uint32_t>(4);
 
     // NoC coords (x,y)= (1,0)
-    uint64_t src0_dram_noc_addr = get_noc_addr(1, 0, src0_dram);
-    uint64_t src1_dram_noc_addr = get_noc_addr(1, 0, src1_dram);
-    uint64_t dst_dram_noc_addr = get_noc_addr(1, 0, dst_dram);
+    uint64_t src0_dram_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, src0_dram);
+    uint64_t src1_dram_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, src1_dram);
+    uint64_t dst_dram_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dst_dram);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0; // index=0
     constexpr uint32_t cb_id_in1 = tt::CB::c_in1; // index=1
