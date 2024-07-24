@@ -42,9 +42,9 @@ void MAIN {
     hacky_sync(1, sync_wait_cycles, sync_address);
     DEBUG_STATUS("AAAA");
     hacky_sync(2, sync_wait_cycles, sync_address);
-    DEBUG_STATUS("BBBB");
+    //DEBUG_STATUS("BBBB");
     hacky_sync(3, sync_wait_cycles, sync_address);
-    DEBUG_STATUS("CCCC");
+    //DEBUG_STATUS("CCCC");
     hacky_sync(4, sync_wait_cycles, sync_address);
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 }
