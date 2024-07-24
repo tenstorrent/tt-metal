@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Union, Optional
-
 import sys
 
 import ttnn
@@ -13,6 +11,7 @@ from ttnn.operations.complex_binary_backward import (
     _golden_function_complex_mul,
     _golden_function_complex_div,
 )
+
 import torch
 
 THIS_MODULE = sys.modules[__name__]
@@ -45,6 +44,8 @@ ttnn.attach_golden_function(ttnn.embedding_bw, golden_function=_golden_function)
 
 
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
     if torch.is_complex(input_tensor_a):
         if torch_op == torch.add:
             alpha = kwargs.pop("alpha")
@@ -68,6 +69,8 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
 
 
 def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b=None, *args, **kwargs):
+    import torch
+
     if torch_op == torch.clone:
         pyt_y = torch.clone(input_tensor_a)
         input_tensor_a.retain_grad()
@@ -94,6 +97,8 @@ def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, in
 def _golden_function_backward_with_dim(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, dimension=None, *args, **kwargs
 ):
+    import torch
+
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     if dimension == None:
@@ -122,6 +127,8 @@ def _golden_function_backward_with_float(
 def _golden_function_backward_with_string(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, **kwargs
 ):
+    import torch
+
     if torch.is_complex(input_tensor_a):
         if torch_op == torch.div:
             return _golden_function_complex_div(grad_tensor, input_tensor_a, input_tensor_b)
@@ -152,6 +159,8 @@ def _golden_function_backward_with_string(
 
 
 def _golden_function_comparison_ops(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
     if isinstance(input_tensor_b, (float, int)):
         golden_tensor = [torch.zeros_like(input_tensor_a)]
     else:

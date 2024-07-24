@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import dataclasses
 import json
+import importlib
 import os
 import pathlib
-import pprint
 from types import ModuleType
 
 from loguru import logger
@@ -182,8 +181,10 @@ from ttnn.core import (
 )
 
 import ttnn.reflection
-import ttnn.tracer
 import ttnn.database
+
+if importlib.util.find_spec("torch") is not None:
+    import ttnn.tracer
 
 
 begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture

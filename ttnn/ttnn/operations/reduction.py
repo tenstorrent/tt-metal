@@ -8,13 +8,13 @@ from typing import Tuple, Union, Optional
 import tt_lib as ttl
 
 import ttnn
-import torch
 
 
 def _create_golden_function(torch_function_name):
-    torch_function = getattr(torch, torch_function_name)
-
     def golden_function(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim=False, **_):
+        import torch
+
+        torch_function = getattr(torch, torch_function_name)
         if dim == None:
             return torch_function(input_tensor, keepdim=keepdim)
         else:
