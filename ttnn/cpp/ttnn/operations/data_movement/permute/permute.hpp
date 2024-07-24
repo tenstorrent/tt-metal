@@ -126,6 +126,6 @@ struct ExecutePermute {
 
 }  // namespace operations::data_movement
 
-constexpr auto permute = ttnn::register_operation<ttnn::operations::data_movement::ExecutePermute>("ttnn::permute");
+constexpr auto permute = ttnn::register_operation<"ttnn::permute", ttnn::operations::data_movement::ExecutePermute>();
 
 }  // namespace ttnn

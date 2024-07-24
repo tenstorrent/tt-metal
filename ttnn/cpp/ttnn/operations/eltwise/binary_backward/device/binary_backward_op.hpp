@@ -53,6 +53,10 @@ static std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, con
 std::vector<Tensor> _atan2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _embedding_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _xlogy_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _hypot_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _ldexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _logaddexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 //OpHandler_binary_bw_float_default : get_function_binary_bw_float_default
 std::vector<ttnn::Tensor> _subalpha_bw( const Tensor& grad, const Tensor& input, const Tensor& other, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -86,6 +90,34 @@ template <>
 struct OpHandler_binary_bw<BinaryBackwardOpType::ATAN2_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _atan2_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw<BinaryBackwardOpType::XLOGY_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _xlogy_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw<BinaryBackwardOpType::HYPOT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _hypot_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw<BinaryBackwardOpType::LDEXP_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _ldexp_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler_binary_bw<BinaryBackwardOpType::LOGADDEXP_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _logaddexp_bw(grad, input, other, output_mem_config);
     }
 };
 

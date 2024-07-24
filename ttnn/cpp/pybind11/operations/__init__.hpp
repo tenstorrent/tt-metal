@@ -29,7 +29,7 @@
 #include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
-#include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
+#include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"

@@ -24,9 +24,9 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteTopK {
-    static inline std::vector<Tensor> execute_on_worker_thread(
+    static inline std::vector<Tensor> operator()(
         uint8_t queue_id,
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         const uint16_t k,
         const int8_t dim,
         const bool largest,
@@ -40,8 +40,8 @@ struct ExecuteTopK {
         queue_id);
     }
 
-    static inline auto execute_on_worker_thread(
-        const Tensor &input_tensor,
+    static inline auto operator()(
+        const Tensor& input_tensor,
         const uint16_t k,
         const int8_t dim,
         const bool largest,
@@ -49,9 +49,9 @@ struct ExecuteTopK {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+        return operator()(
+            DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
-
 
     static inline std::vector<Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
@@ -63,6 +63,7 @@ struct ExecuteTopK {
 
 }  // namespace operations::reduction
 
-constexpr auto topk = ttnn::register_operation<ttnn::operations::reduction::ExecuteTopK>("ttnn::topk");
+constexpr auto topk =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::topk", ttnn::operations::reduction::ExecuteTopK>();
 
 }  // namespace ttnn

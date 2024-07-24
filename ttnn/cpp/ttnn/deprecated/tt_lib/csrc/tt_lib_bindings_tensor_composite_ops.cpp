@@ -331,13 +331,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         R"doc(Returns tensor with the polyval of all of elements of the input tensor ``{0}`` with coefficients ``{1}``.)doc",
         R"doc("coefficients value with highest degree first", "List of float", "List size > 0")doc");
 
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "glu",
-        &glu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Gated Linear Units (GLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
     m_tensor.def(
         "prod",
         &prod,
@@ -361,27 +354,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "dim", "Dimension to perform prod", "int", "default to 0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "geglu",
-        &geglu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Gaussian Error Gated Linear Units function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "reglu",
-        &reglu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Rectified Linear Gated Linear Units (ReGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "swiglu",
-        &swiglu,
-        py::arg("dim") = -1,
-        R"doc(Applies the Swish Gated Linear Units (SwiGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-        R"doc(dimension to split)doc");
+
     detail::bind_unary_op_with_param(
         m_tensor,
         "logical_andi",

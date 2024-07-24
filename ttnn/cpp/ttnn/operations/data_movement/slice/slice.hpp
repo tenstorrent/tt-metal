@@ -14,16 +14,12 @@ namespace operations {
 namespace data_movement {
 
 struct ExecuteSlice {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Shape output_tensor_start,
         tt::tt_metal::Shape output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg) {
-
-
-
-
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             tt::tt_metal::Shape output_tensor_shape = {
                 output_tensor_end[0] - output_tensor_start[0] + 1,
@@ -75,21 +71,21 @@ struct ExecuteSlice {
         }
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Shape output_tensor_start,
         tt::tt_metal::Shape output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg) {
-        return execute_on_worker_thread(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
+        return operator()(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array1D output_tensor_start,
         tt::tt_metal::Array1D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg) {
-        return execute_on_worker_thread(
+        return operator()(
             queue_id,
             input_tensor,
             tt::tt_metal::Shape(output_tensor_start),
@@ -97,14 +93,13 @@ struct ExecuteSlice {
             memory_config_arg);
     }
 
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg) {
-        return execute_on_worker_thread(
+        return operator()(
             queue_id,
             input_tensor,
             tt::tt_metal::Shape(output_tensor_start),
@@ -112,38 +107,26 @@ struct ExecuteSlice {
             memory_config_arg);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg) {
-        return execute_on_worker_thread(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
+        return operator()(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
     }
 
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end) {
-        return execute_on_worker_thread(0, input_tensor, output_tensor_start, output_tensor_end, std::nullopt);
+        return operator()(0, input_tensor, output_tensor_start, output_tensor_end, std::nullopt);
     }
-
-
-
-
-
-
-
-
-
-
-
-
 };
 
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto slice = ttnn::register_operation<ttnn::operations::data_movement::ExecuteSlice>("ttnn::slice");
+constexpr auto slice =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::slice", ttnn::operations::data_movement::ExecuteSlice>();
 
 }  // namespace ttnn

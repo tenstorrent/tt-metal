@@ -12,9 +12,8 @@ namespace ttnn {
 namespace operations::normalization {
 
 struct ExecuteSoftmax {
-
     // softmax
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const int dim_arg,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -28,8 +27,8 @@ struct ExecuteSoftmax {
 
         auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         if (dim == rank - 1) {
-            auto output_tensor =
-                ttnn::operations::normalization::softmax(input_tensor_4D, memory_config.value_or(input_tensor.memory_config()), compute_kernel_config);
+            auto output_tensor = ttnn::operations::normalization::softmax(
+                input_tensor_4D, memory_config.value_or(input_tensor.memory_config()), compute_kernel_config);
             return ttnn::reshape(output_tensor, input_shape);
         } else {
             auto dim_4D = dim + 4 - rank;
@@ -40,9 +39,8 @@ struct ExecuteSoftmax {
 };
 
 struct ExecuteScaleMaskSoftmax {
-
     // scale_mask_softmax
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor> mask = std::nullopt,
@@ -61,7 +59,7 @@ struct ExecuteScaleMaskSoftmax {
 struct ExecuteSoftmaxInPlace {
 
     // softmax_in_place
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
@@ -77,7 +75,7 @@ struct ExecuteSoftmaxInPlace {
 struct ExecuteScaleMaskSoftmaxInPlace {
 
     // scale_mask_softmax_in_place
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor> mask = std::nullopt,
@@ -96,7 +94,7 @@ struct ExecuteScaleMaskSoftmaxInPlace {
 struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
 
     // scale_causal_mask_hw_dims_softmax_in_place
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor> mask = std::nullopt,
@@ -113,10 +111,19 @@ struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
 
 }  // namespace operations::normalization
 
-constexpr auto softmax = ttnn::register_operation<ttnn::operations::normalization::ExecuteSoftmax>("ttnn::softmax");
-constexpr auto scale_mask_softmax = ttnn::register_operation<ttnn::operations::normalization::ExecuteScaleMaskSoftmax>("ttnn::scale_mask_softmax");
-constexpr auto softmax_in_place = ttnn::register_operation<ttnn::operations::normalization::ExecuteSoftmaxInPlace>("ttnn::softmax_in_place");
-constexpr auto scale_mask_softmax_in_place = ttnn::register_operation<ttnn::operations::normalization::ExecuteScaleMaskSoftmaxInPlace>("ttnn::scale_mask_softmax_in_place");
-constexpr auto scale_causal_mask_hw_dims_softmax_in_place = ttnn::register_operation<ttnn::operations::normalization::ExecuteScaleCausalMaskHWSoftmaxInPlace>("ttnn::scale_causal_mask_hw_dims_softmax_in_place");
+constexpr auto softmax =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::softmax", ttnn::operations::normalization::ExecuteSoftmax>();
+constexpr auto scale_mask_softmax = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::scale_mask_softmax",
+    ttnn::operations::normalization::ExecuteScaleMaskSoftmax>();
+constexpr auto softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::softmax_in_place",
+    ttnn::operations::normalization::ExecuteSoftmaxInPlace>();
+constexpr auto scale_mask_softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::scale_mask_softmax_in_place",
+    ttnn::operations::normalization::ExecuteScaleMaskSoftmaxInPlace>();
+constexpr auto scale_causal_mask_hw_dims_softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::scale_causal_mask_hw_dims_softmax_in_place",
+    ttnn::operations::normalization::ExecuteScaleCausalMaskHWSoftmaxInPlace>();
 
 }  // namespace ttnn

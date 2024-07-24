@@ -125,12 +125,12 @@ ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 **/ttnn/cpp/ttnn/experimental/tt_lib/fallback_ops @tt-aho
 
 # TTNN
-ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 
 # models
 /models/ @boris-drazic
@@ -144,11 +144,12 @@ models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovi
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
-models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic
+models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic @djordje-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
+models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
 models/demos/resnet @mywoodstock @tt-aho
 models/demos/ttnn_resnet @mywoodstock @tt-aho

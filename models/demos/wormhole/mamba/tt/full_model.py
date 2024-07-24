@@ -127,7 +127,7 @@ class MambaTT(torch.nn.Module):
     def embedding(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
         x = ttnn.embedding(
-            x, self.embedding_weights, output_dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            x, self.embedding_weights, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.embedding always returns (B, L, E)
         return ttnn.reshape(x, [1, 1, self.configs["outer_dim"], x.shape[2]])
 

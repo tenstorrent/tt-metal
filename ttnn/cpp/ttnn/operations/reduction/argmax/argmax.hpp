@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteArgMax {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
@@ -25,17 +25,18 @@ struct ExecuteArgMax {
             .at(0);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
+        return operator()(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
     }
 };
 
 }  // namespace operations::reduction
 
-constexpr auto argmax = ttnn::register_operation<ttnn::operations::reduction::ExecuteArgMax>("ttnn::argmax");
+constexpr auto argmax =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::argmax", ttnn::operations::reduction::ExecuteArgMax>();
 
 }  // namespace ttnn

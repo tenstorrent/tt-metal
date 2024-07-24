@@ -26,7 +26,7 @@ struct ExecuteTernaryBackward {
 
      //Type 0: 3 inputs, 1 grad tensor, 1 float
 
-    static std::vector<Tensor> execute_on_worker_thread(
+    static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -34,7 +34,7 @@ struct ExecuteTernaryBackward {
         const MemoryConfig &memory_config) {
         auto op_type = get_ternary_fn<ternary_backward_op_type>();
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, input_tensor_c_arg, memory_config);
-        }
+    }
 };
 
 template <TernaryBackwardOpType ternary_backward_op_type>
@@ -50,7 +50,7 @@ struct ExecuteTernaryBackwardFloat {
 
     //Type 1: 3 inputs, 1 grad tensor, 1 float
 
-    static std::vector<Tensor> execute_on_worker_thread(
+    static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -59,8 +59,7 @@ struct ExecuteTernaryBackwardFloat {
         const MemoryConfig &memory_config) {
         auto op_type = get_ternary_fn_float<ternary_backward_op_type>();
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, input_tensor_c_arg, alpha, memory_config);
-        }
-
+    }
 };
 
 template <TernaryBackwardOpType ternary_backward_op_type>
@@ -111,8 +110,17 @@ struct ExecuteTernaryBackwardOptional {
 }  // operations::ternary_backward
 
 //type 1
-constexpr auto addcmul_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardFloat<operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>("ttnn::addcmul_bw");
-constexpr auto addcdiv_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardFloat<operations::ternary_backward::TernaryBackwardOpType::ADDCDIV_BW>>("ttnn::addcdiv_bw");
-constexpr auto where_bw = ttnn::register_operation<operations::ternary_backward::ExecuteTernaryBackwardOptional<operations::ternary_backward::TernaryBackwardOpType::WHERE_BW>>("ttnn::where_bw");
+constexpr auto addcmul_bw = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::addcmul_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardFloat<
+        operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>();
+constexpr auto addcdiv_bw = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::addcdiv_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardFloat<
+        operations::ternary_backward::TernaryBackwardOpType::ADDCDIV_BW>>();
+constexpr auto where_bw = ttnn::register_operation<
+    "ttnn::where_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardOptional<
+        operations::ternary_backward::TernaryBackwardOpType::WHERE_BW>>();
 
 }  // namespace ttnn

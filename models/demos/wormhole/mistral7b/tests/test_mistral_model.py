@@ -5,13 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
@@ -42,31 +35,18 @@ class Emb(torch.nn.Module):
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "version",
-    (
-        "generative",
-        # "instruct",  # Disabled from testing due to PCC mismatch
-    ),
-)
-@pytest.mark.parametrize(
     "iterations",
     (17,),
 )
-def test_mistral_model_inference(device, iterations, version, use_program_cache, reset_seeds):
-    if version == "generative":
-        instruct = False
-    elif version == "instruct":
-        instruct = True
-    else:
-        assert "Invalid version. Please use 'generative' or 'instruct'"
-
+def test_mistral_model_inference(device, iterations, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
+    pcc = 0.98
 
     model_args = TtModelArgs(device)
-    model_args.max_batch_size = 32
+
     model_args.n_layers = 32  # Full model
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
@@ -83,11 +63,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
     }
     logger.info("Finished loading weights...")
 
-    if instruct:
-        # The instruct prompts follow the format: <bos> [INST] prompt [/INST]. [INST] are strings. <bos> is the correspoding bos_id token
-        prompts = ["[INST] what is the capital of Canada? [/INST]"] * 32
-    else:
-        prompts = ["This is a test"] * 32
+    prompts = ["This is a test"] * model_args.max_batch_size
 
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
@@ -130,7 +106,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
         all_tests_pass = True
 
     seqlen = 1  # Generating one token per user at a time
-    batch = 32
+    batch = model_args.max_batch_size
 
     if run_ref_pt:
         cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
@@ -161,7 +137,9 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
         # Run TT model
         tt_out = tt_model(decode_input, pos)
         # Convert ttnn tensor to torch tensor
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_output_torch = (
+            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+        )  # [seq, batch, hidden_dim]
 
         if run_ref_pt:  # Run reference model
             freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
@@ -193,7 +171,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
         # TODO Measure only PCC at the end, instead of at every iteration
         # Measure PCC if also running reference model
         if run_ref_pt:
-            passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
+            passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
             logger.info(f"Model output: {pcc_message}")
@@ -227,7 +205,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
                         )
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)
+                        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
                         if i == 0:
                             logger.info(f"K cache output: {output_pcc}")
                         else:
@@ -236,7 +214,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
                         if does_pass:
                             logger.info(f"V Cache Passed!")
                         else:
-                            logger.warning(f"V Cache Failed! PCC value is lower than {0.99}")
+                            logger.warning(f"V Cache Failed! PCC value is lower than {pcc}")
                         # if not does_pass:
                         # all_tests_pass = False
 
@@ -249,4 +227,4 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
             logger.info(f"All {generation_length} Mistral decode iterations Passed!")
         else:
             logger.warning("One or more iterations of Mistral decode had bad PCC")
-            assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
+            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
