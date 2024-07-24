@@ -25,8 +25,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        128,
         4096,
+        128,
     ),
 )
 def test_mistral_attention_inference(seq_len, device, use_program_cache, reset_seeds):
