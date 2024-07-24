@@ -17,6 +17,7 @@ import architecture
 from elasticsearch import Elasticsearch, NotFoundError
 
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+ARCH = os.getenv("ARCH_NAME")
 
 
 def git_hash():
@@ -285,12 +286,6 @@ if __name__ == "__main__":
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
     )
     parser.add_argument(
-        "--arch",
-        required=True,
-        choices=["grayskull", "wormhole", "wormhole_b0", "blackhole"],
-        help="Device architecture",
-    )
-    parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
     parser.add_argument(
@@ -320,9 +315,6 @@ if __name__ == "__main__":
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
-
-    global ARCH
-    ARCH = architecture.str_to_arch(args.arch)
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf
