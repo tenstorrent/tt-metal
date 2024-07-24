@@ -12,6 +12,12 @@ Passing complex types such as vectors and tensors by const reference avoids unne
 - **Performance**: Avoids the cost of copying large data structures.
 - **Safety**: Prevents unintended modifications to the data.
 
+### Example
+```
+void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<std::size_t> transfer_size = std::nullopt); // Wrong!
+void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr<void>>& src, const std::optional<std::size_t> transfer_size = std::nullopt); // Right!
+```
+
 ## 2. Use `std::span` for Input Parameters
 
 ### Practice
@@ -24,6 +30,29 @@ Consider using `std::span` as input instead of `std::vector`. This allows `std::
 - **Flexibility**: Enables functions to accept both `std::vector` and `std::array`.
 - **Efficiency**: Eliminates the need for copying data, enhancing performance.
 - **Safety**: Provides bounds-checked access to the underlying data.
+### Example
+```
+template <typename T>
+void print_elements(std::span<T> data) {
+    for (const auto& element : data) {
+        std::cout << element << " ";
+    }
+    std::cout << std::endl;
+}
+
+int main() {
+    std::array<int, 5> arr = {1, 2, 3, 4, 5};
+    std::vector<int> vec = {6, 7, 8, 9, 10};
+
+    // Call print_elements with std::array
+    print_elements(arr);
+
+    // Call print_elements with std::vector
+    print_elements(vec);
+
+    return 0;
+}
+```
 
 ## 3. Use `std::string_view` Instead of `std::string` or `const char*`
 
@@ -38,11 +67,47 @@ Consider using `std::string_view` instead of `std::string` or `const char*`.
 - **Flexibility**: Can be used with different types of string-like data, enhancing versatility.
 - **Efficiency**: Reduces memory usage and increases efficiency by providing a non-owning view.
 
+### Example
+```
+#include <iostream>
+#include <string>
+#include <string_view>
+
+// Function to count the number of vowels in a string using string_view
+size_t count_vowels(std::string_view str) {
+    size_t count = 0;
+    for (char c : str) {
+        switch (c) {
+            case 'a': case 'e': case 'i': case 'o': case 'u':
+            case 'A': case 'E': case 'I': case 'O': case 'U':
+                ++count;
+                break;
+            default:
+                // do nothing
+                break;
+        }
+    }
+    return count;
+}
+
+int main() {
+    std::string myString = "Hello, world!";
+    const char* cString = "Example string";  // C-style string
+
+    // Using string_view on a std::string
+    std::cout << "Vowels in '" << myString << "': " << count_vowels(myString) << std::endl;
+    // Using string_view on a C-style string
+    std::cout << "Vowels in '" << cString << "': " << count_vowels(cString) << std::endl;
+
+    return 0;
+}
+```
+
 
 ## 4. Avoid Dynamic Allocations in Frequently Called Functions
 
 ### Practice
-Try to avoid dynamic allocations in functions that are called every time a user runs an operation. If the vector size is known, use `std::array` or `std::tuple`. `ttnn::small_vector` is a good replacement for `std::vector` in 99% of use cases.
+Try to avoid dynamic allocations in functions that are called every time a user runs an operation. If the vector size is known, use `std::array` or `std::tuple`. `ttnn::small_vector`(not implemented yet) is a good replacement for `std::vector` in 99% of use cases.
 
 ### Explanation
 Dynamic allocations can be costly in terms of performance, especially in functions that are called frequently. Using fixed-size containers like `std::array` or `std::tuple` can significantly reduce overhead. `ttnn::small_vector` provides a performance-optimized alternative to `std::vector` for most scenarios.
@@ -51,6 +116,15 @@ Dynamic allocations can be costly in terms of performance, especially in functio
 - **Performance**: Reduces the overhead associated with dynamic memory allocation.
 - **Predictability**: Improves predictability of memory usage and performance.
 - **Efficiency**: Enhances overall efficiency by leveraging fixed-size containers or optimized small vectors.
+
+### Example
+```
+// Allocating on heap
+std::vector<int> dynamicVector = {1, 2, 3, 4, 5};
+
+// No heap allocation
+std::array<int, 5> fixedArray = {1, 2, 3, 4, 5};
+```
 
 ## 5. Avoid Using `.at()` for Vector Access
 
@@ -65,6 +139,16 @@ The `.at()` function performs bounds checking and throws an exception if the ind
 - **Debugging**: Easier to debug issues with clear assertions and fatal errors.
 - **Performance**: Avoids the overhead associated with exception handling.
 
+### Example
+```
+for (int i = 0; i < fp32_vec.size(); i++) {
+  fp32_vec.at(i) = rand_float() + offset; // Very bad, breaks a lot of optimiations. Additional check.
+}
+for (int i = 0; i < fp32_vec.size(); i++) {
+  fp32_vec[i] = rand_float() + offset; // Good!
+```
+
+
 ## 6. Avoid `std::move` When Returning from Functions
 
 ### Practice
@@ -76,6 +160,9 @@ RVO is an optimization technique that eliminates unnecessary copying or moving o
 ### Motivation
 - **Performance**: Ensures that RVO can be applied, minimizing unnecessary copying or moving of objects.
 - **Efficiency**: Maintains optimal performance by allowing the compiler to perform return value optimizations.
+
+### Example
+https://godbolt.org/z/enTqadjMz
 
 ## 7. Avoid `const T&&` or `const auto&&` and Returning `const` Values
 
@@ -89,6 +176,9 @@ Using `const` rvalue references (`const T&&` or `const auto&&`) and returning `c
 - **Performance**: Enables the use of move constructors, enhancing performance.
 - **Optimization**: Allows the compiler to optimize code more effectively.
 - **Efficiency**: Facilitates efficient resource management by leveraging move semantics.
+
+### Example
+https://godbolt.org/z/PsK4vahMr
 
 ## 8. Use `std::move` with `emplace_back` and Prefer `push_back` When Appropriate
 
@@ -116,6 +206,9 @@ The `noexcept` specifier indicates that a function does not throw exceptions. Ma
 - **Safety**: Clearly indicates that move operations are safe and will not throw exceptions.
 - **Efficiency**: Enhances the performance of STL containers by allowing move operations.
 
+### Example
+https://stackoverflow.com/questions/28627348/why-does-a-throwing-move-constructor-result-in-copying-instead-of-moving-where-a
+
 ## 10. Use the Copy-and-Swap Idiom
 
 ### Practice
@@ -124,7 +217,9 @@ Use the Copy-and-Swap idiom to avoid duplicating code between different construc
 ### Explanation
 The Copy-and-Swap idiom is a robust and elegant method to implement copy assignment operators. It leverages the copy constructor and the swap method to provide strong exception safety and reduce code duplication.
 
-### Motivation
+### Example 
+https://stackoverflow.com/questions/3279543/what-is-the-copy-and-swap-idiom
+
 
 ## 11. Avoid Global Classes, Especially with Mutexes or Locks
 
