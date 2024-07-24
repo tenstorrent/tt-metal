@@ -748,7 +748,7 @@ op_map = {
     "clamp-min-bw": {
         "tt_op": ttnn_ops.clamp_min_bw,
         "pytorch_op": pytorch_ops.clamp_min_bw,
-    }
+    },
     "eltwise-addalpha": {
         "tt_op": ttnn_ops.eltwise_addalpha,
         "pytorch_op": pytorch_ops.addalpha,
