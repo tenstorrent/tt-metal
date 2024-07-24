@@ -3614,6 +3614,7 @@ def addcdiv_bw(
     z,  # other_tensor1
     w,  # other_tensor2
     *args,
+    scalar,
     device,
     dtype,
     layout,
@@ -3654,7 +3655,6 @@ def rsqrt_bw(
     x,  # grad_tensor
     y,  # input_tensor
     *args,
-    scalar,
     device,
     dtype,
     layout,
