@@ -11,7 +11,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/embeddings/embeddings_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
@@ -500,26 +499,6 @@ void TensorModule(py::module& m_tensor) {
             "pad_token", "pad_token used in token ids", "uint32_t", "Default is None", "No"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "output_dtype", "DataType of output tensor", "DataType", "Default is weights dtype", "No"
-    )doc");
-
-    // FC
-    m_tensor.def(
-        "fully_connected",
-        &fully_connected,
-        py::arg("act").noconvert(),
-        py::arg("weights").noconvert(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Fully connected layer (linear.)
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "act", "Input activations tensor", "Tensor", "", "Yes"
-            "weights", "Input weights tensor", "Tensor", "", "Yes"
-            "bias", "Input bias tensor", "Tensor", "", "No"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     // TMs
