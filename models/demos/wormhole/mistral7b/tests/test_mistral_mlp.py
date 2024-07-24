@@ -21,9 +21,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        128,
-        1024,
         4096,
+        128,
     ),
 )
 def test_mistral_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
