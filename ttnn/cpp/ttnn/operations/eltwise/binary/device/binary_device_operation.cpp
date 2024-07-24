@@ -317,7 +317,7 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
             i + input_shape_b.rank() < input_shape_b.rank() ? input_shape_b.with_tile_padding()[i] : 1;
         output_shape_with_tile_padding[i + rank] = std::max(dim_a_with_tile_padding, dim_b_with_tile_padding);
     }
-    return ttnn::Shape::from_vector(output_shape, output_shape_with_tile_padding);
+    return ttnn::Shape(output_shape, output_shape_with_tile_padding);
 }
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(

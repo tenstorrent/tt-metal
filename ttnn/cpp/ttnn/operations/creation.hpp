@@ -63,7 +63,7 @@ inline ttnn::Tensor full(
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
     Device* device = device_arg.has_value() ? &(device_arg.value().get()) : nullptr;
     return tt::numpy::full(
-        shape.value(),
+        shape.value,
         fill_value,
         dtype.value_or(ttnn::bfloat16),
         layout.value_or(ttnn::ROW_MAJOR_LAYOUT),

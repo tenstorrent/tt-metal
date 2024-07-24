@@ -142,7 +142,7 @@ struct BinaryOperation {
                 first_shape[-3] == second_shape[-3]) {
 
                 tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
-                Shape repeats({first_shape[0], 1, 1, 1});
+                Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
                 second = ttnn::repeat(second, repeats, output_memory_config);
             }
         };
@@ -254,7 +254,7 @@ struct RelationalBinary {
                 first_shape[-1] == second_shape[-1] and first_shape[-2] == second_shape[-2] and
                 first_shape[-3] == second_shape[-3]) {
                 tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
-                Shape repeats({first_shape[0], 1, 1, 1});
+                Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
                 second = ttnn::repeat(second, repeats, output_memory_config);
             }
         };

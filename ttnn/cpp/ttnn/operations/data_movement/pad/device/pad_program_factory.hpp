@@ -31,10 +31,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer = tt::tt_metal::owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
-    const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
-                                                 Shape({1, 1, 1, pad_value_const_buffer_size}),
-                                                 DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+    const Tensor pad_value_const_tensor =
+        Tensor(
+            OwnedStorage{pad_value_const_buffer},
+            Shape(std::array<uint32_t, 4>{1, 1, 1, pad_value_const_buffer_size}),
+            DataType::BFLOAT16,
+            Layout::ROW_MAJOR)
+            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     CoreRange cores({0, 0}, {0, 0});
@@ -183,10 +186,13 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer = owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
-    const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
-                                                 Shape({1, 1, 1, pad_value_const_buffer_size}),
-                                                 DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+    const Tensor pad_value_const_tensor =
+        Tensor(
+            OwnedStorage{pad_value_const_buffer},
+            Shape(std::array<uint32_t, 4>{1, 1, 1, pad_value_const_buffer_size}),
+            DataType::BFLOAT16,
+            Layout::ROW_MAJOR)
+            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     Buffer *src0_buffer = a.buffer();
@@ -649,10 +655,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     auto pad_value_const_buffer = owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     // NOTE: The const buffer is always in L1
     // TODO: make a local buffer for each core?
-    const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
-                                                 Shape({1, 1, 1, pad_value_const_buffer_size}),
-                                                 DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+    const Tensor pad_value_const_tensor =
+        Tensor(
+            OwnedStorage{pad_value_const_buffer},
+            Shape(std::array<uint32_t, 4>{1, 1, 1, pad_value_const_buffer_size}),
+            DataType::BFLOAT16,
+            Layout::ROW_MAJOR)
+            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;

@@ -36,7 +36,8 @@ struct EmbeddingOperation {
 
         auto batch_size = input_tensor_arg.get_shape()[0];
         auto sentence_size = input_tensor_arg.get_shape()[-1];
-        auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape{{batch_size, 1, 1, sentence_size}});
+        auto input_tensor =
+            ttnn::reshape(input_tensor_arg, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
 
         bool tilized = layout == ttnn::TILE_LAYOUT;
         auto embeddings = operation::run(
@@ -48,7 +49,8 @@ struct EmbeddingOperation {
                                   .output_dtype = dtype.value_or(weight.get_dtype())},
                               {input_tensor, weight})
                               .at(0);
-        embeddings = ttnn::reshape(embeddings, ttnn::Shape{{batch_size, sentence_size, hidden_embedding_dim}});
+        embeddings = ttnn::reshape(
+            embeddings, ttnn::Shape{std::array<uint32_t, 3>{batch_size, sentence_size, hidden_embedding_dim}});
         return embeddings;
     }
 

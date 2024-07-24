@@ -339,8 +339,8 @@ struct ExecutePad {
         }
         // output_tensor is currently 4D. We have to squeeze back to the original rank
         auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
-        auto shape = to_vec(output_tensor.get_shape().value());
-        auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value());
+        auto shape = to_vec(output_tensor.get_shape().value);
+        auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
         if (auto rank_diff = shape.size() - original_rank; rank_diff) {
             auto remove_first_elements = [](auto& source, size_t n) {
                 source.erase(source.begin(), source.begin() + n);

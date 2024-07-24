@@ -5,6 +5,7 @@
 
 #include "repeat_interleave.hpp"
 
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -35,21 +36,20 @@ ttnn::Tensor ExecuteRepeatInterleave::operator()(const ttnn::Tensor& input_a, ui
         // TODO: For dim = 1 facing issue with concat_op
         if (normalized_dim) {
             Tensor concat_out = concat(combined_tensors, 2);
-            return reshape(concat_out, shape_wh[0], shape_wh[1] * repeat, shape_wh[2], shape_wh[3]);
+            return tt::tt_metal::reshape(concat_out, shape_wh[0], shape_wh[1] * repeat, shape_wh[2], shape_wh[3]);
         } else {
             Tensor concat_out = concat(combined_tensors, 1);
             return reshape(concat_out, shape_wh[0] * repeat, shape_wh[1], shape_wh[2], shape_wh[3]);
         }
     } else {
-        Tensor reshape_out =
-            reshape(input_a, 1, 1, shape_wh[0] * shape_wh[1] * shape_wh[2], shape_wh[3]);
+        Tensor reshape_out = tt::tt_metal::reshape(input_a, 1, 1, shape_wh[0] * shape_wh[1] * shape_wh[2], shape_wh[3]);
         for (int i = 0; i < repeat; i++) {
             combined_tensors.push_back(reshape_out);
         }
         Tensor concat_out = concat(combined_tensors, 1);
         std::vector<int64_t> permute_dims = {0, 2, 1, 3};
         Tensor permute_out = ttnn::permute(concat_out, permute_dims);
-        return reshape(permute_out, shape_wh[0], shape_wh[1], shape_wh[2] * repeat, shape_wh[3]);
+        return tt::tt_metal::reshape(permute_out, shape_wh[0], shape_wh[1], shape_wh[2] * repeat, shape_wh[3]);
     }
 }
 

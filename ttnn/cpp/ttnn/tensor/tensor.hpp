@@ -167,7 +167,7 @@ struct Tensor {
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                     std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value());
+                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value);
             }
             this->tensor_attributes->num_shards_to_be_populated = num_buffers;
         }
@@ -291,7 +291,7 @@ struct Tensor {
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage &storage() const { return this->tensor_attributes->storage; };
-    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value(); };
+    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value; };
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
     inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
     inline const Layout &layout() const { return this->tensor_attributes->layout; };
@@ -397,7 +397,7 @@ static Tensor create_device_tensor(
     Layout layout,
     Device *device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return create_device_tensor(shape.value(), dtype, layout, device, memory_config);
+    return create_device_tensor(shape.value, dtype, layout, device, memory_config);
 }
 
 // template<typename Buffer>

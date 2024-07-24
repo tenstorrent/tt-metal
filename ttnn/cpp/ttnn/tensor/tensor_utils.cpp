@@ -707,12 +707,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value());
+                    shard.tensor_attributes->shape.value);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value());
+                    shard.tensor_attributes->shape.value);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {

@@ -168,7 +168,7 @@ Tensor to_layout_impl(
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = unsqueeze_to_4D(tensor);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            tensor = tensor.unpad_from_tile(tensor.get_shape().value().without_padding());
+            tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
 
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
         } else if (layout == ttnn::TILE_LAYOUT) {
