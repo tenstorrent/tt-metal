@@ -2444,10 +2444,6 @@ def addcdiv(x, y, z):
     tt_lib.tensor.addcdiv(x, y, z, 2)
 
 
-def lamb_optimizer(x, y, z):
-    tt_lib.tensor.lamb_optimizer(x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02)
-
-
 def addalpha_bw(x, y, z):
     ttnn.addalpha_bw(x, y, z, alpha=5)
 
@@ -2584,11 +2580,6 @@ all_ternary_ops = [
     {
         "op": addcdiv,
         "name": "tt_lib.tensor.addcdiv",
-    },
-    {
-        "op": lamb_optimizer,
-        "name": "tt_lib.tensor.lamb_optimizer",
-        "num_repeats": 2,
     },
     {
         "op": addalpha_bw,
