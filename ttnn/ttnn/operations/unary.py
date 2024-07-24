@@ -636,4 +636,13 @@ def _golden_function_rpow(input_tensor_a, dim, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.rpow, golden_function=_golden_function_rpow)
+
+
+def _golden_function_frac(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.frac(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.frac, golden_function=_golden_function_frac)
 __all__ = []

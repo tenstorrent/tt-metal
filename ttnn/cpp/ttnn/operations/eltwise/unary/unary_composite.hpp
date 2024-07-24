@@ -174,20 +174,10 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
-<<<<<<< HEAD
 constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
     "ttnn::pow",
     operations::unary::ExecutePower>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
-=======
-constexpr auto tril = REGISTER_OPERATION_FROM_FUNCTION("ttnn::tril", WRAP_WITH_RESHAPE(ttnn::operations::unary::tril));
-constexpr auto triu = REGISTER_OPERATION_FROM_FUNCTION("ttnn::triu", WRAP_WITH_RESHAPE(ttnn::operations::unary::triu));
-
-<<<<<<< HEAD
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", ttnn::operations::unary::ExecutePower>();
-
-// newly importedconstexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
->>>>>>> 10385: Migrate normalize_global to TTNN
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
 constexpr auto deg2rad = ttnn::register_operation_with_auto_launch_op<
@@ -316,5 +306,9 @@ constexpr auto rpow = ttnn::register_operation_with_auto_launch_op<
 constexpr auto normalize_global = ttnn::register_operation_with_auto_launch_op<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
+constexpr auto frac = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::frac",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
+
 
 }  // namespace ttnn

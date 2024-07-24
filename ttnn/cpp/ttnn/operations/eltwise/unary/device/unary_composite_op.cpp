@@ -767,4 +767,12 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
     return _make_global_from_hw_impl(_normalize, y, output_mem_config);
 }
 
+Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor trunc_res = trunc(input);
+    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
+    return result;
+}
+
 }  // namespace ttnn::operations::unary

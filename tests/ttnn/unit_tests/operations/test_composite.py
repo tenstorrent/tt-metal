@@ -637,9 +637,26 @@ def test_unary_logical_not_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 64])),
+        (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_frac(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1e6, 1e6, device)
+    output_tensor = ttnn.frac(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.frac)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 64])),  # Single core
+        (torch.Size([1, 3, 320, 32 * 8])),  # Multi core
     ),
 )
 @pytest.mark.parametrize(
