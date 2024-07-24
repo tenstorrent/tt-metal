@@ -139,7 +139,7 @@ class TtEmbeddings:
             self.word_embeddings_weight,
             layout=ttnn.TILE_LAYOUT,
             embeddings_type=ttnn.EmbeddingsType.PADDED,
-            pad_token=self.pad_token,
+            padding_idx=self.pad_token,
             memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
         )
         input_ids.deallocate()
