@@ -640,7 +640,7 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
                const Tensor& input_tensor,
                uint32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
+               const std::optional<Tensor>& output_tensor,
                const uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
             },
@@ -657,7 +657,7 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
                 const Tensor& input_tensor,
                 float exponent,
                 const std::optional<MemoryConfig>& memory_config,
-                std::optional<Tensor> output_tensor,
+                const std::optional<Tensor>& output_tensor,
                 const uint8_t queue_id) -> ttnn::Tensor {
                     return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
                 },

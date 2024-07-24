@@ -7,9 +7,6 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -45,8 +42,6 @@ enum class UnaryCompositeOpType {
     REGLU,
     GEGLU,
     SWIGLU,
-    POWER_FP,
-    POWER_INT
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -84,15 +79,10 @@ Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
-Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
-Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
-
-template <UnaryCompositeOpType OpType>
-struct OpHandler_Power;
 
 template <UnaryCompositeOpType OpType>
 struct OpHandler_scale_shift;
@@ -327,20 +317,6 @@ struct OpHandler_dim<UnaryCompositeOpType::SWIGLU> {
     }
 };
 
-template <>
-struct OpHandler_Power<UnaryCompositeOpType::POWER_FP> {
-    static Tensor handle(uint8_t q_id, const Tensor& input, float exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
-        return _power(q_id, input, exponent, mem_cfg, output);
-    }
-};
-
-template <>
-struct OpHandler_Power<UnaryCompositeOpType::POWER_INT> {
-    static Tensor handle(uint8_t q_id, const Tensor& input, uint32_t exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
-        return _power(q_id, input, exponent, mem_cfg, output);
-    }
-};
-
 // Template functions to get the function pointers
 template <UnaryCompositeOpType OpType>
 auto get_function_type1() {
@@ -370,10 +346,5 @@ auto get_function_type5() {
 template <UnaryCompositeOpType OpType>
 auto get_glu_fn() {
     return &OpHandler_dim<OpType>::handle;
-}
-
-template <UnaryCompositeOpType OpType>
-auto get_power_fn() {
-    return &OpHandler_Power<OpType>::handle;
 }
 }
