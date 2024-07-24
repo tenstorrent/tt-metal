@@ -254,6 +254,24 @@ def _golden_function_logical_xor(input_tensor_a, input_tensor_b, *args, **kwargs
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_xor, golden_function=_golden_function_logical_xor)
 
 
+def _golden_function_logical_and(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_and(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_and, golden_function=_golden_function_logical_and)
+
+
+def _golden_function_logical_or(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_or(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_or, golden_function=_golden_function_logical_or)
+
+
 def _golden_function_atan2(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 

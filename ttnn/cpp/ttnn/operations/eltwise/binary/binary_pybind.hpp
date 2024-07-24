@@ -311,7 +311,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool accurate_mode,
-               string round_mode,
+               std::string round_mode,
                const std::optional<MemoryConfig>& memory_config) {
                     return self(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
                 },
@@ -327,7 +327,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_a,
                float value,
                bool accurate_mode,
-               string round_mode,
+               std::string round_mode,
                const std::optional<MemoryConfig>& memory_config) {
                     return self(input_tensor_a, value, accurate_mode, round_mode, memory_config);
                 },
