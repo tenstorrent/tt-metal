@@ -741,4 +741,12 @@ op_map = {
         "tt_op": ttnn_ops.clamp_min_bw,
         "pytorch_op": pytorch_ops.clamp_min_bw,
     },
+    "rsub-bw": {
+        "tt_op": ttnn_ops.rsub_bw,
+        "pytorch_op": pytorch_ops.rsub_bw,
+    },
+    "where-bw": {
+        "tt_op": ttnn_ops.where_bw,
+        "pytorch_op": pytorch_ops.where_bw,
+    },
 }
