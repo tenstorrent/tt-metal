@@ -125,12 +125,12 @@ ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 **/ttnn/cpp/ttnn/experimental/tt_lib/fallback_ops @tt-aho
 
 # TTNN
-ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 
 # models
 /models/ @boris-drazic
