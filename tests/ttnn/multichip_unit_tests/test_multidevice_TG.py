@@ -196,7 +196,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
     assert out_pass
 
 
-@pytest.mark.skip("DRAM-SHARDED Matmuls gives ND PCC")
+@pytest.mark.skip("See GH #10673: DRAM-SHARDED Matmuls gives ND PCC on TG")
 @pytest.mark.parametrize(
     "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
 )
@@ -912,13 +912,13 @@ def run_test_sdpa_decode_single_iter(
     start_idx = s // 2
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(start_idx + 1)
     program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        q_chunk_size=padded_num_heads,
-        k_chunk_size=k_chunk_size,
+        q_chunk_size=0,  # Unused
+        k_chunk_size=0,  # Unused
     )
 
+    k_chunk_size = get_chunk_size(start_idx + 1)
     padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
     # Test various sequence lengths
