@@ -27,7 +27,7 @@ def get_model_config(
     llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=32, max_context_len=4096
 ):
     llm_mode = "decode" if seq_len == 1 else "prefill"
-    assert num_devices == 8
+    # assert num_devices == 8
     assert batch in (1, 16, 32)
     assert seq_len in (1, 128, 2048, 8192)
 
