@@ -29,5 +29,5 @@ struct ExecuteDownsample {
 };
 } // data_movement
 } // operations
-constexpr auto downsample = ttnn::register_operation<ttnn::operations::data_movement::ExecuteDownsample>("ttnn::downsample");
+constexpr auto downsample = ttnn::register_operation<"ttnn::downsample", ttnn::operations::data_movement::ExecuteDownsample>();
 } // data_movement

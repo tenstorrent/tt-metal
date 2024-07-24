@@ -37,6 +37,6 @@ namespace ttnn {
 
 // Register the operation. The name, in this case, "ttnn::example" should match the namespace of the operation
 // And the name will be directly mapped to python, where it will become "ttnn.example"
-constexpr auto example = ttnn::register_operation<operations::examples::ExampleOperation>("ttnn::example");
+constexpr auto example = ttnn::register_operation<"ttnn::example", operations::examples::ExampleOperation>();
 
 }  // namespace ttnn

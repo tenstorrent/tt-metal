@@ -144,6 +144,6 @@ struct ExecuteSlice {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto slice = ttnn::register_operation<ttnn::operations::data_movement::ExecuteSlice>("ttnn::slice");
+constexpr auto slice = ttnn::register_operation<"ttnn::slice", ttnn::operations::data_movement::ExecuteSlice>();
 
 }  // namespace ttnn

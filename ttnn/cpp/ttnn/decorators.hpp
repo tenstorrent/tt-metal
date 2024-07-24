@@ -4,11 +4,13 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include <reflect>
+
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -76,23 +78,30 @@ inline Tensors create_async_output_tensors(const Tensors& inputs, const Optional
 
 template <typename... args_t>
 auto map_launch_op_args_to_execute_on_worker_thread_args(
-    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors, const OptionalTensors& optional_output_tensors, args_t&&... args) {
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors,
+    const OptionalTensors& optional_output_tensors,
+    args_t&&... args) {
     auto input_tensor_index = 0;
     auto optional_input_tensor_index = 0;
     auto optional_output_tensor_index = 0;
-    return std::tuple{
-        [&input_tensor_index, &input_tensors, &optional_input_tensor_index, &optional_input_tensors, &optional_output_tensor_index, &optional_output_tensors](auto&& arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, Tensor>) {
-                return input_tensors.at(input_tensor_index++);
-            } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
-                return optional_input_tensors.at(optional_input_tensor_index++);
-            } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
-                return optional_output_tensors.at(optional_output_tensor_index++);
-            } else {
-                return arg;
-            }
-        }(std::forward<args_t>(args))...};
+    return std::tuple{[&input_tensor_index,
+                       &input_tensors,
+                       &optional_input_tensor_index,
+                       &optional_input_tensors,
+                       &optional_output_tensor_index,
+                       &optional_output_tensors](auto&& arg) {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, Tensor>) {
+            return input_tensors.at(input_tensor_index++);
+        } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
+            return optional_input_tensors.at(optional_input_tensor_index++);
+        } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
+            return optional_output_tensors.at(optional_output_tensor_index++);
+        } else {
+            return arg;
+        }
+    }(std::forward<args_t>(args))...};
 }
 
 template <typename concrete_operation_t, typename T>
@@ -138,19 +147,18 @@ void log(const std::string& prefix, args_t&&... args) {
 }
 
 // Get "add" from "ttnn::add"
-static const std::string base_name(const char* cpp_fully_qualified_name) {
-    auto cpp_fully_qualified_name_as_string = std::string(cpp_fully_qualified_name);
-    auto last_token = cpp_fully_qualified_name_as_string.substr(cpp_fully_qualified_name_as_string.rfind("::") + 2);
+static const std::string base_name(const std::string& cpp_fully_qualified_name) {
+    auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
     return last_token;
 }
 
 // Convert "ttnn::add" to "add_t"
-static const std::string class_name(const char* cpp_fully_qualified_name) {
+static const std::string class_name(const std::string& cpp_fully_qualified_name) {
     return base_name(cpp_fully_qualified_name) + "_t";
 }
 
 // Convert "ttnn::add" to "ttnn.add"
-static const std::string python_fully_qualified_name(const char* cpp_fully_qualified_name) {
+static const std::string python_fully_qualified_name(const std::string& cpp_fully_qualified_name) {
     auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
         if (from.empty()) {
             return input;
@@ -163,7 +171,7 @@ static const std::string python_fully_qualified_name(const char* cpp_fully_quali
         };
         return output;
     };
-    return replace(std::string{cpp_fully_qualified_name}, "::", ".");
+    return replace(cpp_fully_qualified_name, "::", ".");
 }
 
 }  // namespace detail
@@ -174,23 +182,21 @@ concept SyncOperation = requires { [](auto&&... args) { concrete_operation_t::op
 template <typename concrete_operation_t>
 concept AsyncOperation = requires { [](auto&&... args) { concrete_operation_t::execute_on_worker_thread(args...); }; };
 
-template <auto id, typename concrete_operation_t>
+template <auto id, reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
     requires(static_cast<bool>(SyncOperation<concrete_operation_t> xor AsyncOperation<concrete_operation_t>))
 struct operation_t {
-    const char* cpp_fully_qualified_name;  // TODO: move this to template args when C++20 is available
-
     template <typename... args_t>
         requires SyncOperation<concrete_operation_t>
     auto operator()(args_t&&... args) const {
         ZoneScopedN("Run ttnn operation ");
-        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
         auto output = concrete_operation_t::operator()(std::forward<decltype(args)>(args)...);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
 
@@ -198,8 +204,8 @@ struct operation_t {
         requires AsyncOperation<concrete_operation_t>
     auto operator()(args_t&&... args) const {
         ZoneScopedN("Run ttnn operation (using auto async)");
-        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
@@ -220,14 +226,14 @@ struct operation_t {
 
         bool enable_autoformat = false;
         operation::launch_op(
-            [cpp_fully_qualified_name = this->cpp_fully_qualified_name, args...](
+            [args...](
                 const Tensors& input_tensors,
                 const OptionalConstTensors& optional_input_tensors,
                 const OptionalTensors& optional_output_tensors) mutable -> Tensors {
                 auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
                     input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
                 return std::apply(
-                    [cpp_fully_qualified_name](auto&&... args) -> Tensors {
+                    [](auto&&... args) -> Tensors {
                         return detail::map_execute_on_worker_thread_return_to_launch_op_return<concrete_operation_t>(
                             concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
                     },
@@ -239,7 +245,7 @@ struct operation_t {
             optional_output_tensors,
             enable_autoformat);
 
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);
@@ -257,20 +263,20 @@ struct operation_t {
     }
 
     // Get "add" from "ttnn::add"
-    const std::string base_name() const { return detail::base_name(this->cpp_fully_qualified_name); }
+    const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
 
     // Convert "ttnn::add" to "add_t"
-    const std::string class_name() const { return detail::class_name(this->cpp_fully_qualified_name); }
+    const std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
 
     // Convert "ttnn::add" to "ttnn.add"
     const std::string python_fully_qualified_name() const {
-        return detail::python_fully_qualified_name(this->cpp_fully_qualified_name);
+        return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
     }
 };
 
-template <typename concrete_operation_t>
-constexpr auto register_operation(const char* cpp_fully_qualified_name) {
-    return operation_t<__COUNTER__, concrete_operation_t>{cpp_fully_qualified_name};
+template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
+constexpr auto register_operation() {
+    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t>{};
 }
 
 namespace detail {
@@ -282,10 +288,12 @@ struct lambda_operation_t {
 
 // If you are feeling lazy, you can use this macro to create an operation struct from a lambda
 // You  will have to implement async manually
-#define REGISTER_OPERATION_FROM_FUNCTION(name, function)                                                        \
-    (::ttnn::decorators::register_operation<::ttnn::decorators::detail::lambda_operation_t<[](auto&&... args) { \
-        return function(std::forward<decltype(args)>(args)...);                                                 \
-    }>>(name))
+#define REGISTER_OPERATION_FROM_FUNCTION(cpp_fully_qualified_name, function) \
+    (::ttnn::decorators::register_operation<                                 \
+        cpp_fully_qualified_name,                                            \
+        ::ttnn::decorators::detail::lambda_operation_t<[](auto&&... args) {  \
+            return function(std::forward<decltype(args)>(args)...);          \
+        }>>())
 
 }  // namespace decorators
 
