@@ -106,6 +106,7 @@ Pointwise Unary
    ttnn/ceil
    ttnn/geglu
    ttnn/gelu
+   ttnn/bias_gelu_unary
    ttnn/glu
    ttnn/hardshrink
    ttnn/hardsigmoid

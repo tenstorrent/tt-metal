@@ -157,6 +157,18 @@ struct ExecuteUnaryCompositeOpWithDim
 
 
 template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithFloat
+{
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor,
+        float param,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt)
+        {
+            auto op_type = get_function_float<unary_comp_op_type>();
+            return op_type(input_tensor, param, memory_config);
+        }
+};
+template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithThresholdValue
 {
     static ttnn::Tensor execute_on_worker_thread(
@@ -297,4 +309,5 @@ constexpr auto reglu = ttnn::register_operation<operations::unary::ExecuteUnaryC
 constexpr auto geglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>("ttnn::geglu");
 constexpr auto swiglu = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>("ttnn::swiglu");
 
+constexpr auto bias_gelu_unary = ttnn::register_operation<operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::BIAS_GELU_UNARY>>("ttnn::bias_gelu_unary");
 }  // namespace ttnn

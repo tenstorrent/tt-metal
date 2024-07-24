@@ -574,4 +574,10 @@ Tensor _swiglu(
     return swiglu_result;
 }
 
+// Function: bias gelu
+// Ref: http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnxops/onnx_commicrosoft_BiasGelu.html
+Tensor _bias_gelu_unary(const Tensor& a, float bias, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::gelu(ttnn::add(a, bias), true, output_mem_config);
+}
+
 }  // namespace ttnn::operations::unary

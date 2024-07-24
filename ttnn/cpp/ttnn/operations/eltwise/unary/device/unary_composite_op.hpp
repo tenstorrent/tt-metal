@@ -42,6 +42,7 @@ enum class UnaryCompositeOpType {
     REGLU,
     GEGLU,
     SWIGLU,
+    BIAS_GELU_UNARY,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -79,6 +80,7 @@ Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
+Tensor _bias_gelu_unary(const Tensor&, float, const std::optional<MemoryConfig>& );
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -98,6 +100,9 @@ struct OpHandler_threshold_value;
 
 template <UnaryCompositeOpType OpType>
 struct OpHandler_dim;
+
+template <UnaryCompositeOpType OpType>
+struct OpHandler_float;
 
 template <>
 struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
@@ -317,6 +322,13 @@ struct OpHandler_dim<UnaryCompositeOpType::SWIGLU> {
     }
 };
 
+template <>
+struct OpHandler_float<UnaryCompositeOpType::BIAS_GELU> {
+    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
+    return _bias_gelu(t1, param, mem_cfg);
+    }
+};
+
 // Template functions to get the function pointers
 template <UnaryCompositeOpType OpType>
 auto get_function_type1() {
@@ -346,5 +358,10 @@ auto get_function_type5() {
 template <UnaryCompositeOpType OpType>
 auto get_glu_fn() {
     return &OpHandler_dim<OpType>::handle;
+}
+
+template <UnaryCompositeOpType OpType>
+auto get_function_float() {
+    return &OpHandler_float<OpType>::handle;
 }
 }
