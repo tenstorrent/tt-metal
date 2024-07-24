@@ -14,7 +14,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -35,7 +35,7 @@ std::vector<ttnn::Tensor> _atan2_bw(
     UnaryWithParam {UnaryOpType::SQUARE},
     UnaryWithParam {UnaryOpType::RECIP}};
     Tensor recip_mul =
-        ttnn::multiply(grad, ttnn::unary_chain(hypot(input, other), ops_chain, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad, ttnn::unary_chain(ttnn::hypot(input, other, output_memory_config), ops_chain, output_memory_config), std::nullopt, output_memory_config);
     Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_memory_config);
     Tensor cond = ttnn::logical_and(ttnn::eqz(input, output_memory_config), ttnn::eqz(other, output_memory_config));
     grad_a = where(cond, t_nan, grad_a, output_memory_config);
@@ -193,7 +193,7 @@ std::vector<ttnn::Tensor> _hypot_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    Tensor result_recip = ttnn::reciprocal(hypot(input, other), output_memory_config);
+    Tensor result_recip = ttnn::reciprocal(ttnn::hypot(input, other, output_memory_config), output_memory_config);
     Tensor grad_a =
         ttnn::multiply(grad, ttnn::multiply(input, result_recip, std::nullopt, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_a);
