@@ -70,7 +70,7 @@ inline Tensors create_async_output_tensors(const Tensors& inputs, const Optional
     } else {
         static_assert(
             tt::stl::concepts::always_false_v<concrete_operation_t>,
-            "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a tuple "
+            "Operation is expecting the operator() method to return either a single Tensor or a tuple "
             "of "
             "Tensor(s). If the operation returns a vector of Tensors, it must implement create_async_output_tensors.");
     }
@@ -176,17 +176,10 @@ static const std::string python_fully_qualified_name(const std::string& cpp_full
 
 }  // namespace detail
 
-template <typename concrete_operation_t>
-concept SyncOperation = requires { [](auto&&... args) { concrete_operation_t::operator()(args...); }; };
-
-template <typename concrete_operation_t>
-concept AsyncOperation = requires { [](auto&&... args) { concrete_operation_t::execute_on_worker_thread(args...); }; };
-
-template <auto id, reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
-    requires(static_cast<bool>(SyncOperation<concrete_operation_t> xor AsyncOperation<concrete_operation_t>))
+template <auto id, reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t, bool auto_launch_op>
 struct operation_t {
     template <typename... args_t>
-        requires SyncOperation<concrete_operation_t>
+        requires(not auto_launch_op)
     auto operator()(args_t&&... args) const {
         ZoneScopedN("Run ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
@@ -201,7 +194,7 @@ struct operation_t {
     }
 
     template <typename... args_t>
-        requires AsyncOperation<concrete_operation_t>
+        requires(auto_launch_op)
     auto operator()(args_t&&... args) const {
         ZoneScopedN("Run ttnn operation (using auto async)");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
@@ -211,7 +204,7 @@ struct operation_t {
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
         using execute_on_worker_thread_return_t =
-            decltype(concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
+            decltype(concrete_operation_t::operator()(std::forward<decltype(args)>(args)...));
 
         const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
         const OptionalConstTensors optional_input_tensors =
@@ -235,7 +228,7 @@ struct operation_t {
                 return std::apply(
                     [](auto&&... args) -> Tensors {
                         return detail::map_execute_on_worker_thread_return_to_launch_op_return<concrete_operation_t>(
-                            concrete_operation_t::execute_on_worker_thread(std::forward<decltype(args)>(args)...));
+                            concrete_operation_t::operator()(std::forward<decltype(args)>(args)...));
                     },
                     execute_on_worker_thread_args);
             },
@@ -256,7 +249,7 @@ struct operation_t {
         } else {
             static_assert(
                 tt::stl::concepts::always_false_v<concrete_operation_t>,
-                "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a "
+                "Operation is expecting the operator() method to return either a single Tensor or a "
                 "vector of "
                 "Tensor(s).");
         }
@@ -276,7 +269,12 @@ struct operation_t {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
 constexpr auto register_operation() {
-    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t>{};
+    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t, false>{};
+}
+
+template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
+constexpr auto register_operation_with_auto_launch_op() {
+    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t, true>{};
 }
 
 namespace detail {
@@ -298,5 +296,6 @@ struct lambda_operation_t {
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
+using ttnn::decorators::register_operation_with_auto_launch_op;
 
 }  // namespace ttnn

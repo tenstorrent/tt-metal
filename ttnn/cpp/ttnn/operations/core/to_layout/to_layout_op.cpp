@@ -39,7 +39,7 @@ inline bool use_multicore_device_tilize(
 }
 
 template <typename T>
-Tensor execute_on_worker_thread(
+Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
@@ -189,22 +189,22 @@ Tensor execute_on_worker_thread(
 }
 }  // namespace detail
 
-/* static */ Tensor ToLayout::execute_on_worker_thread(
+/* static */ Tensor ToLayout::operator()(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     Device* device) {
-    return detail::execute_on_worker_thread(tensor_arg, layout, dtype, memory_config, device);
+    return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 
-/* static */ Tensor ToLayout::execute_on_worker_thread(
+/* static */ Tensor ToLayout::operator()(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     DeviceMesh* device) {
-    return detail::execute_on_worker_thread(tensor_arg, layout, dtype, memory_config, device);
+    return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 
 }  // namespace core

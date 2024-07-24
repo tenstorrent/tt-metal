@@ -18,8 +18,7 @@ namespace operations {
 namespace data_movement {
 
 struct UpSample {
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         std::variant<int, std::array<int, 2>, std::array<int, 3>, std::array<int, 4>> scale_factor,
         std::optional<MemoryConfig> output_mem_config = std::nullopt) {
@@ -76,8 +75,7 @@ struct UpSample {
 };
 
 struct Repeat {
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& shape,
         std::optional<MemoryConfig> output_mem_config = std::nullopt) {
@@ -92,10 +90,11 @@ struct RepeatInterleave {
     // # This operation does not support the following cases:
     // #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
     // #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
-    static ttnn::Tensor execute_on_worker_thread(const ttnn::Tensor& input_tensor,
-                                                 uint32_t repeats,
-                                                 int32_t dim,
-                                                 std::optional<MemoryConfig> output_mem_config = std::nullopt) {
+    static ttnn::Tensor operator()(
+        const ttnn::Tensor& input_tensor,
+        uint32_t repeats,
+        int32_t dim,
+        std::optional<MemoryConfig> output_mem_config = std::nullopt) {
         MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
         auto output_tensor = tt::tt_metal::repeat_interleave(input_tensor, repeats, dim, mem_config);
         return output_tensor;
@@ -105,9 +104,9 @@ struct RepeatInterleave {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto upsample = ttnn::register_operation<"ttnn::upsample", ttnn::operations::data_movement::UpSample>();
-constexpr auto repeat = ttnn::register_operation<"ttnn::repeat", ttnn::operations::data_movement::Repeat>();
+constexpr auto upsample = ttnn::register_operation_with_auto_launch_op<"ttnn::upsample", ttnn::operations::data_movement::UpSample>();
+constexpr auto repeat = ttnn::register_operation_with_auto_launch_op<"ttnn::repeat", ttnn::operations::data_movement::Repeat>();
 constexpr auto repeat_interleave =
-    ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::RepeatInterleave>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::repeat_interleave", ttnn::operations::data_movement::RepeatInterleave>();
 
 }  // namespace ttnn

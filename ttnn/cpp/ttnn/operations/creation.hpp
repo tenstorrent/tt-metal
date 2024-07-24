@@ -153,7 +153,7 @@ inline ttnn::Tensor empty_like(
 }
 
 struct Full {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Shape& shape,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -163,7 +163,7 @@ struct Full {
         return full(shape, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Shape& shape,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -175,7 +175,7 @@ struct Full {
 };
 
 struct FullLike {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& tensor,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -185,7 +185,7 @@ struct FullLike {
         return full_like(tensor, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& tensor,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -197,15 +197,15 @@ struct FullLike {
 };
 
 struct Arange {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const int64_t stop,
         const DataType dtype = ttnn::bfloat16,
         const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-        return Arange::execute_on_worker_thread(0, stop, 1, dtype, device, memory_config);
+        return Arange::operator()(0, stop, 1, dtype, device, memory_config);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const int64_t start,
         const int64_t stop,
         const int64_t step = 1,
@@ -232,18 +232,18 @@ struct Arange {
 }  // namespace creation
 }  // namespace operations
 
-constexpr auto full = ttnn::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
+constexpr auto full = ttnn::register_operation_with_auto_launch_op<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = REGISTER_OPERATION_FROM_FUNCTION("ttnn::zeros", ttnn::operations::creation::zeros);
 constexpr auto ones = REGISTER_OPERATION_FROM_FUNCTION("ttnn::ones", ttnn::operations::creation::ones);
 constexpr auto empty = REGISTER_OPERATION_FROM_FUNCTION("ttnn::empty", ttnn::operations::creation::empty);
 
-constexpr auto full_like = ttnn::register_operation<"ttnn::full_like", ttnn::operations::creation::FullLike>();
+constexpr auto full_like = ttnn::register_operation_with_auto_launch_op<"ttnn::full_like", ttnn::operations::creation::FullLike>();
 constexpr auto zeros_like =
     REGISTER_OPERATION_FROM_FUNCTION("ttnn::zeros_like", ttnn::operations::creation::zeros_like);
 constexpr auto ones_like = REGISTER_OPERATION_FROM_FUNCTION("ttnn::ones_like", ttnn::operations::creation::ones_like);
 constexpr auto empty_like =
     REGISTER_OPERATION_FROM_FUNCTION("ttnn::empty_like", ttnn::operations::creation::empty_like);
 
-constexpr auto arange = ttnn::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
+constexpr auto arange = ttnn::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn
