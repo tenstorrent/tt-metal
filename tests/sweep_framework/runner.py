@@ -112,8 +112,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
             p.terminate()
             p = None
-            smi_dir = architecture.tt_smi_path(ARCH)
-            smi_process = subprocess.run([smi_dir, "-tr", "0"])
+            smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
             if smi_process.returncode == 0:
                 print("SWEEPS: TT-SMI Reset Complete Successfully")
             result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
