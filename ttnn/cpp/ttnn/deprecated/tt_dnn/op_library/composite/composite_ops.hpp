@@ -65,11 +65,6 @@ Tensor mac(
 // use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// mish[x] = x*tanh[softplus[x]]
-// use transformation y = x*tanh[softplus[x]] by broadcast
-// Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor mish(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // Function Selu - scaled exponential linear
 // use transformation y = scale * alpha * (exp(X)-1) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
@@ -518,12 +513,6 @@ Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// nextafter
-Tensor nextafter(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
