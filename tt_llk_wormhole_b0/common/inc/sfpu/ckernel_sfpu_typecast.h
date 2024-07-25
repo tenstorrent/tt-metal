@@ -23,7 +23,6 @@ inline void _calculate_typecast_fp16b_to_uint16_()
 {
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPENCC(0,0,0,0);
         TTI_SFPLOAD(0,0,3,0);
         TTI_SFPSETCC(0,0,0,0);
         TTI_SFPLOADI(0,0,0);
@@ -180,7 +179,6 @@ inline void _calculate_typecast_uint32_to_fp16b_()
 {
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPENCC(0,0,0,0);
         TTI_SFPLOAD(0,4,3,0);
         TTI_SFPSETSGN(0,0,1,1);
         TTI_SFPCAST(1,2,0);
@@ -198,7 +196,6 @@ inline void _calculate_typecast_uint32_to_fp32_()
 {
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPENCC(0,0,0,0);
         TTI_SFPLOAD(0,4,3,0);
         TTI_SFPSETSGN(0,0,1,1);
         TTI_SFPCAST(1,2,0);
