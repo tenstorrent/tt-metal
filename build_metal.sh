@@ -56,7 +56,7 @@ show_help() {
     echo "  -h  Show this help message."
     echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c  Enable ccache for the build."
-    echo "  -b  Set the build type. Default is Release. Other options are Debug and RelWithDebInfo."
+    echo "  -b  Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
 }
 
 # Parse CLI options
