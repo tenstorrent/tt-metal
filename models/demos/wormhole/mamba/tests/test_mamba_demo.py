@@ -22,10 +22,10 @@ def test_demo(user_input, model_version, device, use_program_cache, get_tt_cache
     )
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(1500)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "user_input, model_version, max_gen_len, prefill_chunk_size",
+    "user_input, model_version, max_gen_len, prefill_chunk_size, iterations",
     (
         (
             [
@@ -34,6 +34,7 @@ def test_demo(user_input, model_version, device, use_program_cache, get_tt_cache
             "state-spaces/mamba-2.8b-slimpj",
             4,
             32,
+            1,
         ),
         (
             [
@@ -42,11 +43,12 @@ def test_demo(user_input, model_version, device, use_program_cache, get_tt_cache
             "state-spaces/mamba-2.8b-slimpj",
             4,
             128,
+            1,
         ),
     ),
 )
 def test_prefill_decode_demo(
-    user_input, model_version, device, use_program_cache, get_tt_cache_path, max_gen_len, prefill_chunk_size
+    user_input, model_version, device, use_program_cache, get_tt_cache_path, max_gen_len, prefill_chunk_size, iterations
 ):
     return run_mamba_prefill_decode_demo(
         prompts=user_input,
@@ -56,4 +58,5 @@ def test_prefill_decode_demo(
         display=False,
         cache_dir=get_tt_cache_path(model_version),
         prefill_chunk_size=prefill_chunk_size,
+        iterations=iterations,
     )
