@@ -9,13 +9,14 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/pool/maxpool/max_pool.hpp"
+#include "max_pool2d_pybind.hpp"
 
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
-namespace ttnn {
-namespace operations {
-namespace maxpool {
+
+namespace ttnn::operations {
+namespace pool {
 
 
 void py_module(py::module& module) {
@@ -99,8 +100,11 @@ void py_module(py::module& module) {
         | memory_config     | output tensor memory config   | MemoryConfig  |             | No       |
         +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
+
+    bind_max_pool2d_operation(module);
 }
 
-}  // namespace maxpool
-}  // namespace operations
-}  // namespace ttnn
+
+
+}  // namespace pool
+}  // namespace ttnn::operations
