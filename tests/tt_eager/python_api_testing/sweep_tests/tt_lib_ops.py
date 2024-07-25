@@ -3068,60 +3068,6 @@ def abs_bw(
 
 
 @setup_host_and_device
-def gt_bw(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttl.tensor.gt_bw(t0, output_mem_config)[0]
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def lt_bw(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttl.tensor.lt_bw(t0, output_mem_config)[0]
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def ne_bw(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttl.tensor.ne_bw(t0, output_mem_config)[0]
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def binary_le_bw(
     x,  # grad_tensor
     y,  # input_tensor
