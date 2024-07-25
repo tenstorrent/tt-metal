@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "tt_numpy/functions.hpp"
@@ -27,7 +27,7 @@ namespace tt_metal {
 
 Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> inputs = {input_r,input_i};
-    return concat(inputs, -1, output_mem_config);
+    return ttnn::concat(inputs, -1, output_mem_config);
 }
 
 Tensor get_real(const Tensor& input, const MemoryConfig& output_mem_config) {
