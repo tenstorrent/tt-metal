@@ -111,18 +111,16 @@ tests/scripts/run_performance.sh @tt-rkim
 # **/tensor/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - tensor and op infra
-ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ @SeanNijjar
-ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/experimental/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/experimental/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh* @razorback3 @dongjin-na
 ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
-**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
-**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
-**/ttnn/cpp/ttnn/experimental/tt_lib/fallback_ops @tt-aho
+**/ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
+**/ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
+**/ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
 
 # TTNN
 ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
@@ -130,7 +128,8 @@ ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/cpp/ttnn/operations/moreh* @razorback3 @dongjin-na
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
 
 # models
 /models/ @boris-drazic
@@ -158,7 +157,7 @@ models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
-docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @sangwon-chae
+docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @dongjin-na
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim
