@@ -247,13 +247,14 @@ Implementing functions in `.cpp` files rather than in headers reduces compilatio
 - **Encapsulation**: Improves encapsulation by hiding implementation details.
 - **Maintainability**: Simplifies code maintenance by separating interface from implementation.
 
-## 13. Avoid `using namespace std;` in Headers
+## 13. Avoid `using namespace` in Headers
 
 ### Practice
-Never write `using namespace std;` in header files.
+Never write `using namespace` in header files.
+The worst example which should be avoided in 100% cases is `using namespace std;`.
 
 ### Explanation
-Including `using namespace std;` in header files can lead to namespace pollution and conflicts, making the codebase harder to manage and increasing the risk of name collisions.
+Including `using namespace` in header files can lead to namespace pollution and conflicts, making the codebase harder to manage and increasing the risk of name collisions.
 
 ### Motivation
 - **Namespace Pollution**: Prevents namespace pollution and reduces the risk of name collisions.
