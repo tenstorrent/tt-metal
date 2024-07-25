@@ -115,8 +115,11 @@ class MambaTT(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
 
-    def to_prefill(self):
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
         self.return_logits = False
+        for i in range(self.num_layers):
+            self.layers[i].to_prefill(prefill_config)
 
     def to_decode(self, decode_config):
         self.configs = decode_config
@@ -181,3 +184,7 @@ class MambaTT(torch.nn.Module):
             x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
             x = x.view((self.configs["batch_size"], self.configs["seq_len"], -1))
             return x
+
+    def reset(self):
+        for layer in self.layers:
+            layer.reset()

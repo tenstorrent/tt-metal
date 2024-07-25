@@ -61,7 +61,7 @@ class TtMambaBlock(torch.nn.Module):
             )
 
         conv1d_bias_name = "mixer.conv1d.bias"
-        self.conv1d_bias = load_fn(
+        self.conv1d_bias_prefill = load_fn(
             conv1d_bias_name,
             lambda x: x.repeat(self.configs["outer_dim"], 1),
             postfix=f"{self.configs['outer_dim']}",
@@ -71,6 +71,8 @@ class TtMambaBlock(torch.nn.Module):
             lambda x: x.repeat(self.configs["num_users"], 1),
             postfix=f"{self.configs['num_users']}",
         )
+
+        self.conv1d_bias = self.conv1d_bias_prefill
 
         if self.configs["mode"] == ModelMode.DECODE:
             self.conv_states = []
@@ -84,7 +86,6 @@ class TtMambaBlock(torch.nn.Module):
                 )
         elif self.configs["mode"] == ModelMode.PREFILL:
             self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
-            self.conv_states = [self.convolution_cache.concat_users(i) for i in range(4)]
 
         self.use_torch_conv = False
         if self.use_torch_conv:
@@ -113,18 +114,20 @@ class TtMambaBlock(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
 
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
+        self.conv1d_bias = self.conv1d_bias_prefill
+        self.tt_ssm.to_prefill(self.configs)
+
     def to_decode(self, decode_config):
         self.configs = decode_config
-        self.tt_ssm.to_decode(self.configs)
-
-        # deallocate prefill conv_bias, need to reinitialize when back in prefill mode
-        ttnn.deallocate(self.conv1d_bias)
         self.conv1d_bias = self.conv1d_bias_decode
-
+        self.conv_states = []
         for i in range(0, 4):
-            self.conv_states[i] = ttnn.typecast(
-                self.convolution_cache.concat_users(i), self.configs["dtype"]["activations"]
+            self.conv_states.append(
+                ttnn.typecast(self.convolution_cache.concat_users(i), self.configs["dtype"]["activations"])
             )
+        self.tt_ssm.to_decode(self.configs)
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
@@ -196,9 +199,9 @@ class TtMambaBlock(torch.nn.Module):
             x_ssm = ttnn.to_layout(x_ssm, ttnn.ROW_MAJOR_LAYOUT)
             x_ssm = ttnn.concat(
                 [
-                    (self.convolution_cache.get(self.configs["current_user"], 1)),
-                    (self.convolution_cache.get(self.configs["current_user"], 2)),
-                    (self.convolution_cache.get(self.configs["current_user"], 3)),
+                    self.convolution_cache.get(self.configs["current_user"], 1),
+                    self.convolution_cache.get(self.configs["current_user"], 2),
+                    self.convolution_cache.get(self.configs["current_user"], 3),
                     x_ssm,
                 ],
                 dim=-2,
@@ -265,3 +268,7 @@ class TtMambaBlock(torch.nn.Module):
         ttnn.deallocate(out)
 
         return out_proj
+
+    def reset(self):
+        self.convolution_cache.reset()
+        self.tt_ssm.reset()
