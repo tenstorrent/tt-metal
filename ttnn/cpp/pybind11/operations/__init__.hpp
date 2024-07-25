@@ -7,17 +7,20 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "pybind11/operations/ccl.hpp"
-#include "pybind11/operations/conv2d.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/kv_cache.hpp"
-#include "pybind11/operations/maxpool2d.hpp"
-#include "pybind11/operations/pool.hpp"
-#include "pybind11/operations/ternary.hpp"
+
+#include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
+#include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
+#include "ttnn/operations/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
@@ -26,12 +29,12 @@
 #include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
-#include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
+#include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
-
+#include "ttnn/operations/experimental/experimental_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -61,6 +64,11 @@ void py_module(py::module& module) {
     auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
     unary_backward::py_module(m_unary_backward);
 
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_bind_all_gather(m_ccl);
+    ccl::py_bind_line_all_gather(m_ccl);
+    ccl::py_bind_reduce_scatter(m_ccl);
+
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);
 
@@ -85,8 +93,9 @@ void py_module(py::module& module) {
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv2d::py_module(m_conv2d);
 
-    auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
-    maxpool2d::py_module(m_maxpool2d);
+    auto m_pool = module.def_submodule("pool", "pooling  operations");
+    maxpool::py_module(m_pool);
+    avgpool::py_module(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
@@ -97,17 +106,14 @@ void py_module(py::module& module) {
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);
 
-    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_module(m_ccl);
-
     auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
     kv_cache::py_module(m_kv_cache);
 
-    auto m_pool = module.def_submodule("pool", "pool operations");
-    pool::py_module(m_pool);
-
     auto m_copy = module.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);
+
+    auto m_experimental = module.def_submodule("experimental", "experimental operations");
+    experimental::py_module(m_experimental);
 }
 
 }  // namespace operations

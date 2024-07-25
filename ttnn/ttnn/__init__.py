@@ -3,16 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import dataclasses
 import json
+import importlib
 import os
 import pathlib
-import pprint
-from typing import Optional
 from types import ModuleType
 
-import sys
-from pathlib import Path
 from loguru import logger
 
 # Sets env and updates shared libs rpath
@@ -23,70 +19,9 @@ library_tweaks.setup_ttnn_so()
 
 import ttnn._ttnn
 
-CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
-
-UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
-UnaryOpType = ttnn._ttnn.activation.UnaryOpType
-
-
-@dataclasses.dataclass
-class Config:
-    cache_path: pathlib.Path = pathlib.Path().home() / ".cache" / "ttnn"
-    model_cache_path: pathlib.Path = cache_path / "models"
-    tmp_dir: pathlib.Path = pathlib.Path("/") / "tmp" / "ttnn"
-    enable_model_cache: bool = False
-    enable_fast_runtime_mode: bool = True
-    throw_exception_on_fallback: bool = False
-    enable_logging: bool = False
-    enable_graph_report: bool = False
-    enable_detailed_buffer_report: bool = False
-    enable_detailed_tensor_report: bool = False
-    enable_comparison_mode: bool = False
-    comparison_mode_pcc: float = 0.9999
-    root_report_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
-    report_name: Optional[str] = None
-
-    @property
-    def report_path(self):
-        import zlib
-        import pickle
-
-        if self.report_name is None:
-            return None
-        return self.root_report_path / f"{zlib.adler32(pickle.dumps(self.report_name))}"
-
-    def __setattr__(self, name: str, value) -> None:
-        object.__setattr__(self, name, value)
-        if isinstance(value, pathlib.Path):
-            value = str(value)
-        setattr(CPP_CONFIG, name, value)
-        self.validate(name)
-
-    def validate(self, name):
-        if name in {"enable_fast_runtime_mode", "enable_logging"}:
-            if self.enable_fast_runtime_mode:
-                if self.enable_logging:
-                    logger.warning(
-                        "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want to enable logging."
-                    )
-
-        if name in {
-            "enable_logging",
-            "enable_graph_report",
-            "enable_detailed_buffer_report",
-            "enable_detailed_tensor_report",
-        }:
-            if not self.enable_logging:
-                if self.enable_graph_report:
-                    logger.warning("Running without logging. Please enable logging to save graph report")
-                if self.enable_detailed_buffer_report:
-                    logger.warning("Running without logging. Please enable logging to save detaile buffer report")
-                if self.enable_detailed_tensor_report:
-                    logger.warning("Running without logging. Please enable logging to save detailed tensor report")
-
-
-CONFIG = Config()
+Config = ttnn._ttnn.core.Config
+CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
 if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
@@ -121,8 +56,11 @@ def load_config_from_json_file(json_path):
 
 def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
-        normalized_config = dataclasses.asdict(CONFIG)
-        for key, value in normalized_config.items():
+        normalized_config = {}
+        for key in dir(CONFIG):
+            if "__" in key:
+                continue
+            value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
                 value = str(value)
             normalized_config[key] = value
@@ -141,7 +79,7 @@ if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
-logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
+logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
 @contextlib.contextmanager
@@ -196,6 +134,8 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     DeviceGrid,
+    UnaryWithParam,
+    UnaryOpType,
 )
 
 from ttnn.device import (
@@ -241,8 +181,10 @@ from ttnn.core import (
 )
 
 import ttnn.reflection
-import ttnn.tracer
 import ttnn.database
+
+if importlib.util.find_spec("torch") is not None:
+    import ttnn.tracer
 
 
 begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
@@ -321,5 +263,11 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
+
+from ttnn.operations.embedding import (
+    EmbeddingsType,
+)
+
 from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
-from ttnn.operations.pool import MaxPool2d
+from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, global_avg_pool2d, avg_pool2d
+from ttnn.operations.conv1d import Conv1d, Conv1dConfig

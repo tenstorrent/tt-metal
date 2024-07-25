@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/buffers/circular_buffer_types.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
-#include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -382,7 +382,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         }
     }
     for (auto& coord : mcast_sender_core_ranges) {
-        log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start.x, coord.start.y);
+        log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i=0; i < num_cores; ++i) {
         // not found in mcast sender
@@ -391,7 +391,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         }
     }
     for (auto& coord : mcast_receiver_core_ranges) {
-        log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start.x, coord.start.y);
+        log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);

@@ -184,25 +184,58 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize_init() {
-    _llk_pack_untilize_init_<block_ct_dim>();
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    static_assert(diagonal==false && "Diagonal packing is not supported for BH!");
+    const std::uint32_t output_id = get_output_id(output);
+
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        num_faces
+    );
+
+    // Pack row by row
+    // if constexpr (diagonal) {
+    //     TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
+    // } else {
+    TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0);
+    // }
 }
 
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t block_c_index = 0) {
-
+inline void llk_pack_untilize_uninit(std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
-    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1 + SCALE_DATUM_SIZE(pack_dst_format[output_id], (block_c_index * ((num_faces>1) ? num_faces/2 : 1) * block_ct_dim * FACE_R_DIM))/16;
 
-    for (std::uint32_t block=0; block<num_blocks; block++) {
+    uint x_stride = (uint)(pack_src_format[output_id]&0x3) == (uint)DataFormat::Float32 ? 4 :
+                    (uint)(pack_src_format[output_id]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
+    const uint z_stride = FACE_R_DIM*FACE_C_DIM*x_stride;
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+}
 
-        _llk_pack_untilize_<block_ct_dim>(
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+inline void llk_pack_untilize(
+    std::uint32_t block_rt_dim,
+    std::uint32_t output,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces = 4,
+    const std::uint32_t block_c_index = 0) {
+
+    static_assert(diagonal==false && "Diagonal packing is not supported for BH!");
+    const std::uint32_t output_id = get_output_id(output);
+    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1 + SCALE_DATUM_SIZE(pack_dst_format[output_id], (block_c_index * ((num_faces>2) ? num_faces/2 : num_faces) * block_ct_dim * FACE_C_DIM))/16;
+
+    for (std::uint32_t block_rt=0; block_rt<block_rt_dim; block_rt++) {
+
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
             pack_tile_addr,
-            pack_dst_format[output_id]
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces,
+            block_rt*block_ct_dim
         );
 
-        pack_tile_addr += block_ct_dim*cb_interface[output_id].fifo_page_size;
+        pack_tile_addr += full_ct_dim*cb_interface[output_id].fifo_page_size;
     }
 }
 
@@ -241,13 +274,13 @@ inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
-template <bool untilize = false>
+template <bool untilize = false, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize>(
+    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor>(
         face_r_dim,
         narrow_tile
     );
@@ -259,7 +292,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>(
         face_r_dim,
         narrow_tile
     );

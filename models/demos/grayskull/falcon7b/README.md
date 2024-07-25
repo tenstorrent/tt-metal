@@ -8,7 +8,7 @@ To run the model for a single user you can use the command line input:
 
 To run the demo using prewritten prompts for a batch of 32 users run (currently only supports same token-length inputs):
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/grayskull/falcon7b/demo_grayskull.py::test_demo[user_input0-default_mode_stochastic]`
+`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/grayskull/falcon7b/demo_grayskull.py::test_demo[user_input0-default_mode_stochastic]`
 
 ## Inputs
 

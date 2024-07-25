@@ -31,7 +31,7 @@ run_t3000_llama3_70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
   # Llama3 70B demo (output verification)
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_enabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3] --timeout=900
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3] --timeout=900
 
 
   # Record the end time
@@ -68,6 +68,7 @@ run_t3000_mixtral_tests() {
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
   pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

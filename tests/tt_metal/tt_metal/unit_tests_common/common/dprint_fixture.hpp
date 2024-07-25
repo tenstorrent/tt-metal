@@ -38,8 +38,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_enabled(false);
 
         // By default, exclude dispatch cores from printing
-        auto num_cqs_str = getenv("TT_METAL_NUM_HW_CQS");
-        int num_cqs = (num_cqs_str != nullptr)? std::stoi(num_cqs_str) : 1;
+        unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
         std::map<CoreType, std::unordered_set<CoreCoord>> disabled;
         for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
             // TODO: Better way to get this info once we've solidified how it will be set.

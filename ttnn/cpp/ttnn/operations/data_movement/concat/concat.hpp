@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/operations/core.hpp"
-#include "tt_eager/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+
+#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 
 #include <ranges>
 
@@ -18,7 +19,12 @@ namespace data_movement {
 struct Concat {
 
     // Wrapper for TTDNN
-    static inline ttnn::Tensor execute_on_worker_thread(uint8_t queue_id, const std::vector<ttnn::Tensor>& input_tensors, int dim, const std::optional<MemoryConfig>& memory_config, std::optional<ttnn::Tensor> &optional_output_tensor) {
+    static inline ttnn::Tensor operator()(
+        uint8_t queue_id,
+        const std::vector<ttnn::Tensor>& input_tensors,
+        int dim,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<ttnn::Tensor>& optional_output_tensor) {
         TT_FATAL(input_tensors.size() > 0, "ttnn.concat: expected a non-empty list of Tensors!");
         TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
         const auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG); // should match input tensor memory config when unpopulated but causes CI errors for now
@@ -94,20 +100,22 @@ struct Concat {
         }
 
         return output_tensor;
-
     }
 
-    static inline ttnn::Tensor execute_on_worker_thread(const std::vector<ttnn::Tensor>& input_tensors, int dim, const std::optional<MemoryConfig>& memory_config, std::optional<ttnn::Tensor> &optional_output_tensor) {
+    static inline ttnn::Tensor operator()(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        int dim,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<ttnn::Tensor>& optional_output_tensor) {
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
-
+        return operator()(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
     }
-
 };
 
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto concat = ttnn::register_operation<ttnn::operations::data_movement::Concat>("ttnn::concat");
+constexpr auto concat =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::concat", ttnn::operations::data_movement::Concat>();
 
 }  // namespace ttnn

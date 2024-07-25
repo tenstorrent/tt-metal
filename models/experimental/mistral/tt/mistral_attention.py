@@ -189,7 +189,7 @@ class TtAttention(nn.Module):
         xq.deallocate()
 
         key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-        key = tt_lib.tensor.permute(key, [0, 2, 3, 1])
+        key = ttnn.permute(key, [0, 2, 3, 1])
         key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
 
         value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
@@ -203,8 +203,8 @@ class TtAttention(nn.Module):
         scores = ttnn.multiply(scores, self.scale, memory_config=self.args.out_mem_config)
 
         if mask is not None:
-            mask = tt_lib.tensor.permute(mask, [2, 3, 0, 1])
-            scores = tt_lib.tensor.permute(scores, [2, 3, 0, 1])
+            mask = ttnn.permute(mask, [2, 3, 0, 1])
+            scores = ttnn.permute(scores, [2, 3, 0, 1])
 
             scores = tt_lib.tensor.bcast(
                 scores,
@@ -213,7 +213,7 @@ class TtAttention(nn.Module):
                 tt_lib.tensor.BcastOpDim.HW,
                 output_mem_config=self.output_mem_config,
             )
-            scores = tt_lib.tensor.permute(scores, [2, 3, 0, 1])
+            scores = ttnn.permute(scores, [2, 3, 0, 1])
         desired_output_shape = [bsz, 32, seqlen, seqlen]
         desired_output_shape[-1] = value.get_legacy_shape()[-1]
 

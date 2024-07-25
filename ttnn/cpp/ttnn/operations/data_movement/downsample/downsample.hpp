@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
 
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include "device/downsample_op.hpp"
 
@@ -17,7 +17,7 @@ namespace operations {
 namespace data_movement {
 
 struct ExecuteDownsample {
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> dtype) {
         auto dtype_ = dtype.has_value() ? dtype.value():input_tensor_a.get_dtype();
         auto output_tensor = operation::run(
@@ -29,5 +29,6 @@ struct ExecuteDownsample {
 };
 } // data_movement
 } // operations
-constexpr auto downsample = ttnn::register_operation<ttnn::operations::data_movement::ExecuteDownsample>("ttnn::downsample");
+constexpr auto downsample = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::downsample", ttnn::operations::data_movement::ExecuteDownsample>();
 } // data_movement

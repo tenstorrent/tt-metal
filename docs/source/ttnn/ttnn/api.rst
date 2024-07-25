@@ -262,6 +262,8 @@ Pointwise Unary
    ttnn/real_bw
    ttnn/angle_bw
    ttnn/conj_bw
+   ttnn/conj
+   ttnn/polar
 
 Pointwise Binary
 ================
@@ -270,6 +272,8 @@ Pointwise Binary
    :maxdepth: 1
 
    ttnn/add
+   ttnn/addalpha
+   ttnn/subalpha
    ttnn/multiply
    ttnn/subtract
    ttnn/pow
@@ -350,6 +354,7 @@ Reduction
    ttnn/sum
    ttnn/var
    ttnn/argmax
+   ttnn/prod
    ttnn/topk
 
 Data Movement

@@ -74,7 +74,7 @@ protected:
                 continue;
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        tt::DevicePool::initialize(ids, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE);
         devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 

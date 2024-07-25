@@ -197,7 +197,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             # ttl.device.SetDefaultDevice(device_mesh.get_device(0))
 
             # TODO Update argmax to ttnn when OP becomes available
-            tt_out_B11B = ttnn.experimental.tensor.argmax(tt_out_11BH, dim=-1)
+            tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:

@@ -4,8 +4,8 @@
 
 #include "matmul.hpp"
 
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
@@ -48,8 +48,8 @@ ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct tt::operations::primary::Matmul& parameters) {
-    const auto& input_tensor_a_adjusted = parameters.transpose_a ? tt::tt_metal::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
-    const auto& input_tensor_b_adjusted = parameters.transpose_b ? tt::tt_metal::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
+    const auto& input_tensor_a_adjusted = parameters.transpose_a ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
+    const auto& input_tensor_b_adjusted = parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
 
     const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
     const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();

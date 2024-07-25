@@ -11,8 +11,7 @@ namespace operations {
 namespace normalization {
 
 struct ExecuteGroupNorm {
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+    static inline ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const int num_groups,
         const float epsilon,
@@ -73,7 +72,7 @@ struct ExecuteGroupNorm {
         return operation::run(
             GroupNorm{
                 .eps=epsilon,
-                .num_groups=num_groups,
+                .num_groups=static_cast<uint32_t>(num_groups),
                 .output_mem_config=output_mem_config,
                 .program_config=program_config},
                 {input_tensor},
@@ -84,6 +83,7 @@ struct ExecuteGroupNorm {
 }  // namespace normalization
 }  // namespace operations
 
-constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::ExecuteGroupNorm>("ttnn::group_norm");
+constexpr auto group_norm = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
 
 }  // namespace ttnn

@@ -4,13 +4,13 @@
 
 #include <tuple>
 
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/deprecated/tt_numpy/functions.hpp"
 
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;

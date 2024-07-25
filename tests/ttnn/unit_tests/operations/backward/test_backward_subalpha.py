@@ -24,14 +24,30 @@ def test_bw_subalpha(input_shapes, alpha, device):
 
     tt_output_tensor_on_device = ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
 
-    in_data.retain_grad()
-    other_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.subalpha_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data, alpha)
 
-    pyt_y = torch.sub(in_data, other_data, alpha=alpha)
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
 
-    pyt_y.backward(gradient=grad_data)
 
-    golden_tensor = [in_data.grad, other_data.grad]
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_bw_subalpha_default(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    tt_output_tensor_on_device = ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.subalpha_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

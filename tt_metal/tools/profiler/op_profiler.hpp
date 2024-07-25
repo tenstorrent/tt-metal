@@ -9,11 +9,11 @@
 #include <tuple>
 #include <type_traits>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "third_party/json/json.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/TracyC.h"

@@ -5,12 +5,14 @@
 #pragma once
 #include <optional>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace tt {

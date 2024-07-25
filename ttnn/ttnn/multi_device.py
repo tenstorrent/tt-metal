@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-from collections import abc
 
 from typing import List, Dict
 
 import ttnn
-import torch
 
 
 DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
@@ -99,7 +97,7 @@ class TensorToMesh:
     def __init__(self, device_mesh):
         self.device_mesh = device_mesh
 
-    def map(self, tensor: torch.tensor):
+    def map(self, tensor: "torch.Tensor"):
         raise NotImplementedError("Subclasses must implement this method")
 
     def config(self):
@@ -124,7 +122,9 @@ class ShardTensorToMesh(TensorToMesh):
         super().__init__(device_mesh)
         self.shard_dim = dim
 
-    def map(self, tensor: torch.tensor) -> Dict[int, ttnn.Tensor]:
+    def map(self, tensor: "torch.Tensor") -> Dict[int, ttnn.Tensor]:
+        import torch
+
         sliced_tensors = torch.chunk(tensor, self.device_mesh.get_num_devices(), dim=self.shard_dim)
         return list(sliced_tensors)
 
@@ -139,7 +139,7 @@ class ReplicateTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh: DeviceMesh):
         super().__init__(device_mesh)
 
-    def map(self, tensor: torch.tensor):
+    def map(self, tensor: "torch.Tensor"):
         return [tensor for i in range(self.device_mesh.get_num_devices())]
 
     def config(self):
@@ -153,7 +153,9 @@ class ConcatMeshToTensor(MeshToTensor):
         self.concat_dim = dim
         self.device_mesh = device_mesh
 
-    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
+    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+        import torch
+
         device_shards_converted_to_torch = [
             ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
@@ -164,7 +166,7 @@ class ListMeshToTensor(MeshToTensor):
     def __init__(self, device_mesh: DeviceMesh):
         self.device_mesh = device_mesh
 
-    def compose(self, tensor: ttnn.Tensor) -> List[torch.Tensor]:
+    def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
         return [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
 
 

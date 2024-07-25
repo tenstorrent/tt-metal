@@ -4,8 +4,8 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-#include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

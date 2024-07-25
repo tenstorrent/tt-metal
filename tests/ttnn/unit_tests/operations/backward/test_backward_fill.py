@@ -29,12 +29,11 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
-    pyt_y = torch.zeros_like(grad_data)
-    grad_sum = grad_data.sum()
-    pyt_y.fill_(grad_sum)
 
     tt_output_tensor_on_device = ttnn.fill_bw(grad_tensor, input_tensor)
 
-    golden_tensor = [pyt_y]
+    golden_function = ttnn.get_golden_function(ttnn.fill_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
     comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
     assert comp_pass

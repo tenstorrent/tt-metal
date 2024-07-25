@@ -25,15 +25,8 @@ def test_bw_addcmul(input_shapes, value, device):
 
     tt_output_tensor_on_device = ttnn.addcmul_bw(grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, value)
 
-    in_data.retain_grad()
-    tensor1_data.retain_grad()
-    tensor2_data.retain_grad()
-
-    pyt_y = torch.addcmul(in_data, tensor1_data, tensor2_data, value=value)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad, tensor1_data.grad, tensor2_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.addcmul_bw)
+    golden_tensor = golden_function(grad_data, in_data, tensor1_data, tensor2_data, value)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

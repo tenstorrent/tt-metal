@@ -27,7 +27,7 @@ from ttnn.operations.conv.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from ttnn.operations.conv.tt_py_max_pool import TTPyMaxPool
+from ttnn.operations.pool import TTPyMaxPool
 
 from models.utility_functions import (
     _nearest_32,

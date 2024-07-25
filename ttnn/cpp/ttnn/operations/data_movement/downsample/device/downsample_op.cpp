@@ -6,9 +6,9 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -47,10 +47,10 @@ std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
     uint32_t num_cores = all_cores.num_cores();
     auto first_core_range = *all_cores.ranges().begin();
     uint32_t num_cores_height_sliced =
-        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? num_cores : first_core_range.end.x + 1;
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? num_cores : first_core_range.end_coord.x + 1;
     uint32_t num_cores_width_sliced = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
                                           ? 1
-                                          : first_core_range.end.y + 1;  // width is not sliced when height sharded
+                                          : first_core_range.end_coord.y + 1;  // width is not sliced when height sharded
     return {num_cores_height_sliced, num_cores_width_sliced};
 }
 

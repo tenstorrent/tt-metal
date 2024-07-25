@@ -7,7 +7,7 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -91,14 +91,14 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             block_height = shard_spec.value().shape[0] / TILE_HEIGHT;
             block_width = shard_spec.value().shape[1] / TILE_WIDTH;
             block_size = block_width * block_height;
-            end_core = (*shard_spec.value().grid.ranges().begin()).end;
+            end_core = (*shard_spec.value().grid.ranges().begin()).end_coord;
             output_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
             uint32_t output_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
             last_unpadded_block_height = block_height - (round_up(output_height, block_height) - output_height);
             last_unpadded_block_width = block_width - (round_up(output_width, block_width) - output_width);
         }
         auto bbox = core_group_1.bounding_box();
-        cores = grid_to_cores_with_noop(bbox.end.x, bbox.end.y, num_cores_x, num_cores_y, row_major);
+        cores = grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
     } else {
         row_major = true;
         std::tie(
@@ -383,7 +383,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        (block_sharded and not out_sharded) ? "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/"
+        (block_sharded and not out_sharded) ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/"
                                               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
                                             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,

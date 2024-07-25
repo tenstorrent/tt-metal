@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -792,16 +792,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
+    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     const auto& in0_sender_interleaved_cores =
-        grid_to_cores(in0_sender_interleaved.start, in0_sender_interleaved.end, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start, in1_sender.end, true);
+        grid_to_cores(in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
+    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         in1_receiver_other_cores = grid_to_cores(
-            in0_receiver_in1_receiver_interleaved_other_cores.value().start,
-            in0_receiver_in1_receiver_interleaved_other_cores.value().end,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
     }
 

@@ -635,7 +635,7 @@ all_binary_ops = [
         "name": "ttnn.xlogy",
     },
     {
-        "op": tt_lib.tensor.embeddings,
+        "op": ttnn.embedding,
         "name": "tt_lib.tensor.embeddings",
         "layout": "ROW_MAJOR",
         "shape_func": embeddings_shape_func,
@@ -1450,35 +1450,35 @@ def logical_noti(x):
 
 
 def glu_1(x):
-    tt_lib.tensor.glu(x, -1)
+    ttnn.glu(x, -1)
 
 
 def geglu_1(x):
-    tt_lib.tensor.geglu(x, -1)
+    ttnn.geglu(x, -1)
 
 
 def reglu_1(x):
-    tt_lib.tensor.reglu(x, -1)
+    ttnn.reglu(x, -1)
 
 
 def swiglu_1(x):
-    tt_lib.tensor.swiglu(x, -1)
+    ttnn.swiglu(x, -1)
 
 
 def glu_2(x):
-    tt_lib.tensor.glu(x, -2)
+    ttnn.glu(x, -2)
 
 
 def geglu_2(x):
-    tt_lib.tensor.geglu(x, -2)
+    ttnn.geglu(x, -2)
 
 
 def reglu_2(x):
-    tt_lib.tensor.reglu(x, -2)
+    ttnn.reglu(x, -2)
 
 
 def swiglu_2(x):
-    tt_lib.tensor.swiglu(x, -2)
+    ttnn.swiglu(x, -2)
 
 
 def repeat(x):
@@ -2192,35 +2192,35 @@ all_unary_ops = [
     },
     {
         "op": glu_1,
-        "name": "tt_lib.tensor.glu_dim_3",
+        "name": "ttnn.glu_dim_3",
     },
     {
         "op": geglu_1,
-        "name": "tt_lib.tensor.geglu_dim_3",
+        "name": "ttnn.geglu_dim_3",
     },
     {
         "op": reglu_1,
-        "name": "tt_lib.tensor.reglu_dim_3",
+        "name": "ttnn.reglu_dim_3",
     },
     {
         "op": swiglu_1,
-        "name": "tt_lib.tensor.swiglu_dim_3",
+        "name": "ttnn.swiglu_dim_3",
     },
     {
         "op": glu_2,
-        "name": "tt_lib.tensor.glu_dim_2",
+        "name": "ttnn.glu_dim_2",
     },
     {
         "op": geglu_2,
-        "name": "tt_lib.tensor.geglu_dim_2",
+        "name": "ttnn.geglu_dim_2",
     },
     {
         "op": reglu_2,
-        "name": "tt_lib.tensor.reglu_dim_2",
+        "name": "ttnn.reglu_dim_2",
     },
     {
         "op": swiglu_2,
-        "name": "tt_lib.tensor.swiglu_dim_2",
+        "name": "ttnn.swiglu_dim_2",
     },
     {
         "op": repeat,

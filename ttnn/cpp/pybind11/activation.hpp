@@ -8,8 +8,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tt_eager/tensor/tensor.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "export_enum.hpp"
 
 namespace py = pybind11;
