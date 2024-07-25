@@ -733,4 +733,16 @@ op_map = {
         "tt_op": ttnn_ops.unary_pow_bw,
         "pytorch_op": pytorch_ops.power_bw,
     },
+    "eltwise-max-bw": {
+        "tt_op": ttnn_ops.eltwise_max_bw,
+        "pytorch_op": pytorch_ops.max_bw,
+    },
+    "eltwise-min-bw": {
+        "tt_op": ttnn_ops.eltwise_min_bw,
+        "pytorch_op": pytorch_ops.min_bw,
+    },
+    "eltwise-mul-bw": {
+        "tt_op": ttnn_ops.eltwise_mul_bw,
+        "pytorch_op": pytorch_ops.mul_bw,
+    },
 }

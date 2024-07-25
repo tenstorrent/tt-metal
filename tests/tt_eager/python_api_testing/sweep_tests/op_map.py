@@ -701,25 +701,13 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
     },
-    "eltwise-mul-bw": {
-        "tt_op": tt_lib_ops.eltwise_mul_bw,
-        "pytorch_op": pytorch_ops.mul_bw,
-    },
     "eltwise-min": {
         "tt_op": tt_lib_ops.eltwise_min,
         "pytorch_op": pytorch_ops.min,
     },
-    "eltwise-min-bw": {
-        "tt_op": tt_lib_ops.eltwise_min_bw,
-        "pytorch_op": pytorch_ops.min_bw,
-    },
     "eltwise-max": {
         "tt_op": tt_lib_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
-    },
-    "eltwise-max-bw": {
-        "tt_op": tt_lib_ops.eltwise_max_bw,
-        "pytorch_op": pytorch_ops.max_bw,
     },
     "eltwise-squared_difference": {
         "tt_op": tt_lib_ops.eltwise_squared_difference,
