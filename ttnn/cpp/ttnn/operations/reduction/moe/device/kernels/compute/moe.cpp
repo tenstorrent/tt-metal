@@ -21,113 +21,93 @@
 int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
-void exp_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
+template<uint32_t in0, uint32_t in1, uint32_t num_tiles>
+void max_block_inplace() {
+    // inputs come in full, outputs go out full
+    copy_tile_to_dst_init_short(in0);
+    max_tile_init();
 
-    exp_tile_init();
-    cb_wait_front(in0_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    constexpr uint32_t dst_reg_0 = 0;
+    constexpr uint32_t dst_reg_1 = 1;
+    cb_wait_front(in0, num_tiles);
+    cb_wait_front(in1, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst(tt::DstMode::Half);
-        copy_tile(in0_cb, 0, 0);
-        cb_pop_front(in0_cb, 1);
-        exp_tile(0);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
+        copy_tile(in0, 0, dst_reg_0);
+        copy_tile(in1, i, dst_reg_1);
+        cb_pop_front(in0, 1);
+        cb_reserve_back(in0, 1);
+        max_tile(dst_reg_0, dst_reg_1);
+        pack_tile(dst_reg_0, in0);
+        cb_push_back(in0, 1);
         release_dst(tt::DstMode::Half);
     }
 }
-void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
 
-    add_tiles_init();
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst(tt::DstMode::Half);
-        add_tiles(in0_cb, in1_cb, 0, i, 0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst(tt::DstMode::Half);
-    }
+template<uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
+void sub_exp_block_bcast_cols_inplace() {
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: in1_cb has rows produced
 
-    cb_pop_front(in1_cb, num_tiles);
-}
-void sub_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
-
-    sub_tiles_init();
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst(tt::DstMode::Half);
-        sub_tiles(in0_cb, in1_cb, 0, i, 0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst(tt::DstMode::Half);
-    }
-
-    cb_pop_front(in1_cb, num_tiles);
-}
-void sub_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
-
-    uint32_t num_tiles = rows * cols;
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
+    exp_tile_init<true>();
+    cb_wait_front(in0_cb, rows*cols);
     cb_wait_front(in1_cb, rows);
+
+
+    constexpr uint32_t dst_tiles = 1; //SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = cols; // #>> LOG2_SUB_EXP_GRANULARITY;
     for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
-            acquire_dst(tt::DstMode::Half);
-            sub_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-            cb_pop_front(in0_cb, 1);
-            cb_reserve_back(in0_cb, 1);
-            pack_tile(0, in0_cb);
-            cb_push_back(in0_cb, 1);
-            release_dst(tt::DstMode::Half);
+        for(uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                exp_tile<true>(j);
+            }
+            tile_regs_commit();
+            cb_pop_front(in0_cb, dst_tiles);
+            cb_reserve_back(in0_cb, dst_tiles);
+            tile_regs_wait();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+            cb_push_back(in0_cb, dst_tiles);
+            tile_regs_release();
         }
     }
-    cb_pop_front(in1_cb, rows);
 }
-void add_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
+
+void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
     uint32_t num_tiles = rows * cols;
-    add_bcast_cols_init_short(in0_cb, in1_cb);
+    unpack_reconfig_data_format(in0_cb, in1_cb);
+    add_bcast_rows_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, rows);
+    cb_wait_front(in1_cb, cols);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst(tt::DstMode::Half);
-            add_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
+            pack_reconfig_data_format(in0_cb);
             pack_tile(0, in0_cb);
             cb_push_back(in0_cb, 1);
             release_dst(tt::DstMode::Half);
         }
     }
-    cb_pop_front(in1_cb, rows);
+    cb_pop_front(in1_cb, cols);
 }
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-
+    unpack_reconfig_data_format(in0_cb, in1_cb);
     mul_tiles_init();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
@@ -136,6 +116,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
+        pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
         release_dst(tt::DstMode::Half);
@@ -169,6 +150,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
+    unpack_reconfig_data_format_srca(in0_cb);
     eqz_tile_init();
     cb_wait_front(in0_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -176,6 +158,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
         eqz_tile(0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
+        pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
         release_dst(tt::DstMode::Half);
@@ -209,7 +192,7 @@ void reduce_c() {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-
+    unpack_reconfig_data_format(in0_cb, scale_cb);
     reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     const uint32_t num_tiles = rows * cols;
@@ -226,6 +209,7 @@ void reduce_c() {
         }
 
         cb_reserve_back(out_cb, 1);
+        pack_reconfig_data_format(out_cb);
         pack_tile(reduce_dst_idx, out_cb);
         cb_push_back(out_cb, 1);
         release_dst(tt::DstMode::Half);
@@ -392,16 +376,32 @@ void MAIN {
     constexpr uint32_t K = get_compile_time_arg_val(12);
     constexpr uint32_t logk = get_compile_time_arg_val(13);
     constexpr uint32_t logWt = get_compile_time_arg_val(14);
-
+    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
     constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
 
+    // mask out invalid experts
+    add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt);
+
+    // top-k
     top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
-    add_block_bcast_cols_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt);
-    sub_block_bcast_cols_inplace(output_ind_cb_index, expert_mask_cb_index, Ht,Kt);
+
+    // mask out all experts except the top-k
+    add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt);
     eqz_block_inplace(output_ind_cb_index, Ht*Kt);
-    //mul_block_bcast_cols_inplace(values_cb_index, output_ind_cb_index, Ht,Kt);
-    exp_block_inplace(values_cb_index, Ht*Kt);
-    //reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
+
+    //softmax
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+    sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
+    recip_block_inplace(cb_cur_sum, Ht);
+    mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
+
+    // select 0th expert
+    mul_block_inplace(values_cb_index, output_ind_cb_index, Ht*Kt);
+
+    //final sum
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
 
 }
 }

@@ -7,6 +7,8 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
+#include "tt_metal/common/math.hpp"
+#include "tt_eager/tt_dnn/op_library/math.hpp"
 
 namespace ttnn::operations::reduction::detail {
 
@@ -124,6 +126,18 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         .set_page_size(output_ind_cb_index, index_tile_size);
     auto cb_output_ind_tensor = tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 
+    uint32_t cb_cur_max_index = tt::CB::c_intermed5;
+    tt::tt_metal::CircularBufferConfig cb_cur_max_config = tt::tt_metal::CircularBufferConfig(
+        num_out_tiles * out_tile_size, {{cb_cur_max_index, out_cb_data_format}})
+        .set_page_size(cb_cur_max_index, out_tile_size);
+    auto cb_cur_max_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_cur_max_config);
+
+    uint32_t cb_cur_sum_index = tt::CB::c_intermed6;
+    tt::tt_metal::CircularBufferConfig cb_cur_sum_config = tt::tt_metal::CircularBufferConfig(
+        num_out_tiles * out_tile_size, {{cb_cur_sum_index, out_cb_data_format}})
+        .set_page_size(cb_cur_sum_index, out_tile_size);
+    auto cb_cur_sum_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_cur_sum_config);
+
     // OUTPUT CBs
     uint32_t out_cb_index = tt::CB::c_out0;
     tt::tt_metal::CircularBufferConfig c_out0_config = tt::tt_metal::CircularBufferConfig(
@@ -171,10 +185,13 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         }
     );
 
+    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
+    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index,
                                                         (uint32_t) out_is_dram,
                                                         Ht,
-                                                        k};
+                                                        k,
+                                                        packed_identity_scalar};
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_binary_interleaved.cpp",
@@ -207,6 +224,8 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
                                         k,
                                         (std::uint32_t) std::log2(k),
                                         (std::uint32_t) std::log2(Wt),
+                                        cb_cur_max_index,
+                                        cb_cur_sum_index
                                         };
 
     tt::tt_metal::KernelHandle moe_compute_kernel_id = tt::tt_metal::CreateKernel(
