@@ -25,7 +25,7 @@ from models.demos.ttnn_resnet.tests.test_ttnn_resnet50_performant import (
     setup_l1_sharded_input,
     setup_dram_sharded_input,
 )
-from models.demos.ttnn_resnet.tt.custom_preprocessing import custom_preprocessor
+from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
 
 try:
@@ -308,7 +308,7 @@ def run_perf_resnet(
     torch_resnet50.eval()
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_resnet50, custom_preprocessor=custom_preprocessor, device=None
+        initialize_model=lambda: torch_resnet50, custom_preprocessor=create_custom_mesh_preprocessor(None), device=None
     )
     torch_resnet50.to(torch.bfloat16)
 

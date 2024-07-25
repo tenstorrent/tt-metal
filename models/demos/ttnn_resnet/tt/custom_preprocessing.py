@@ -60,3 +60,12 @@ def custom_preprocessor(
                 ttnn_module_args=ttnn_module_args,
             )
     return parameters
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(
+            model, name, ttnn_module_args, convert_to_ttnn, custom_mesh_preprocessor, mesh_mapper
+        )
+
+    return custom_mesh_preprocessor

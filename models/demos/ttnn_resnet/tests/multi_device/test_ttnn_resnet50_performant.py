@@ -11,7 +11,7 @@ from models.utility_functions import (
     divup,
     run_for_wormhole_b0,
 )
-from tests.ttnn.integration_tests.resnet.test_ttnn_functional_resnet50_new import create_test_infra
+from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
 
 try:
     from tracy import signpost
