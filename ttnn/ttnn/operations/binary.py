@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -113,19 +113,28 @@ ttnn.attach_golden_function(ttnn.le, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.logical_and(input_tensor_a, input_tensor_b)
+    return input_tensor_a.logical_and_(input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn.logical_and, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_and_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.logical_or(input_tensor_a, input_tensor_b)
+    return input_tensor_a.logical_or_(input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn.logical_or, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logical_or_, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.logical_xor_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.logical_xor_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -245,6 +254,24 @@ def _golden_function_logical_xor(input_tensor_a, input_tensor_b, *args, **kwargs
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_xor, golden_function=_golden_function_logical_xor)
 
 
+def _golden_function_logical_and(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_and(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_and, golden_function=_golden_function_logical_and)
+
+
+def _golden_function_logical_or(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_or(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.logical_or, golden_function=_golden_function_logical_or)
+
+
 def _golden_function_atan2(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
@@ -270,6 +297,61 @@ def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, 
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.isclose, golden_function=_golden_function_isclose)
+
+
+def _golden_function_div(input_tensor_a, input_tensor_b, round_mode, *args, **kwargs):
+    import torch
+
+    if round_mode == "None":
+        return torch.div(input_tensor_a, input_tensor_b, rounding_mode=None)
+    return torch.div(input_tensor_a, input_tensor_b, rounding_mode=round_mode)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.div, golden_function=_golden_function_div)
+
+
+def _golden_function_div_no_nan(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    if isinstance(input_tensor_b, float):
+        if input_tensor_b == 0:
+            return torch.zeros_like(input_tensor_a)
+        else:
+            return input_tensor_a / input_tensor_b
+    else:
+        return torch.where(input_tensor_b == 0, 0, input_tensor_a / input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.div_no_nan, golden_function=_golden_function_div_no_nan)
+
+
+def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.floor_divide(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.floor_div, golden_function=_golden_function_floor_div)
+
+
+def _golden_function_binary_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.remainder(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.binary.binary_remainder, golden_function=_golden_function_binary_remainder
+)
+
+
+def _golden_function_binary_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.fmod(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.binary_fmod, golden_function=_golden_function_binary_fmod)
 
 
 def torch_squared_difference(x, y, *args, **kwargs):

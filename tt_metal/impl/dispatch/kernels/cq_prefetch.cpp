@@ -82,7 +82,7 @@ constexpr uint32_t max_read_packed_cmd =
 constexpr uint32_t l1_cache_elements = max_read_packed_cmd;
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
-    l1_to_local_cache_copy_chunk;
+    l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);;
 
 static uint32_t l1_cache[l1_cache_elements_rounded];
 

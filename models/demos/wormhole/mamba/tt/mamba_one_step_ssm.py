@@ -90,13 +90,13 @@ class TtMambaSSM(torch.nn.Module):
             x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
             return x.repeat(self.configs["num_users"], 1)  # (B, 2EN)
 
-        self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.configs['outer_dim']}")
-
+        self.A_prefill = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.configs['outer_dim']}")
         self.A_decode = load_fn(A_weight_name, tm_fn=preprocess_A_decode, postfix=f"A_{self.configs['num_users']}")
+        self.A = self.A_prefill
 
         # D weight
         D_weight_name = "mixer.D"
-        self.D = load_fn(
+        self.D_prefill = load_fn(
             D_weight_name,
             lambda x: x.repeat(self.configs["outer_dim"], 1),
             postfix=f"D_{self.configs['outer_dim']}",
@@ -107,6 +107,7 @@ class TtMambaSSM(torch.nn.Module):
             lambda x: x.repeat(self.configs["num_users"], 1),
             postfix=f"D_{self.configs['num_users']}",
         )
+        self.D = self.D_prefill
 
         # hidden state
 
@@ -116,9 +117,7 @@ class TtMambaSSM(torch.nn.Module):
                 f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
             )
         else:
-            self.hidden_state_cache = TensorCache(
-                self.configs["num_users"], 1, self.hidden_size * self.n, device, on_host=True
-            )
+            self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
@@ -129,12 +128,13 @@ class TtMambaSSM(torch.nn.Module):
         self.core_grid_row = self.configs["core_grid_row"]
         self.core_grid_col = self.configs["core_grid_col"]
 
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
+        self.A = self.A_prefill
+        self.D = self.D_prefill
+
     def to_decode(self, decode_config):
         self.configs = decode_config
-
-        # Deallocate prefill A and D, need to reinitialize when back in prefill mode
-        ttnn.deallocate(self.A)
-        ttnn.deallocate(self.D)
         self.A = self.A_decode
         self.D = self.D_decode
 
@@ -332,3 +332,6 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(C2)
 
         return x
+
+    def reset(self):
+        self.hidden_state_cache.reset()

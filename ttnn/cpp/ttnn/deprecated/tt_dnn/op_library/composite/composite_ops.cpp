@@ -932,7 +932,6 @@ Tensor addcdiv(
 Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, string round_mode,  const MemoryConfig& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::divide(input_a, input_b);
-
     if(round_mode == "trunc"){
         result = trunc(result);
     }
