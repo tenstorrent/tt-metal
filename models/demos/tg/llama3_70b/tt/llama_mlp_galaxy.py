@@ -100,9 +100,9 @@ class TtLlamaMLP_galaxy:
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
         # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard.weight"
-        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard.weight"
-        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard.weight"
+        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard_unpadded.weight"
+        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard_unpadded.weight"
+        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard_unpadded.weight"
         w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
         w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
         w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"

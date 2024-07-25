@@ -87,12 +87,13 @@ class TtLlamaAttention_galaxy:
 
     def get_attn_model_config(self):
         if self.model_config["LLM_MODE"] == "decode":
+            # 32 x 2048 X 2048 x 1280
             self.FUSED_QKV_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
-                in0_block_w=8,
+                in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=32 // 32,
+                per_core_M=1,
                 per_core_N=1,
                 fuse_batch=True,
                 fused_activation=None,
@@ -144,18 +145,6 @@ class TtLlamaAttention_galaxy:
                 packer_l1_acc=False,
             )
 
-            self.SELFOUT_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=32 // 32,
-                per_core_N=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-
             shard_grid = ttnn.CoreRangeSet({num_to_corerange(self.batch_size_per_device_group)})
             shard_spec = ttnn.ShardSpec(
                 shard_grid, (self.padded_local_heads, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False
@@ -163,6 +152,19 @@ class TtLlamaAttention_galaxy:
 
             self.SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+            )
+
+            # (32 x 1k) x (1k x 2k)
+            self.SELFOUT_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
     def init_kv_cache(self):
@@ -350,8 +352,7 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
-            # program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-            core_grid=ttnn.CoreGrid(y=5, x=8),
+            program_config=self.FUSED_QKV_MM_PROGCFG,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
@@ -518,9 +519,8 @@ class TtLlamaAttention_galaxy:
         attn_output = ttnn.matmul(
             attn_output,
             self.wo,
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            program_config=self.SELFOUT_PROGCFG,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )

@@ -378,12 +378,12 @@ class TtLlamaModel_galaxy:
             #     if self.llama3
             #     else self.model_config["LM_HEAD_MM_PROGCFG"]
             # ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
         )
         norm_out.deallocate(True)
 
-        lm_head_out = self.tt_all_reduce(lm_head_out, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        lm_head_out = self.tt_all_reduce(lm_head_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         return lm_head_out
