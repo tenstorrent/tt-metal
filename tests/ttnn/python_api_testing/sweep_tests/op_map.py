@@ -745,4 +745,16 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_mul_bw,
         "pytorch_op": pytorch_ops.mul_bw,
     },
+    "eltwise-sub-bw": {
+        "tt_op": ttnn_ops.eltwise_sub_bw,
+        "pytorch_op": pytorch_ops.sub_bw,
+    },
+    "eltwise-tan-bw": {
+        "tt_op": ttnn_ops.eltwise_tan_bw,
+        "pytorch_op": pytorch_ops.tan_bw,
+    },
+    "sub-unary-bw": {
+        "tt_op": ttnn_ops.sub_unary_bw,
+        "pytorch_op": pytorch_ops.sub_unary_bw,
+    },
 }

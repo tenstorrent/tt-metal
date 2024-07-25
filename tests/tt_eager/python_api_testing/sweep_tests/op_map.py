@@ -156,10 +156,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_sub_unary,
         "pytorch_op": pytorch_ops.sub_unary,
     },
-    "sub-unary-bw": {
-        "tt_op": tt_lib_ops.sub_unary_bw,
-        "pytorch_op": pytorch_ops.sub_unary_bw,
-    },
     "eltwise-add_unary": {
         "tt_op": tt_lib_ops.eltwise_add_unary,
         "pytorch_op": pytorch_ops.add_unary,
@@ -323,10 +319,6 @@ op_map = {
     "eltwise-tan": {
         "tt_op": tt_lib_ops.eltwise_tan,
         "pytorch_op": pytorch_ops.tan,
-    },
-    "eltwise-tan-bw": {
-        "tt_op": tt_lib_ops.eltwise_tan_bw,
-        "pytorch_op": pytorch_ops.tan_bw,
     },
     "eltwise-asin": {
         "tt_op": tt_lib_ops.eltwise_asin,
@@ -692,10 +684,6 @@ op_map = {
     "eltwise-sub": {
         "tt_op": tt_lib_ops.eltwise_sub,
         "pytorch_op": pytorch_ops.sub,
-    },
-    "eltwise-sub-bw": {
-        "tt_op": tt_lib_ops.eltwise_sub_bw,
-        "pytorch_op": pytorch_ops.sub_bw,
     },
     "eltwise-mul": {
         "tt_op": tt_lib_ops.eltwise_mul,
