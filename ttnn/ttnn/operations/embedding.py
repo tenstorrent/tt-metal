@@ -14,5 +14,6 @@ def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
 
 ttnn.attach_golden_function(ttnn.embedding, golden_function=_golden_function)
 
+EmbeddingsType = ttnn._ttnn.operations.embedding.EmbeddingsType
 
 __all__ = []

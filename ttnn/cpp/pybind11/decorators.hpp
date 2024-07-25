@@ -18,7 +18,7 @@ namespace ttnn {
 namespace decorators {
 
 template <typename T, typename Return, typename... Args>
-constexpr auto resolve_call_method(Return (*execute_on_worker_thread)(Args...)) {
+constexpr auto resolve_call_method(Return (*function)(Args...)) {
     return [](const T& self, Args&&... args) { return self(std::forward<Args>(args)...); };
 }
 
@@ -42,9 +42,7 @@ void define_call_operator(T& py_operation, const pybind_arguments_t<py_args_t...
     std::apply(
         [&py_operation](auto... args) {
             py_operation.def(
-                "__call__",
-                resolve_call_method<registered_operation_t>(&concrete_operation_t::execute_on_worker_thread),
-                args...);
+                "__call__", resolve_call_method<registered_operation_t>(&concrete_operation_t::operator()), args...);
         },
         overload.value);
 }
@@ -65,10 +63,11 @@ template <
     auto id,
     reflect::fixed_string cpp_fully_qualified_name,
     typename concrete_operation_t,
+    bool auto_launch_op,
     typename... overload_t>
 auto bind_registered_operation(
     py::module& module,
-    const operation_t<id, cpp_fully_qualified_name, concrete_operation_t>& operation,
+    const operation_t<id, cpp_fully_qualified_name, concrete_operation_t, auto_launch_op>& operation,
     const std::string& doc,
     overload_t&&... overloads) {
     using registered_operation_t = std::decay_t<decltype(operation)>;

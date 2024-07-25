@@ -25,14 +25,14 @@ namespace operations {
 namespace core {
 
 struct ToLayout {
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         Device* device = nullptr);
 
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,

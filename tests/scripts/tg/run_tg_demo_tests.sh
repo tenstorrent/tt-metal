@@ -1,10 +1,13 @@
-
 #/bin/bash
-set -eo pipefail
 
 run_tg_tests() {
   # Add tests here
-  echo "Fill me!"
+  echo "Fill me!"; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_demo_tests failed"
+    exit 1
+  fi
 }
 
 main() {

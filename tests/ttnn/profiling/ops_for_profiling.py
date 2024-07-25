@@ -635,7 +635,7 @@ all_binary_ops = [
         "name": "ttnn.xlogy",
     },
     {
-        "op": tt_lib.tensor.embeddings,
+        "op": ttnn.embedding,
         "name": "tt_lib.tensor.embeddings",
         "layout": "ROW_MAJOR",
         "shape_func": embeddings_shape_func,

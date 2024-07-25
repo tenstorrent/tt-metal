@@ -31,7 +31,7 @@ namespace operations {
 namespace pool {
 
 struct GlobalAveragePool2D {
-    static Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DataType>& output_dtype = std::nullopt) {
@@ -43,7 +43,7 @@ struct GlobalAveragePool2D {
 }  // namespace pool
 }  // namespace operations
 
-constexpr auto global_avg_pool2d =
-    ttnn::register_operation<"ttnn::global_avg_pool2d", ttnn::operations::pool::GlobalAveragePool2D>();
+constexpr auto global_avg_pool2d = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::global_avg_pool2d", ttnn::operations::pool::GlobalAveragePool2D>();
 
 }  // namespace ttnn

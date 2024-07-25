@@ -70,10 +70,15 @@ class TtTransformer(nn.Module):
         x: ttnn.Tensor,
         current_pos: int,
         attn_masks: Optional[ttnn.Tensor] = None,
+        rot_mat=None,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
     ):
         for layer in self.layers:
-            x = layer(x, current_pos, attn_masks)
-
+            x = layer(x, current_pos, attn_masks, rot_mat, transformation_mats, user_id, mode)
+        if mode == "prefill":
+            return x
         x = self.norm(x)
         output = ttnn.linear(
             x,

@@ -11,8 +11,7 @@ namespace operations {
 namespace kv_cache {
 
 struct ExecuteFillCache {
-    static ttnn::Tensor execute_on_worker_thread(
-        const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
+    static ttnn::Tensor operator()(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
         operation::run(
             tt::tt_metal::UpdateCache{batch_index, 0, 0, tt::tt_metal::UpdateCacheOpType::FILL},
             std::vector<ttnn::Tensor>{cache, input});
@@ -21,7 +20,7 @@ struct ExecuteFillCache {
 };
 
 struct ExecuteUpdateCache {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& cache,
         const ttnn::Tensor& input,
         const uint32_t update_index,
@@ -40,10 +39,12 @@ struct ExecuteUpdateCache {
 }  // namespace operations
 
 namespace kv_cache {
-constexpr auto fill_cache_for_user_ =
-    ttnn::register_operation<"ttnn::kv_cache::fill_cache_for_user_", ttnn::operations::kv_cache::ExecuteFillCache>();
-constexpr auto update_cache_for_token_ = ttnn::
-    register_operation<"ttnn::kv_cache::update_cache_for_token_", ttnn::operations::kv_cache::ExecuteUpdateCache>();
+constexpr auto fill_cache_for_user_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::kv_cache::fill_cache_for_user_",
+    ttnn::operations::kv_cache::ExecuteFillCache>();
+constexpr auto update_cache_for_token_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::kv_cache::update_cache_for_token_",
+    ttnn::operations::kv_cache::ExecuteUpdateCache>();
 }  // namespace kv_cache
 
 }  // namespace ttnn

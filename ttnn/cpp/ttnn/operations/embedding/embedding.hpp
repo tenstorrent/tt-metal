@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/operations/embedding/embedding/device/embeddings_op.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -15,19 +15,17 @@ namespace operations {
 
 namespace embedding {
 
-struct Embedding {
-    static inline Tensor execute_on_worker_thread(
+struct EmbeddingOperation {
+    static inline Tensor operator()(
         uint8_t queue_id,
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
         const Layout& layout = ttnn::ROW_MAJOR_LAYOUT,
         EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
-        const std::optional<const DataType> output_dtype = std::nullopt,
+        const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt
-        ) {
-
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         if (pad_token.has_value()) {
             embeddings_type = EmbeddingsType::PADDED;
         }
@@ -47,31 +45,31 @@ struct Embedding {
                                   .tilized = tilized,
                                   .embeddings_type = embeddings_type,
                                   .pad_token = pad_token,
-                                  .output_dtype = output_dtype.value_or(weight.get_dtype())},
+                                  .output_dtype = dtype.value_or(weight.get_dtype())},
                               {input_tensor, weight})
                               .at(0);
         embeddings = ttnn::reshape(embeddings, ttnn::Shape{{batch_size, sentence_size, hidden_embedding_dim}});
         return embeddings;
     }
 
-    static inline auto execute_on_worker_thread(
+    static inline auto operator()(
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
         const Layout& layout = ttnn::ROW_MAJOR_LAYOUT,
         EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
-        const std::optional<const DataType> output_dtype = std::nullopt,
+        const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt
         ) {
             constexpr auto DefaultQueueId = 0;
-            return execute_on_worker_thread(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, output_dtype, memory_config, optional_output_tensor);
+            return operator()(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
         }
 };
 
 }  // namespace embedding
 }  // namespace operations
 
-constexpr auto embedding = ttnn::register_operation<"ttnn::embedding", ttnn::operations::embedding::Embedding>();
+constexpr auto embedding = ttnn::register_operation_with_auto_launch_op<"ttnn::embedding", ttnn::operations::embedding::EmbeddingOperation>();
 
 }  // namespace ttnn

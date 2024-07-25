@@ -249,24 +249,22 @@ struct ExecuteUnaryBackward {
 
     //Type 1: 2 inputs, 1 grad tensor
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<ttnn::Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-
         auto op_type = UnaryBackwardFunction::get_function_type1(unary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_arg, output_memory_config);
     }
 
-    //Type 1: Type 1 with 1 float
+    // Type 1: Type 1 with 1 float
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<ttnn::Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-
         auto op_type = UnaryBackwardFunction::get_function_type1_w_float(unary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_arg, alpha, output_memory_config);

@@ -590,8 +590,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.xlogy
 
-.. autofunction:: tt_lib.tensor.prod
-
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv
@@ -607,8 +605,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.normalize_hw
 
 .. autofunction:: tt_lib.tensor.normalize_global
-
-.. autofunction:: tt_lib.tensor.embeddings
 
 .. autofunction:: tt_lib.tensor.nextafter
 

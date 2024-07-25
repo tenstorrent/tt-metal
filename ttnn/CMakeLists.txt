@@ -51,7 +51,7 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/device/topk_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding/embedding/device/embeddings_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding/device/embedding_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/slice/device/slice_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/permute_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
@@ -70,6 +70,11 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/maxpool/device/max_pool_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/maxpool/device/max_pool_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/maxpool/device/max_pool_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/prod.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/device/prod_nc_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/device/prod_op_all.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/device/prod_nc_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/device/prod_all_program_factory.cpp
 )
 
 ### Setup TTNN as a shared library with optional Python bindings
@@ -93,6 +98,8 @@ set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_com
 set(TTNN_PUBLIC_LINK_DIRS "")
 
 set(TTNN_PRECOMPILED_HEADERS
+    ${PROJECT_SOURCE_DIR}/tt_metal/tt_stl/reflection.hpp
+    ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/operation.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h

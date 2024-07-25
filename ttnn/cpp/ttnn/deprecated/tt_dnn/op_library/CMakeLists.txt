@@ -84,10 +84,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_nc_impl/moreh_int_sum_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/prod/prod_nc/prod_nc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/prod/prod_nc_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/prod/prod_op_all.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/prod/single_core/prod_op_all_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_h/moreh_mean_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_w/moreh_mean_w.cpp
@@ -165,7 +161,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_llama_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_llama_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/embeddings/embeddings_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/multi_core/paged_update_cache_op_multi_core.cpp
