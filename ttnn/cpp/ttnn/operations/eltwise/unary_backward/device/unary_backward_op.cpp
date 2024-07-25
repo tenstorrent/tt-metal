@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -843,7 +844,7 @@ std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const Memo
 
 // Hardswish
 // result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
-std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
         ttnn::lt(input, ttnn::operations::creation::full_like(input, -3.0f), std::nullopt, output_mem_config),
@@ -863,14 +864,14 @@ std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const
 
 // tanhshrink
 // result:  torch.square(torch.tanh(input)) * grad_data
-std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor tanh_res = ttnn::square(ttnn::tanh(input, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
-std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
@@ -908,7 +909,7 @@ std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const Mem
 
 // Asin
 // result: grad * (-self * self + 1).rsqrt()
-std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -947,7 +948,7 @@ std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const Memo
 
 // Asinh
 // result: grad * (self * self + 1).rsqrt()
-std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -963,7 +964,7 @@ std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const Mem
 
 // name: sin(Tensor self) -> Tensor
 // self: grad * self.cos()
-std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_input = ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_input);
@@ -972,7 +973,7 @@ std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, cons
 
 // name: sinh(Tensor self) -> Tensor
 // self: grad * self.cosh()
-std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor grad_a = where(
@@ -981,7 +982,7 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
         where(
             ttnn::lt(input, ttnn::operations::creation::full_like(input, -88.5), std::nullopt, output_mem_config),
             t_inf,
-            ttnn::multiply(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(grad, unary::_cosh(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         output_mem_config);
     t_inf.deallocate();
@@ -999,7 +1000,7 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 
 // bw(log10(in)) = grad/(in * 2.30258509299404568402)
-std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
         ttnn::ltz(grad, output_mem_config),
@@ -1019,7 +1020,7 @@ std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const Mem
 
 // bw(log1p(in)) = grad/(in + 1)
 // for -1 = inf
-std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
         ttnn::ltz(grad, output_mem_config),
@@ -1042,7 +1043,7 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
-std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
         ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
@@ -1056,7 +1057,7 @@ std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
-std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = ttnn::operations::creation::zeros_like(grad);
     grad_tensor.emplace_back(zero_grad);
@@ -1065,7 +1066,7 @@ std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const Memo
 
 // softsign
 // result = grad_data / torch.square(1 + torch.abs(input))
-std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -1082,7 +1083,7 @@ std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const 
 
 // name: cosh(Tensor self) -> Tensor
 // self: grad * self.sinh()
-std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = ttnn::multiply(ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     Tensor t_neg_inf =
@@ -1094,7 +1095,7 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const Memo
             ttnn::lt(input,
             ttnn::operations::creation::full_like(input, -88.50, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
             t_neg_inf,
-            ttnn::multiply(grad, sinh(input, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(grad, unary::_sinh(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         output_mem_config);
     t_neg_inf.deallocate();
@@ -1166,7 +1167,7 @@ std::vector<Tensor> _logiteps_bw(
 
 
 // bw(log2(in)) = grad/(in * 0.69314718055994530942)
-std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
         ttnn::ltz(grad, output_mem_config),
@@ -1185,7 +1186,7 @@ std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 
 
-std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
@@ -1222,7 +1223,7 @@ std::vector<Tensor> _div_no_nan_bw(
 
 // #  bw (exp2) = grad * exp2(input) * M_LN2
 // # M_LN2 = 0.693147180559945309417
-std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor exp_result = ttnn::exp2(input, output_mem_config);
     exp_result = ttnn::multiply(exp_result, M_LN2, std::nullopt, output_mem_config);
@@ -1232,7 +1233,7 @@ std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const Memo
 }
 
 // bw(expm1) = grad * expm1(input) + 1
-std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor eresult = ttnn::expm1(input, output_mem_config);
     Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
@@ -1260,11 +1261,12 @@ std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, cons
     return grad_tensor;
 }
 
-std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_memory_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
@@ -1319,7 +1321,7 @@ std::vector<Tensor> _polygamma_bw(
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
-std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
         ttnn::multiply(ttnn::sqrt(ttnn::operations::creation::full_like(input, M_PI), output_mem_config),
@@ -1353,7 +1355,7 @@ std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const Me
     return grad_tensor;
 }
 
-std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
         ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
@@ -1367,7 +1369,7 @@ std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const Memor
     return grad_tensor;
 }
 
-std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float M_PI_180 = M_PI / 180;
     Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
@@ -1622,48 +1624,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
             return _selu_bw;
         case UnaryBackwardOpType::SQUARE_BW:
             return _square_bw;
-        case UnaryBackwardOpType::HARDSWISH_BW:
-            return _hardswish_bw;
-        case UnaryBackwardOpType::TANHSHRINK_BW:
-            return _tanhshrink_bw;
-        case UnaryBackwardOpType::ATANH_BW:
-            return _atanh_bw;
-        case UnaryBackwardOpType::ASIN_BW:
-            return _asin_bw;
-        case UnaryBackwardOpType::ASINH_BW:
-            return _asinh_bw;
-        case UnaryBackwardOpType::SIN_BW:
-            return _sin_bw;
-        case UnaryBackwardOpType::SINH_BW:
-            return _sinh_bw;
-        case UnaryBackwardOpType::LOG10_BW:
-            return _log10_bw;
-        case UnaryBackwardOpType::LOG1P_BW:
-            return _log1p_bw;
-        case UnaryBackwardOpType::ERFC_BW:
-            return _erfc_bw;
-        case UnaryBackwardOpType::CEIL_BW:
-            return _ceil_bw;
-        case UnaryBackwardOpType::SOFTSIGN_BW:
-            return _softsign_bw;
-        case UnaryBackwardOpType::COSH_BW:
-            return _cosh_bw;
-        case UnaryBackwardOpType::LOG2_BW:
-            return _log2_bw;
-        case UnaryBackwardOpType::SIGN_BW:
-            return _sign_bw;
-        case UnaryBackwardOpType::EXP2_BW:
-            return _exp2_bw;
-        case UnaryBackwardOpType::EXPM1_BW:
-            return _expm1_bw;
-        case UnaryBackwardOpType::DIGAMMA_BW:
-            return _digamma_bw;
-        case UnaryBackwardOpType::ERFINV_BW:
-            return _erfinv_bw;
-        case UnaryBackwardOpType::ERF_BW:
-            return _erf_bw;
-        case UnaryBackwardOpType::DEG2RAD_BW:
-            return _deg2rad_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
