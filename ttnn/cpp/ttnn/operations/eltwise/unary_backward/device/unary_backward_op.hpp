@@ -178,6 +178,370 @@ struct OpHandler<UnaryBackwardOpType::THRESHOLD_BW> {
 };
 
 template <>
+struct OpHandler<UnaryBackwardOpType::RPOW_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _rpow_bw(grad, input, exponent, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ACOS_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _acos_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ATAN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _atan_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::RAD2DEG_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _rad2deg_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::FRAC_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _frac_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::TAN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _tan_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SIGMOID_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _sigmoid_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::RSQRT_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _rsqrt_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::NEG_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _neg_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::RECIPROCAL_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _reciprocal_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::CEIL_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _ceil_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SOFTSIGN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _softsign_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::COSH_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _cosh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOG2_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _log2_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SIGN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _sign_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::EXP2_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _exp2_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::EXPM1_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _expm1_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::DIGAMMA_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _digamma_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ERFINV_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _erfinv_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ERF_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _erf_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::DEG2RAD_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _deg2rad_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::HARDSWISH_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _hardswish_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::TANHSHRINK_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _tanhshrink_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ATANH_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _atanh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ASIN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _asin_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ASINH_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _asinh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SIN_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _sin_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SINH_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _sinh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOG10_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _log10_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOG1P_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _log1p_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ERFC_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _erfc_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::TRUNC_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _trunc_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOG_SIGMOID_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _log_sigmoid_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::FILL_ZERO_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _fill_zero_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::I0_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _i0_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::RELU6_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _relu6_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ABS_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _abs_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SILU_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _silu_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SELU_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _selu_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SQUARE_BW> {
+    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+        return _square_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::DIV_NO_NAN_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _div_no_nan_bw(grad, input, exponent, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::POLYGAMMA_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _polygamma_bw(grad, input, n, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _lt_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LE_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _le_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::GE_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _ge_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::NE_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _ne_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::HARDSHRINK_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _hardshrink_bw(grad, input, lambd, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SOFTSHRINK_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _softshrink_bw(grad, input, lambd, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LEAKY_RELU_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float negative_slope, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _leaky_relu_bw(grad, input, negative_slope, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ELU_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _elu_bw(grad, input, alpha, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::CELU_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _celu_bw(grad, input, alpha, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOGITEPS_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _logiteps_bw(grad, input, eps, output_mem_config);
+    }
+};
+
+template <>
 struct OpHandler<UnaryBackwardOpType::REMAINDER_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
         return _remainder_bw(grad, input, scalar, output_mem_config);
