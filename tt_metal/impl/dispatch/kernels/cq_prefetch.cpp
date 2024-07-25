@@ -79,7 +79,7 @@ static uint32_t rd_block_idx;
 constexpr uint32_t max_read_packed_cmd =
     CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS *
     sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
-constexpr uint32_t l1_cache_elements = max_read_packed_cmd;
+constexpr uint32_t l1_cache_elements = max_read_packed_cmd + 1;  // +1 for sentinel value
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);;
@@ -677,7 +677,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
         amt_to_read -= amt_read2;
 
         // note: below can walk off the end of the sub_cmds
-        // this is ok as right side of comparison in the while will be 0
+        // this is ok as we store a sentinel non-zero value
         read_length = sub_cmd->length;
         ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
     }
@@ -724,7 +724,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
             amt_to_read -= amt_read2;
 
             // note: below can walk off the end of the sub_cmds
-            // this is ok as right side of comparison in the while will be 0
+            // this is ok as we store a sentinel non-zero value
             read_length = sub_cmd->length;
             ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
         }
@@ -768,13 +768,17 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
     uint32_t * l1_cache_pos = l1_cache;
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
         // wrap cmddat
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), remaining / sizeof(uint32_t), l1_cache_pos);
+        uint32_t amt = remaining / sizeof(uint32_t);
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), amt, l1_cache_pos);
         sub_cmds_length -= remaining;
         data_ptr = cmddat_q_base;
-        l1_cache_pos += remaining / sizeof(uint32_t);
+        l1_cache_pos += amt;
     }
 
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
+    uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), amt, l1_cache_pos);
+    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length);
     return stride;
@@ -1001,8 +1005,10 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(uint32_t& cmd_ptr,
     volatile uint32_t tt_l1_ptr * l1_ptr = (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd));
     uint32_t * l1_cache_pos = l1_cache;
     while (sub_cmds_length > remaining) {
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, remaining / sizeof(uint32_t), l1_cache_pos);
-        l1_cache_pos += remaining / sizeof(uint32_t);
+        uint32_t amt = remaining / sizeof(uint32_t);
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, amt, l1_cache_pos);
+
+        l1_cache_pos += amt;
         sub_cmds_length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
@@ -1013,7 +1019,11 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(uint32_t& cmd_ptr,
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
+
+    uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, amt, l1_cache_pos);
+    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length);
     return stride;
