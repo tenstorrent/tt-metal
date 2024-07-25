@@ -2,17 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "prefix_scan_program_factory.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "tt_metal/host_api.hpp"
+
+namespace tt::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
-using namespace tt;
-
-namespace tt {
-namespace operations {
-namespace primary {
-namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const Tensor& a,
@@ -21,7 +17,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     Tensor& output,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto* a_buffer = a.buffer();
     auto* bx_buffer = bx.buffer();
@@ -29,11 +25,11 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     auto* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
-    const tt::DataFormat input_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    const uint32_t input_tile_size = tt_metal::detail::TileSize(input_format);
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const auto all_cores = a.shard_spec()->grid;
     const auto create_circular_buffer = [&program, &all_cores](
@@ -41,12 +37,12 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                                             uint32_t num_tiles,
                                             uint32_t tile_size,
                                             const tt::DataFormat& format,
-                                            Buffer* buffer = nullptr) -> tt_metal::CBHandle {
+                                            Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
         auto config = CircularBufferConfig(num_tiles * tile_size, {{index, format}}).set_page_size(index, tile_size);
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
         }
-        return tt_metal::CreateCircularBuffer(program, all_cores, config);
+        return tt::tt_metal::CreateCircularBuffer(program, all_cores, config);
     };
 
     const uint32_t sharded_sequence_length = a.shard_spec()->shape[0];
@@ -115,23 +111,23 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
         cb_out_id,
         cb_h_acc_id};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/reader_ssm_prefix_scan.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/writer_ssm_prefix_scan.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_prefix_scan.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp",
         all_cores,
-        tt_metal::ComputeConfig{
+        tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
@@ -155,10 +151,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
          cb_bx_in,
          cb_h_in,
          cb_out](Program& program, const Tensor& a, const Tensor& bx, const Tensor& h, const Tensor& output) {
-            tt_metal::Buffer* a_buffer = a.buffer();
-            tt_metal::Buffer* bx_buffer = bx.buffer();
-            tt_metal::Buffer* h_buffer = h.buffer();
-            tt_metal::Buffer* output_buffer = output.buffer();
+            tt::tt_metal::Buffer* a_buffer = a.buffer();
+            tt::tt_metal::Buffer* bx_buffer = bx.buffer();
+            tt::tt_metal::Buffer* h_buffer = h.buffer();
+            tt::tt_metal::Buffer* output_buffer = output.buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_a_in, *a_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_bx_in, *bx_buffer);
@@ -210,7 +206,4 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace transformers
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // namespace tt::operations::experimental::ssm::detail
