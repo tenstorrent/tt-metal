@@ -26,26 +26,6 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-void bind_upsample(py::module& module) {
-    const auto doc = R"doc(
- Upsamples a given multi-channel 2D (spatial) data.
- The input data is assumed to be of the form [N, H, W, C].
-
- The algorithms available for upsampling are 'nearest' for now.
-
- Args:
-     * :attr:`input_tensor`: the input tensor
-     * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
-     )doc";
-
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::upsample,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"), py::arg("scale_factor"), py::arg("memory_config") = std::nullopt});
-}
-
 void bind_repeat(py::module& module) {
     auto doc = R"doc(
 repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
@@ -80,7 +60,6 @@ Example:
 void py_module(py::module& module) {
     detail::bind_permute(module);
     detail::bind_concat(module);
-    bind_upsample(module);
     detail::bind_pad(module);
     detail::bind_slice(module);
     detail::bind_downsample(module);
