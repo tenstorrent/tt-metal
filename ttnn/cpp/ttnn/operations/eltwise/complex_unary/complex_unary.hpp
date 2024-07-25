@@ -20,8 +20,7 @@ struct ExecuteComplexUnaryType1 {
 
     //Type 1: 1 input tensor
     static Tensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
-        auto op_type = get_function_complex_unary<complex_unary_op_type>();
-        return op_type(input_tensor_arg, memory_config);
+        return OpHandler<complex_unary_op_type>::handle(input_tensor_arg, memory_config);
     }
 };
 
@@ -29,8 +28,7 @@ struct ExecuteComplexUnaryType1 {
 template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryType2 {
     static ComplexTensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
-        auto op_type = get_function_complex_unary_type2<complex_unary_op_type>();
-        return op_type(input_tensor_arg, memory_config);
+        return OpHandler<complex_unary_op_type>::handle(input_tensor_arg, memory_config);
     }
 };
 

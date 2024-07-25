@@ -21,8 +21,7 @@ struct ExecuteComplexUnaryBackward {
         const ComplexTensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_arg,
         const MemoryConfig &memory_config) {
-        auto op_type = get_function_complex<complex_unary_backward_op_type>();
-        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+        return OpHandler<complex_unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, memory_config);
     }
 };
 
@@ -31,8 +30,7 @@ template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackwardTensor {
     static std::vector<ComplexTensor> operator()(
         const Tensor &grad_tensor_arg, const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
-        auto op_type = get_function_tensor_complex<complex_unary_backward_op_type>();
-        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+        return OpHandler<complex_unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, memory_config);
     }
 };
 

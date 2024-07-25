@@ -25,8 +25,7 @@ struct ExecuteComplexBinaryBackwardWFloat {
         const ComplexTensor &input_tensor_b_arg,
         float alpha,
         const MemoryConfig &memory_config) {
-        auto op_type = get_function_w_float<complex_binary_backward_op_type>();
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, memory_config);
+        return OpHandler<complex_binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, memory_config);
     }
 };
 
@@ -40,8 +39,7 @@ struct ExecuteComplexBinaryBackwardWoFloat {
         const ComplexTensor &input_tensor_a_arg,
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config) {
-        auto op_type = get_function_wo_float<complex_binary_backward_op_type>();
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
+        return OpHandler<complex_binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
     }
 };
 
