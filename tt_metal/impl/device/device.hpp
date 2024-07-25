@@ -138,7 +138,7 @@ class Device {
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const {
         return tt::Cluster::instance().get_ethernet_sockets(this->id_, connected_chip_id);
     }
-
+    
     bool is_mmio_capable() const {
         return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
     }
