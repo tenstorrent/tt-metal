@@ -11,7 +11,7 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "llama_version",
