@@ -75,7 +75,7 @@ def run_test_ff1(
         per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
         per_core_N=per_core_N,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
         fuse_batch=True,
-        fused_activation=ttl.tensor.FusibleActivation.SILU,
+        fused_activation=ttnn.UnaryOpType.SILU,
         mcast_in0=True,
     )
 

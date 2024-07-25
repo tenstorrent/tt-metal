@@ -11,6 +11,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
+import ttnn
 
 TILE_HEIGHT = TILE_WIDTH = 32
 
@@ -63,7 +64,7 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
     ttact_res = ttact.to(device)
 
     def run_ops(ttact_res):
-        return ttl.tensor.average_pool_2d(ttact_res)
+        return ttnn.avg_pool2d(ttact_res)
 
     # Compile
     run_ops(ttact_res)

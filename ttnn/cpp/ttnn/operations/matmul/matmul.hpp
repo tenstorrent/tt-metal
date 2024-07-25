@@ -6,10 +6,10 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -22,6 +22,10 @@ using MatmulMultiCoreReuseMultiCast1DProgramConfig =
     tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig;
 // MatmulProgramConfig is the Union of the above types
 using MatmulProgramConfig = tt::operations::primary::MatmulProgramConfig;
+
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
+
 namespace operations {
 namespace matmul {
 

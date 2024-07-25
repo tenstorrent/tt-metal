@@ -5,8 +5,8 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -15,6 +15,8 @@
 
 using namespace tt::constants;
 using namespace tt;
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 namespace reuse_mcast_optimized_helpers {
 using namespace tt::constants;
@@ -450,7 +452,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(
+            using ttnn::operations::unary::utils::get_defines;
+            mm_kernel_defines.merge(get_defines(
                 fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
@@ -789,16 +792,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
+    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     const auto& in0_sender_interleaved_cores =
-        grid_to_cores(in0_sender_interleaved.start, in0_sender_interleaved.end, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start, in1_sender.end, true);
+        grid_to_cores(in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
+    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         in1_receiver_other_cores = grid_to_cores(
-            in0_receiver_in1_receiver_interleaved_other_cores.value().start,
-            in0_receiver_in1_receiver_interleaved_other_cores.value().end,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
+            in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
     }
 

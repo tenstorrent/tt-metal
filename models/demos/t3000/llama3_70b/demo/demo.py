@@ -46,7 +46,7 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
     ids=("tt-70b-T3000", "meta-70b"),
 )
 @pytest.mark.parametrize(
-    "num_tokens, output_at_end, top_p, top_k, temperature",
+    "max_output_tokens, output_at_end, top_p, top_k, temperature",
     (
         (128, True, 1, 1, 1.0),
         (128, True, 0.9, 10, 1.0),
@@ -58,13 +58,21 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
     ("models/demos/t3000/llama2_70b/demo/data/llama3_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        (32, 2048),
+        (16, 8192),
+    ),
+    ids=("short_context", "long_context"),
+)
 def test_LlamaModel_demo(
     # model args
     implementation,
     skip_model_load,
     num_layers,
     # Generation args
-    num_tokens,
+    max_output_tokens,
     prompts_file,
     output_at_end,
     top_p,
@@ -77,6 +85,8 @@ def test_LlamaModel_demo(
     decode_only,
     llama_version,
     ground_truth,
+    max_batch_size,
+    max_context_len,
     use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
@@ -97,8 +107,10 @@ def test_LlamaModel_demo(
         ckpt_dir=ckpt_dir,
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
+        max_batch_size=max_batch_size,
+        max_kv_context_len=max_context_len,
         num_layers=num_layers,
-        num_tokens=num_tokens,
+        max_output_tokens=max_output_tokens,
         prompts_file=prompts_file,
         output_at_end=output_at_end,
         top_p=top_p,

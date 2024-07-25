@@ -5,13 +5,13 @@
 #include <cmath>
 
 #include "common/constants.hpp"
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 

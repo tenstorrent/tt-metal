@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include "ttnn/experimental/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "device/groupnorm_op.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace normalization {
 
 struct ExecuteGroupNorm {
-
-    static inline ttnn::Tensor execute_on_worker_thread(
+    static inline ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const int num_groups,
         const float epsilon,
@@ -62,7 +61,7 @@ struct ExecuteGroupNorm {
             .buffer_type = tt::tt_metal::BufferType::DRAM};
         const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
 
-        const tt::operations::primary::GroupNormShardedMultiCoreProgramConfig& program_config = {
+        const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .math_fidelity = MathFidelity::HiFi4,
             .im_data_format = DataType::BFLOAT16,
@@ -70,14 +69,21 @@ struct ExecuteGroupNorm {
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.get_layout())};
 
-        return tt::operations::primary::groupnorm(
-            input_tensor, num_groups, epsilon, gamma, beta, input_mask, output_mem_config, program_config);
+        return operation::run(
+            GroupNorm{
+                .eps=epsilon,
+                .num_groups=static_cast<uint32_t>(num_groups),
+                .output_mem_config=output_mem_config,
+                .program_config=program_config},
+                {input_tensor},
+                {gamma, beta, input_mask}).at(0);
     }
 };
 
 }  // namespace normalization
 }  // namespace operations
 
-constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::ExecuteGroupNorm>("ttnn::group_norm");
+constexpr auto group_norm = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
 
 }  // namespace ttnn

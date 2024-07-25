@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
 
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include "device/pad_op.hpp"
 
@@ -23,7 +23,7 @@ constexpr uint8_t DefaultQueueId = 0;
 struct ExecutePad {
 
     template <typename ShapeType>
-    static ttnn::Tensor _execute_on_worker_thread(
+    static ttnn::Tensor pad_impl(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ShapeType & output_padded_shape,
@@ -62,147 +62,176 @@ struct ExecutePad {
         }
     }
 
-
-
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array1D & output_padded_shape,
-        const tt::tt_metal::Array1D & input_tensor_start,
+        const tt::tt_metal::Array1D& output_padded_shape,
+        const tt::tt_metal::Array1D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array1D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array1D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array2D & output_padded_shape,
-        const tt::tt_metal::Array2D & input_tensor_start,
+        const tt::tt_metal::Array2D& output_padded_shape,
+        const tt::tt_metal::Array2D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array2D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array2D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array3D & output_padded_shape,
-        const tt::tt_metal::Array3D & input_tensor_start,
+        const tt::tt_metal::Array3D& output_padded_shape,
+        const tt::tt_metal::Array3D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array3D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array3D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array4D & output_padded_shape,
-        const tt::tt_metal::Array4D & input_tensor_start,
+        const tt::tt_metal::Array4D& output_padded_shape,
+        const tt::tt_metal::Array4D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array4D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array4D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array5D & output_padded_shape,
-        const tt::tt_metal::Array5D & input_tensor_start,
+        const tt::tt_metal::Array5D& output_padded_shape,
+        const tt::tt_metal::Array5D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array5D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array5D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array6D & output_padded_shape,
-        const tt::tt_metal::Array6D & input_tensor_start,
+        const tt::tt_metal::Array6D& output_padded_shape,
+        const tt::tt_metal::Array6D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array6D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array6D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array7D & output_padded_shape,
-        const tt::tt_metal::Array7D & input_tensor_start,
+        const tt::tt_metal::Array7D& output_padded_shape,
+        const tt::tt_metal::Array7D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array7D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array7D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array8D & output_padded_shape,
-        const tt::tt_metal::Array8D & input_tensor_start,
+        const tt::tt_metal::Array8D& output_padded_shape,
+        const tt::tt_metal::Array8D& input_tensor_start,
         const float value,
         const bool use_multicore,
-        const std::optional<MemoryConfig>& memory_config_arg)
-        {return _execute_on_worker_thread<tt::tt_metal::Array8D>(queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);}
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        return pad_impl<tt::tt_metal::Array8D>(
+            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array1D & output_padded_shape,
-        const tt::tt_metal::Array1D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array1D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array1D& output_padded_shape,
+        const tt::tt_metal::Array1D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array1D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array2D & output_padded_shape,
-        const tt::tt_metal::Array2D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array2D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array2D& output_padded_shape,
+        const tt::tt_metal::Array2D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array2D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array3D & output_padded_shape,
-        const tt::tt_metal::Array3D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array3D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array3D& output_padded_shape,
+        const tt::tt_metal::Array3D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array3D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array4D & output_padded_shape,
-        const tt::tt_metal::Array4D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array4D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array4D& output_padded_shape,
+        const tt::tt_metal::Array4D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array4D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array5D & output_padded_shape,
-        const tt::tt_metal::Array5D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array5D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array5D& output_padded_shape,
+        const tt::tt_metal::Array5D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array5D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array6D & output_padded_shape,
-        const tt::tt_metal::Array6D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array6D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array6D& output_padded_shape,
+        const tt::tt_metal::Array6D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array6D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array7D & output_padded_shape,
-        const tt::tt_metal::Array7D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array7D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
+        const tt::tt_metal::Array7D& output_padded_shape,
+        const tt::tt_metal::Array7D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array7D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array8D & output_padded_shape,
-        const tt::tt_metal::Array8D & input_tensor_start,
-        const float value)
-        {return _execute_on_worker_thread<tt::tt_metal::Array8D>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);}
-
+        const tt::tt_metal::Array8D& output_padded_shape,
+        const tt::tt_metal::Array8D& input_tensor_start,
+        const float value) {
+        return pad_impl<tt::tt_metal::Array8D>(
+            0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);
+    }
 
     template <typename ShapeType>
-    static ttnn::Tensor _execute_on_worker_thread(
+    static ttnn::Tensor pad_impl(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         std::vector<std::pair<uint32_t, uint32_t>> padding,
@@ -257,7 +286,7 @@ struct ExecutePad {
             pad_front_array[i] = pad_front[i];
         }
 
-        return _execute_on_worker_thread<ShapeType>(queue_id, input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg);
+        return pad_impl<ShapeType>(queue_id, input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg);
 
 
     }
@@ -269,45 +298,44 @@ struct ExecutePad {
 
     // This function signature is similar to pytorch's signature
     // Any rank tensor supported
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         std::vector<std::pair<uint32_t, uint32_t>> padding,
         const float value,
         const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg) {
-
         const int original_rank = input_tensor.get_shape().rank();
 
         ttnn::Tensor output_tensor;
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             if(original_rank == 1) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array1D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array1D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 2) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array2D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array2D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 3) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array3D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array3D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 4) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 5) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array5D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array5D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 6) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 7) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
             else if(original_rank == 8) {
-                output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+                output_tensor =  pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
             }
         }
         else {
-            output_tensor =  _execute_on_worker_thread<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+            output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
         }
         // output_tensor is currently 4D. We have to squeeze back to the original rank
         auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
@@ -328,13 +356,11 @@ struct ExecutePad {
 
         return output_tensor;
     }
-
-
 };
 
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::ExecutePad>("ttnn::pad");
+constexpr auto pad = ttnn::register_operation_with_auto_launch_op<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
 
 }  // namespace ttnn

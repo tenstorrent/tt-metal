@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import math
 from loguru import logger
 import re
 from typing import Tuple
@@ -28,6 +29,59 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
+from ttnn import (
+    TensorToMesh,
+    MeshToTensor,
+)
+
+
+class ShardTensor2dMesh(TensorToMesh):
+    def __init__(self, device_mesh, dims, cluster_shape):
+        super().__init__(device_mesh)
+        self.dims = dims
+        self.cluster_shape = cluster_shape
+
+    def map(self, tensor: torch.tensor):
+        # Returns list of tensors to map to row-major ordering of chips in cluster
+        tensors_grid_y = None
+        if self.dims[1] == None:
+            tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
+        else:
+            tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
+
+        tensors_grid_all = None
+        if self.dims[0] == None:
+            tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
+        else:
+            tensors_grid_all = [
+                tt for t in tensors_grid_y for tt in torch.chunk(t, self.cluster_shape[0], dim=self.dims[0])
+            ]
+
+        return list(tensors_grid_all)
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
+        }
+
+
+class ConcatMesh2DToTensor(MeshToTensor):
+    def __init__(self, device_mesh, dims, cluster_shape):
+        self.dims = dims
+        self.cluster_shape = cluster_shape
+        self.device_mesh = device_mesh
+
+    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
+        tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+
+        row_concat = []
+        for cluster_row in range(self.cluster_shape[1]):
+            start = cluster_row * self.cluster_shape[0]
+            end = start + self.cluster_shape[0]
+            row_concat.append(torch.cat(tt_shards[start:end], dim=self.dims[0]))
+        all_concat = torch.cat(row_concat, dim=self.dims[1])
+        return all_concat
 
 
 def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
@@ -188,13 +242,37 @@ def tt_all_gather_torch(tensors, dim=-1):
     return res
 
 
-def generate_rot_emb(dhead, end, theta: float = 10000.0):
-    cos, sin = precompute_freqs(dhead, end, theta)
+def generate_rot_emb(dhead, end, theta: float = 10000.0, use_scaled: bool = False):
+    cos, sin = precompute_freqs(dhead, end, theta, use_scaled)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
+def apply_scaling(freqs: torch.Tensor):
+    # Llama-3.1 specific scaling
+    # Values obtained from grid search
+    scale_factor = 8
+    low_freq_factor = 1
+    high_freq_factor = 4
+    old_context_len = 8192  # original llama3 length
+
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def precompute_freqs(dim: int, end: int, theta: float = 10000.0, use_scaled: bool = False):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -208,6 +286,8 @@ def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
+    if use_scaled:
+        freqs = apply_scaling(freqs)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -415,3 +495,14 @@ def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_
             logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
             test_passed = False
     return test_passed
+
+
+def num_to_corerange(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
+    )

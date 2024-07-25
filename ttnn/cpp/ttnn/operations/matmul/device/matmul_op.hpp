@@ -5,17 +5,21 @@
 #pragma once
 #include <optional>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+using ttnn::operations::unary::UnaryWithParam;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -144,7 +148,7 @@ struct Matmul {
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     const bool untilize_out = false;
     const std::optional<const CoreCoord> user_core_coord = std::nullopt;
-    const std::optional<const UnaryWithParam> user_fused_activation = std::nullopt;
+    const std::optional<UnaryWithParam> user_fused_activation = std::nullopt;
     const bool user_run_batched = false;
     const bool transpose_a = false;
     const bool transpose_b = false;
@@ -189,7 +193,7 @@ inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &inpu
     return broadcast_batch;
 }
 
-MatmulProgramConfig create_matmul_1d_systolic_array_program_config(const ttnn::types::Shape& input_shape_a, const ttnn::types::Shape& input_shape_b, const CoreCoord& core_coord, const std::optional<const UnaryWithParam> fused_activation, const bool fp32_dest_acc_en);
+MatmulProgramConfig create_matmul_1d_systolic_array_program_config(const ttnn::types::Shape& input_shape_a, const ttnn::types::Shape& input_shape_b, const CoreCoord& core_coord, const std::optional<UnaryWithParam> fused_activation, const bool fp32_dest_acc_en);
 
 MatmulProgramConfig create_matmul_program_config(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<const CoreCoord> user_core_coord, std::optional<UnaryWithParam> fused_activation, std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 
@@ -226,7 +230,7 @@ inline Tensor matmul(
     return output_tensors.at(0);
 }
 
-MatmulProgramConfig generate_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &mem_config, const std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const std::optional<const CoreCoord> user_core_coord, const std::optional<const UnaryWithParam> user_fused_activation, const std::optional<const bool> user_run_batched);
+MatmulProgramConfig generate_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &mem_config, const std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const std::optional<const CoreCoord> user_core_coord, const std::optional<UnaryWithParam> user_fused_activation, const std::optional<const bool> user_run_batched);
 
 }  // namespace primary
 

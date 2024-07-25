@@ -390,8 +390,8 @@ class Operation:
                     ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_JSON
                 )
                 output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_csv"):
-                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_csv()
+                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_json"):
+                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_json()
                 if original_operation_history_json is not None:
                     os.environ["OPERATION_HISTORY_JSON"] = original_operation_history_json
                 else:
@@ -484,6 +484,12 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                if ttnn.CONFIG.report_path is not None:
+                    previous_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
+                    if previous_operation is not None:
+                        operation_id = previous_operation.operation_id + 1
+                        ttnn._ttnn.set_operation_id(operation_id)
+
                 operation_id = ttnn._ttnn.get_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
@@ -638,6 +644,30 @@ def query_registered_operations(include_experimental=False):
         return ttnn_operations
 
 
+def dump_operations(csv_file, include_experimental=False):
+    import csv
+    import pandas as pd
+
+    apis = query_registered_operations(include_experimental)
+
+    def to_dict(obj):
+        return {
+            "python_fully_qualified_name": obj.python_fully_qualified_name,
+            "function": str(obj.function),
+            "preprocess_golden_function_inputs": str(obj.preprocess_golden_function_inputs),
+            "golden_function": str(obj.golden_function),
+            "postprocess_golden_function_outputs": str(obj.postprocess_golden_function_outputs),
+            "is_cpp_operation": obj.is_cpp_operation,
+            "is_experimental": obj.is_experimental,
+        }
+
+    df = pd.DataFrame([to_dict(obj) for obj in apis])
+    df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
+    df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
+    df = df[["python_fully_qualified_name", "is_cpp_operation", "has_golden_function", "is_experimental"]]
+    df.to_csv(csv_file, index=False)
+
+
 def get_golden_function(operation):
     if operation.golden_function is None:
         raise RuntimeError(f"{operation} does not have a golden function")
@@ -702,14 +732,14 @@ def export_operation(python_fully_qualified_name, operation, is_method):
     module_path = module_path[1:]  # ["ttnn", "add"] -> ["add"]
 
     def recursive_helper(module, path):
-        current, *rest = path
+        submodule_name, *rest = path
         if not rest:
-            setattr(module, current, operation)
+            setattr(module, submodule_name, operation)
             return
 
-        current_module = getattr(module, current, types.ModuleType("module_name"))
-        setattr(module, current, current_module)
-        recursive_helper(current_module, rest)
+        submodule = getattr(module, submodule_name, types.ModuleType(submodule_name))
+        setattr(module, submodule_name, submodule)
+        recursive_helper(submodule, rest)
 
     recursive_helper(ttnn, module_path)
 

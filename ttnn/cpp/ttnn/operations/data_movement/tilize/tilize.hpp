@@ -5,18 +5,18 @@
 #pragma once
 
 #include "device/tilize_op.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
 
 struct ExecuteTilize {
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
         return operation::run(
                    Tilize{
@@ -30,18 +30,19 @@ struct ExecuteTilize {
             .at(0);
     }
 
-    static ttnn::Tensor execute_on_worker_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
         constexpr uint8_t DefaultQueueId = 0;
-        return execute_on_worker_thread(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
+        return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
     }
 };
 
 }  // namespace operations::data_movement
 
-constexpr auto tilize = ttnn::register_operation<ttnn::operations::data_movement::ExecuteTilize>("ttnn::tilize");
+constexpr auto tilize =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::tilize", ttnn::operations::data_movement::ExecuteTilize>();
 
 }  // namespace ttnn

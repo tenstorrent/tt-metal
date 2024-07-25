@@ -5,7 +5,7 @@
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn_test_fixtures.hpp"
 

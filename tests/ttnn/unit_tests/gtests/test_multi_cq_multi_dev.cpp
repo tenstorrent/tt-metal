@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "common/bfloat16.hpp"
-#include "ttnn/cpp/ttnn/async_runtime.hpp"
+#include "ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"
 #include <cmath>
 
@@ -16,9 +17,13 @@ using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
 Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
-    auto op0 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::MUL_UNARY_SFPU, 2}}};
-    auto op1 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::NEG}}};
-    auto op2 = tt::tt_metal::EltwiseUnary{std::vector{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::ADD_UNARY_SFPU, 500}}};
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
+    auto op0 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 2}}};
+    auto op1 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::NEG}}};
+    auto op2 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 500}}};
+
 
     Tensor output_tensor = ttnn::run_operation(cq_id, op0, {input_tensor}).at(0);
     for (int i = 0; i < 3; i++) {

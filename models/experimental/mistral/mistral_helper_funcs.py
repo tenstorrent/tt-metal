@@ -59,7 +59,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
-            return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
+            return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
     elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
         if x.get_legacy_shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
@@ -114,15 +114,15 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
 
     t_one_xq = tt_lib.tensor.ones(query_shape, output_mem_config=mem_config)
-    t_one_xq = tt_lib.tensor.permute(t_one_xq, (3, 1, 2, 0), output_mem_config=mem_config)
+    t_one_xq = ttnn.permute(t_one_xq, (3, 1, 2, 0), memory_config=mem_config)
 
-    freqs_real = tt_lib.tensor.permute(freqs_cis.real, (3, 1, 2, 0), output_mem_config=mem_config)
-    freqs_imag = tt_lib.tensor.permute(freqs_cis.imag, (3, 1, 2, 0), output_mem_config=mem_config)
+    freqs_real = ttnn.permute(freqs_cis.real, (3, 1, 2, 0), memory_config=mem_config)
+    freqs_imag = ttnn.permute(freqs_cis.imag, (3, 1, 2, 0), memory_config=mem_config)
 
     bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
     bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_re_xq = tt_lib.tensor.permute(bcast_freq_re_xq, (3, 1, 2, 0), output_mem_config=mem_config)
-    bcast_freq_im_xq = tt_lib.tensor.permute(bcast_freq_im_xq, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_re_xq = ttnn.permute(bcast_freq_re_xq, (3, 1, 2, 0), memory_config=mem_config)
+    bcast_freq_im_xq = ttnn.permute(bcast_freq_im_xq, (3, 1, 2, 0), memory_config=mem_config)
     t_one_xq.deallocate()
 
     bcast_freq_xq = tt_lib.tensor.complex_tensor(bcast_freq_re_xq, bcast_freq_im_xq)
@@ -131,12 +131,12 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     bcast_freq_im_xq.deallocate()
 
     t_one_xk = tt_lib.tensor.ones(key_shape, output_mem_config=mem_config)
-    t_one_xk = tt_lib.tensor.permute(t_one_xk, (3, 1, 2, 0), output_mem_config=mem_config)
+    t_one_xk = ttnn.permute(t_one_xk, (3, 1, 2, 0), memory_config=mem_config)
 
     bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
     bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_re_xk = tt_lib.tensor.permute(bcast_freq_re_xk, (3, 1, 2, 0), output_mem_config=mem_config)
-    bcast_freq_im_xk = tt_lib.tensor.permute(bcast_freq_im_xk, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_re_xk = ttnn.permute(bcast_freq_re_xk, (3, 1, 2, 0), memory_config=mem_config)
+    bcast_freq_im_xk = ttnn.permute(bcast_freq_im_xk, (3, 1, 2, 0), memory_config=mem_config)
 
     bcast_freq_xk = tt_lib.tensor.complex_tensor(bcast_freq_re_xk, bcast_freq_im_xk)
 

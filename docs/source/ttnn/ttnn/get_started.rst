@@ -22,7 +22,7 @@ Install and build the project by following the instructions in the
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Get started with the Falcon 7B demo. Navigate to the `Falcon 7B demo folder
-<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
+<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/falcon7b>`_
 for details.
 
 You can also check our demos for
@@ -35,17 +35,11 @@ and
 3. TT-NN Tutorial: Multi-Head Attention (Simple)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. note::
-   This tutorial currently works on Grayskull only.
-
 Learn the basics of multi-head attention operations with TT-NN
 with a simple example: `TT-NN simple module <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn>`_.
 
 4. TT-NN Tutorial: Multi-Head Attention (Optimized)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. note::
-   This tutorial currently works on Grayskull only.
 
 Dive deeper into multi-head attention operations in TT-NN, optimizing
 performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.

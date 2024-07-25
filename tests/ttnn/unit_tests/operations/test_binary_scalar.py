@@ -5,11 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
-    data_gen_with_range,
-    data_gen_with_val,
-    compare_pcc,
-)
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -21,24 +17,23 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 @pytest.mark.parametrize(
-    "fn_relational",
+    "ttnn_fn",
     (
-        [ttnn.gt, torch.gt],
-        [ttnn.lt, torch.lt],
-        [ttnn.ne, torch.ne],
-        [ttnn.ge, torch.ge],
-        [ttnn.le, torch.le],
-        [ttnn.eq, torch.eq],
+        (ttnn.gt),
+        (ttnn.lt),
+        (ttnn.ne),
+        (ttnn.ge),
+        (ttnn.le),
+        (ttnn.eq),
     ),
 )
-def test_unary_relops_ttnn(input_shapes, device, fn_relational):
+def test_unary_relops_ttnn(input_shapes, device, ttnn_fn):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    ttnn_fn = fn_relational[0]
-    torch_fn = fn_relational[1]
     cq_id = 0
     ttnn_fn(input_tensor, 4.5, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch_fn(in_data, 4.5)
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    golden_tensor = golden_fn(in_data, 4.5)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

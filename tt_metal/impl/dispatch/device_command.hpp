@@ -321,12 +321,13 @@ class DeviceCommand {
     }
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr) {
+    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void *data = nullptr) {
         uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
         auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
             write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+            write_cmd->write_linear_host.is_event = is_event;
             write_cmd->write_linear_host.length =
                 sizeof(CQDispatchCmd) + data_sizeB;  // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
         };
@@ -342,11 +343,9 @@ class DeviceCommand {
 
         if (inline_data) {
             TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
-            this->add_data(data, data_sizeB, increment_sizeB);
-        } else {
-            this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, data_sizeB);
         }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {

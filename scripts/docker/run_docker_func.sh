@@ -46,7 +46,6 @@ function run_docker_common {
         -e TT_METAL_HOME=${TT_METAL_HOME} \
         -e LOGURU_LEVEL=${LOGURU_LEVEL} \
         -e LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
-        -e CONFIG=${CONFIG} \
         -e ARCH_NAME=${ARCH_NAME} \
         -e PYTHONPATH=${TT_METAL_HOME} \
         -e XDG_CACHE_HOME=${TT_METAL_HOME}/.pipcache \

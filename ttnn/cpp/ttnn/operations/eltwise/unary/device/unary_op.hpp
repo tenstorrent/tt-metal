@@ -7,12 +7,12 @@
 #include <functional>
 #include <optional>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tensor/host_buffer/functions.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 
 namespace ttnn::operations::unary {
@@ -216,3 +216,15 @@ std::map<string, string> get_block_defines(
 }  // namespace utils
 
 }  // namespace ttnn::operations::unary
+
+namespace tt::stl::json {
+
+template <>
+struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
+    auto operator()(const nlohmann::json& json_object) const {
+        return ttnn::operations::unary::UnaryWithParam{
+            from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
+            from_json<std::vector<float>>(json_object["params"])};
+    }
+};
+};  // namespace tt::stl::json

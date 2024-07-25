@@ -7,8 +7,8 @@
 #include <random>
 #include <tt_numpy/functions.hpp>
 
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt;

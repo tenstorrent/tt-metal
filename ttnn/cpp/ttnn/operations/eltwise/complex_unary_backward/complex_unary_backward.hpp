@@ -1,0 +1,50 @@
+
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "device/complex_unary_backward_op.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement.hpp"
+
+namespace ttnn {
+
+namespace operations::complex_unary_backward {
+using ComplexTensor = complex_binary::ComplexTensor;
+
+//OpHandler_complex : get_function_complex
+template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
+struct ExecuteComplexUnaryBackward {
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_arg,
+        const MemoryConfig &memory_config) {
+        auto op_type = get_function_complex<complex_unary_backward_op_type>();
+        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+    }
+};
+
+//OpHandler_tensor_complex : get_function_tensor_complex
+template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
+struct ExecuteComplexUnaryBackwardTensor {
+    static std::vector<ComplexTensor> operator()(
+        const Tensor &grad_tensor_arg, const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
+        auto op_type = get_function_tensor_complex<complex_unary_backward_op_type>();
+        return op_type(grad_tensor_arg, input_tensor_arg, memory_config);
+    }
+};
+
+}
+
+//OpHandler_complex : get_function_complex
+constexpr auto polar_bw = ttnn::register_operation<"ttnn::polar_bw", operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::POLAR_BW>>();
+constexpr auto conj_bw = ttnn::register_operation<"ttnn::conj_bw", operations::complex_unary_backward::ExecuteComplexUnaryBackward<operations::complex_unary_backward::ComplexUnaryBackwardOpType::CONJ_BW>>();
+
+//OpHandler_tensor_complex : get_function_tensor_complex
+constexpr auto imag_bw = ttnn::register_operation<"ttnn::imag_bw", operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::IMAG_BW>>();
+constexpr auto real_bw = ttnn::register_operation<"ttnn::real_bw", operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::REAL_BW>>();
+constexpr auto angle_bw = ttnn::register_operation<"ttnn::angle_bw", operations::complex_unary_backward::ExecuteComplexUnaryBackwardTensor<operations::complex_unary_backward::ComplexUnaryBackwardOpType::ANGLE_BW>>();
+
+}

@@ -11,9 +11,6 @@ import tt_lib
 import ttnn
 from ttnn import ConcatMeshToTensor
 
-if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
-    from tracy import signpost
-
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -49,7 +46,11 @@ def run_test_FalconCausalLM_end_to_end(
     expected_compile_time,
     expected_inference_time,
     warmup_iterations,
+    is_ci_env,
 ):
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     # Clear global profiler state before starting measurements
     profiler.clear()
     devices = device_mesh.get_devices()
@@ -139,7 +140,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("COMPILE_RUN")
 
     if llm_mode == "prefill":
@@ -185,7 +186,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Run warmup interations - profiler still disabled
     profiler.start(f"model_warmup_run_for_inference")
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
@@ -235,12 +236,14 @@ def run_test_FalconCausalLM_end_to_end(
         ttnn.device.synchronize_device(device)
 
     # Run for perf iteration - profiler enabled
+    for device in devices:
+        tt_lib.device.DumpDeviceProfiler(device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.start(f"model_run_for_inference")
 
-    if not os.getenv("CI") == "true":
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("PERF_RUN")
 
     if llm_mode == "prefill":
@@ -366,6 +369,7 @@ def test_perf_bare_metal(
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -401,4 +405,79 @@ def test_perf_bare_metal(
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
+        is_ci_env=is_ci_env,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
+@pytest.mark.parametrize(
+    "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
+    (
+        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 1, "BFLOAT8_B-DRAM"),
+    ),
+    ids=[
+        "prefill_seq128_bfp8_layers1",
+        "prefill_seq2048_bfp8_layers1",
+    ],
+)
+@pytest.mark.parametrize(
+    "model_version",
+    ("tiiuae/falcon-40b-instruct",),
+    ids=["falcon_40b"],
+)
+def test_device_perf_bare_metal(
+    num_devices,
+    model_version,
+    llm_mode,
+    batch,
+    seq_len,
+    kv_cache_len,
+    expected_compile_time,
+    expected_inference_time,
+    num_layers,
+    request,
+    model_config_str,
+    model_location_generator,
+    get_tt_cache_path,
+    t3k_device_mesh,
+    use_program_cache,
+    is_ci_env,
+):
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
+    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
+        pytest.skip("Decode is only supported for SHARDED memory config!")
+
+    input_shape = [batch, seq_len]
+    model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
+    devices = t3k_device_mesh.get_devices()
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
+
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
+
+    run_test_FalconCausalLM_end_to_end(
+        t3k_device_mesh,
+        model_version,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        num_layers,
+        model_config,
+        model_config_str,
+        tt_cache_path,
+        model_location_generator,
+        expected_compile_time,
+        expected_inference_time,
+        warmup_iterations=10,
+        is_ci_env=is_ci_env,
     )

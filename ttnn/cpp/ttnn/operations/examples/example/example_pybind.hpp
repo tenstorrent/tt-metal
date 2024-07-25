@@ -20,6 +20,9 @@ void bind_example_operation(py::module& module) {
         module,
         ttnn::example,
         R"doc(example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
+
+        // Add pybind overloads for the C++ APIs that should be exposed to python
+        // There should be no logic here, just a call to `self` with the correct arguments
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::example)& self, const ttnn::Tensor& input_tensor, const uint8_t& queue_id)
                 -> ttnn::Tensor { return self(queue_id, input_tensor); },

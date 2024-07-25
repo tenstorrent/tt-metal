@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
+from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
 
 
@@ -13,7 +13,9 @@ from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
         (True, 128, {"prefill_t/s": 4350, "decode_t/s": 1000, "decode_t/s/u": 3.9}, False, None),
         (True, 1024, {"prefill_t/s": 9500, "decode_t/s": 950, "decode_t/s/u": 3.7}, False, None),
         (True, 2048, {"prefill_t/s": 7800, "decode_t/s": 950, "decode_t/s/u": 3.7}, False, None),
+        (True, 128, None, False, None),
         (True, 1024, None, False, None),
+        (True, 2048, None, False, None),
         (False, 1024, None, True, "models/demos/t3000/falcon7b/expected_greedy_output.json"),
         (False, 1024, None, True, None),
         (False, 1024, None, False, None),
@@ -22,7 +24,9 @@ from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
         "perf_mode_128_stochastic_verify",
         "perf_mode_1024_stochastic_verify",
         "perf_mode_2048_stochastic_verify",
+        "perf_mode_128_stochastic",
         "perf_mode_1024_stochastic",
+        "perf_mode_2048_stochastic",
         "default_mode_1024_greedy_verify",
         "default_mode_1024_greedy",
         "default_mode_1024_stochastic",
@@ -43,7 +47,14 @@ def test_demo_multichip(
     all_devices,
     use_program_cache,
     async_mode,
+    is_ci_env,
 ):
+    if is_ci_env:
+        if num_devices != 8 or (not expected_greedy_output_path and not expected_perf_metrics):
+            pytest.skip("Skipping test in CI since it provides redundant testing")
+    elif expected_greedy_output_path or expected_perf_metrics:
+        assert num_devices == 8, "8 devices are expected for perf and greedy output verification"
+
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     devices = get_devices_for_t3000(all_devices, num_devices)
 

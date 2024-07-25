@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/multi_device.hpp"
 
 namespace py = pybind11;
@@ -26,14 +26,41 @@ void py_module(py::module& module) {
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"))
-        .def("get_device", &ttnn::multi_device::DeviceMesh::get_device, py::return_value_policy::reference)
         .def("get_num_devices", &ttnn::multi_device::DeviceMesh::num_devices)
         .def("get_device_ids", &ttnn::multi_device::DeviceMesh::get_device_ids)
+        .def(
+            "get_device",
+            py::overload_cast<int>(&ttnn::multi_device::DeviceMesh::get_device, py::const_),
+            py::return_value_policy::reference)
+        .def(
+            "get_device",
+            py::overload_cast<int, int>(&ttnn::multi_device::DeviceMesh::get_device, py::const_),
+            py::return_value_policy::reference)
         .def("get_devices", &ttnn::multi_device::DeviceMesh::get_devices, py::return_value_policy::reference, R"doc(
             Get the devices in the device mesh.
 
             Returns:
                 List[Device]: The devices in the device mesh.
+        )doc")
+        .def(
+            "get_devices_on_row",
+            &ttnn::multi_device::DeviceMesh::get_devices_on_row,
+            py::return_value_policy::reference,
+            R"doc(
+            Get the devices in a row of the device mesh.
+
+            Returns:
+                List[Device]: The devices on a row in the device mesh.
+        )doc")
+        .def(
+            "get_devices_on_column",
+            &ttnn::multi_device::DeviceMesh::get_devices_on_column,
+            py::return_value_policy::reference,
+            R"doc(
+            Get the devices in a row of the device mesh.
+
+            Returns:
+                List[Device]: The devices on a row in the device mesh.
         )doc");
 
     module.def(

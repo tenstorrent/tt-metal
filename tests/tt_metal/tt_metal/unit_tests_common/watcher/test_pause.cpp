@@ -126,11 +126,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 
-TEST_F(WatcherFixture, TestWatcherPause) {
-    if (this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "Skip, see #9993");
-        GTEST_SKIP();
-    }
+// See #10527
+TEST_F(WatcherFixture, DISABLED_TestWatcherPause) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

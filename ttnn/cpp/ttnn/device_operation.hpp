@@ -6,10 +6,10 @@
 
 #include <concepts>
 #include <optional>
-#include <tt_eager/tensor/tensor.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_dnn/op_library/operation_history.hpp"
+#include "ttnn/operation_history.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_stl/concepts.hpp"
@@ -200,7 +200,6 @@ static void append_operation_to_operation_history(
         std::string{tt::stl::get_type_name<device_operation_t>()},
         tt::stl::reflection::get_attributes(operation_attributes),
         input_tensor_records,
-        {},
         program_cache_hit,
         program_hash,
     });

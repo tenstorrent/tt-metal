@@ -185,6 +185,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
+        "LLM_MODE": "decode",
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
@@ -549,14 +550,14 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         )
         model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+        model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
             ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.experimental.tensor.BufferType.L1,
             ttnn.experimental.tensor.ShardSpec(
                 shard_spec_32_cores_grid,
                 [
                     row_height,
-                    shard_width_4x_hidden_dim_across_32_cores,
+                    shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -583,16 +584,16 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             per_core_M=row_height // 32,
             per_core_N=4,
             fuse_batch=True,
-            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
             mcast_in0=True,
         )
         model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=32,  # TODO: Can this be larger
-            out_subblock_h=1,  # TODO: Can this be larger
+            in0_block_w=4,
+            out_subblock_h=1,
             out_subblock_w=1,
             per_core_M=row_height // 32,
-            per_core_N=1,
+            per_core_N=8,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -683,6 +684,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
+        "LLM_MODE": "prefill",
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
@@ -745,50 +747,78 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["row_height"] = row_height
     model_config["BATCH_SIZE"] = batch_size
     model_config["SEQ_LEN"] = seq_len
+    model_config["MAX_MM_SEQ_LEN"] = 2048
+    model_config["MM_SEQ_LEN_BATCHED"] = 1024
 
-    # Layernorm is an exception that are sharded also here, because the interleaved OP does not fit in L1 for 40b hidden size
-    layernorm_num_cores_x = 8
-    layernorm_max_num_cores_y = 8
+    def get_grid_size_and_core_range_based_on_num_cores(num_cores):
+        assert num_cores in (16, 32, 64)
+        if num_cores == 16:
+            attention_mm_grid_size = (8, 2)
+            attn_core_range_set = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0),
+                        ttnn.experimental.tensor.CoreCoord(7, 1),
+                    ),
+                }
+            )
+        elif num_cores == 32:
+            attention_mm_grid_size = (8, 4)
+            attn_core_range_set = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0),
+                        ttnn.experimental.tensor.CoreCoord(7, 3),
+                    ),
+                }
+            )
+        else:
+            attention_mm_grid_size = (8, 8)
+            attn_core_range_set = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0),
+                        ttnn.experimental.tensor.CoreCoord(7, 7),
+                    ),
+                }
+            )
+        return attention_mm_grid_size, attn_core_range_set
 
-    layernorm_slice_size = 512
+    # Attetnion in slices: determine number of cores and shard spec
     attention_max_slice_size = 1024
     attention_slice_size = min(attention_max_slice_size, row_height)
     assert row_height % attention_slice_size == 0
 
     attention_num_slices = row_height // attention_slice_size
     attention_num_cores = min(attention_slice_size * 16 // 32, 64)
-    assert attention_num_cores in (16, 32, 64)
 
-    if attention_num_cores == 16:
-        attention_mm_grid_size = (8, 2)
-        attn_shard_spec = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 1),
-                ),
-            }
-        )
-    elif attention_num_cores == 32:
-        attention_mm_grid_size = (8, 4)
-        attn_shard_spec = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 3),
-                ),
-            }
-        )
-    else:
-        attention_mm_grid_size = (8, 8)
-        attn_shard_spec = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 7),
-                ),
-            }
-        )
+    attention_mm_grid_size, attn_core_range_set = get_grid_size_and_core_range_based_on_num_cores(attention_num_cores)
+
+    # MLP in slices: determine number of cores and shard spec
+    use_mm_2d_start = 512
+    model_config["MM_USE_MM2D_START"] = use_mm_2d_start
+    mlp_max_slice_size = (
+        256 if model_config["DEFAULT_DTYPE"] == BFLOAT16_DTYPE else 1024
+    )  # BF16 runs out of L1 otherwise
+    mlp_slice_size = min(mlp_max_slice_size, row_height)
+    assert row_height % mlp_slice_size == 0
+
+    mlp_num_slices = max(row_height // mlp_slice_size, 1)
+    model_config["MLP_NUM_SLICES"] = mlp_num_slices
+
+    if row_height >= use_mm_2d_start:
+        mlp_num_cores = min(mlp_slice_size // 32 * 8, 64)
+    else:  # use 1d matmuls and width sharding
+        mlp_num_cores = 32
+
+    mlpn_mm_grid_size, mlp_core_range_set = get_grid_size_and_core_range_based_on_num_cores(mlp_num_cores)
+    model_config["MLP_GRID_SIZE"] = mlpn_mm_grid_size
+
+    # Layernorm sharding (the interleaved OP does not fit in L1 for 40b hidden size)
+    layernorm_num_cores_x = 8
+    layernorm_max_num_cores_y = 8
+
+    layernorm_slice_size = 1024
 
     (
         layernorm_block_sharded_mem_config,
@@ -803,7 +833,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         dtype,
     )
 
-    # partial block sharded layernorm
     model_config["PARTIAL_LN_MEMCFG"] = layernorm_block_sharded_mem_config
     model_config["PARTIAL_LN_PROGCFG"] = layernorm_block_sharded_prg_config
     model_config["PARTIAL_LN_INPLACE_PROGCFG"] = layernorm_block_sharded_prg_config_inplace
@@ -856,7 +885,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.experimental.tensor.BufferType.L1,
         ttnn.experimental.tensor.ShardSpec(
-            attn_shard_spec,
+            attn_core_range_set,
             [16 * attention_slice_size // attention_num_cores, head_dim],
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -867,7 +896,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.experimental.tensor.BufferType.L1,
         ttnn.experimental.tensor.ShardSpec(
-            attn_shard_spec,
+            attn_core_range_set,
             [16 * attention_slice_size // attention_num_cores, row_height],
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -878,12 +907,83 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.experimental.tensor.BufferType.L1,
         ttnn.experimental.tensor.ShardSpec(
-            attn_shard_spec,
+            attn_core_range_set,
             [16 * attention_slice_size // attention_num_cores, head_dim],
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
+
+    # MLP sharding specs
+
+    if mlp_slice_size > use_mm_2d_start:
+        model_config["MLP_INPUT_SHARD_SPEC"] = [
+            row_height // mlp_num_slices // mlpn_mm_grid_size[1],
+            hidden_size // mlpn_mm_grid_size[0],
+        ]
+
+        model_config["MLP_INPUT_SHARD_LAYOUT"] = ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
+
+        model_config["DENSE_H_TO_4H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
+                mlp_core_range_set,
+                [
+                    row_height // mlp_num_slices // mlpn_mm_grid_size[1],
+                    hidden_size // 8 // mlpn_mm_grid_size[0],
+                ],
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["DENSE_4H_TO_H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
+                mlp_core_range_set,
+                [
+                    row_height // mlp_num_slices // mlpn_mm_grid_size[1],
+                    hidden_size // mlpn_mm_grid_size[0],
+                ],
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    else:  # use 1d matmuls and width sharding
+        model_config["MLP_INPUT_SHARD_SPEC"] = [
+            row_height // mlp_num_slices,
+            hidden_size // mlp_num_cores,
+        ]
+
+        model_config["MLP_INPUT_SHARD_LAYOUT"] = ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED
+
+        model_config["DENSE_H_TO_4H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
+                mlp_core_range_set,
+                [
+                    row_height // mlp_num_slices,
+                    hidden_size // 8 // mlp_num_cores,
+                ],
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["DENSE_4H_TO_H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
+                mlp_core_range_set,
+                [
+                    row_height // mlp_num_slices,
+                    hidden_size // mlp_num_cores,
+                ],
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
 
     # uncomment if need to see all the configs
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")

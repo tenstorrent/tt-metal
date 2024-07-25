@@ -50,7 +50,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
     ```bash
     # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_disabled-sampling-tt-70b-T3000-80L-decode_only-text_completion-llama3]
+    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-text_completion-llama3]
     ```
 
 4. **Run the performance test:**
@@ -63,15 +63,15 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
 ## Details
 
-- **Batch Size:** Supports batch size 32.
+- **Batch Size:** Supports batch size 16 and 32.
 - **Input File:** Uses `./demo/data/multi_prompt.json`.
 - **Model Configuration:** Utilizes a pretrained model.
 - **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
 - **Model Functionality:**
-    - The maximum context length is currently limited to (2k + 128) tokens. Support for 8k context is in testing.
     - The demo can run in `decode_only` mode in which we use decode mode to consume the context one token at a time, or `prefill_decode` mode in which we prefill the context and then decode.
 
 - **Demo arguments:**
+    - `context: [short_context, long_context]`: Select between short context (batch 32, sequence_length 2k) and long context (batch 16, sequence length 8k)
     - `ground_truth: [check_disabled, check_enabled]`: Enable or disable ground truth checking, used for testing
     - `sampling: [greedy, sampling]`: Select between greedy decoding and top-k/top-p sampling
     - `implementation: [tt-70b-T3000]`: Run the 70B model on the Tenstorrent backend

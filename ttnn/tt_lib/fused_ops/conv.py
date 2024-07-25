@@ -44,7 +44,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         bias_on_device = bias_.to(device)
 
     def conv_(activation):
-        output = tensor.conv(
+        output = ttnn.operations.conv2d.conv_legacy(
             activation,
             weight_on_device,
             None,
@@ -123,12 +123,12 @@ def resnet50_1x1_conv_as_matmul(
             per_core_M=matmul_config["per_core_M"],
             per_core_N=matmul_config["per_core_N"],
             transpose_mcast=False,
-            fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU) if fuse_relu else None,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if fuse_relu else None,
         )
     else:
         matmul_program_config = matmul_config
         if fuse_relu:
-            matmul_program_config.fused_activation = tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU)
+            matmul_program_config.fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     def conv_(activation):
         # conv1x1 stride 1 padding 0, use matmul op
@@ -236,13 +236,13 @@ def resnet50_optimized_conv(
     )
     bias_on_device = bias_.to(device)
 
-    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+    opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
-    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+    opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
         out_subblock_h_ntiles=out_subblock_h,
@@ -251,22 +251,22 @@ def resnet50_optimized_conv(
 
     def conv_(activation):
         # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.optimized_conv(
+        output = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
-            bias_on_device,
-            None,
-            [R, S, U, V, P_H, P_W],
-            K,
-            False,
-            True,
-            fuse_relu,
-            math_fidelity,
-            opt_conv_parall_conf,
-            opt_conv_block_conf,
-            0,
-            output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-            output_dtype=output_dtype,
+            bias=bias_on_device,
+            conv_reader_indices=None,
+            conv_params=[R, S, U, V, P_H, P_W],
+            output_channels=K,
+            untilize_out=False,
+            has_bias=True,
+            fuse_relu=fuse_relu,
+            math_fidelity=math_fidelity,
+            parallelization_config=opt_conv_parall_conf,
+            block_config=opt_conv_block_conf,
+            extra_padding_for_32_B_alignment=0,
+            memory_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+            dtype=output_dtype,
             input_tensor_shape=input_tensor_shape,
             compute_kernel_config=compute_kernel_config,
         )
@@ -355,13 +355,13 @@ def resnet50_first_conv(
     P_H = 0
     P_W = 0
 
-    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+    opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
-    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+    opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
         out_subblock_h_ntiles=out_subblock_h,
@@ -370,7 +370,7 @@ def resnet50_first_conv(
 
     def conv_(activation):
         # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
-        output_plus_bias = tensor.optimized_conv(
+        output_plus_bias = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
             bias_on_device,
@@ -449,7 +449,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
 
     def conv_(activation):
         # downsample op
-        output = tensor.downsample(activation, downsample_params, output_dtype=output_dtype)
+        output = ttnn.downsample(activation, downsample_params, dtype=output_dtype)
         output = ttnn.linear(
             output,
             weight_on_device,

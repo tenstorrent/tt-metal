@@ -4,8 +4,8 @@
 
 // #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
 

@@ -10,8 +10,9 @@ from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
+from models.utility_functions import torch2tt_tensor
 
-from models.demos.t3000.falcon40b.tt.model_utils import partial_layernorm
+from models.demos.t3000.falcon40b.tt.model_utils import fused_partial_layernorm
 
 
 class TtFalconDecoderLayer:
@@ -68,63 +69,64 @@ class TtFalconDecoderLayer:
         ln_mlp_weights_str = f"{layer_name}.ln_mlp.weight"
         ln_mlp_bias_str = f"{layer_name}.ln_mlp.bias"
 
-        ln_mlp_weights_path = (
-            tt_cache_path / f"{ln_mlp_weights_str}_rm_{self.model_config['LN_MLP_WEIGHTS_DTYPE'].name}"
-        )
+        def pad_ln_params(x):
+            return torch.cat([x.reshape([1, 1, 1, -1]), torch.zeros(1, 1, 31, x.shape[-1])], dim=2)
+
+        ln_mlp_weights_path = tt_cache_path / f"{ln_mlp_weights_str}_{self.model_config['LN_MLP_WEIGHTS_DTYPE'].name}"
 
         self.ln_mlp_gamma = ttnn.as_tensor(
             tensor=self.state_dict[ln_mlp_weights_str],
             dtype=self.model_config["LN_MLP_WEIGHTS_DTYPE"],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             cache_file_name=ln_mlp_weights_path,
-            preprocess=lambda x: x.reshape([1, 1, -1, 32]),
+            preprocess=pad_ln_params,
         )
 
-        ln_mlp_bias_path = tt_cache_path / f"{ln_mlp_bias_str}_rm_{self.model_config['LN_MLP_BIAS_DTYPE'].name}"
+        ln_mlp_bias_path = tt_cache_path / f"{ln_mlp_bias_str}_{self.model_config['LN_MLP_BIAS_DTYPE'].name}"
 
         self.ln_mlp_beta = ttnn.as_tensor(
             tensor=self.state_dict[ln_mlp_bias_str],
             dtype=self.model_config["LN_MLP_BIAS_DTYPE"],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             cache_file_name=ln_mlp_bias_path,
-            preprocess=lambda x: x.reshape([1, 1, -1, 32]),
+            preprocess=pad_ln_params,
         )
 
         ln_attn_weights_str = f"{layer_name}.ln_attn.weight"
         ln_attn_bias_str = f"{layer_name}.ln_attn.bias"
 
         ln_attn_weights_path = (
-            tt_cache_path / f"{ln_attn_weights_str}_rm_{self.model_config['LN_ATTN_WEIGHTS_DTYPE'].name}"
+            tt_cache_path / f"{ln_attn_weights_str}_{self.model_config['LN_ATTN_WEIGHTS_DTYPE'].name}"
         )
 
         self.ln_attn_gamma = ttnn.as_tensor(
             tensor=self.state_dict[ln_attn_weights_str],
             dtype=self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["LN_ATTN_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             cache_file_name=ln_attn_weights_path,
-            preprocess=lambda x: x.reshape([1, 1, -1, 32]),
+            preprocess=pad_ln_params,
         )
 
-        ln_attn_bias_path = tt_cache_path / f"{ln_attn_bias_str}_rm_{self.model_config['LN_ATTN_BIAS_DTYPE'].name}"
+        ln_attn_bias_path = tt_cache_path / f"{ln_attn_bias_str}_{self.model_config['LN_ATTN_BIAS_DTYPE'].name}"
 
         self.ln_attn_beta = ttnn.as_tensor(
             tensor=self.state_dict[ln_attn_bias_str],
             dtype=self.model_config["LN_ATTN_BIAS_DTYPE"],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             cache_file_name=ln_attn_bias_path,
-            preprocess=lambda x: x.reshape([1, 1, -1, 32]),
+            preprocess=pad_ln_params,
         )
 
         self.layernorm_eps = config.layer_norm_epsilon
@@ -229,27 +231,18 @@ class TtFalconDecoderLayer:
                 self.model_config["LN_INPUT_DTYPE"],
             )
 
-        attn_ln_output = partial_layernorm(
+        attn_ln_output, mlp_ln_output = fused_partial_layernorm(
             replicated_hidden_states,
             self.ln_attn_gamma,
             self.ln_attn_beta,
-            self.layernorm_eps,
-            self.model_config["layernorm_params"],
-            self.model_config["PARTIAL_LN_MEMCFG"],
-            self.model_config["PARTIAL_LN_PROGCFG"],
-            self.model_config["LN_MLP_OUTPUT_DTYPE"],
-            self.ln_output_tensors_dict["attn_layernorm"],
-        )
-
-        mlp_ln_output = partial_layernorm(
-            replicated_hidden_states,
             self.ln_mlp_gamma,
             self.ln_mlp_beta,
             self.layernorm_eps,
             self.model_config["layernorm_params"],
             self.model_config["PARTIAL_LN_MEMCFG"],
-            self.model_config["PARTIAL_LN_INPLACE_PROGCFG"],
-            self.model_config["LN_MLP_OUTPUT_DTYPE"],
+            # self.model_config["PARTIAL_LN_INPLACE_PROGCFG"],
+            self.model_config["PARTIAL_LN_PROGCFG"],
+            self.ln_output_tensors_dict["attn_layernorm"],
             self.ln_output_tensors_dict["mlp_layernorm"],
         )
 

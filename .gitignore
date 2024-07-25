@@ -10,7 +10,7 @@ test_hlk_args_init_gen
 tt_build
 tt_debug
 build
-build_debug
+build_*
 /python_env/
 
 /llk_out/
@@ -118,10 +118,10 @@ ttnn/tutorials/DiT/
 compile_commands.json
 
 # rpath_check
-tt_eager/tt_lib/.rpath_checked*
-ttnn/ttnn/.rpath_checked
+ttnn/ttnn/.rpath_checked*
 
 # exclude packages brough in from CPM
 .cpmcache
 
 ClangBuildAnalyzer.ini
+ttnn/ttnn/.rpath_checked__ttnn

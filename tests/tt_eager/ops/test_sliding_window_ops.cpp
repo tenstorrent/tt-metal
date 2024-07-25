@@ -4,13 +4,13 @@
 
 #include <tuple>
 
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/deprecated/tt_numpy/functions.hpp"
 
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;
@@ -62,13 +62,13 @@ uint32_t compare_conv_out_with_golden(
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::Device *device,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    const tuple<vector<vector<uint16_t>>, vector<vector<uint16_t>>, vector<vector<uint16_t>>, uint32_t>
+    const tuple<vector<vector<uint16_t>>, vector<vector<uint16_t>>, vector<vector<uint16_t>>>
         &halo_kernel_config,
     const vector<bool> &pad_metadata,
     bool remote_read = false,
     bool is_block_sharded = false,
     bool transpose_mcast = false) {
-    auto [flattened_pad_config, flattened_local_config, flattened_remote_config, max_out_n_sticks_per_core] =
+    auto [flattened_pad_config, flattened_local_config, flattened_remote_config] =
         halo_kernel_config;
 
     uint32_t padded_input_tensor_buf_idx = 0;

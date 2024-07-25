@@ -11,10 +11,10 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
 
-@pytest.mark.parametrize("sample_counts", [(64,)])
+@pytest.mark.parametrize("sample_counts", [(1024,)])
 @pytest.mark.parametrize("page_sizes", [(16,)])
 @pytest.mark.parametrize("channel_counts", [(1,)])
-@pytest.mark.parametrize("hop_counts", [(4, 8, 12)])
+@pytest.mark.parametrize("hop_counts", [(8,)])
 def test_multichip_hop_latency(sample_counts, page_sizes, channel_counts, hop_counts):
     test_string_name = f"test_ethernet_send_data_microbenchmark - \
             sample_counts: {sample_counts}, \

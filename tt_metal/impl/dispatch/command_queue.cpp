@@ -103,7 +103,7 @@ void EnqueueReadBufferCommand::process() {
 
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
-    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
+    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size, false);
 
     this->add_prefetch_relay(command_sequence);
 
@@ -505,9 +505,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
             if (kg.total_rta_size != 0) {
-                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
-                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                             CoreCoord core_coord(x, y);
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
@@ -751,8 +751,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t i = 0;
             uint32_t max_overall_base_index = 0;
             for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-                const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-                const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+                const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
+                const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
 
                 const uint32_t num_receivers = core_range.size();
                 auto& cb_config_payload = cb_config_payloads[i];
@@ -935,9 +935,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
-                    device->physical_core_from_logical_core(core_range.start, kernel_group.get_core_type());
+                    device->physical_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
                 CoreCoord physical_end =
-                    device->physical_core_from_logical_core(core_range.end, kernel_group.get_core_type());
+                    device->physical_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
 
                 multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                     .noc_xy_addr = this->device->get_noc_multicast_encoding(
@@ -961,8 +961,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord physical_coord =
                             device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
@@ -1088,7 +1088,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
-                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                    (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
@@ -1114,7 +1114,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
-                    (write_offset_bytes + CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                    (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
@@ -1342,7 +1342,7 @@ void EnqueueRecordEventCommand::process() {
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
-        flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, event_payload.data());
+        flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, true, event_payload.data());
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
@@ -2251,6 +2251,7 @@ void HWCommandQueue::read_completion_queue() {
                                 channel);
                             uint32_t event_completed =
                                 dispatch_cmd_and_event.at(sizeof(CQDispatchCmd) / sizeof(uint32_t));
+
                             TT_ASSERT(
                                 event_completed == read_descriptor.event_id,
                                 "Event Order Issue: expected to read back completion signal for event {} but got {}!",

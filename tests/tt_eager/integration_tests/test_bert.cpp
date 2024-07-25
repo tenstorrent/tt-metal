@@ -4,19 +4,22 @@
 
 #include <chrono>
 
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
-#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/transformer/transformer.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
 MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
@@ -95,7 +98,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     value.deallocate();
 
 
-    auto concat_heads_output = tt::operations::primary::transformers::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto concat_heads_output = ttnn::experimental::transformer::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
 
@@ -196,8 +199,7 @@ Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
     auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, tt::operations::primary::Matmul{});
     hidden_states.deallocate();
 
-
-    return bcast(output, parameters.at("qa_head_bias"), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, l1_memory_config);
+    return ttnn::add(output, parameters.at("qa_head_bias"), std::nullopt, l1_memory_config);
 }
 
 
@@ -247,7 +249,11 @@ void test_bert() {
         parameters.emplace(fmt::format("feedforward_layernorm_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
     };
     parameters.emplace("qa_head_weight", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
-    parameters.emplace("qa_head_bias", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
+    parameters.emplace(
+        "qa_head_bias",
+        ttnn::reshape(
+            tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config),
+            ttnn::Shape{tt::tt_metal::Shape{{1, 1, 1, TILE_WIDTH}, {1, 1, TILE_HEIGHT, TILE_WIDTH}}}));
 
     auto run_bert = [&]() {
         tt::log_debug(tt::LogTest, "run_bert started");

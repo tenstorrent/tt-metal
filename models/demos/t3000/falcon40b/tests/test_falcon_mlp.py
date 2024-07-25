@@ -126,8 +126,8 @@ def run_test_FalconMLP_inference(
 @pytest.mark.parametrize(
     "model_config_str, pcc",
     [
-        ("BFLOAT8_B-SHARDED", 0.9986),
-        ("BFLOAT16-SHARDED", 0.9986),
+        ("BFLOAT8_B-SHARDED", 0.9985),
+        ("BFLOAT16-SHARDED", 0.9985),
         ("BFLOAT8_B-DRAM", 0.9983),
         ("BFLOAT16-DRAM", 0.9986),
     ],

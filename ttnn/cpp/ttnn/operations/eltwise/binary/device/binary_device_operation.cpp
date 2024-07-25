@@ -3,26 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_device_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 namespace ttnn::operations::binary {
 
 namespace utils {
-using namespace tt::tt_metal;
+
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 std::map<string, string> get_defines(
     BinaryOpType op_type,
     const std::optional<DataType> input_dtype,
     const std::optional<DataType> output_dtype,
-    const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations) {
+    const std::optional<std::vector<UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
     string idst = "i";
+
+    using ttnn::operations::unary::utils::get_defines;
 
     switch (op_type) {
         case BinaryOpType::ADD:
@@ -38,69 +42,69 @@ std::map<string, string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::GT:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LT:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::GTE:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LTE:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::EQ:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::NE:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::SQUARED_DIFFERENCE:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LOGICAL_AND:
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
+            defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
             // PRE_IN1_0 ====> Applies prescaling for second input
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
+            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
             break;
         case BinaryOpType::DIV_FAST:
             // Divide by a non-zero tensor
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::LOGICAL_OR:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LDEXP:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::LOGADDEXP2:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
+            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
         default: TT_ASSERT(false && "Undefined op type");
     }
@@ -144,7 +148,7 @@ std::map<string, string> get_defines(
             fused_activations.value().at(0).op_type == UnaryOpType::RELU) {
             defines["PACK_RELU"] = "1";
         } else {
-            defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), "0", idst));
+            defines.merge(ttnn::operations::unary::utils::get_block_defines(fused_activations.value(), "0", idst));
         }
     }
 

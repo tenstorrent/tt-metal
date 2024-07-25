@@ -32,6 +32,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     pcc = 0.99
     dtype = ttnn.bfloat8_b
 
+    # Load state dictionary
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
@@ -62,7 +63,6 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
-        # input = torch.randn(1, 32, 4096)
         pt_decode_input_bsh = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         start_pos = generation_start_pos + i
         current_pos = start_pos % model_args.sliding_window
@@ -74,9 +74,9 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             model_args,
             tt_model.device_mesh,
         )
+
         # Run TT model
         tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, current_rot_mat)
-
         tt_output_torch_b1h = (
             ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)

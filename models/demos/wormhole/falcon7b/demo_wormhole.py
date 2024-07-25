@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
+from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
+from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -12,7 +13,9 @@ from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
         (True, 128, {"prefill_t/s": 1370, "decode_t/s": 430, "decode_t/s/u": 13.4}, False, None),
         (True, 1024, {"prefill_t/s": 1770, "decode_t/s": 370, "decode_t/s/u": 11.6}, False, None),
         (True, 2048, {"prefill_t/s": 1600, "decode_t/s": 360, "decode_t/s/u": 11.2}, False, None),
+        (True, 128, None, False, None),
         (True, 1024, None, False, None),
+        (True, 2048, None, False, None),
         (False, 1024, None, True, "models/demos/wormhole/falcon7b/expected_greedy_output.json"),
         (False, 1024, None, True, None),
         (False, 1024, None, False, None),
@@ -21,7 +24,9 @@ from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
         "perf_mode_128_stochastic_verify",
         "perf_mode_1024_stochastic_verify",
         "perf_mode_2048_stochastic_verify",
+        "perf_mode_128_stochastic",
         "perf_mode_1024_stochastic",
+        "perf_mode_2048_stochastic",
         "default_mode_1024_greedy_verify",
         "default_mode_1024_greedy",
         "default_mode_1024_stochastic",
@@ -38,7 +43,14 @@ def test_demo(
     get_tt_cache_path,
     device,
     use_program_cache,
+    is_ci_env,
 ):
+    if is_ci_env:
+        if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
+            pytest.skip("Skipping test in CI since it provides redundant testing")
+
+    assert is_wormhole_b0()
+
     return run_falcon_demo_kv(
         user_input=user_input,
         batch_size=32,

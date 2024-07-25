@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

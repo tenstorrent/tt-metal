@@ -4,9 +4,9 @@
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtTransformerBlock(LightweightModule):
@@ -43,40 +43,35 @@ class TtTransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtypes={
-                    "w1": ttnn.bfloat4_b,
+                    "w1": ttnn.bfloat8_b,
                     "w2": ttnn.bfloat8_b,
-                    "w3": ttnn.bfloat4_b,
+                    "w3": ttnn.bfloat8_b,
                 },
             ),
             args=args,
             layer_num=layer_num,
             dtype=dtype,
         )
-        self.attention_norm = TtRMSNorm(
-            device_mesh=device_mesh,
+        self.attention_norm = RMSNorm(
+            device=device_mesh,
+            dim=args.dim,
             state_dict=state_dict,
-            args=args,
-            dtype=ttnn.bfloat16,
             layer_num=layer_num,
+            weight_dtype=ttnn.bfloat16,
             weight_key="attention_norm",
         )
 
-        self.ffn_norm = TtRMSNorm(
-            device_mesh=device_mesh,
+        self.ffn_norm = RMSNorm(
+            device=device_mesh,
+            dim=args.dim,
             state_dict=state_dict,
-            args=args,
-            dtype=ttnn.bfloat16,
             layer_num=layer_num,
+            weight_dtype=ttnn.bfloat16,
             weight_key="ffn_norm",
         )
 
     def forward(
-        self,
-        xs_1SBH,
-        start_pos,
-        current_pos,
-        attn_masks,
-        rot_mat,
+        self, xs_1SBH, start_pos, current_pos, attn_masks, rot_mat, transformation_mats=None, user_id=0, mode="decode"
     ) -> ttnn.Tensor:
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -86,16 +81,22 @@ class TtTransformerBlock(LightweightModule):
         H: hidden dim (4096)
         """
         attn_norm_1SBH = self.attention_norm(xs_1SBH)
-
         attn_1SBH = self.attention(
             attn_norm_1SBH,
             start_pos,
             current_pos,
             attn_masks,
             rot_mat,
+            transformation_mats,
+            user_id,
+            mode,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
+        xs_1SBH.deallocate(True)
+        attn_1SBH.deallocate(True)
         ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
-        ffn_1SBH = self.feed_forward(ffn_norm_1SBH)
+        ffn_1SBH = self.feed_forward(ffn_norm_1SBH, mode=mode)
         out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
+        hs_1SBH.deallocate(True)
+        ffn_1SBH.deallocate(True)
         return out_1SBH

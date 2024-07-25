@@ -16,7 +16,6 @@ jobs:
         os: [ubuntu-20.04]
     env:
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.build.type }}
       # So we can get all the makefile output we want
       VERBOSE: 1
     runs-on: ${{ matrix.build.runs-on }}
@@ -38,7 +37,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: |
-          cmake -B build -G Ninja
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
           cmake --build build
       - name: Build tt-metal C++ tests
         run: |

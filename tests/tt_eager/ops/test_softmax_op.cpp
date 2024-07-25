@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
-#include <tt_numpy/functions.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/deprecated/tt_numpy/functions.hpp"
 
 #include <algorithm>
 #include <functional>

@@ -41,10 +41,10 @@ Makefile @tt-rkim
 /module.mk @tt-rkim
 tt_metal/module.mk @tt-rkim
 tt_metal/common/module.mk @tt-rkim
-tt_eager/module.mk @tt-rkim
+ttnn/cpp/ttnn/experimental/module.mk @tt-rkim
 /CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
 tt_metal/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
-tt_eager/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
+ttnn/cpp/ttnn/experimental/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
 
 # Testing scripts and infra
 
@@ -80,12 +80,12 @@ docs/source/frameworks/tt_dispatch.rst @pgkeller
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
 
 # metal - fw, llks, risc-v
-tt_metal/hw/ckernels/ @rtawfik01
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
 # tt_metal/hw/meta/ @davorchap @pgkeller @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
-tt_metal/include/compute_kernel_api/ @rtawfik01
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic
 tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @tarafdarTT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT
@@ -111,26 +111,26 @@ tests/scripts/run_performance.sh @tt-rkim
 # **/tensor/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - tensor and op infra
-tt_eager/tt_dnn/op_library/ccl/ @SeanNijjar
-tt_eager/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/ccl/ @SeanNijjar
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/experimental/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
-**/tt_eager/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
-**/tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
-**/tt_eager/tt_lib/fallback_ops @tt-aho
+**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @sangwon-chae
+**/ttnn/cpp/ttnn/experimental/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
+**/ttnn/cpp/ttnn/experimental/tt_lib/fallback_ops @tt-aho
 
 # TTNN
-ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
 
 # models
 /models/ @boris-drazic
@@ -140,18 +140,21 @@ models/demos @eyonland @arakhmati @cfjchu @xanderchin
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat @eyonland @AleksKnezevic @nsmithtt
 models/demos/t3000 @uaydonat @AleksKnezevic @nsmithtt
-models/demos/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
-models/demos/mamba @esmalTT @uaydonat @kpaigwar
+models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
+models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
-models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic
+models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic @djordje-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
 models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
+models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/grayskull @boris-drazic @eyonland
 models/demos/resnet @mywoodstock @tt-aho
+models/demos/ttnn_resnet @mywoodstock @tt-aho
 models/perf/ @boris-drazic @tt-rkim
+models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt

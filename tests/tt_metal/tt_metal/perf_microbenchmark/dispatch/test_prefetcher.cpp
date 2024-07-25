@@ -115,8 +115,8 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write-read 6:Host 7:Packed-read (default {})", DEFAULT_TEST_TYPE);
         log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end.x);
-        log_info(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
+        log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end_coord.x);
+        log_info(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end_coord.y);
         log_info(LogTest, "  -b: run a \"big\" test (fills memory w/ fewer transactions) (default false)", DEFAULT_TEST_TYPE);
         log_info(LogTest, " -rb: gen data, readback and test every iteration - disable for perf measurements (default true)");
         log_info(LogTest, "  -c: use coherent data as payload (default false)");
@@ -155,8 +155,8 @@ void init(int argc, char **argv) {
     prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
-    all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
-    all_workers_g.end.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end.y);
+    all_workers_g.end_coord.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end_coord.x);
+    all_workers_g.end_coord.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end_coord.y);
     split_prefetcher_g = test_args::has_command_option(input_args, "-spre");
     split_dispatcher_g = test_args::has_command_option(input_args, "-sdis");
     use_dram_exec_buf_g = test_args::has_command_option(input_args, "-x");
@@ -911,8 +911,8 @@ void gen_rnd_test(Device *device,
     while (device_data.size() * sizeof(uint32_t) < DEVICE_DATA_SIZE) {
         // Assumes terminate is the last command...
         uint32_t cmd = std::rand() % CQ_PREFETCH_CMD_TERMINATE;
-        uint32_t x = rand() % (all_workers_g.end.x - first_worker_g.x);
-        uint32_t y = rand() % (all_workers_g.end.y - first_worker_g.y);
+        uint32_t x = rand() % (all_workers_g.end_coord.x - first_worker_g.x);
+        uint32_t y = rand() % (all_workers_g.end_coord.y - first_worker_g.y);
 
         CoreCoord worker_core(first_worker_g.x + x, first_worker_g.y + y);
 
@@ -1168,8 +1168,8 @@ void gen_smoke_test(Device *device,
 
     dispatch_cmds.resize(0);
     worker_cores.resize(0);
-    for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-        for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
+    for (uint32_t y = all_workers_g.start_coord.y; y <= all_workers_g.end_coord.y; y++) {
+        for (uint32_t x = all_workers_g.start_coord.x; x <= all_workers_g.end_coord.x; x++) {
             CoreCoord worker_core(x, y);
             worker_cores.push_back(worker_core);
         }
@@ -1184,7 +1184,7 @@ void gen_smoke_test(Device *device,
     dispatch_cmds.resize(0);
     worker_cores.resize(0);
     worker_cores.push_back(first_worker_g);
-    worker_cores.push_back(all_workers_g.end);
+    worker_cores.push_back(all_workers_g.end_coord);
     gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, device_data, 156);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
@@ -1266,7 +1266,7 @@ void gen_prefetcher_cmds(Device *device,
         // No cmds, tests terminating - true smoke test
         break;
     case 1:
-        gen_smoke_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, all_workers_g.end);
+        gen_smoke_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, all_workers_g.end_coord);
         break;
     case 2:
         gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data);
@@ -1614,6 +1614,7 @@ void configure_for_single_chip(Device *device,
         prefetch_q_base,
         prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
         prefetch_q_rd_ptr_addr,
+        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
         cmddat_q_base, // overridden for split below
         cmddat_q_size_g, // overridden for split below
         0, // scratch_db_base filled in below if used
@@ -1636,9 +1637,9 @@ void configure_for_single_chip(Device *device,
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[10] = prefetch_d_buffer_base;
-        prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[11] = prefetch_d_buffer_base;
+        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_compile_args[13] = scratch_db_base;
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
@@ -1656,9 +1657,9 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[2] = prefetch_d_buffer_pages;
         prefetch_compile_args[3] = prefetch_downstream_cb_sem;
         prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[10] = cmddat_q_base;
-        prefetch_compile_args[11] = cmddat_q_size_g;
-        prefetch_compile_args[12] = 0;
+        prefetch_compile_args[11] = cmddat_q_base;
+        prefetch_compile_args[12] = cmddat_q_size_g;
+        prefetch_compile_args[13] = 0;
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
@@ -1821,7 +1822,7 @@ void configure_for_single_chip(Device *device,
     } else {
         uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(
             program,
@@ -2200,6 +2201,7 @@ void configure_for_multi_chip(Device *device,
         prefetch_q_base,
         prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
         prefetch_q_rd_ptr_addr,
+        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
         cmddat_q_base, // overridden for split below
         cmddat_q_size_g, // overridden for split below
         0, // scratch_db_base filled in below if used
@@ -2222,9 +2224,9 @@ void configure_for_multi_chip(Device *device,
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[10] = prefetch_d_buffer_base;
-        prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[11] = prefetch_d_buffer_base;
+        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_compile_args[13] = scratch_db_base;
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
@@ -2242,9 +2244,9 @@ void configure_for_multi_chip(Device *device,
         prefetch_compile_args[2] = prefetch_d_buffer_pages;
         prefetch_compile_args[3] = prefetch_downstream_cb_sem;
         prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[10] = cmddat_q_base;
-        prefetch_compile_args[11] = cmddat_q_size_g;
-        prefetch_compile_args[12] = 0;
+        prefetch_compile_args[11] = cmddat_q_base;
+        prefetch_compile_args[12] = cmddat_q_size_g;
+        prefetch_compile_args[13] = 0;
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
@@ -2492,7 +2494,7 @@ void configure_for_multi_chip(Device *device,
     } else {
         uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
-        prefetch_compile_args[12] = scratch_db_base;
+        prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(
             program,

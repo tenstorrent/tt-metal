@@ -47,18 +47,10 @@ def test_embedding_bw(input_shapes, device):
     tt_output_tensor_on_device = ttnn.embedding_bw(grad_tensor, input_tensor, weights_tensor)
     tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
-    weights.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.embedding_bw)
+    golden_tensor = golden_function(grad_data, input_index, weights, input_shapes)
 
-    pyt_y = torch.nn.functional.embedding(
-        input_index.reshape((batch_size, no_of_embeddings)),
-        weights.reshape((batch_size * no_of_embeddings, embedding_dim)),
-    ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_output_tensor_a = weights.grad
-
-    comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a)
+    comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_tensor, tt_output_tensor_a)
 
     logger.debug(comp_out_a)
     assert comp_pass_a

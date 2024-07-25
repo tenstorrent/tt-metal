@@ -23,6 +23,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    skip_for_wormhole_b0,
 )
 
 
@@ -39,7 +40,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     reference_model.load_state_dict(partial_state_dict)
 
     batch = 32
-    seq_len = 1  # length to generate
+    seq_len = 1  # Decode one token at a time
 
     tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
@@ -49,7 +50,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     )
 
     generation_start_pos = 0
-    generation_length = 2
+    generation_length = 10
     all_tests_pass = True
 
     for i in range(generation_length):
@@ -58,7 +59,6 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         start_pos = generation_start_pos + i
         attention_input, attn_mask = prepare_inputs_ttnn(
             tt_attention_input,
-            # tt_model.hidden_size,
             model_args.dim,
             start_pos,
             model_args,
@@ -88,14 +88,16 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[start_pos={start_pos}] Mistral_Attention Passed!")
+            logger.info(f"[start_pos={start_pos}] Mixtral_Attention Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Mistral_Attention Failed!")
+            logger.warning(f"[start_pos={start_pos}] Mixtral_Attention Failed!")
             all_tests_pass = False
 
+        # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+
     if all_tests_pass:
-        logger.info("Mistral Attention output Passed!")
+        logger.info("Mixtral Attention output Passed!")
     else:
-        logger.warning("Mistral Attention output Failed!")
+        logger.warning("Mixtral Attention output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

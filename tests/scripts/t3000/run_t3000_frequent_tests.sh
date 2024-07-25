@@ -11,6 +11,7 @@ run_t3000_ethernet_tests() {
 
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py ; fail+=$?
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_ring_latency_microbenchmark.py ; fail+=$?
+  pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_link_ping_latency.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -51,6 +52,7 @@ run_t3000_mixtral_tests() {
 
   # mixtral8x7b 8 chip decode model test (env flags set inside the test)
   pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py --timeout=600; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py --timeout=600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -68,8 +70,8 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k post_commit ; fail+=$?
-  pytest -n auto tests/tt_eager/python_api_testing/unit_testing/misc/test_reduce_scatter_post_commit.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k post_commit ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_reduce_scatter_post_commit.py ; fail+=$?
 
   # distributed layernorm
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
@@ -124,7 +126,7 @@ run_t3000_falcon40b_tests() {
 
 run_t3000_tests() {
   # Run ethernet tests
-  #run_t3000_ethernet_tests
+  run_t3000_ethernet_tests
 
   # Run tteager tests
   run_t3000_tteager_tests

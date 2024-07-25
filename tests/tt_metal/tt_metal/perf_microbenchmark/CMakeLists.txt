@@ -7,6 +7,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_read_and_send_data
     ethernet/test_workers_and_erisc_datamover_unidirectional
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm
+    ethernet/test_ethernet_link_ping_latency_no_edm
     ethernet/test_ethernet_hop_latencies_no_edm
     routing/test_tx_rx
     routing/test_mux_demux
@@ -53,7 +54,7 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_eager
+        ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
         ${PROJECT_SOURCE_DIR}/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}

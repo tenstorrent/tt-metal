@@ -7,11 +7,11 @@
 #include <cmath>
 #include "common/base_types.hpp"
 #include "common/core_coord.h"
-#include "tensor/types.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace ttnn::operations::normalization {
 

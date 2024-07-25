@@ -29,7 +29,7 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 
-from models.experimental.resnet.tt.ttnn_functional_resnet50 import resnet50
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

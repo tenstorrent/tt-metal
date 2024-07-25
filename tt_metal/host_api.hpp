@@ -83,7 +83,8 @@ Device *CreateDevice(
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 Device *CreateDeviceMinimal(
-    chip_id_t device_id);
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs = 1);
 
 /**
  * Resets device and closes device

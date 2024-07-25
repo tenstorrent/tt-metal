@@ -8,11 +8,11 @@
 #include <cmath>
 
 #include "detail/util.hpp"
-#include "tensor/host_buffer/functions.hpp"
-#include "tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/pool/max_pool.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -69,8 +69,8 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto shard_grid = input_shard_spec.grid.ranges();
                 TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
                 auto core_range = *shard_grid.begin();
-                uint32_t ncores_w = core_range.end.x + 1;
-                uint32_t ncores_h = core_range.end.y + 1;
+                uint32_t ncores_w = core_range.end_coord.x + 1;
+                uint32_t ncores_h = core_range.end_coord.y + 1;
                 // array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] / ncores_h, output_shape[-1] / ncores_w};
                 // auto output_shard_spec = input_shard_spec;
                 // output_shard_spec.shape = output_shard_shape;

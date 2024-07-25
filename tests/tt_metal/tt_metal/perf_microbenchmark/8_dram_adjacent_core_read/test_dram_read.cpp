@@ -127,14 +127,14 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     std::vector<uint32_t> bank_ids;
     for (int i=0; i < all_cores_list.size(); i++) {
-        auto core = all_cores_list[i].start;
+        auto core = all_cores_list[i].start_coord;
         uint32_t bank_id = i + bank_start_id;
         uint32_t vc = bank_id & 0x3;
 
         bank_ids.push_back(bank_id);
 
         for (int j=0; j<i; ++j) {
-            auto core_ = all_cores_list[j].start;
+            auto core_ = all_cores_list[j].start_coord;
 
             if (core_.y == core.y and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) { // same vc and same row
                 vc = (vc + 1) & 0x3;
@@ -176,7 +176,7 @@ bool validation(
     for (auto core: all_cores) {
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core.start, cb_addr, num_tiles_cb * single_tile_size, result_vec);
+            device, core.start_coord, cb_addr, num_tiles_cb * single_tile_size, result_vec);
 
         uint32_t num_datum_per_block = block_h * block_w * num_datum_per_slice;
         uint32_t tensor_slice_stride = core_id * num_datum_per_slice;
@@ -597,8 +597,8 @@ int main(int argc, char **argv) {
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;
 
         for (auto core: all_cores_list) {
-            auto phys_core = device->worker_core_from_logical_core(core.start);
-            log_info("logical core: {}, physical coer: {}", core.start, phys_core);
+            auto phys_core = device->worker_core_from_logical_core(core.start_coord);
+            log_info("logical core: {}, physical coer: {}", core.start_coord, phys_core);
         }
 
         log_info(

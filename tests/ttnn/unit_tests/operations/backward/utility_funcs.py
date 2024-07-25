@@ -52,7 +52,7 @@ def data_gen_with_val(input_shapes, device, required_grad=False, val=1, is_row_m
     return pt_tensor, tt_tensor
 
 
-def data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim, required_grad=False):
+def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, required_grad=False):
     torch.manual_seed(213919)
     pt_tensor_temp = torch.zeros(input_shapes, requires_grad=required_grad).bfloat16()
     shape_Required = torch.Size(

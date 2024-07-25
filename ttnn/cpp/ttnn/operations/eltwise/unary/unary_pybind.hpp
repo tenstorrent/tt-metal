@@ -10,7 +10,9 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace py = pybind11;
 
@@ -19,6 +21,9 @@ namespace operations {
 namespace unary {
 
 namespace detail {
+
+using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
+using ComplexTensor = complex_binary::ComplexTensor;
 
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
@@ -68,6 +73,124 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
             py::arg("queue_id") = 0});
 }
 
+
+template <typename unary_operation_t>
+void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor or ComplexTensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            {2}
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor, memory_config, output_tensor);
+                },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ComplexTensor& input_tensor,
+               const ttnn::MemoryConfig& memory_config) -> Tensor {
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType1<complex_unary::ComplexUnaryOpType::ABS>;
+                return ComplexUnaryOp::operator()(input_tensor, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
+}
+
+template <typename unary_operation_t>
+void bind_unary_operation_overload_complex_return_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor or ComplexTensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            {2}
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor, memory_config, output_tensor);
+                },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ComplexTensor& input_tensor,
+               const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType2<complex_unary::ComplexUnaryOpType::RECIPROCAL>;
+                return ComplexUnaryOp::operator()(input_tensor, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
+}
 
 template <typename unary_operation_t>
 void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation) {
@@ -234,6 +357,63 @@ void bind_unary_operation_with_integer_parameter(
             py::arg("queue_id") = 0});
 }
 
+
+template <typename unary_operation_t>
+void bind_unary_operation_with_dim_parameter(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name,
+    const std::string& parameter_doc,
+    const std::string& info_doc) {
+
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, *, {2}: int32_t = -1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            {4}
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`{2}` (int32_t): {3}.
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor, {2})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               int dim,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, dim, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim") = -1,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+
 template <typename unary_operation_t>
 void bind_softplus(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
@@ -363,7 +543,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const std::vector<UnaryWithParam>& ops_chain,
+               const FusedActivations& ops_chain,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
                const uint8_t queue_id) {
@@ -460,7 +640,7 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
                const Tensor& input_tensor,
                uint32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
+               std::optional<Tensor> output_tensor,
                const uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
             },
@@ -477,7 +657,7 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
                 const Tensor& input_tensor,
                 float exponent,
                 const std::optional<MemoryConfig>& memory_config,
-                const std::optional<Tensor>& output_tensor,
+                std::optional<Tensor> output_tensor,
                 const uint8_t queue_id) -> ttnn::Tensor {
                     return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
                 },
@@ -488,6 +668,225 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
                 py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0}
             );
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite_scale_shift(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, scale, shift, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`scale`
+                * :attr:`shift`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               float scale,
+               float shift,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, scale, shift, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::arg("scale")=1.0f/6.0f,
+            py::arg("shift")=0.5f,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite_scale_alpha(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, scale, alpha, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`scale`
+                * :attr:`alpha`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               float scale,
+               float alpha,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, scale, alpha, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::arg("scale")= 1.0507009873554804934193349852946,
+            py::arg("alpha")= 1.6732632423543772848170429916717,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite_threshold_value(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, threshold, value, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`threshold`
+                * :attr:`value`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               float threshold,
+               float value,
+               const std::optional<MemoryConfig>& memory_config) {
+                    return self(input_tensor, threshold, value, memory_config);
+                },
+            py::arg("input_tensor"),
+            py::arg("threshold"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_composite_low_high(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, low, high, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`low`
+                * :attr:`high`
+
+            Keyword Args:
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Example::
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               float low,
+               float high,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, low, high, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg("low") = -1.0f,
+            py::arg("high") = 1.0f,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -685,10 +1084,11 @@ void bind_unary_operation_with_diag(py::module& module, const unary_operation_t&
             py::arg("queue_id") = 0});
 }
 
+
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_unary_operation(module, ttnn::abs);
+    detail::bind_unary_operation_overload_complex(module, ttnn::abs);
     detail::bind_unary_operation(module, ttnn::acos);
     detail::bind_unary_operation(module, ttnn::asin);
     detail::bind_unary_operation(module, ttnn::atan);
@@ -715,7 +1115,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::ltz);
     detail::bind_unary_operation(module, ttnn::neg);
     detail::bind_unary_operation(module, ttnn::nez);
-    detail::bind_unary_operation(module, ttnn::reciprocal);
+    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
     detail::bind_unary_operation(module, ttnn::relu);
     detail::bind_unary_operation(module, ttnn::relu6);
     detail::bind_unary_operation(module, ttnn::sigmoid);
@@ -746,7 +1146,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function", "This will carry out ReLU operation at min value instead of the standard 0");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::remainder, "value", "Perform an eltwise-modulus operation a - a.div(b, rounding_mode=floor) * b.", "Support provided only for WH_B0.");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::fmod, "value", "scalar value", "Perform an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b . Support provided only for WH_B0.");
-    // detail::bind_unary_operation_with_float_parameter(module, ttnn::prelu, "weight", "The weight parameter for the PReLU function");
 
     // Unaries with integer parameter
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "Input tensor needs to be of INT32 dtype. Support provided for Wormhole_B0 only");
@@ -757,6 +1156,12 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_not, "value", "scalar value", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
 
+    // Unary ops with dim parameter
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::glu, "dim", "Dimenstion to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply glu function on second tensor followed by mul op with first tensor");
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::reglu, "dim", "Dimenstion to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply relu function on second tensor followed by mul op with first tensor");
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::geglu, "dim", "Dimenstion to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply gelu function on second tensor followed by mul op with first tensor");
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::swiglu, "dim", "Dimenstion to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply silu function on second tensor followed by mul op with first tensor");
+
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
@@ -765,28 +1170,39 @@ void py_module(py::module& module) {
     detail::bind_power(module, ttnn::pow);
 
     // Other Unary composite
-    detail::bind_unary_composite_operation(module, ttnn::rad2deg);
-    detail::bind_unary_composite_operation(module, ttnn::deg2rad);
-
-    detail::bind_unary_composite_operation(module, ttnn::acosh);
-    detail::bind_unary_composite_operation(module, ttnn::asinh);
-    detail::bind_unary_composite_operation(module, ttnn::atanh);
-    detail::bind_unary_composite_operation(module, ttnn::cbrt);
-    detail::bind_unary_composite_operation(module, ttnn::cosh);
-    detail::bind_unary_composite_operation(module, ttnn::digamma);
-    detail::bind_unary_operation_with_scale_and_shift(module, ttnn::hardswish);
-    detail::bind_unary_operation_with_scale_and_shift(module, ttnn::hardsigmoid);
-    detail::bind_unary_operation_with_low_and_high(module, ttnn::hardtanh);
-    detail::bind_unary_composite_operation(module, ttnn::lgamma);
-    detail::bind_unary_composite_operation(module, ttnn::log1p);
-    detail::bind_unary_composite_operation(module, ttnn::mish);
-    detail::bind_unary_composite_operation(module, ttnn::multigammaln);
-    detail::bind_unary_composite_operation(module, ttnn::sinh);
-    detail::bind_unary_composite_operation(module, ttnn::softsign);
-    detail::bind_unary_composite_operation(module, ttnn::swish);
-    detail::bind_unary_composite_operation(module, ttnn::tanhshrink);
     detail::bind_unary_operation_with_diag(module, ttnn::tril);
     detail::bind_unary_operation_with_diag(module, ttnn::triu);
+
+    // unary composite imported into ttnn
+    detail::bind_unary_composite(module, ttnn::deg2rad);
+    detail::bind_unary_composite(module, ttnn::rad2deg);
+    detail::bind_unary_composite(module, ttnn::tanhshrink);
+    detail::bind_unary_composite(module, ttnn::acosh);
+    detail::bind_unary_composite(module, ttnn::asinh);
+    detail::bind_unary_composite(module, ttnn::atanh);
+    detail::bind_unary_composite(module, ttnn::cbrt);
+    detail::bind_unary_composite(module, ttnn::cosh);
+    detail::bind_unary_composite(module, ttnn::digamma);
+    detail::bind_unary_composite(module, ttnn::lgamma);
+    detail::bind_unary_composite(module, ttnn::log1p);
+    detail::bind_unary_composite(module, ttnn::mish);
+    detail::bind_unary_composite(module, ttnn::multigammaln);
+    detail::bind_unary_composite(module, ttnn::sinh);
+    detail::bind_unary_composite(module, ttnn::softsign);
+    detail::bind_unary_composite(module, ttnn::swish);
+    detail::bind_unary_composite(module, ttnn::trunc);
+    detail::bind_unary_composite(module, ttnn::var_hw);
+    detail::bind_unary_composite(module, ttnn::std_hw);
+    detail::bind_unary_composite(module, ttnn::normalize_hw);
+
+    detail::bind_unary_composite_scale_shift(module, ttnn::hardswish);
+    detail::bind_unary_composite_scale_shift(module, ttnn::hardsigmoid);
+    detail::bind_unary_composite_low_high(module, ttnn::hardtanh);
+    detail::bind_unary_composite_low_high(module, ttnn::clip);
+    detail::bind_unary_composite_low_high(module, ttnn::clamp);
+    detail::bind_unary_composite_scale_alpha(module, ttnn::selu);
+    detail::bind_unary_composite_threshold_value(module, ttnn::threshold);
+
 }
 
 }  // namespace unary

@@ -24,6 +24,7 @@ from models.utility_functions import (
     profiler,
     disable_compilation_reports,
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -232,7 +233,7 @@ def run_test_LlamaModel_end_to_end(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(240000)
+@pytest.mark.timeout(4500)
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize(
     "llama_version",

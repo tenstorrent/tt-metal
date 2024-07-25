@@ -11,10 +11,12 @@
 #include <ostream>
 #include <reflect>
 #include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <variant>
 #include <vector>
+#include <filesystem>
 
 #include "concepts.hpp"
 #include "third_party/json/json.hpp"
@@ -341,6 +343,11 @@ typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std:
     return os;
 }
 
+static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
+    os << path.c_str();
+    return os;
+}
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional) {
     if (optional.has_value()) {
@@ -483,6 +490,11 @@ constexpr auto visit_object_of_type(auto callback, T&& object) {
         [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
 }
 
+template <typename object_t, typename... Ts>
+constexpr auto visit_object_of_type(auto callback, Ts&&... objects) {
+    (visit_object_of_type<object_t>(callback, objects), ...);
+}
+
 template <typename object_t, typename T>
     requires std::same_as<std::decay_t<T>, object_t>
 constexpr auto get_first_object_of_type(T&& value) {
@@ -555,6 +567,18 @@ struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
         using tt::stl::reflection::operator<<;
         std::stringstream ss;
         ss << value;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <>
+struct fmt::formatter<std::filesystem::path> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << path;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1096,9 +1120,8 @@ struct from_json_t<T> {
             [&object, &json_object](auto I) {
                 const auto& attribute_name = reflect::member_name<I>(object);
                 const auto& attribute = reflect::get<I>(object);
-                if (json_object.contains(attribute_name)) {
-                    reflect::get<I>(object) = from_json<std::decay_t<decltype(attribute)>>(json_object[attribute_name]);
-                }
+                reflect::get<I>(object) =
+                    from_json<std::decay_t<decltype(attribute)>>(json_object[std::string{attribute_name}]);
             },
             object);
         return object;

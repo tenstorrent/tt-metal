@@ -23,8 +23,8 @@ from models.utility_functions import (
     skip_for_wormhole_b0,
 )
 
-# from models.experimental.resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
-from models.experimental.resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api_24 import resnet50
+# from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api_24 import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

@@ -14,6 +14,7 @@
 #include "ttnn/operations/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/reduction/topk/topk_pybind.hpp"
 #include "ttnn/operations/reduction/moe/moe_pybind.hpp"
+#include "ttnn/operations/reduction/prod/prod_pybind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -30,6 +31,7 @@ void py_module(py::module& module) {
     detail::bind_reduction_argmax_operation(module);
     detail::bind_reduction_topk_operation(module);
     detail::bind_reduction_moe_operation(module);
+    detail::bind_reduction_prod_operation(module, ttnn::prod);
 }
 
 }  // namespace ttnn::operations::reduction

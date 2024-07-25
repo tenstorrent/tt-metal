@@ -29,7 +29,7 @@ def run_tilize_matmul_test(M, K, N, device):
         ttl.tensor.Layout.ROW_MAJOR,
         device,
     )
-    a_t = ttl.tensor.tilize(a)
+    a_t = ttnn.tilize(a)
     b_t = ttl.tensor.Tensor(
         tilize_to_list(B),
         b_shape,

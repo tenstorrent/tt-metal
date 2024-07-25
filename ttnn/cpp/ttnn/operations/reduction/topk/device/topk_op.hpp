@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::reduction {
 

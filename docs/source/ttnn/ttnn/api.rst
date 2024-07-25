@@ -168,12 +168,17 @@ Pointwise Unary
    ttnn/tanhshrink
    ttnn/threshold
    ttnn/mul_bw
-   ttnn/clamp_min_bw
-   ttnn/clamp_max_bw
    ttnn/clamp_bw
    ttnn/hardtanh_bw
    ttnn/threshold_bw
    ttnn/softplus_bw
+   ttnn/div_bw
+   ttnn/rdiv_bw
+   ttnn/bias_gelu_bw
+   ttnn/pow_bw
+   ttnn/exp_bw
+   ttnn/tanh_bw
+   ttnn/sqrt_bw
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
@@ -217,6 +222,7 @@ Pointwise Unary
    ttnn/silu_bw
    ttnn/selu_bw
    ttnn/square_bw
+   ttnn/prod_bw
    ttnn/hardswish_bw
    ttnn/tanhshrink_bw
    ttnn/atanh_bw
@@ -244,6 +250,20 @@ Pointwise Unary
    ttnn/erf_bw
    ttnn/deg2rad_bw
    ttnn/polygamma_bw
+   ttnn/gelu_bw
+   ttnn/repeat_bw
+   ttnn/real
+   ttnn/imag
+   ttnn/angle
+   ttnn/is_imag
+   ttnn/is_real
+   ttnn/polar_bw
+   ttnn/imag_bw
+   ttnn/real_bw
+   ttnn/angle_bw
+   ttnn/conj_bw
+   ttnn/conj
+   ttnn/polar
 
 Pointwise Binary
 ================
@@ -252,6 +272,8 @@ Pointwise Binary
    :maxdepth: 1
 
    ttnn/add
+   ttnn/addalpha
+   ttnn/subalpha
    ttnn/multiply
    ttnn/subtract
    ttnn/pow
@@ -292,10 +314,8 @@ Pointwise Binary
    ttnn/squared_difference_bw
    ttnn/concat_bw
    ttnn/rsub_bw
-   ttnn/bias_gelu_bw
    ttnn/min_bw
    ttnn/max_bw
-   ttnn/div_bw
    ttnn/lerp_bw
 
 Pointwise Ternary
@@ -334,6 +354,7 @@ Reduction
    ttnn/sum
    ttnn/var
    ttnn/argmax
+   ttnn/prod
    ttnn/topk
 
 Data Movement
@@ -348,6 +369,8 @@ Data Movement
    ttnn/reshape
    ttnn/repeat
    ttnn/repeat_interleave
+   ttnn/tilize
+   ttnn/tilize_with_val_padding
 
 Normalization
 =============
@@ -395,6 +418,7 @@ Vision
    :maxdepth: 1
 
    ttnn/upsample
+   ttnn/downsample
 
 KV Cache
 ========

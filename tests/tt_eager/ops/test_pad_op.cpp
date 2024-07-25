@@ -5,10 +5,10 @@
 #include <cmath>
 
 #include "common/constants.hpp"
-#include "tensor/host_buffer/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 

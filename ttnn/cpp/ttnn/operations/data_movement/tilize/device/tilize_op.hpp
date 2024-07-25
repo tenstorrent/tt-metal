@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
