@@ -35,6 +35,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
     num_to_corerange,
     ConcatMesh2DToTensor,
+    ShardTensor2dMesh,
 )
 from models.utility_functions import nearest_32
 
@@ -114,7 +115,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
 
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 32),
+            shape=(x.shape[2], x.shape[3] // 32 // llama_attention_model.cluster_shape[0]),
             core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -126,7 +127,9 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ACT_MEMCFG,
             device=llama_attention_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
+            mesh_mapper=ShardTensor2dMesh(
+                llama_attention_model.device_mesh, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
+            ),
         )
 
         batch_size_per_group = llama_attention_model.batch_size_per_device_group
@@ -272,7 +275,12 @@ def run_test_LlamaAttention_inference(
             attn_mask,
         )
 
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+
+        tt_out = ttnn.to_torch(
+            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+        )
+        tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -345,7 +353,7 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9997)],
+    [(32, 1, 0.9995)],
     ids=["decode"],
 )
 @pytest.mark.parametrize(

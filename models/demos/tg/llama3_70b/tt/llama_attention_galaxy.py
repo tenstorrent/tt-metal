@@ -12,7 +12,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ConcatMesh2DToTensor,
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    get_flash_decode_chunk_size,
     num_to_corerange,
 )
 
@@ -88,12 +87,13 @@ class TtLlamaAttention_galaxy:
 
     def get_attn_model_config(self):
         if self.model_config["LLM_MODE"] == "decode":
+            # 32 x 2048 X 2048 x 1280
             self.FUSED_QKV_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
-                in0_block_w=8,
+                in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=32 // 32,
+                per_core_M=1,
                 per_core_N=1,
                 fuse_batch=True,
                 fused_activation=None,
@@ -145,18 +145,6 @@ class TtLlamaAttention_galaxy:
                 packer_l1_acc=False,
             )
 
-            self.SELFOUT_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=32 // 32,
-                per_core_N=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-
             shard_grid = ttnn.CoreRangeSet({num_to_corerange(self.batch_size_per_device_group)})
             shard_spec = ttnn.ShardSpec(
                 shard_grid, (self.padded_local_heads, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False
@@ -164,6 +152,19 @@ class TtLlamaAttention_galaxy:
 
             self.SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+            )
+
+            # (32 x 1k) x (1k x 2k)
+            self.SELFOUT_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
     def init_kv_cache(self):
@@ -208,12 +209,12 @@ class TtLlamaAttention_galaxy:
         assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
         assert not hasattr(self, "wo_list"), "wo_list is already an attribute of this object"
         # Load weights
-        wqkv_cache_str = f"{self.layer_name}.attention.wqkv_fused_galaxy.weight"
+        wqkv_cache_str = f"{self.layer_name}.attention.wqkv_fused_galaxy_2d.weight"
         wq_str = f"{self.layer_name}.attention.wq.weight"
         wk_str = f"{self.layer_name}.attention.wk.weight"
         wv_str = f"{self.layer_name}.attention.wv.weight"
         wo_str = f"{self.layer_name}.attention.wo.weight"
-        wo_cache_str = f"{self.layer_name}.attention.wo_galaxy.weight"
+        wo_cache_str = f"{self.layer_name}.attention.wo_galaxy_2d.weight"
 
         qkv_cat = None
         pt_wo = None
@@ -263,7 +264,7 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
 
@@ -273,7 +274,7 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(None, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wo_cache_str,
         )
 
@@ -302,6 +303,46 @@ class TtLlamaAttention_galaxy:
         attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, attn_masks)
         return self.attn_selfout(attn_outputs)
 
+    def tt_all_reduce(self, tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
+        """
+        reduction of a multi-device tensor
+        """
+        concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
+
+        out = ttnn.to_torch(
+            tensors,
+            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
+        )
+        out = torch.sum(out, dim=1, keepdim=True)
+
+        shape = (
+            out.shape[2],
+            out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
+        )
+
+        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
+            act_mem_config = ttnn.create_sharded_memory_config(
+                shape=shape,
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            act_mem_config = None
+
+        act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
+        out_tt = ttnn.from_torch(
+            out,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=act_mem_config,
+            device=self.device_mesh,
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
+        )
+
+        return out_tt
+
     def attn_qkv(
         self,
         xs,
@@ -311,12 +352,16 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
-            program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
+            program_config=self.FUSED_QKV_MM_PROGCFG,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
         )
         xs.deallocate(True)
+
+        fused_query_key_value = self.tt_all_reduce(
+            fused_query_key_value, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
         fused_query_key_value = ttnn.matmul(
@@ -392,12 +437,10 @@ class TtLlamaAttention_galaxy:
         ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-
         program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
-            q_chunk_size=self.padded_local_heads,
-            k_chunk_size=k_chunk_size,
+            q_chunk_size=0,  # unused
+            k_chunk_size=0,  # unused
         )
 
         attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
@@ -473,27 +516,15 @@ class TtLlamaAttention_galaxy:
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
-        attn_output = self.tt_all_gather(
-            attn_output,
-            dim=3,
-            cluster_axis=1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        )
-
         attn_output = ttnn.matmul(
             attn_output,
             self.wo,
-            program_config=self.model_config["SELFOUT_MM_PROGCFG"],
+            program_config=self.SELFOUT_PROGCFG,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )
 
-        attn_output = self.tt_all_gather(
-            attn_output,
-            dim=3,
-            cluster_axis=1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        )
+        attn_output = self.tt_all_reduce(attn_output, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         return attn_output

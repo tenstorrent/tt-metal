@@ -57,7 +57,7 @@ class TtLlamaMLP_galaxy:
                     )
                 }
             )
-            M, K, N = 32, 8192, 32768
+            M, K, N = 32, 8192, 28 * 1024
 
             K = K // self.cluster_shape[0]
             N = N // self.cluster_shape[1]
@@ -99,55 +99,55 @@ class TtLlamaMLP_galaxy:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard.weight"
-        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard.weight"
-        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard.weight"
+        # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard_unpadded.weight"
+        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard_unpadded.weight"
+        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard_unpadded.weight"
+        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
+        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
+        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
         w3_dtype = ttnn.bfloat4_b
 
-        padded_w1 = None
-        padded_w2 = None
-        padded_w3 = None
+        w1 = None
+        w2 = None
+        w3 = None
         if not self.read_cache:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            w1 = self.state_dict[w1_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w2 = self.state_dict[w2_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w3 = self.state_dict[w3_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
 
         self.w1 = ttnn.as_tensor(
-            padded_w1,
+            w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w1_mem_config,
+            # memory_config=self.w1_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w1_cache_str,
         )
 
         self.w3 = ttnn.as_tensor(
-            padded_w3,
+            w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w1_mem_config,
+            # memory_config=self.w1_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w3_cache_str,
         )
 
         self.w2 = ttnn.as_tensor(
-            padded_w2,
+            w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w2_mem_config,
+            # memory_config=self.w2_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w2_cache_str,
         )
@@ -238,7 +238,8 @@ class TtLlamaMLP_galaxy:
         w1_out = ttnn.matmul(
             x,
             self.w1,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.DRAM_SHARDED_PROGCFG,
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -247,7 +248,8 @@ class TtLlamaMLP_galaxy:
         w3_out = ttnn.matmul(
             x,
             self.w3,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.DRAM_SHARDED_PROGCFG, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -274,7 +276,8 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.DRAM_SHARDED_PROGCFG, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -283,18 +286,6 @@ class TtLlamaMLP_galaxy:
         hidden_states = self.tt_all_reduce(
             hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
-
         # hidden_states = ttnn.all_reduce(hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-
-        hidden_states = self.tt_all_gather(
-            hidden_states, dim=3, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        )
-
-        # hidden_states = ttnn.all_gather(
-        #     hidden_states,
-        #     dim=3,
-        #     cluster_axis=0,
-        #     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        # )
 
         return hidden_states
