@@ -92,22 +92,22 @@ template <UnaryCompositeOpType OpType>
 struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_Power;
+struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_scale_shift;
+struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_scale_alpha;
+struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_low_high;
+struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_threshold_value;
+struct OpHandler;
 
 template <UnaryCompositeOpType OpType>
-struct OpHandler_dim;
+struct OpHandler;
 
 template <>
 struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
@@ -250,49 +250,49 @@ struct OpHandler<UnaryCompositeOpType::NORMALIZE_HW> {
 };
 
 template <>
-struct OpHandler_scale_shift<UnaryCompositeOpType::HARDSWISH> {
+struct OpHandler<UnaryCompositeOpType::HARDSWISH> {
     static Tensor handle(const Tensor& t1, float scale, float shift, const std::optional<MemoryConfig>& mem_cfg ) {
         return _hardswish(t1, scale, shift, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_scale_shift<UnaryCompositeOpType::HARDSIGMOID> {
+struct OpHandler<UnaryCompositeOpType::HARDSIGMOID> {
     static Tensor handle(const Tensor& t1, float scale, float shift, const std::optional<MemoryConfig>& mem_cfg ) {
         return _hardsigmoid(t1, scale, shift, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_low_high<UnaryCompositeOpType::HARDTANH> {
+struct OpHandler<UnaryCompositeOpType::HARDTANH> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg ) {
         return _hardtanh(t1, low, high, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_low_high<UnaryCompositeOpType::CLIP> {
+struct OpHandler<UnaryCompositeOpType::CLIP> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg ) {
         return _clip(t1, low, high, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_low_high<UnaryCompositeOpType::CLAMP> {
+struct OpHandler<UnaryCompositeOpType::CLAMP> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg ) {
         return _clamp(t1, low, high, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_scale_alpha<UnaryCompositeOpType::SELU> {
+struct OpHandler<UnaryCompositeOpType::SELU> {
     static Tensor handle(const Tensor& t1, float scale, float alpha, const std::optional<MemoryConfig>& mem_cfg ) {
         return _selu(t1, scale, alpha, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_threshold_value<UnaryCompositeOpType::THRESHOLD> {
+struct OpHandler<UnaryCompositeOpType::THRESHOLD> {
     static Tensor handle(const Tensor& t1, float threshold, float value, const std::optional<MemoryConfig>& mem_cfg ) {
         return _threshold(t1, threshold, value, mem_cfg);
     }
@@ -300,42 +300,42 @@ struct OpHandler_threshold_value<UnaryCompositeOpType::THRESHOLD> {
 
 //glu (geglu, reglu, swiglu, glu) varinats are supported only for last dimension.
 template <>
-struct OpHandler_dim<UnaryCompositeOpType::GLU> {
+struct OpHandler<UnaryCompositeOpType::GLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
     return _glu(t1, dim, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_dim<UnaryCompositeOpType::REGLU> {
+struct OpHandler<UnaryCompositeOpType::REGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
         return _reglu(t1, dim, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_dim<UnaryCompositeOpType::GEGLU> {
+struct OpHandler<UnaryCompositeOpType::GEGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
         return _geglu(t1, dim, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_dim<UnaryCompositeOpType::SWIGLU> {
+struct OpHandler<UnaryCompositeOpType::SWIGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg ) {
     return _swiglu(t1, dim, mem_cfg);
     }
 };
 
 template <>
-struct OpHandler_Power<UnaryCompositeOpType::POWER_FP> {
+struct OpHandler<UnaryCompositeOpType::POWER_FP> {
     static Tensor handle(uint8_t q_id, const Tensor& input, float exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
 };
 
 template <>
-struct OpHandler_Power<UnaryCompositeOpType::POWER_INT> {
+struct OpHandler<UnaryCompositeOpType::POWER_INT> {
     static Tensor handle(uint8_t q_id, const Tensor& input, uint32_t exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
@@ -349,31 +349,31 @@ auto get_function_type1() {
 
 template <UnaryCompositeOpType OpType>
 auto get_function_type2() {
-    return &OpHandler_scale_shift<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryCompositeOpType OpType>
 auto get_function_type3() {
-    return &OpHandler_low_high<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryCompositeOpType OpType>
 auto get_function_type4() {
-    return &OpHandler_scale_alpha<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryCompositeOpType OpType>
 auto get_function_type5() {
-    return &OpHandler_threshold_value<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryCompositeOpType OpType>
 auto get_glu_fn() {
-    return &OpHandler_dim<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryCompositeOpType OpType>
 auto get_power_fn() {
-    return &OpHandler_Power<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 }

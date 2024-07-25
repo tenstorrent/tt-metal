@@ -73,8 +73,7 @@ struct ExecuteUnaryCompositeOpWithScaleShift
         float scale,
         float shift,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto op_type = get_function_type2<unary_comp_op_type>();
-        return op_type(input_tensor, scale, shift, memory_config);
+        return OpHandler<unary_comp_op_type>::handle(input_tensor, scale, shift, memory_config);
     }
 };
 

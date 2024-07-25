@@ -21,8 +21,7 @@ struct ExecuteBinaryCompositeOps
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto op_type = get_function_type0<binary_comp_op_type>();
-        return op_type(input_tensor_a, input_tensor_b, memory_config);
+        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
     }
 };
 
@@ -34,8 +33,7 @@ struct ExecuteBinaryCompositeOpsFloat
         const Tensor& input_tensor_b,
         float alpha,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto op_type = get_function_type1<binary_comp_op_type>();
-        return op_type(input_tensor_a, input_tensor_b, alpha, memory_config);
+        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, alpha, memory_config);
     }
 };
 
@@ -49,8 +47,7 @@ struct ExecuteBinaryCompositeOpsIsClose
         float atol,
         const bool equal_nan,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto op_type = get_function_type2<binary_comp_op_type>();
-        return op_type(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
     }
 };
 
