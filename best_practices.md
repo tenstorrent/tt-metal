@@ -234,10 +234,10 @@ Global classes can lead to issues with concurrency and resource management, espe
 - **Maintainability**: Avoids hidden dependencies and makes the code easier to understand and maintain.
 - **Predictability**: Improves the predictability of resource management and execution flow.
 
-## 12. Move Function Implementations to `.cpp` Files
+## 12. Move Function  Implementations to `.cpp` Files
 
 ### Practice
-Move function implementations from header files to `.cpp` files.
+Move function and method implementations from header files to `.cpp` files. Template heavy functions/methods implementations could be moved to the '_inl.hpp' file which should be included in the end of the header.
 
 ### Explanation
 Implementing functions in `.cpp` files rather than in headers reduces compilation dependencies and improves encapsulation. It also leads to faster compile times and reduces the chances of multiple definition errors.
