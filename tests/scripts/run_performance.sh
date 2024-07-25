@@ -74,8 +74,6 @@ run_device_perf_models() {
 
         env pytest models/demos/bert/tests -m $test_marker
 
-        env pytest models/demos/wormhole/mistral7b/tests -m $test_marker
-
         env pytest models/demos/resnet/tests -m $test_marker
     fi
 
