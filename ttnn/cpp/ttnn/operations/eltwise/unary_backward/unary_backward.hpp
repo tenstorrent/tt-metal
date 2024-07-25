@@ -542,6 +542,11 @@ constexpr auto logiteps_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
         operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW>>();
 
+constexpr auto hardshrink_bw = ttnn::register_operation<
+    "ttnn::hardshrink_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
+        operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW>>();
+
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
     operations::unary_backward::ExecuteUnaryBackwardOptionalFloatParamsWithDefault<

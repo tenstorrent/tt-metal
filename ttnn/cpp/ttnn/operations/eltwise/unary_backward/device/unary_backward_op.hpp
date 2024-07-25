@@ -556,6 +556,13 @@ struct OpHandler<UnaryBackwardOpType::NE_BW> {
 };
 
 template <>
+struct OpHandler<UnaryBackwardOpType::SOFTPLUS_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _softplus_bw(grad, input, beta, threshold, output_mem_config);
+    }
+};
+
+template <>
 struct OpHandler<UnaryBackwardOpType::HARDSHRINK_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
         return _hardshrink_bw(grad, input, lambd, output_mem_config);
