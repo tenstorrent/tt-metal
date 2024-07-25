@@ -137,7 +137,7 @@ def concat(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     xtt = (t0, t1)
-    t2 = ttl.tensor.concat(xtt, dim, output_mem_config=output_mem_config)
+    t2 = ttnn.concat(xtt, dim, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 

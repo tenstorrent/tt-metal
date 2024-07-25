@@ -5,6 +5,7 @@
 import copy
 import torch
 import tt_lib as ttl
+import ttnn
 from contextlib import AbstractContextManager
 from loguru import logger
 from functools import wraps
@@ -21,30 +22,29 @@ class UseDeviceConv:
 
 def disable_conv(fn):
     @wraps(fn)
-    def __wrapper__(*args,**kwargs):
+    def __wrapper__(*args, **kwargs):
         with DisableDeviceConv(use_conv=False) as _:
-            values = fn(*args,**kwargs)
+            values = fn(*args, **kwargs)
         return values
+
     return __wrapper__
+
 
 class DisableDeviceConv(AbstractContextManager):
     """useful for testing"""
 
-    def __init__(self,use_conv=False):
+    def __init__(self, use_conv=False):
         self.state = [UseDeviceConv.READY]
         UseDeviceConv.READY = use_conv
-        logger.debug('Disabled Device Conv operators.')
-
+        logger.debug("Disabled Device Conv operators.")
 
     def __exit__(self, exc_type, exc_value, traceback):
         UseDeviceConv.READY = self.state[0]
-        logger.debug('Restored Device Conv operators.')
+        logger.debug("Restored Device Conv operators.")
         del self.state
 
 
-def parse_conv2d_interface(
-    conv_weight=None, conv_bias=None, in_channels=-1, out_channels=-1, **kwargs
-):
+def parse_conv2d_interface(conv_weight=None, conv_bias=None, in_channels=-1, out_channels=-1, **kwargs):
     # conv_weight, conv_bias, in_channels, out_channels, **kwargs
     # conv_weight, conv_bias, in_channels, out_channels, kernel_size, stride, padding
     if "biases" in kwargs:
@@ -111,6 +111,7 @@ def Conv2d(*args, **kwargs):
 
     return fallback_ops.Conv2d(*args, **kwargs)
 
+
 def concat(tensors, dim=0):
     device = ttl.device.GetDefaultDevice()
     new_tensors = []
@@ -122,4 +123,4 @@ def concat(tensors, dim=0):
             t = t.to(device)
         new_tensors.append(t)
 
-    return ttl.tensor.concat(new_tensors, dim)
+    return ttnn.concat(new_tensors, dim)

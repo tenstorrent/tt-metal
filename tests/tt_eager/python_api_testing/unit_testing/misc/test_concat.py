@@ -9,6 +9,7 @@ import sys
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
@@ -42,7 +43,7 @@ def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_
 
     tt_cpu = torch.concat(inputs, dim)
 
-    tt = ttl.tensor.concat(tt_inputs, dim, output_mem_config)
+    tt = ttnn.concat(tt_inputs, dim, memory_config=output_mem_config)
 
     tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
@@ -228,7 +229,7 @@ def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid
     )
 
     dim = 3
-    tt_output_interleaved = ttl.tensor.concat(tt_inputs, dim, output_sharded_mem_config)
+    tt_output_interleaved = ttnn.concat(tt_inputs, dim, memory_config=output_sharded_mem_config)
 
     tt_dev = tt_output_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     tt_cpu = torch.concat(inputs, dim)
