@@ -22,7 +22,7 @@ Note the current compatability matrix:
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
 | Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | N/A                            |
-| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | v1.0.2 or above, `mesh` config |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
 
 ---
 
