@@ -950,7 +950,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
             run_conv_on_device_batch_one(torch_to_tt_tensor_rm(xx[batch_idx, :, :, :], device))
             for batch_idx in range(N)
         ]
-        conv_concat = tt_lib.tensor.concat(partial_convs, 0)
+        conv_concat = ttnn.concat(partial_convs, 0)
         return conv_concat
 
     def run_conv_on_device_batch_one(x):
