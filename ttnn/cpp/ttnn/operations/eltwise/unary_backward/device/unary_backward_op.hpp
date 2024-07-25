@@ -141,125 +141,101 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
-struct OpHandler_two_float;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_two_float_with_default;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_float_string_default;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_string_default;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_shape;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_unary_optional_float;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_unary_optional;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_prod_bw;
-
-template <UnaryBackwardOpType OpType>
-struct OpHandler_optional_float_params_with_default;
+struct OpHandler;
 
 template <>
-struct OpHandler_optional_float_params_with_default<UnaryBackwardOpType::CLAMP_BW> {
+struct OpHandler<UnaryBackwardOpType::CLAMP_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config ) {
         return _clamp_bw(grad, input, min, max, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_two_float_with_default<UnaryBackwardOpType::HARDTANH_BW> {
+struct OpHandler<UnaryBackwardOpType::HARDTANH_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
         return _hardtanh_bw(grad, input, min, max, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_two_float<UnaryBackwardOpType::THRESHOLD_BW> {
+struct OpHandler<UnaryBackwardOpType::THRESHOLD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config ) {
         return _threshold_bw(grad, input, threshold, value, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_two_float_with_default<UnaryBackwardOpType::SOFTPLUS_BW> {
+struct OpHandler<UnaryBackwardOpType::SOFTPLUS_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
         return _softplus_bw(grad, input, beta, threshold, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_float_string_default<UnaryBackwardOpType::DIV_BW> {
+struct OpHandler<UnaryBackwardOpType::DIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _div_bw(grad, input, scalar, round_mode, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_float_string_default<UnaryBackwardOpType::RDIV_BW> {
+struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_float_string_default<UnaryBackwardOpType::BIAS_GELU_BW> {
+struct OpHandler<UnaryBackwardOpType::BIAS_GELU_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
         return _bias_gelu_bw(grad, input, bias, approximate, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_unary_optional_float<UnaryBackwardOpType::POW_BW> {
+struct OpHandler<UnaryBackwardOpType::POW_BW> {
     static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
         return _pow_bw(queue_id, grad, input, exponent, output_mem_config, are_required_outputs, input_grad);
     }
 };
 
 template <>
-struct OpHandler_unary_optional<UnaryBackwardOpType::EXP_BW> {
+struct OpHandler<UnaryBackwardOpType::EXP_BW> {
     static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
         return _exp_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 
 template <>
-struct OpHandler_unary_optional<UnaryBackwardOpType::TANH_BW> {
+struct OpHandler<UnaryBackwardOpType::TANH_BW> {
     static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
         return _tanh_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 
 template <>
-struct OpHandler_unary_optional<UnaryBackwardOpType::SQRT_BW> {
+struct OpHandler<UnaryBackwardOpType::SQRT_BW> {
     static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
         return _sqrt_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 
 template <>
-struct OpHandler_string_default<UnaryBackwardOpType::GELU_BW> {
+struct OpHandler<UnaryBackwardOpType::GELU_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
         return _gelu_bw(grad, input, approximate, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_shape<UnaryBackwardOpType::REPEAT_BW> {
+struct OpHandler<UnaryBackwardOpType::REPEAT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
         return _repeat_bw(grad, input, shape, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_prod_bw<UnaryBackwardOpType::PROD_BW> {
+struct OpHandler<UnaryBackwardOpType::PROD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config ) {
         return _prod_bw(grad, input, all_dimensions, dim, output_mem_config);
     }
@@ -268,47 +244,47 @@ struct OpHandler_prod_bw<UnaryBackwardOpType::PROD_BW> {
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
-    return &OpHandler_two_float<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float_with_default() {
-    return &OpHandler_two_float_with_default<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_float_string_default() {
-    return &OpHandler_float_string_default<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_string_default() {
-    return &OpHandler_string_default<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_shape() {
-    return &OpHandler_shape<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_unary_optional_float() {
-    return &OpHandler_unary_optional_float<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_unary_optional() {
-    return &OpHandler_unary_optional<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_prod_bw() {
-    return &OpHandler_prod_bw<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <UnaryBackwardOpType OpType>
 auto get_function_optional_float_params_with_default() {
-    return &OpHandler_optional_float_params_with_default<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::unary_backward

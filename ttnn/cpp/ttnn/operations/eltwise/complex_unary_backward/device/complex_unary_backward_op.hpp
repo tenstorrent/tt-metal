@@ -37,55 +37,52 @@ std::vector<ComplexTensor> _angle_bw(const Tensor& grad, const ComplexTensor& in
 std::vector<ComplexTensor> _complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryBackwardOpType OpType>
-struct OpHandler_complex;
-
-template <ComplexUnaryBackwardOpType OpType>
-struct OpHandler_tensor_complex;
+struct OpHandler;
 
 template <>
-struct OpHandler_complex<ComplexUnaryBackwardOpType::POLAR_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::POLAR_BW> {
     static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _polar_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex<ComplexUnaryBackwardOpType::CONJ_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::CONJ_BW> {
     static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _conj_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex<ComplexUnaryBackwardOpType::COMPLEX_RECIP_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::COMPLEX_RECIP_BW> {
     static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _complex_recip_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::IMAG_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::IMAG_BW> {
     static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _imag_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::REAL_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::REAL_BW> {
     static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _real_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::ANGLE_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::ANGLE_BW> {
     static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _angle_bw(grad, input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::COMPLEX_ABS_BW> {
+struct OpHandler<ComplexUnaryBackwardOpType::COMPLEX_ABS_BW> {
     static std::vector<ComplexTensor> handle( const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _complex_abs_bw(grad, input, output_mem_config);
     }
@@ -93,12 +90,12 @@ struct OpHandler_tensor_complex<ComplexUnaryBackwardOpType::COMPLEX_ABS_BW> {
 
 template <ComplexUnaryBackwardOpType OpType>
 auto get_function_complex() {
-    return &OpHandler_complex<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <ComplexUnaryBackwardOpType OpType>
 auto get_function_tensor_complex() {
-    return &OpHandler_tensor_complex<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 }  // namespace ttnn::operations::complex_unary_backward

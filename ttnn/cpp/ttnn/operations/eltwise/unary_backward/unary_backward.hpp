@@ -30,9 +30,8 @@ struct ExecuteUnaryBackwardTwoFloat {
         float min,
         float max,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_type1_w_two_float<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, min, max, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, min, max, output_memory_config);
     }
 };
 
@@ -46,9 +45,8 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
         float parameter_a,
         float parameter_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_type1_w_two_float_with_default<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
     }
 };
 
@@ -69,9 +67,8 @@ struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
         std::optional<float> parameter_a,
         std::optional<float> parameter_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_optional_float_params_with_default<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
     }
 };
 
@@ -92,9 +89,8 @@ struct ExecuteUnaryBackwardFloatStringDefault {
         float parameter_a,
         string parameter_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_type1_float_string_default<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
     }
 };
 
@@ -114,9 +110,8 @@ struct ExecuteUnaryBackwardStringDefault {
         const Tensor &input_tensor_arg,
         string parameter_a,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_type1_string_default<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
     }
 };
 
@@ -136,9 +131,8 @@ struct ExecuteUnaryBackwardShape {
         const Tensor &input_tensor_arg,
         const tt::tt_metal::Shape &parameter_a,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_type1_shape<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
     }
 };
 
@@ -162,8 +156,7 @@ struct ExecuteUnaryBackwardOptionalFloat {
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        auto op_type = get_function_unary_optional_float<unary_backward_op_type>();
-        return op_type(queue_id, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
     }
 
     //type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -175,8 +168,7 @@ struct ExecuteUnaryBackwardOptionalFloat {
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        auto op_type = get_function_unary_optional_float<unary_backward_op_type>();
-        return op_type(DefaultQueueId, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(DefaultQueueId, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
     }
 };
 
@@ -199,8 +191,7 @@ struct ExecuteUnaryBackwardOptional {
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        auto op_type = get_function_unary_optional<unary_backward_op_type>();
-        return op_type(queue_id, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
     }
 
     //type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -211,8 +202,7 @@ struct ExecuteUnaryBackwardOptional {
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        auto op_type = get_function_unary_optional<unary_backward_op_type>();
-        return op_type(DefaultQueueId, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(DefaultQueueId, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
     }
 };
 
@@ -232,9 +222,8 @@ struct ExecuteUnaryBackwardProdBW {
         bool all_dimensions = true,
         int64_t dim = 0,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto op_type = get_function_prod_bw<unary_backward_op_type>();
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return op_type(grad_tensor_arg, input_tensor_arg, all_dimensions, dim, output_memory_config);
+        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, all_dimensions, dim, output_memory_config);
     }
 };
 
