@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/prod/prod_op_all.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include <algorithm>
 #include <optional>
 
+#include "prod_op_all.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/common/constants.hpp"
 #include <ttnn/deprecated/tt_numpy/functions.hpp>
 #include "tt_metal/host_api.hpp"
