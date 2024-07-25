@@ -5,7 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
