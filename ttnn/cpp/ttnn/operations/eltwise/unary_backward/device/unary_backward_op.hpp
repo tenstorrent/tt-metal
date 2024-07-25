@@ -109,6 +109,21 @@ struct UnaryBackwardFunction{
 //OpHandler_two_float : get_function_type1_w_two_float
 std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
+//OpHandler_float : get_function_type1_w_float
+std::vector<Tensor> _remainder_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _fmod_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
+
+//OpHandler : get_function_type1
+std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _fill_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+
 //OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -161,6 +176,83 @@ template <>
 struct OpHandler<UnaryBackwardOpType::THRESHOLD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config ) {
         return _threshold_bw(grad, input, threshold, value, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::REMAINDER_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _remainder_bw(grad, input, scalar, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::FMOD_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _fmod_bw(grad, input, scalar, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::GT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _gt_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ASSIGN_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _assign_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::MULTIGAMMALN_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _multigammaln_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _lgamma_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::FILL_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _fill_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::HARDSIGMOID_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _hardsigmoid_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::COS_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _cos_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ACOSH_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _acosh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::SUB_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _sub_bw(grad, input, scalar, output_mem_config);
     }
 };
 
@@ -244,6 +336,16 @@ struct OpHandler<UnaryBackwardOpType::PROD_BW> {
 // Template functions to get the function pointers
 template <UnaryBackwardOpType OpType>
 auto get_function_type1_w_two_float() {
+    return &OpHandler<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1_w_float() {
+    return &OpHandler<OpType>::handle;
+}
+
+template <UnaryBackwardOpType OpType>
+auto get_function_type1() {
     return &OpHandler<OpType>::handle;
 }
 
