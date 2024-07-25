@@ -145,6 +145,7 @@ class ReplicateTensorToMesh(TensorToMesh):
     def config(self):
         return {
             "strategy": "replicate",
+            "replication_factor": str(self.device_mesh.get_num_devices()),
         }
 
 

@@ -13,7 +13,10 @@ static DistributedTensorConfig create_shard_distributed_tensor_config(const std:
     return ShardTensor(std::stoi(metadata.at("shard_dim")));
 }
 static DistributedTensorConfig create_replicate_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return ReplicateTensor{};
+    if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
+        return ReplicateTensor(std::stoi(it->second));
+    }
+    TT_THROW("Unsupported Replication strategy:");
 }
 
 DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
@@ -166,8 +169,8 @@ const uint32_t Shape::get_normalized_index(std::int64_t index) const {
     return normalized_index;
 }
 
-bool operator==(const ReplicateTensor&, const ReplicateTensor&) {
-    return true; // All instances are considered equal because there are no data members.
+bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
+    return a.replication_factor == b.replication_factor; // All instances are considered equal because there are no data members.
 }
 bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
     return true; // All instances are considered equal because there are no data members.
