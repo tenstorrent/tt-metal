@@ -73,3 +73,87 @@ def test_ternary_where_opt_output(input_shapes, predicate, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
+def test_lerp_overload_ttnn(input_shapes, value, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.lerp(input_tensor1, input_tensor2, value)
+    golden_fn = ttnn.get_golden_function(ttnn.lerp)
+    golden_tensor = golden_fn(in_data1, in_data2, value)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_lerp_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.lerp(input_tensor1, input_tensor2, input_tensor3)
+    golden_fn = ttnn.get_golden_function(ttnn.lerp)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("value1", [1.0, 5.0, 10.0])
+@pytest.mark.parametrize("value2", [1.0, 5.0, 10.0])
+def test_mac_overload_ttnn(input_shapes, value1, value2, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.mac(input_tensor1, value1, value2)
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    golden_tensor = golden_fn(in_data1, value1, value2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_mac_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.mac(input_tensor1, input_tensor2, input_tensor3)
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
