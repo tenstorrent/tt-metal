@@ -31,7 +31,7 @@ namespace ttnn {
 
 // Register the operation. The name, in this case, "ttnn::example" should match the namespace of the operation
 // And the name will be directly mapped to python, where it will become "ttnn.example"
-constexpr auto example = ttnn::register_operation_with_auto_launch_op<"ttnn::example", operations::examples::ExampleOperation>();
+constexpr auto example = ttnn::register_operation<"ttnn::example", operations::examples::ExampleOperation>();
 
 // Alternatively, the operation can be registered as asynchronous
 // constexpr auto example = ttnn::register_operation_with_auto_launch_op<"ttnn::example", operations::examples::ExampleOperation>();
