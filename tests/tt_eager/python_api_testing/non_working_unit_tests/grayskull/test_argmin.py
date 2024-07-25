@@ -33,7 +33,7 @@ class TestArgmin:
         input_tensor = (
             tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
-        tt_output_tensor_on_device = ttnn.argmin(input_tensor, dim=dim, all=all)
+        tt_output_tensor_on_device = ttnn.experimental.argmin(input_tensor, dim=dim, all=all)
 
         tt_out_tensor = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
         if all:

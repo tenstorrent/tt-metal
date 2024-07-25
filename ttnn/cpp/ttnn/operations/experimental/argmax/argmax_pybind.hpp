@@ -58,4 +58,45 @@ void bind_argmax_operation(py::module& module) {
                 py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::argmax::detail
+
+void bind_argmin_operation(py::module& module) {
+    auto doc =
+        R"doc({0}(input_tensor: ttnn.Tensor, dim: int, *, all: bool, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        Performs Argmin function on :attr:`input_tensor`, :attr:`dim`, :attr:`all`.
+
+        Args:
+            * :attr:`input_tensor`
+
+        Keyword args:
+            * :attr:`dim`
+            * :attr:`all` Default is false
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, dim)
+        )doc";
+
+    using OperationType = decltype(ttnn::experimental::argmin);
+    bind_registered_operation(
+        module,
+        ttnn::experimental::argmin,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               int64_t dim,
+               bool all,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, dim, all, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::kw_only(),
+            py::arg("all") = false,
+            py::arg("memory_config") = std::nullopt});
+}
+
+}  // namespace ttnn::operations::experimental::detail

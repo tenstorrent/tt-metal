@@ -9,6 +9,7 @@
 namespace ttnn {
 
 namespace operations::experimental {
+
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     auto& padded_shape = input_a.get_legacy_shape();
     auto& unpadded_shape = padded_shape.without_padding();
@@ -20,11 +21,11 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor Argmax::_argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
 
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
-    operation::launch_with_autoformat(
+    operation::launch_op(
         [_dim, all, output_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -126,10 +127,14 @@ Tensor Argmax::_argmax(const Tensor& input_t, int64_t _dim, bool all, const std:
         },
         {input_t},
         output_tensors);
-    return output_tensors.at(0);
+    return output_tensors[0];
 
 }
 
+Tensor _argmin(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor neg_input = ttnn::neg(input_a, output_mem_config);
+    return _argmax(neg_input, _dim, all, output_mem_config);
+}
 
 }  // namespace operations
 }  // namespace ttnn

@@ -16,6 +16,7 @@ void py_module(py::module& module) {
     // Transformer ops
     transformer::detail::bind_experimental_transformer_operations(module);
     detail::bind_argmax_operation(module);
+    detail::bind_argmin_operation(module);
 }
 
 }  // namespace ttnn::operations::experimental

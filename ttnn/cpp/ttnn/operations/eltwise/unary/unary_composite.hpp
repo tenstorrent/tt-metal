@@ -12,7 +12,6 @@ namespace ttnn {
 namespace operations {
 namespace unary {
 
-template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecutePower{
 
      static Tensor operator()(
@@ -22,7 +21,7 @@ struct ExecutePower{
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt)
         {
-        return OpHandler<unary_comp_op_type>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
+        return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
     static Tensor operator()(
@@ -31,7 +30,7 @@ struct ExecutePower{
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt)
         {
-        return OpHandler<unary_comp_op_type>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
+        return OpHandler<UnaryCompositeOpType::POW>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
     static Tensor operator()(
@@ -41,7 +40,7 @@ struct ExecutePower{
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt)
         {
-        return OpHandler<unary_comp_op_type>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
+        return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
     static Tensor operator()(
@@ -50,7 +49,7 @@ struct ExecutePower{
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt)
         {
-        return OpHandler<unary_comp_op_type>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
+        return OpHandler<UnaryCompositeOpType::POW>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 };
 
@@ -102,32 +101,15 @@ struct ExecuteUnaryCompositeOpWithInt {
         }
 };
 
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithIntBool {
-    static Tensor operator()(
-        const Tensor &input_tensor,
-        int32_t param1,
-        bool all,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, all, output_memory_config);
-        }
-};
-
 // re-implement tt_eager composite unary op => ttnn composite unary ops.
-Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
+inline Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
     auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return tt::tt_metal::where(ttnn::eqz(queue_id, input_tensor, output_memory_config), t_inf, result, output_memory_config, optional_output_tensor);
+    return ttnn::where(ttnn::eqz(queue_id, input_tensor, output_memory_config), t_inf, result, output_memory_config, optional_output_tensor);
 }
-
-// // To be used for div op overloading in binary composite
-// Tensor div_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
-//     return ttnn::multiply(queue_id, input_tensor, (1.0f / value), std::nullopt, memory_config, optional_output_tensor);
-// }
 
 }  // namespace unary
 }  // namespace operations
@@ -181,7 +163,7 @@ constexpr auto rdiv = REGISTER_OPERATION_FROM_FUNCTION("ttnn::rdiv", WRAP_WITH_R
 
 constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
     "ttnn::pow",
-    operations::unary::ExecutePower<operations::unary::UnaryCompositeOpType::POWER_FP>>();
+    operations::unary::ExecutePower>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
@@ -295,9 +277,5 @@ constexpr auto round = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polygamma = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
-
-constexpr auto argmin = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::argmin",
-    operations::unary::ExecuteUnaryCompositeOpWithIntBool<operations::unary::UnaryCompositeOpType::ARGMIN>>();
 
 }  // namespace ttnn

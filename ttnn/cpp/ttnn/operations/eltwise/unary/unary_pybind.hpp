@@ -754,7 +754,7 @@ void bind_unary_composite_int_with_default(py::module& module, const unary_opera
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_two_float_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& description) {
+void bind_unary_composite_floats_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
@@ -803,7 +803,7 @@ void bind_unary_composite_two_float_with_default(py::module& module, const unary
 }
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_one_int(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
+void bind_unary_composite_int(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, {2}: int, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
@@ -846,52 +846,7 @@ void bind_unary_composite_one_int(py::module& module, const unary_operation_t& o
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_one_int_bool(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
-    auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: int, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
-        {4}
-
-        Args:
-            * :attr:`input_tensor`
-
-        Keyword args:
-            * :attr:`{2}` (int): {3}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2})
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        parameter_name_a,
-        parameter_a_doc,
-        description);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t parameter_a,
-               bool all,
-               const std::optional<MemoryConfig>& memory_config)  {
-                return self(input_tensor, parameter_a, all, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg(parameter_name_a.c_str()),
-            py::kw_only(),
-            py::arg("all") = false,
-            py::arg("memory_config") = std::nullopt});
-}
-
-//OpHandler_two_float_with_default
-template <typename unary_operation_t>
-void bind_unary_composite_two_float(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc,  const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string& description) {
+void bind_unary_composite_floats(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc,  const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, {4}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
 
@@ -1241,43 +1196,43 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc");
 
-    detail::bind_unary_composite_two_float_with_default(
+    detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardswish,
         "scale", "Scale value", 1.0f/6.0f,
         "shift", "Shift value", 0.5f,
         R"doc(Performs hardswish function on :attr:`input_tensor`, :attr:`scale`, :attr:`shift`.)doc");
-    detail::bind_unary_composite_two_float_with_default(
+    detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardsigmoid,
         "scale", "Scale value", 1.0f/6.0f,
         "shift", "Shift value", 0.5f,
         R"doc(Performs hardsigmoid function on :attr:`input_tensor`, :attr:`scale`, :attr:`shift`.)doc");
-    detail::bind_unary_composite_two_float_with_default(
+    detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardtanh,
         "min", "min value", -1.0f,
         "max", "max value", 1.0f,
         R"doc(Performs hardtanh function on :attr:`input_tensor`, :attr:`min`, :attr:`max`.)doc");
-    detail::bind_unary_composite_two_float(
+    detail::bind_unary_composite_floats(
         module,
         ttnn::clip,
         "low", "Low value",
         "high", "High value",
         R"doc(Performs clip function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
-    detail::bind_unary_composite_two_float(
+    detail::bind_unary_composite_floats(
         module,
         ttnn::clamp,
         "low", "Low value",
         "high", "High value",
         R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
-    detail::bind_unary_composite_two_float_with_default(
+    detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,
         "scale", "Scale value", 1.0507,
         "alpha", "Alpha value", 1.67326,
         R"doc(Performs selu function on :attr:`input_tensor`, :attr:`scale`, :attr:`alpha`.)doc");
-    detail::bind_unary_composite_two_float(
+    detail::bind_unary_composite_floats(
         module,
         ttnn::threshold,
         "threshold", "Threshold value",
@@ -1298,16 +1253,11 @@ void py_module(py::module& module) {
         ttnn::round,
         "decimals", "decimals value", 0,
         R"doc(Performs round function on :attr:`input_tensor`, not supported for grayskull, :attr:`decimals`.)doc");
-    detail::bind_unary_composite_one_int(
+    detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,
         "k", "k value",
         R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
-    detail::bind_unary_composite_one_int_bool(
-        module,
-        ttnn::argmin,
-        "dim", "dim value",
-        R"doc(Performs Argmin function on :attr:`input_tensor`, :attr:`dim`.)doc");
 
 }
 

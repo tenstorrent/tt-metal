@@ -8,14 +8,13 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "unary_composite_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/operations/experimental/argmax/argmax.hpp"
+
 namespace ttnn::operations::unary{
 
 Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
@@ -88,7 +87,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
    }
    // input == 1, output is 0
-   Tensor result = where(ttnn::eq(input_a, t_one, std::nullopt, output_mem_config), 0.0f, t_result);
+   Tensor result = ttnn::where(ttnn::eq(input_a, t_one, std::nullopt, output_mem_config), 0.0f, t_result);
    return result;
 }
 
@@ -106,7 +105,7 @@ Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
            ttnn::log(ttnn::add(x_abs, ttnn::sqrt(x_sq_p1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
    }
    // input is negative, output is -asinh(input)
-   Tensor result = where(input_a, ln_res, ttnn::neg(ln_res, output_mem_config));
+   Tensor result = ttnn::where(input_a, ln_res, ttnn::neg(ln_res, output_mem_config));
    return result;
 }
 
@@ -129,7 +128,7 @@ Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
    // Input is -1 < value < 1, output is atanh(input)
    float t_nan = std::nanf("");
    Tensor abs_temp = ttnn::subtract(ttnn::abs(input_a, output_mem_config), 1.0f, std::nullopt, output_mem_config);
-   Tensor result = where(ttnn::ltz(abs_temp, output_mem_config), comp_result, t_nan);
+   Tensor result = ttnn::where(ttnn::ltz(abs_temp, output_mem_config), comp_result, t_nan);
    return result;
 }
 
@@ -276,11 +275,11 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
         {
             {
                 Tensor t_one = ttnn::ones_like(x);
-                result = where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result);
+                result = ttnn::where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result);
             }
             {
                 Tensor t_two = ttnn::full_like(x, 2.0f);
-                result = where(ttnn::eq(x, t_two, std::nullopt, output_mem_config), 0.0f, result);
+                result = ttnn::where(ttnn::eq(x, t_two, std::nullopt, output_mem_config), 0.0f, result);
             }
         }
     }
@@ -362,8 +361,8 @@ Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     auto arch = input.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
-    Tensor trunc_res = where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
-    Tensor result = where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
+    Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
+    Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
     return result;
 }
 
@@ -623,7 +622,7 @@ Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryC
         Tensor rounded_non_half = ttnn::floor(
             ttnn::add(
                 input,
-                where(ttnn::logical_and(ttnn::ge(input, 0.4), ttnn::le(input, 0.5)), 0.4f, 0.5f, output_mem_config.value()),
+                ttnn::where(ttnn::logical_and(ttnn::ge(input, 0.4), ttnn::le(input, 0.5)), 0.4f, 0.5f, output_mem_config.value()),
                 std::nullopt,
                 output_mem_config),
             output_mem_config.value());
@@ -631,7 +630,7 @@ Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryC
         Tensor is_half = ttnn::eq(fractional_part, 0.5, std::nullopt, output_mem_config);
         Tensor rounded_half =
             ttnn::add(floor_res, is_odd(floor_res, output_mem_config), std::nullopt, output_mem_config);
-        return where(is_half, rounded_half, rounded_non_half, output_mem_config.value());
+        return ttnn::where(is_half, rounded_half, rounded_non_half, output_mem_config.value());
     }
 }
 
@@ -657,9 +656,5 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
     return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
 }
 
-Tensor _argmin(const Tensor& input_a, int32_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor neg_input = ttnn::neg(input_a, output_mem_config);
-    return (ttnn::experimental::argmax(neg_input, _dim, all));
-}
 
 }  // namespace ttnn::operations::unary

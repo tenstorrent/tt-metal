@@ -45,13 +45,11 @@ enum class UnaryCompositeOpType {
     REGLU,
     GEGLU,
     SWIGLU,
-    POWER_FP,
-    POWER_INT,
+    POW,
     TRIL,
     TRIU,
     ROUND,
     POLYGAMMA,
-    ARGMIN,
 };
 
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
@@ -95,7 +93,6 @@ Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>&
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
-Tensor _argmin(const Tensor&, int32_t dim = 0, bool all = false, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -348,23 +345,12 @@ struct OpHandler<UnaryCompositeOpType::SWIGLU> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::POWER_FP> {
+struct OpHandler<UnaryCompositeOpType::POW> {
     static Tensor handle(uint8_t q_id, const Tensor& input, float exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::POWER_INT> {
     static Tensor handle(uint8_t q_id, const Tensor& input, uint32_t exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ARGMIN> {
-    static Tensor handle(const Tensor& t1, int32_t param1, bool all, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _argmin(t1, param1, all, mem_cfg);
     }
 };
 
