@@ -1,31 +1,32 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
 import pytest
+
 from loguru import logger
-from models.utility_functions import is_grayskull
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
+
+from models.utility_functions import is_grayskull
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
+
+MATMUL_VARIANTS = ["matmul1d", "matmul1d_transposed", "matmul2d", "matmul_no_mcast"]
 
 
 @pytest.mark.skipif(is_grayskull(), reason="Stagger only supported on wormhole")
 @pytest.mark.parametrize(
     "program_config_variant, seq_len, inner_dim, weights_n, per_core_M, per_core_N, in_block_w, out_subblock_h, out_subblock_w, mcast_in0",
     (
-        ("MatmulMultiCoreReuseMultiCast1DProgramConfig", 32 * 32, 144 * 32, 56 * 32, 32, 1, 1, 1, 1, True),
-        ("MatmulMultiCoreReuseMultiCast1DProgramConfig", 56 * 32, 144 * 32, 32 * 32, 1, 32, 1, 1, 1, False),
-        ("MatmulMultiCoreReuseMultiCastProgramConfig", 35 * 32, 144 * 32, 56 * 32, 5, 8, 1, 1, 1, False),
-        ("MatmulMultiCoreReuseProgramConfig", 56 * 32, 144 * 32, 56 * 32, 1, 56, 1, 1, 1, False),
+        ("MatmulMultiCoreReuseMultiCast1DProgramConfig", 1 * 32, 1 * 32, 56 * 32, 1, 1, 1, 1, 1, True),
+        ("MatmulMultiCoreReuseMultiCast1DProgramConfig", 56 * 32, 1 * 32, 1 * 32, 1, 1, 1, 1, 1, False),
+        ("MatmulMultiCoreReuseMultiCastProgramConfig", 7 * 32, 1 * 32, 8 * 32, 1, 1, 1, 1, 1, False),
+        ("MatmulMultiCoreReuseProgramConfig", 56 * 32, 1 * 32, 56 * 32, 1, 56, 1, 1, 1, False),
     ),
-    ids=["matmul1d", "matmul1d_transposed", "matmul2d", "matmul_no_mcast"],
+    ids=MATMUL_VARIANTS,
 )
-@pytest.mark.parametrize("disable_stagger", [True, False])
-def test_matmul_stagger(
+def test_run_matmul_with_and_without_stagger(
     device,
     program_config_variant,
     seq_len,
@@ -37,7 +38,6 @@ def test_matmul_stagger(
     out_subblock_h,
     out_subblock_w,
     mcast_in0,
-    disable_stagger,
 ):
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     dtype = ttnn.DataType.BFLOAT8_B
@@ -49,8 +49,23 @@ def test_matmul_stagger(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape)
 
-    a_t = torch2tt_tensor(A, device, ttnn.Layout.TILE, mem_config, dtype)
-    b_t = torch2tt_tensor(B, device, ttnn.Layout.TILE, mem_config, dtype)
+    input0 = ttnn.as_tensor(
+        A,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    input0 = ttnn.to_device(input0, device)
+
+    input1 = ttnn.as_tensor(
+        B,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    input1 = ttnn.to_device(input1, device)
 
     if program_config_variant == "MatmulMultiCoreReuseMultiCastProgramConfig":
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -62,7 +77,7 @@ def test_matmul_stagger(
             per_core_N=per_core_N,
             transpose_mcast=False,
             fused_activation=None,
-            disable_stagger=disable_stagger,
+            disable_stagger=True,
         )
     elif program_config_variant == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -75,7 +90,7 @@ def test_matmul_stagger(
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=mcast_in0,
-            disable_stagger=disable_stagger,
+            disable_stagger=True,
         )
     else:
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -85,7 +100,7 @@ def test_matmul_stagger(
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_M,
             per_core_N=per_core_N,
-            disable_stagger=disable_stagger,
+            disable_stagger=True,
         )
 
     compute_config = ttnn.WormholeComputeKernelConfig(
@@ -95,9 +110,21 @@ def test_matmul_stagger(
         packer_l1_acc=True,
     )
 
+    # run once without stagger, and once with,
+    # to be able to compare execution time in the main test
+    ttnn.matmul(
+        input0,
+        input1,
+        program_config=program_config,
+        memory_config=mem_config,
+        dtype=dtype,
+        compute_kernel_config=compute_config,
+    )
+
+    program_config.disable_stagger = False
     out = ttnn.matmul(
-        a_t,
-        b_t,
+        input0,
+        input1,
         program_config=program_config,
         memory_config=mem_config,
         dtype=dtype,
@@ -105,7 +132,7 @@ def test_matmul_stagger(
     )
 
     pt_out = A @ B
-    out = tt2torch_tensor(out)
+    out = ttnn.to_torch(out)
 
     passing, output = comp_pcc(pt_out, out)
     logger.info(output)

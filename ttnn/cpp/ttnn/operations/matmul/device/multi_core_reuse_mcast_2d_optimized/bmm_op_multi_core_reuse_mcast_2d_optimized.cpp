@@ -465,16 +465,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
-    // This is done to mitigate di/dt issues.
-    // See issue #9857.
-    if (device->arch() == ARCH::WORMHOLE_B0 && cores.size() > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        if (std::getenv("DISABLE_MATMUL_STAGGER") != nullptr || disable_stagger) {
-            log_warning(LogOp, "Stagger disabled for matmul 2D op.");
-        } else {
-            mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        }
-    }
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), disable_stagger, mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";

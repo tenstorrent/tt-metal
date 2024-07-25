@@ -19,6 +19,8 @@
 using namespace tt::constants;
 using ttnn::operations::unary::UnaryWithParam;
 
+const bool tt::operations::primary::Matmul::disable_stagger_from_env = std::getenv("DISABLE_MATMUL_STAGGER") != nullptr;
+
 vector<uint32_t> _get_prime_factors(uint32_t n) {
     uint32_t i = 2;
 
@@ -493,6 +495,19 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
     }
     return tt::operations::primary::create_matmul_program_config(
         input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
+}
+
+void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, const bool disable_stagger, std::map<string, string>& mm_kernel_defines) {
+    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues.
+    // See issue #9857.
+    if (arch == tt::ARCH::WORMHOLE_B0 && num_cores > tt::constants::WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        if (disable_stagger) {
+            log_warning(tt::LogOp, "Stagger disabled for matmul op using {} cores.", num_cores);
+        } else {
+            mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        }
+    }
 }
 
 tuple<uint32_t, uint32_t> get_subblock_sizes(
@@ -1237,6 +1252,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig!");
+                const bool disable_stagger = disable_stagger_from_env || program_config.disable_stagger;
                 // TODO: fuse_batch doesn't do anything for this variant! Code is doing fuse_batch=false
                 return bmm_multi_core_reuse_optimized(
                     input_tensor_a,
@@ -1253,8 +1269,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.per_core_N,
                     /*fuse_batch=*/false,
                     this->untilize_out,
-                    program_config.disable_stagger);
+                    disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                const bool disable_stagger = disable_stagger_from_env || program_config.disable_stagger;
                 return matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -1272,8 +1289,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.transpose_mcast,
                     program_config.fused_activation,
                     this->untilize_out,
-                    program_config.disable_stagger);
+                    disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                const bool disable_stagger = disable_stagger_from_env || program_config.disable_stagger;
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -1291,7 +1309,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     program_config.mcast_in0,
                     this->untilize_out,
-                    program_config.disable_stagger);
+                    disable_stagger);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 return matmul_multi_core_reuse_dram_sharded_optimized(
                     input_tensor_a,
@@ -1306,8 +1324,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->untilize_out,
                     false,
                     false,
-                    false,
-                    program_config.disable_stagger);
+                    false);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core non-optimized reuse");
                 return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);

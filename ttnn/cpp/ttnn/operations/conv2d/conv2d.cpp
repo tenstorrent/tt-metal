@@ -548,7 +548,8 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntiles,
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
             .fuse_batch = true,
-            .mcast_in0 = false};
+            .mcast_in0 = false,
+            .disable_stagger = true}; // stagger is used for di/dt problem in big matmuls; these matmuls don't need this mitigation
         if (activation != "") {
             matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
         }
@@ -562,7 +563,8 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
             .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntiles,
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
-            .transpose_mcast = transpose_mcast};
+            .transpose_mcast = transpose_mcast,
+            .disable_stagger = true}; // stagger is used for di/dt problem in big matmuls; these matmuls don't need this mitigation
         if (activation != "") {
             matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
         }

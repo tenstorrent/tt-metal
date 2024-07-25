@@ -32,6 +32,10 @@ constexpr uint32_t LF_MAN_PREC = 4;
 constexpr uint32_t FP16_MAN_PREC = 10;
 constexpr uint32_t FP16B_MAN_PREC = 7;
 
+// Empirically deduced di/dt problems appear for matmuls using more than 48 cores;
+// when there is 48 cores or less, we don't enable stagger used to mitigate the problems,
+// since the delay impacts op performance.
+// See issue #9857 for more info.
 constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
 }  // namespace constants
 }  // namespace tt

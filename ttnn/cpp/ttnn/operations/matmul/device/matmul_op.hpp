@@ -113,6 +113,9 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
+    // Use this config to disable stagger delay that is enabled by default.
+    // Stagger is applicable only for matmuls with large grid size running on Wormhole B0 to mitigate di/dt problems.
+    // See issue #9857 for more info.
     bool disable_stagger = false;
 };
 
@@ -126,6 +129,9 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    // Use this config to disable stagger delay that is enabled by default.
+    // Stagger is applicable only for matmuls with large grid size running on Wormhole B0 to mitigate di/dt problems.
+    // See issue #9857 for more info.
     bool disable_stagger = false;
 };
 
@@ -139,6 +145,9 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool fuse_batch;
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
+    // Use this config to disable stagger delay that is enabled by default.
+    // Stagger is applicable only for matmuls with large grid size running on Wormhole B0 to mitigate di/dt problems.
+    // See issue #9857 for more info.
     bool disable_stagger = false;
 };
 
@@ -147,7 +156,6 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M;
     std::size_t per_core_N;
     std::optional<UnaryWithParam> fused_activation;
-    bool disable_stagger = false;
 };
 
 struct MatmulMultiCoreProgramConfig {};
@@ -175,6 +183,8 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
 
+    static const bool disable_stagger_from_env;
+
     void validate(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
@@ -182,6 +192,7 @@ struct Matmul {
     std::vector<Shape> compute_output_shapes_dram_sharded(
         const std::vector<Tensor> &input_tensors, uint32_t N_unpadded) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -366,4 +377,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
     const bool matmul = false,
     const std::optional<const CoreCoord> user_core_coord = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, const bool disable_stagger, std::map<string, string>& mm_kernel_defines);
+
 }  // namespace bmm_op_utils

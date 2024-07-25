@@ -127,19 +127,16 @@ void py_module(py::module& module) {
                 std::size_t,
                 std::size_t,
                 std::size_t,
-                std::optional<UnaryWithParam>,
-                bool>(),
+                std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("in0_block_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
-            py::arg("fused_activation"),
-            py::arg("disable_stagger").noconvert() = false)
+            py::arg("fused_activation"))
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation)
-        .def_readwrite("disable_stagger", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::disable_stagger)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             return fmt::format("{}", config);
         });

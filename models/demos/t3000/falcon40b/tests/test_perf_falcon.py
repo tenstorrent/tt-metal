@@ -421,8 +421,8 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 128, 0, 60.5, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 2048, 0, 60.5, 0.94 + 0.1, 1, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 1, "BFLOAT8_B-DRAM"),
     ),
     ids=[
         "prefill_seq128_bfp8_layers1",

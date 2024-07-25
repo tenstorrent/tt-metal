@@ -1023,18 +1023,6 @@ tt_metal::Program create_program_single_core (
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
-
-    // Apply stagger delay on odd rows, so that only half of cores start doing work at once.
-    // This is done to mitigate di/dt issues.
-    // See issue #9857.
-    if (device->arch() == ARCH::WORMHOLE_B0 && all_cores.size() > constants::WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        if (std::getenv("DISABLE_MATMUL_STAGGER") != nullptr) {
-            log_warning(LogOp, "Stagger disabled for matmul 1D op.");
-        } else {
-            mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        }
-    }
-
     bool math_approx_mode = false;
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,

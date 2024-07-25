@@ -208,7 +208,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((10.15),),
+    ((10.31),),
 )
 def test_stable_diffusion_device_perf(expected_perf):
     subdir = "ttnn_stable_diffusion"
@@ -249,7 +249,7 @@ def test_stable_diffusion_device_perf(expected_perf):
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((10.2),),
+    ((10.4),),
 )
 def test_stable_diffusion_device_perf_new_conv(expected_perf):
     subdir = "ttnn_stable_diffusion"
