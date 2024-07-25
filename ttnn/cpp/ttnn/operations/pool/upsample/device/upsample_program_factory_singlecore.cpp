@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "ttnn/operations/upsample/upsample_op.hpp"
+#include "upsample_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -80,13 +80,13 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
     std::map<string, string> kernel_defines;
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/upsample/device/kernels/dataflow/reader_upsample_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_upsample_unary_stick_layout_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/upsample/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
         "writer_upsample_unary_stick_layout_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));

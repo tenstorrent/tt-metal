@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-#include "ttnn/operations/upsample/upsample_op.hpp"
+#include "upsample_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -112,7 +112,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         out_cb_id,
         false,
     };
-    auto writer_kernel_fname = std::string("ttnn/cpp/ttnn/operations/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
+    auto writer_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto writer_kernel =
         CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         out_cb_id,
         true,
     };
-    auto reader_kernel_fname = std::string("ttnn/cpp/ttnn/operations/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
+    auto reader_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto reader_kernel =
         CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
 
