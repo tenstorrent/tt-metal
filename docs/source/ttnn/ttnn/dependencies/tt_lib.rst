@@ -475,8 +475,6 @@ the Type 1 contiguous representations.
 Other Operations
 ================
 
-.. autofunction:: tt_lib.tensor.concat
-
 .. autofunction:: tt_lib.tensor.sum
 
 .. autofunction:: tt_lib.tensor.lerp

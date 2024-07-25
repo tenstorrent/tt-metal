@@ -9,7 +9,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
@@ -66,21 +65,6 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
             )doc"
         );
-        m_tensor.def("concat", &concat,
-            py::arg("input_tensors").noconvert(), py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg1``.
-
-            Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
-
-            Output tensor will be on device, in same layout, and have same data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_tensors", "Input tensors to concat", "List of Tensors", "Tensors of shape [W, Z, Y, X], where Y or X must be a multiple of 32 if they are the concat dim", "Yes"
-                "dim", "dimension of concat", "int", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
 
         m_tensor.def("repeat", &tt::tt_metal::repeat,
             py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
