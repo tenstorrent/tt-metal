@@ -16,7 +16,7 @@ struct Argmax {
 };
 
 struct ExecuteArgMax {
-    static ttnn::Tensor execute_on_worker_thread(
+    static Tensor operator()(
         const Tensor& input_tensor,
         int64_t dim,
         bool all,
@@ -28,6 +28,10 @@ struct ExecuteArgMax {
 }  // namespace operations::experimental
 
 namespace experimental {
-constexpr auto argmax = ttnn::register_operation<ttnn::operations::experimental::ExecuteArgMax>("ttnn::experimental::argmax");
+
+constexpr auto argmax = ttnn::register_operation_with_auto_launch_op<
+  "ttnn::experimental::argmax",
+  ttnn::operations::experimental::ExecuteArgMax>();
+
 }
 }  // namespace ttnn

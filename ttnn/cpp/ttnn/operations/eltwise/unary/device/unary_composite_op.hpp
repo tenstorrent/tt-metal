@@ -325,6 +325,8 @@ struct OpHandler<UnaryCompositeOpType::REGLU> {
         return _reglu(t1, dim, mem_cfg);
     }
 };
+
+template <>
 struct OpHandler<UnaryCompositeOpType::POLYGAMMA> {
     static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _polygamma(t1, param1, mem_cfg);
@@ -358,6 +360,8 @@ struct OpHandler<UnaryCompositeOpType::POWER_INT> {
         return _power(q_id, input, exponent, mem_cfg, output);
     }
 };
+
+template <>
 struct OpHandler<UnaryCompositeOpType::ARGMIN> {
     static Tensor handle(const Tensor& t1, int32_t param1, bool all, const std::optional<MemoryConfig>& mem_cfg ) {
         return _argmin(t1, param1, all, mem_cfg);
