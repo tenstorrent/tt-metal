@@ -91,7 +91,7 @@ class TtDistributedLayernormDLNP1:
 
         output = []
         for i in range(num_devices):
-            output.append(ttl.tensor.concat([meanxs[i], meanx2s[i]], 3))
+            output.append(ttnn.concat([meanxs[i], meanx2s[i]], 3))
 
         return output
 
