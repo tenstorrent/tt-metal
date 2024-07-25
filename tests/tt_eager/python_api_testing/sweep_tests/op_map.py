@@ -356,10 +356,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_exp,
         "pytorch_op": pytorch_ops.exp,
     },
-    "eltwise-exp-bw": {
-        "tt_op": tt_lib_ops.eltwise_exp_bw,
-        "pytorch_op": pytorch_ops.exp_bw,
-    },
     "eltwise-exp2": {
         "tt_op": tt_lib_ops.eltwise_exp2,
         "pytorch_op": pytorch_ops.exp2,
@@ -439,10 +435,6 @@ op_map = {
     "eltwise-pow": {
         "tt_op": tt_lib_ops.eltwise_pow,
         "pytorch_op": pytorch_ops.power,
-    },
-    "unary-pow-bw": {
-        "tt_op": tt_lib_ops.unary_pow_bw,
-        "pytorch_op": pytorch_ops.power_bw,
     },
     "bert-large-fused-qkv-matmul": {
         "tt_op": tt_lib_ops.bert_large_fused_qkv_matmul,

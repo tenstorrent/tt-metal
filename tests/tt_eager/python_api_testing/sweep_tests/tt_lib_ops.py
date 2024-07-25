@@ -3419,26 +3419,6 @@ def eltwise_sub_bw(
 
 
 @setup_host_and_device
-def eltwise_exp_bw(
-    x,  # grad_tensor
-    y,  # input_tensor
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttl.tensor.exp_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_tanh_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -3497,27 +3477,6 @@ def eltwise_tan_bw(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttl.tensor.tan_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
-def unary_pow_bw(
-    x,
-    y,
-    *args,
-    exponent,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttl.tensor.unary_pow_bw(t0, t1, exponent, output_mem_config=output_mem_config)[0]
 
     return tt2torch_tensor(t2)
 

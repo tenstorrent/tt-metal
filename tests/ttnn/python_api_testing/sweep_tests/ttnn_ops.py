@@ -3483,3 +3483,42 @@ def div_bw(
     t3 = ttnn.div_bw(t0, t1, t2, output_mem_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
+
+
+def eltwise_exp_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.exp_bw(t0, t1, output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def unary_pow_bw(
+    x,
+    y,
+    *args,
+    exponent,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.unary_pow_bw(t0, t1, exponent, output_mem_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t2)
