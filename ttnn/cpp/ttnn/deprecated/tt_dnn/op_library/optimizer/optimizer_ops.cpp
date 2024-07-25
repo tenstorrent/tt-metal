@@ -7,7 +7,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

@@ -7,13 +7,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::data_movement {
 
 enum class ConcatOpParallelizationStrategy { MULTI_CORE, SHARDED_MULTI_CORE };
 
-struct Concat {
+struct ConcatDeviceOperation {
     uint32_t dim;
     const MemoryConfig output_mem_config;
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -24,18 +22,11 @@ struct Concat {
     ConcatOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 };
 
-operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
-operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
-
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
-Tensor concat(
+Tensor concat_impl(
     std::vector<Tensor> &input_tensors,
     const std::int64_t dim = 0,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::data_movement
