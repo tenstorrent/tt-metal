@@ -74,7 +74,7 @@ class TtLlamaMLP_galaxy:
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
             )
 
-            self.DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            self.FF1_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 in0_block_w=K
                 // 8
                 // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
@@ -83,11 +83,50 @@ class TtLlamaMLP_galaxy:
                 fused_activation=None,
             )
 
+            self.FF2_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=w2_K
+                // 8
+                // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=w2_N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
             self.COMPUTE_KERNEL_LOFI = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+            )
+
+            full_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 7),
+                    )
+                }
+            )
+            self.FULL_GRID_MEMCFG = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    full_grid,
+                    [
+                        32,
+                        nearest_32(56),
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+
+            self.FF2_ACT_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(M, N // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
     def load_weights(self):
@@ -100,12 +139,12 @@ class TtLlamaMLP_galaxy:
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
         # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard_unpadded.weight"
-        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard_unpadded.weight"
-        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard_unpadded.weight"
-        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
-        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
-        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"
+        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard_unpadded.weight"
+        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard_unpadded.weight"
+        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard_unpadded.weight"
+        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
+        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
+        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
@@ -124,8 +163,8 @@ class TtLlamaMLP_galaxy:
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            # memory_config=self.w1_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w1_cache_str,
         )
@@ -135,8 +174,8 @@ class TtLlamaMLP_galaxy:
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            # memory_config=self.w1_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w3_cache_str,
         )
@@ -146,8 +185,8 @@ class TtLlamaMLP_galaxy:
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            # memory_config=self.w2_mem_config, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.w2_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w2_cache_str,
         )
@@ -238,8 +277,8 @@ class TtLlamaMLP_galaxy:
         w1_out = ttnn.matmul(
             x,
             self.w1,
-            # program_config=self.DRAM_SHARDED_PROGCFG,
-            core_grid=ttnn.CoreGrid(y=1, x=8),
+            program_config=self.FF1_DRAM_SHARDED_PROGCFG,
+            # core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -248,8 +287,8 @@ class TtLlamaMLP_galaxy:
         w3_out = ttnn.matmul(
             x,
             self.w3,
-            # program_config=self.DRAM_SHARDED_PROGCFG, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            core_grid=ttnn.CoreGrid(y=1, x=8),
+            program_config=self.FF1_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -262,7 +301,11 @@ class TtLlamaMLP_galaxy:
         # w1_out = ttnn.all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
         # w3_out = ttnn.all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
+        w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
+
         w1_out = ttnn.silu(w1_out)
+
+        w1_out = ttnn.to_memory_config(w1_out, self.FF2_ACT_MEMCFG)
 
         hidden_states = ttnn.mul(
             w1_out,
@@ -276,8 +319,8 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
-            # program_config=self.DRAM_SHARDED_PROGCFG, # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            core_grid=ttnn.CoreGrid(y=1, x=8),
+            program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,

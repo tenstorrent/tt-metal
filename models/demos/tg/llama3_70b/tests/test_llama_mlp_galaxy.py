@@ -43,7 +43,6 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
     if llama_mlp_model.model_config["LLM_MODE"] == "decode":
         M, K = 32, 8192 // llama_mlp_model.cluster_shape[0]
 
-        K = K // llama_mlp_model.cluster_shape[0]
         act_mem_config = ttnn.create_sharded_memory_config(
             shape=(M, K // 8),
             core_grid=ttnn.CoreGrid(y=1, x=8),
