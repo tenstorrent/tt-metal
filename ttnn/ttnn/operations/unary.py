@@ -433,7 +433,7 @@ ttnn.attach_golden_function(ttnn._ttnn.operations.unary.swiglu, golden_function=
 def _golden_function_logical_not_(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.logical_not(input_tensor_a)
+    return input_tensor_a.logical_not_()
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.logical_not_, golden_function=_golden_function_logical_not_)
@@ -473,65 +473,6 @@ def _golden_function_celu(input_tensor_a, *args, alpha=1.0, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.celu, golden_function=_golden_function_celu)
-
-
-def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
-    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
-        import torch
-
-        name_to_golden_function = {
-            "polygamma": torch.special.polygamma,
-        }
-        torch_function = name_to_golden_function[name]
-        return torch_function(input_tensor, parameter)
-
-    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-            Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
-            .. math::
-                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`{param}`
-            Example::
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{(name)}(tensor, {param})
-            """
-
-    @ttnn.register_python_operation(
-        name=f"ttnn.{name}",
-        golden_function=_golden_function,
-        doc=doc,
-    )
-    def unary_function(
-        input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not _is_scalar(parameter):
-            raise TypeError("Expected second argument to be a float")
-
-        if not ttnn.is_tensor_storage_on_device(input_tensor):
-            raise RuntimeError("input_tensor must be on device!")
-
-        output_tensor = ttl_unary_function(input_tensor, parameter, output_mem_config=memory_config)
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
-
-
-TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("polygamma", ttl.tensor.polygamma, "parameter"),  # composite
-]
-
-for unary_function_name, ttl_unary_function, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
-    register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, param)
-
-
-def _is_scalar(value):
-    return isinstance(value, (int, float))
 
 
 def torch_reglu(input_tensor, *args, **kwargs):

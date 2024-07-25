@@ -692,23 +692,23 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps);
     Tensor t1m_eps = full_like(input_a, (1 - eps));
-    Tensor logit_input = where(
+    Tensor logit_input = ttnn::where(
         ttnn::ltz(t_eps, output_mem_config),
         input_a,
-        where(
+        ttnn::where(
             ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
             t_eps,
-            where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)
+            ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)
             )
         );
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
     Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor logit_result = where(
+    Tensor logit_result = ttnn::where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
-        where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
+        ttnn::where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
         );
     return logit_result;
 }
@@ -725,7 +725,7 @@ Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfi
     UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f}, UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
 
     Tensor result = ttnn::unary_chain(input_a, ops_chain, output_mem_config);
-    result = where(ttnn::gtz(input_a, output_mem_config), input_a, result);
+    result = ttnn::where(ttnn::gtz(input_a, output_mem_config), input_a, result);
     return result;
 }
 

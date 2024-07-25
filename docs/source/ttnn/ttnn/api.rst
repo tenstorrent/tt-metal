@@ -130,7 +130,6 @@ Pointwise Unary
    ttnn/log2
    ttnn/log_sigmoid
    ttnn/logical_not
-   ttnn/logical_not_
    ttnn/logit
    ttnn/mish
    ttnn/multigammaln
