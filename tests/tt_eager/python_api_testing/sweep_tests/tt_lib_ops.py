@@ -3046,26 +3046,6 @@ def abs_bw(
 
 
 @setup_host_and_device
-def relu_bw(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttl.tensor.relu_bw(t0, t1, output_mem_config)[0]
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def gt_bw(
     x,
     *args,
