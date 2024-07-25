@@ -25,6 +25,10 @@ class TtResidualBlock(torch.nn.Module):
 
         self.tt_mamba_block = TtMambaBlock(self.args, self.device, configs, load_fn)
 
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
+        self.tt_mamba_block.to_prefill(prefill_config)
+
     def to_decode(self, decode_config):
         self.configs = decode_config
         self.tt_mamba_block.to_decode(decode_config)
@@ -60,3 +64,6 @@ class TtResidualBlock(torch.nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             output_tensor=mamba_block_out,
         )
+
+    def reset(self):
+        self.tt_mamba_block.reset()
