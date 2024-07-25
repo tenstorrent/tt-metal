@@ -154,19 +154,6 @@ class TtLlamaAttention_galaxy:
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
             )
 
-            # (32 x 1k) x (1k x 2k)
-            self.SELFOUT_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=1,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=1,
-                per_core_N=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-
     def init_kv_cache(self):
         """
         Generates empty KV cache and pushed to device memory
@@ -519,7 +506,7 @@ class TtLlamaAttention_galaxy:
         attn_output = ttnn.matmul(
             attn_output,
             self.wo,
-            program_config=self.SELFOUT_PROGCFG,
+            core_grid=ttnn.CoreGrid(y=4, x=8),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
