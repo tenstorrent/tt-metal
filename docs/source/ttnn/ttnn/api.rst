@@ -276,6 +276,14 @@ Pointwise Binary
    ttnn/subalpha
    ttnn/multiply
    ttnn/subtract
+   ttnn/div
+   ttnn/div_no_nan
+   ttnn/floor_div
+   ttnn/binary_remainder
+   ttnn/binary_fmod
+   ttnn/logical_and_
+   ttnn/logical_or_
+   ttnn/logical_xor_
    ttnn/pow
    ttnn/ldexp
    ttnn/logical_and
