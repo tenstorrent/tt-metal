@@ -7,6 +7,12 @@ namespace internal {
 
 using namespace tt::tt_metal;
 
+// force cast a reference to solid value. Works around binding packed references
+template <typename T>
+static T val(T v) {
+    return v;
+}
+
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
 
 
@@ -113,10 +119,10 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
                 cq_file << fmt::format(
                     " (num_mcast_dests={}, noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
-                    cmd->write_linear.num_mcast_dests,
-                    cmd->write_linear.noc_xy_addr,
-                    cmd->write_linear.addr,
-                    cmd->write_linear.length);
+                    val(cmd->write_linear.num_mcast_dests),
+                    val(cmd->write_linear.noc_xy_addr),
+                    val(cmd->write_linear.addr),
+                    val(cmd->write_linear.length));
                 stride += cmd->write_linear.length;
                 break;
             case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
@@ -124,54 +130,54 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                     uint32_t *event_ptr = (uint32_t *)(cmd + 1);
                     cq_file << fmt::format(" (completed_event_id={})", *event_ptr);
                 } else {
-                    cq_file << fmt::format(" (length={:#010x})", cmd->write_linear_host.length);
+                    cq_file << fmt::format(" (length={:#010x})", val(cmd->write_linear_host.length));
                 }
                 stride += cmd->write_linear_host.length;
                 break;
             case CQ_DISPATCH_CMD_WRITE_PAGED:
                 cq_file << fmt::format(
                     " (is_dram={}, start_page={}, base_addr={:#010x}, page_size={:#010x}, pages={})",
-                    cmd->write_paged.is_dram,
-                    cmd->write_paged.start_page,
-                    cmd->write_paged.base_addr,
-                    cmd->write_paged.page_size,
-                    cmd->write_paged.pages);
+                    val(cmd->write_paged.is_dram),
+                    val(cmd->write_paged.start_page),
+                    val(cmd->write_paged.base_addr),
+                    val(cmd->write_paged.page_size),
+                    val(cmd->write_paged.pages));
                 stride += cmd->write_paged.pages * cmd->write_paged.page_size;
                 break;
             case CQ_DISPATCH_CMD_WRITE_PACKED:
                 cq_file << fmt::format(
                     " (flags={:#02x}, count={}, addr={:#010x}, size={:04x})",
-                    cmd->write_packed.flags,
-                    cmd->write_packed.count,
-                    cmd->write_packed.addr,
-                    cmd->write_packed.size);
+                    val(cmd->write_packed.flags),
+                    val(cmd->write_packed.count),
+                    val(cmd->write_packed.addr),
+                    val(cmd->write_packed.size));
                 // TODO: How does the page count for for packed writes?
                 break;
             case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
                 cq_file << fmt::format(
-                    " (count={}, alignment={})", cmd->write_packed_large.count, cmd->write_packed_large.alignment);
+                    " (count={}, alignment={})", val(cmd->write_packed_large.count), val(cmd->write_packed_large.alignment));
                 break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
                     " (barrier={}, notify_prefetch={}, clear_count=(), wait={}, addr={:#010x}, "
                     "count = {})",
-                    cmd->wait.barrier,
-                    cmd->wait.notify_prefetch,
-                    cmd->wait.clear_count,
-                    cmd->wait.wait,
-                    cmd->wait.addr,
-                    cmd->wait.count);
+                    val(cmd->wait.barrier),
+                    val(cmd->wait.notify_prefetch),
+                    val(cmd->wait.clear_count),
+                    val(cmd->wait.wait),
+                    val(cmd->wait.addr),
+                    val(cmd->wait.count));
                 break;
             case CQ_DISPATCH_CMD_DEBUG:
                 cq_file << fmt::format(
                     " (pad={}, key={}, checksum={:#010x}, size={}, stride={})",
-                    cmd->debug.pad,
-                    cmd->debug.key,
-                    cmd->debug.checksum,
-                    cmd->debug.size,
-                    cmd->debug.stride);
+                    val(cmd->debug.pad),
+                    val(cmd->debug.key),
+                    val(cmd->debug.checksum),
+                    val(cmd->debug.size),
+                    val(cmd->debug.stride));
                 break;
-            case CQ_DISPATCH_CMD_DELAY: cq_file << fmt::format(" (delay={})", cmd->delay.delay); break;
+            case CQ_DISPATCH_CMD_DELAY: cq_file << fmt::format(" (delay={})", val(cmd->delay.delay)); break;
             // These commands don't have any additional data to dump.
             case CQ_DISPATCH_CMD_ILLEGAL: break;
             case CQ_DISPATCH_CMD_GO: break;
@@ -196,57 +202,57 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_PREFETCH_CMD_RELAY_LINEAR:
                 iq_file << fmt::format(
                     " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
-                    cmd->relay_linear.noc_xy_addr,
-                    cmd->relay_linear.addr,
-                    cmd->relay_linear.length);
+                    val(cmd->relay_linear.noc_xy_addr),
+                    val(cmd->relay_linear.addr),
+                    val(cmd->relay_linear.length));
                 break;
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
                     " (packed_page_flags={:#02x}, length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
                     "pages={:#010x})",
-                    cmd->relay_paged.packed_page_flags,
-                    cmd->relay_paged.length_adjust,
-                    cmd->relay_paged.base_addr,
-                    cmd->relay_paged.page_size,
-                    cmd->relay_paged.pages);
+                    val(cmd->relay_paged.packed_page_flags),
+                    val(cmd->relay_paged.length_adjust),
+                    val(cmd->relay_paged.base_addr),
+                    val(cmd->relay_paged.page_size),
+                    val(cmd->relay_paged.pages));
                 break;
             case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
                 iq_file << fmt::format(
                     " (count={}, total_length={:#010x}, stride={:#010x})",
-                    cmd->relay_paged_packed.count,
-                    cmd->relay_paged_packed.total_length,
-                    cmd->relay_paged_packed.stride);
+                    val(cmd->relay_paged_packed.count),
+                    val(cmd->relay_paged_packed.total_length),
+                    val(cmd->relay_paged_packed.stride));
                 stride = cmd->relay_paged_packed.stride;
                 break;
             case CQ_PREFETCH_CMD_RELAY_INLINE:
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             case CQ_PREFETCH_CMD_EXEC_BUF_END:
                 iq_file << fmt::format(
-                    " (length={:#010x}, stride={:#010x})", cmd->relay_inline.length, cmd->relay_inline.stride);
+                    " (length={:#010x}, stride={:#010x})", val(cmd->relay_inline.length), val(cmd->relay_inline.stride));
                 stride = cmd->relay_inline.stride;
                 break;
             case CQ_PREFETCH_CMD_EXEC_BUF:
                 iq_file << fmt::format(
                     " (base_addr={:#010x}, log_page_size={}, pages={})",
-                    cmd->exec_buf.base_addr,
-                    cmd->exec_buf.log_page_size,
-                    cmd->exec_buf.pages);
+                    val(cmd->exec_buf.base_addr),
+                    val(cmd->exec_buf.log_page_size),
+                    val(cmd->exec_buf.pages));
                 break;
             case CQ_PREFETCH_CMD_DEBUG:
                 iq_file << fmt::format(
                     " (pad={}, key={}, checksum={:#010x}, size={}, stride={})",
-                    cmd->debug.pad,
-                    cmd->debug.key,
-                    cmd->debug.checksum,
-                    cmd->debug.size,
-                    cmd->debug.stride);
+                    val(cmd->debug.pad),
+                    val(cmd->debug.key),
+                    val(cmd->debug.checksum),
+                    val(cmd->debug.size),
+                    val(cmd->debug.stride));
                 stride = cmd->debug.stride;
                 break;
             case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
                 iq_file << fmt::format(
                     " (sync_event={:#08x}, sync_event_addr={:#08x})",
-                    cmd->event_wait.sync_event,
-                    cmd->event_wait.sync_event_addr);
+                    val(cmd->event_wait.sync_event),
+                    val(cmd->event_wait.sync_event_addr));
                 stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
                 break;
             // These commands don't have any additional data to dump.

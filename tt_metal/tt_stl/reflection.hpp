@@ -16,6 +16,7 @@
 #include <tuple>
 #include <variant>
 #include <vector>
+#include <filesystem>
 
 #include "concepts.hpp"
 #include "third_party/json/json.hpp"
