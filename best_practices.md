@@ -15,7 +15,7 @@ Passing complex types such as vectors and tensors by const reference avoids unne
 ### Example
 ```
 void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<std::size_t> transfer_size = std::nullopt); // Wrong!
-void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr<void>>& src, const std::optional<std::size_t> transfer_size = std::nullopt); // Right!
+void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr<void>>& src, const std::optional<std::size_t>& transfer_size = std::nullopt); // Right!
 ```
 
 ## 2. Use `std::span` for Input Parameters
