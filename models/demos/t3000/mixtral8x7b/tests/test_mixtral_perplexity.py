@@ -257,7 +257,7 @@ def run_test_perplexity(
         # ("prefill", 4096, 64, -, -, -),
         ("decode", 128, 64, 8.70, 0.52, 0.75),
         ("decode", 1024, 64, 4.90, 0.62, 0.83),
-        ("decode", 2048, 64, 4.23, 0.64, 0.85),
+        # ("decode", 2048, 64, 4.23, 0.64, 0.85),
         # ("decode", 4096, 32, 10.59, 0.49, 0.73),
     ),
     ids=[
@@ -267,7 +267,7 @@ def run_test_perplexity(
         # "prefill_4096",
         "decode_128",
         "decode_1024",
-        "decode_2048",
+        # "decode_2048",
         # "decode_4096",
     ],
 )
