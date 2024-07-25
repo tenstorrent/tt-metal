@@ -185,7 +185,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
             num_tensor_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
-            tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
+            tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, {1, 1, 0});
             tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
             continue;
         }
@@ -349,8 +349,6 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         binary_reader_args[5] = num_tiles_read % HtWt;
         binary_reader_args[6] = bnc1 ? 0 : num_tiles_read / HtWt;
 
-        bcast_kernel_args[0] = 1;                         // B
-        bcast_kernel_args[1] = 1;                         // Ht
         bcast_kernel_args[2] = num_tensor_tiles_per_core; // Wt
 
         unary_writer_args[0] = dst_buffer->address();
