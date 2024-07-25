@@ -308,20 +308,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             }
         }
 
-        auto merge_num_sticks_to_read = [](uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) -> uint32_t {
-            uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
-            uint32_t new_num_sticks_to_read = num_sticks_to_read;
-            uint32_t new_stick_size_bytes = stick_size_bytes;
-
-            for (uint32_t current_size = stick_size_bytes; current_size <= max_read_size; current_size += stick_size_bytes) {
-                if (total_bytes % current_size == 0) {
-                    new_stick_size_bytes = current_size;
-                    new_num_sticks_to_read = total_bytes / current_size;
-                }
-            }
-            return new_num_sticks_to_read;
-        };
-
 
         uint32_t old_new_stick_size_ratio = old_stick_size > new_stick_size ? (old_stick_size / new_stick_size) : (new_stick_size / old_stick_size);
         if (split_work_by_old_sticks) {

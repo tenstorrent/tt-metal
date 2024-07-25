@@ -8,6 +8,33 @@ import torch
 
 import ttnn
 from models.utility_functions import is_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor[:, :115, :115, :]
+    activation_pyt_padded = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded = ttnn.slice(
+        activation_pyt_padded,
+        (0, 0, 0, 0),
+        (n - 1, 115 - 1, 115 - 1, w - 1),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
+    activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
+    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
 def slice_test(
