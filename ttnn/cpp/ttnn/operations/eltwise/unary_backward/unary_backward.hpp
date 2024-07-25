@@ -13,17 +13,8 @@ namespace ttnn {
 
 namespace operations::unary_backward {
 
-//OpHandler_two_float : get_function_type1_w_two_float
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 2 float
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -35,17 +26,8 @@ struct ExecuteUnaryBackwardTwoFloat {
     }
 };
 
-//OpHandler_float : get_function_type1_w_float
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloat {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 1 float
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -57,17 +39,8 @@ struct ExecuteUnaryBackwardFloat {
 
 };
 
-//OpHandler : get_function_type1
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardWoFloat {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -78,10 +51,8 @@ struct ExecuteUnaryBackwardWoFloat {
 
 };
 
-//OpHandler_two_float_with_default : get_function_type1_w_two_float_with_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloatWithDefault {
-    //Type 1: 1 inputs, 1 grad tensor, 2 float
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -93,17 +64,8 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
     }
 };
 
-//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 2 float
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -115,17 +77,8 @@ struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
     }
 };
 
-//OpHandler_float_string_default : get_function_type1_float_string_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloatStringDefault {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 1 float, 1 default string
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -137,17 +90,8 @@ struct ExecuteUnaryBackwardFloatStringDefault {
     }
 };
 
-//OpHandler_string_default : get_function_type1_string_default
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardStringDefault {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 1 float, 1 default string
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -158,17 +102,8 @@ struct ExecuteUnaryBackwardStringDefault {
     }
 };
 
-//OpHandler_shape : get_function_type1_shape
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardShape {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 1 inputs, 1 grad tensor, 1 shape
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -179,17 +114,8 @@ struct ExecuteUnaryBackwardShape {
     }
 };
 
-//OpHandler_unary_optional_float : get_function_unary_optional_float
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloat {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Q_ID, type1 args, optional output tensor for input based on are_required_outputs value
     static std::vector<std::optional<Tensor>> operator()(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
@@ -201,31 +127,10 @@ struct ExecuteUnaryBackwardOptionalFloat {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
     }
-
-    //type1 args, optional output tensor for inputs based on are_required_outputs value
-    static std::vector<std::optional<Tensor>> operator()(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        float parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
-        std::optional<Tensor> input_grad = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(DefaultQueueId, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
-    }
 };
 
-//OpHandler_unary_optional : get_function_unary_optional
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptional {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Q_ID, type1 args, optional output tensor for input based on are_required_outputs value
     static std::vector<std::optional<Tensor>> operator()(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
@@ -236,29 +141,10 @@ struct ExecuteUnaryBackwardOptional {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
     }
-
-    //type1 args, optional output tensor for inputs based on are_required_outputs value
-    static std::vector<std::optional<Tensor>> operator()(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
-        std::optional<Tensor> input_grad = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(DefaultQueueId, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
-    }
 };
 
-//OpHandler_prod_bw : get_function_prod_bw
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardProdBW {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -272,14 +158,6 @@ struct ExecuteUnaryBackwardProdBW {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackward {
-
-    static inline std::vector<ttnn::Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
-    //Type 1: 2 inputs, 1 grad tensor
 
     static std::vector<ttnn::Tensor> operator()(
         const Tensor &grad_tensor_arg,
@@ -305,13 +183,11 @@ struct ExecuteUnaryBackward {
 
 }  // operations::unary
 
-//ExecuteUnaryBackwardTwoFloat : get_function_type1_w_two_float
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
     operations::unary_backward::ExecuteUnaryBackwardTwoFloat<
         operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>();
 
-//ExecuteUnaryBackwardFloat : get_function_type1_w_float
 constexpr auto remainder_bw = ttnn::register_operation<
     "ttnn::remainder_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
@@ -332,7 +208,6 @@ constexpr auto gt_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::GT_BW>>();
 
-//ExecuteUnaryBackwardWoFloat : get_function_type1
 constexpr auto assign_bw = ttnn::register_operation<
     "ttnn::assign_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
@@ -368,7 +243,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
 
-//ExecuteUnaryBackwardFloat : get_function_type1_w_float
 constexpr auto mul_bw = ttnn::register_operation<
     "ttnn::mul_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
@@ -384,13 +258,11 @@ constexpr auto eq_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::EQ_BW>>();
 
-//OpHandler_optional_float_params_with_default : get_function_optional_float_params_with_default
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
     operations::unary_backward::ExecuteUnaryBackwardOptionalFloatParamsWithDefault<
         operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>();
 
-//ExecuteUnaryBackwardTwoFloatWithDefault : get_function_type1_w_two_float_with_default
 constexpr auto softplus_bw = ttnn::register_operation<
     "ttnn::softplus_bw",
     operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
@@ -400,7 +272,6 @@ constexpr auto hardtanh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
         operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>();
 
-//ExecuteUnaryBackwardFloatStringDefault : get_function_type1_float_string_default
 constexpr auto div_bw = ttnn::register_operation<
     "ttnn::div_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
@@ -414,25 +285,21 @@ constexpr auto bias_gelu_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
         operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_BW>>();
 
-//ExecuteUnaryBackwardStringDefault : get_function_type1_string_default
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",
     operations::unary_backward::ExecuteUnaryBackwardStringDefault<
         operations::unary_backward::UnaryBackwardOpType::GELU_BW>>();
 
-//ExecuteUnaryBackwardShape : get_function_type1_shape
 constexpr auto repeat_bw = ttnn::register_operation<
     "ttnn::repeat_bw",
     operations::unary_backward::ExecuteUnaryBackwardShape<
         operations::unary_backward::UnaryBackwardOpType::REPEAT_BW>>();
 
-//OpHandler_unary_optional_float : get_function_unary_optional_float
 constexpr auto pow_bw = ttnn::register_operation<
     "ttnn::pow_bw",
     operations::unary_backward::ExecuteUnaryBackwardOptionalFloat<
         operations::unary_backward::UnaryBackwardOpType::POW_BW>>();
 
-//OpHandler_unary_optional : get_function_unary_optional
 constexpr auto exp_bw = ttnn::register_operation<
     "ttnn::exp_bw",
     operations::unary_backward::ExecuteUnaryBackwardOptional<
@@ -446,7 +313,6 @@ constexpr auto sqrt_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOptional<
         operations::unary_backward::UnaryBackwardOpType::SQRT_BW>>();
 
-//OpHandler_prod_bw : get_function_prod_bw
 constexpr auto prod_bw = ttnn::register_operation<
     "ttnn::prod_bw",
     operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>();

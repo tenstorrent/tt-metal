@@ -17,8 +17,6 @@ using ComplexTensor = complex_binary::ComplexTensor;
 template <ComplexBinaryBackwardOpType complex_binary_backward_op_type>
 struct ExecuteComplexBinaryBackwardWFloat {
 
-    //Type 1: 2 inputs, 1 grad tensor 1 float
-
     static std::vector<ComplexTensor> operator()(
         const ComplexTensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_a_arg,
@@ -31,8 +29,6 @@ struct ExecuteComplexBinaryBackwardWFloat {
 
 template <ComplexBinaryBackwardOpType complex_binary_backward_op_type>
 struct ExecuteComplexBinaryBackwardWoFloat {
-
-    //Type 1: 2 inputs, 1 grad tensor
 
     static std::vector<ComplexTensor> operator()(
         const ComplexTensor &grad_tensor_arg,
