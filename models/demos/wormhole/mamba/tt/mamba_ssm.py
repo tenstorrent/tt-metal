@@ -267,12 +267,12 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(abar2)
             bmulx0_sharded = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
             ttnn.deallocate(bmulx0)
-            hidden_states_sharded = ttl.operations.primary.transformers.ssm_prefix_scan(
+            hidden_states_sharded = ttnn.experimental.prefix_scan(
                 abar2_sharded,
                 bmulx0_sharded,
                 prev_hidden_state,
-                output_mem_config=self.configs["sharded_scan"],
-                output_dtype=ttnn.bfloat8_b,
+                memory_config=self.configs["sharded_scan"],
+                dtype=ttnn.bfloat8_b,
             )
             ttnn.deallocate(abar2_sharded)
             ttnn.deallocate(bmulx0_sharded)

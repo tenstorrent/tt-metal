@@ -4,6 +4,7 @@
 
 import torch
 
+import ttnn
 import tt_lib as ttl
 import pytest
 from loguru import logger
@@ -64,9 +65,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
         .to(device, h_memory_config)
     )
 
-    actual = ttl.operations.primary.transformers.ssm_prefix_scan(
-        a, bx, h_prev, output_mem_config=memory_config, output_dtype=dtype
-    )
+    actual = ttnn.experimental.prefix_scan(a, bx, h_prev, memory_config=memory_config, dtype=dtype)
     assert list(actual.get_legacy_shape()) == list(expected.shape)
     assert actual.dtype == dtype
 
@@ -164,9 +163,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
         a_chunk = to_device(a_chunks[idx])
         bx_chunk = to_device(bx_chunks[idx])
 
-        h_chunk = ttl.operations.primary.transformers.ssm_prefix_scan(
-            a_chunk, bx_chunk, h_prev, output_mem_config=memory_config, output_dtype=dtype
-        )
+        h_chunk = ttnn.experimental.prefix_scan(a_chunk, bx_chunk, h_prev, memory_config=memory_config, dtype=dtype)
         actual.append(tt2torch_tensor(h_chunk))
 
     actual = torch.concat(actual, dim=2)

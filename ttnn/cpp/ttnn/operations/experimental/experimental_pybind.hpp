@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/experimental/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
+#include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -17,6 +18,7 @@ void py_module(py::module& module) {
     transformer::detail::bind_experimental_transformer_operations(module);
     reduction::detail::bind_argmax_operation(module);
     reduction::detail::bind_argmin_operation(module);
+    ssm::detail::bind_prefix_scan(module);
 }
 
 }  // namespace ttnn::operations::experimental
