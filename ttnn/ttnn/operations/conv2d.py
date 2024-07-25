@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 from typing import Tuple, Union, Dict, Optional
 import torch
 import warnings
@@ -392,10 +394,14 @@ def get_grid_size_and_num_cores_nhw_from_core_grid(core_grid, height_sharded):
 
 # internal helper function. not exposed to user.
 def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_config, tile_size):
+    logger.info(
+        f"py create_sharded_memory_config_from_parallel_config: {tensor_shape}, {parallel_config.num_cores_nhw} {parallel_config.grid_size}, {tile_size}"
+    )
     # tensor_shape is [N, H, W, C]
     assert len(tensor_shape) == 4
     assert tensor_shape[0] == 1 and tensor_shape[1] == 1  # todo: add support for generic non-2d shapes
     channels = tensor_shape[3]
+    channels_padded = roundup(channels, tile_size)
     num_cores_nhw = parallel_config.num_cores_nhw
     num_cores_x = parallel_config.grid_size.x
     num_cores_y = parallel_config.grid_size.y
@@ -412,8 +418,8 @@ def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_con
     nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2]
     nhw_padded = roundup(nhw_shape, num_cores_nhw * tile_size)
     nhw_shard = nhw_padded // num_cores_nhw
-    assert channels % logical_grid_size[1] == 0
-    shard_shape = [nhw_shard, channels // logical_grid_size[1]]
+    assert channels_padded % logical_grid_size[1] == 0
+    shard_shape = [nhw_shard, channels_padded // logical_grid_size[1]]
     shard_halo = False
     shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
     return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
