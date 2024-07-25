@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-def tt_smi_path(arch: str):
+def tt_smi_command(arch: str):
     if arch == "grayskull":
-        return "/home/software/syseng/gs/tt-smi"
-    elif arch == "wormhole" or arch == "wormhole_b0":
-        return "/home/software/syseng/wh/tt-smi"
+        return ["/home/software/syseng/gs/tt-smi", "-tr", "0"]
+    elif arch == "wormhole_b0":
+        return ["/home/software/syseng/wh/tt-smi", "-wr", "all", "wait"]
     else:
-        return "/home/software/syseng/bh/tt-smi"
+        raise Exception("Blackhole TT-SMI Reset Not Supported")
