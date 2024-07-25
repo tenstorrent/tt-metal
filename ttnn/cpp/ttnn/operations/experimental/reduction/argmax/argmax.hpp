@@ -11,6 +11,8 @@
 namespace ttnn {
 namespace operations::experimental {
 
+namespace reduction {
+
 Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _argmin(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -34,17 +36,18 @@ struct ExecuteArgMin {
     }
 };
 
+}  // namespace reduction
 }  // namespace operations::experimental
 
 namespace experimental {
 
 constexpr auto argmax = ttnn::register_operation_with_auto_launch_op<
   "ttnn::experimental::argmax",
-  ttnn::operations::experimental::ExecuteArgMax>();
+  ttnn::operations::experimental::reduction::ExecuteArgMax>();
 
 constexpr auto argmin = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::argmin",
-    ttnn::operations::experimental::ExecuteArgMin>();
+    ttnn::operations::experimental::reduction::ExecuteArgMin>();
 
 }
 }  // namespace ttnn

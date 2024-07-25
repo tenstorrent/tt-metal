@@ -9,9 +9,9 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
-#include "ttnn/operations/experimental/argmax/argmax.hpp"
+#include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
 
-namespace ttnn::operations::experimental::detail {
+namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;
 void bind_argmax_operation(py::module& module) {
     auto doc =
@@ -99,4 +99,4 @@ void bind_argmin_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::detail
+}  // namespace ttnn::operations::experimental::reduction::detail

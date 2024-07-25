@@ -35,7 +35,6 @@
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
-#include "ttnn/operations/experimental/argmax/argmax_pybind.hpp"
 
 namespace py = pybind11;
 

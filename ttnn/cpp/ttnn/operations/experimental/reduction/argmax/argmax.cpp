@@ -5,10 +5,9 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/argmax/argmax.hpp"
-namespace ttnn {
+#include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
 
-namespace operations::experimental {
+namespace ttnn::operations::experimental::reduction {
 
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     auto& padded_shape = input_a.get_legacy_shape();
@@ -136,5 +135,4 @@ Tensor _argmin(const Tensor& input_a, int64_t _dim, bool all, const std::optiona
     return _argmax(neg_input, _dim, all, output_mem_config);
 }
 
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::reduction
