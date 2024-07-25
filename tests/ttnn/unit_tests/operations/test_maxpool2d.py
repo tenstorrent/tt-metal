@@ -7,15 +7,18 @@ from loguru import logger
 import torch
 import pytest
 import math
+
 from models.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
 import ttnn
+from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
 
 ## NOTE: this is the new C++ TTNN version
 
 
-@pytest.mark.skip("This is based on the new version of ttnn maxpool c++, which needs to be debugged first.")
+# @pytest.mark.skip("This is based on the new version of ttnn maxpool c++, which needs to be debugged first.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
@@ -25,29 +28,29 @@ import ttnn
             [4, 64, 112, 112],
             [8, 64, 112, 112],
             [16, 64, 112, 112],
-            # [20, 64, 112, 112],
+            # [20, 64, 112, 112],   ## oom
             ## hpr shapes
-            [8, 32, 132, 20],  ## pass
-            [16, 32, 132, 20],  ## pass
-            [32, 32, 132, 20],  ## pass
-            [64, 32, 132, 20],  ## pass
-            [128, 32, 132, 20],  ## pass
+            [8, 32, 132, 20],
+            [16, 32, 132, 20],
+            [32, 32, 132, 20],
+            [64, 32, 132, 20],
+            [128, 32, 132, 20],
             # [256, 32, 132, 20],   ## oom
-            [8, 32, 264, 40],  ## pass
-            [16, 32, 264, 40],  ## pass
-            [32, 32, 264, 40],  ## pass
+            [8, 32, 264, 40],
+            [16, 32, 264, 40],
+            [32, 32, 264, 40],
             # [64, 32, 264, 40],    ## oom
             # [128, 32, 264, 40],   ## oom
             # [256, 32, 264, 40],   ## oom
-            [4, 16, 1056, 160],  ## pass
+            [4, 16, 1056, 160],
             # [8, 16, 1056, 160],     ## oom
             # [16, 16, 1056, 160],    ## oom
             # [32, 16, 1056, 160],    ## oom
             # [64, 16, 1056, 160],    ## oom
             # [128, 16, 1056, 160],   ## oom
             # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],  ## pass
-            [16, 16, 528, 80],  ## pass
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
             # [32, 16, 528, 80],  ## oom
             # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
@@ -74,10 +77,6 @@ import ttnn
     ((2, 2),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize(
-    "nblocks",
-    (1,),
-)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool(
     act_shape,
@@ -85,7 +84,6 @@ def test_run_max_pool(
     padding,
     stride,
     dilation,
-    nblocks,
     device,
     dtype,
 ):
@@ -103,28 +101,14 @@ def test_run_max_pool(
 
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    if out_w % nblocks != 0:
-        pytest.skip(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
-
     if in_c % 16 != 0:
         pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
 
     if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
         pytest.skip("This case runs out of memory on Grayskull")
 
-    if in_n >= 16 and in_c >= 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
+    if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
         pytest.skip("This case runs out of memory on Wormhole b0")
-
-    if (
-        is_wormhole_b0()
-        and act_shape == [16, 64, 112, 112]
-        and kernel_size == (3, 3)
-        and padding == (1, 1)
-        and stride == (2, 2)
-        and dilation == (1, 1)
-        and dtype == ttnn.bfloat16
-    ):
-        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -144,7 +128,7 @@ def test_run_max_pool(
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
-    act_shape = (in_n, 1, in_h * in_w, in_c)
+    act_shape = (1, 1, in_n * in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
     act_reshaped = act_permuted.reshape(act_shape)
 
@@ -155,20 +139,43 @@ def test_run_max_pool(
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
+    pre_shard = True
+    # pre_shard = False
+
     ttact_device = ttnn.to_device(ttact, device)
-    output = ttnn.maxpool2d(
+    if pre_shard:
+        parallel_config = determine_parallel_config(
+            is_1d_systolic=True,
+            batch_size=in_n,
+            input_channels=in_c,
+            output_height=out_h,
+            output_width=out_w,
+            output_channels=in_c,
+            device=device,
+            is_out_tiled=False,
+        )
+        sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+            tensor_shape=act_shape,
+            parallel_config=parallel_config,
+            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
+        )
+        ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
+    output = ttnn.max_pool2d_new(
         input_tensor=ttact_device,
         batch_size=in_n,
-        input_height=in_h,
-        input_width=in_w,
+        input_h=in_h,
+        input_w=in_w,
         channels=in_c,
-        kernel_size=(kernel_h, kernel_w),
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        dilation=(dilation_h, dilation_w),
+        kernel_size=[kernel_h, kernel_w],
+        stride=[stride_h, stride_w],
+        padding=[pad_h, pad_w],
+        dilation=[dilation_h, dilation_w],
         device=device,
     )
-    output_host = ttnn.from_device(output)
+
+    # interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    # output = ttnn.to_memory_config(output, interleaved_mem_config)
+    output_host = output.cpu()
     output_pytorch_padded = ttnn.to_torch(output_host)
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
 
@@ -186,7 +193,11 @@ def test_run_max_pool(
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
-    assert_with_pcc(output_pytorch, golden_pytorch)
+    # torch.save(output_pytorch, "output_pytorch.pt")
+    # torch.save(golden_pytorch, "golden_pytorch.pt")
+    passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
+
+    print(f"Passing: {passing}, PCC: {pcc}")
 
     ## do more rigorous comparision for each element
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)

@@ -12,6 +12,10 @@ from models.utility_functions import (
 from typing import List
 from loguru import logger
 
+
+use_new_maxpool2d = True
+
+
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
@@ -489,22 +493,23 @@ class resnet50:
         self.max_pool_reader_patterns_cache = {}
         max_pool_parallel_config_override = {}
 
-        self.max_pool = ttnn.MaxPool2d(
-            kernel_size=(3, 3),
-            stride=(2, 2),
-            padding=(1, 1),
-            dilation=(1, 1),
-            dtype=ttnn.bfloat16,
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=112,
-            input_width=112,
-            reader_patterns_cache=self.max_pool_reader_patterns_cache,
-            deallocate_activation=True,
-            parallel_config_override=max_pool_parallel_config_override,
-            channels=self.conv1_output_channels,
-            mesh_mapper=self.mesh_mapper,
-        )
+        if not use_new_maxpool2d:
+            self.max_pool = ttnn.MaxPool2d(
+                kernel_size=(3, 3),
+                stride=(2, 2),
+                padding=(1, 1),
+                dilation=(1, 1),
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                batch_size=self.batch_size,
+                input_height=112,
+                input_width=112,
+                reader_patterns_cache=self.max_pool_reader_patterns_cache,
+                deallocate_activation=True,
+                parallel_config_override=max_pool_parallel_config_override,
+                channels=self.conv1_output_channels,
+                mesh_mapper=self.mesh_mapper,
+            )
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -698,12 +703,22 @@ class resnet50:
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
 
-        if is_wormhole_b0() and self.batch_size == 20:
-            # TODO: fix the need to do the reshard here
-            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
-        x = self.max_pool(x)
+        if use_new_maxpool2d:
+            x = ttnn.max_pool2d_new(
+                input_tensor=x,
+                batch_size=self.batch_size,
+                input_h=x_height,
+                input_w=x_width,
+                channels=self.conv1_output_channels,
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+                device=device,
+            )
+        else:
+            x = self.max_pool(x)
+
         x_height = 56
         x_width = 56
         x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
