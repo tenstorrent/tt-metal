@@ -2923,6 +2923,7 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 
     t2 = ttnn.embedding(t0, t1, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+    t2 = ttnn.reshape(t2, [t2.shape[0], 1, t2.shape[1], t2.shape[2]])
 
     tt_data = t2.cpu().to_torch()
 
