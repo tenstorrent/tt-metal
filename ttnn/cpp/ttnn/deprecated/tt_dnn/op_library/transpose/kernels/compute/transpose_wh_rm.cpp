@@ -59,6 +59,8 @@ void MAIN {
         cb_pop_front(cb_im, HtWt);
 
         // untilize
+        // need to add this hw config here, otherwise pcc is bad
+        UNPACK(( llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_im_tp) ));
         untilize_init_short(cb_im_tp);
         cb_wait_front(cb_im_tp, HtWt);
         for (uint32_t w = 0; w < Wt; ++w) {

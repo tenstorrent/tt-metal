@@ -25,6 +25,7 @@ from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 def fold_torch(input_tensor, stride_h, stride_w):
@@ -146,6 +147,7 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     return activation_pyt_padded
 
 
+@skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])

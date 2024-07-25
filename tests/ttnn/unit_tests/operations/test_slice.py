@@ -177,7 +177,7 @@ def test_run_slice_test(
         dtype,
     )
     # CACHE HIT
-    assert num_cache_entries == 3
+    assert num_cache_entries == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq

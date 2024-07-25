@@ -40,7 +40,6 @@ ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 ALWI void untilize_init_short(uint32_t icb)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
-    UNPACK(( llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
     UNPACK(( llk_unpack_untilize_init(icb) ));
 }
 

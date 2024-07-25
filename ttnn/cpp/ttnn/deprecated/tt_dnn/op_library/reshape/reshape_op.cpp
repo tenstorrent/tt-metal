@@ -408,8 +408,9 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
 
     uint32_t src0_cb_index = 0;
     auto num_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
-    auto page_size = old_stick_size > new_stick_size ? old_stick_size : new_stick_size;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_pages * page_size, {{src0_cb_index, cb_data_format}})
+    auto max_page_size = old_stick_size > new_stick_size ? old_stick_size : new_stick_size;
+    auto page_size = new_stick_size;
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_pages * max_page_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
@@ -581,6 +582,17 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
     }
     if (input_tensor_a.get_legacy_shape() == output_shape) {
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
+    }
+    uint32_t ROW_MAJOR_WIDTH = 8;
+    if (input_tensor_a.get_layout() == Layout::ROW_MAJOR &&
+        (input_tensor_a.get_legacy_shape()[3] % ROW_MAJOR_WIDTH != 0 ||
+        output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+        ((compute_volume(output_shape) / output_shape[-1]) % TILE_HEIGHT != 0
+        || output_shape[-1] % TILE_WIDTH != 0
+        || input_tensor_a.get_legacy_shape()[-1] % TILE_WIDTH != 0
+        || (input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
+        TT_FATAL(input_tensor_a.get_dtype()==DataType::BFLOAT16);
+        return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
