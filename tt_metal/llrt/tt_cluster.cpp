@@ -341,6 +341,12 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
     }
 }
 
+eth_coord_t Cluster::get_chip_location(chip_id_t chip) const {
+    const std::unordered_map<chip_id_t, eth_coord_t> &chip_locations = this->cluster_desc_->get_chip_locations();
+    TT_FATAL(chip_locations.find(chip) != chip_locations.end(), "Cannot get chip location for chip {} that does not exist", chip);
+    return chip_locations.at(chip);
+}
+
 void Cluster::verify_eth_fw() const {
     for (const auto &[chip, mmio_device_id] : this->device_to_mmio_device_) {
         std::vector<uint32_t> fw_versions;
