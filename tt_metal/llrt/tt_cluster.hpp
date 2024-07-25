@@ -69,8 +69,7 @@ class Cluster {
     uint32_t get_harvesting_mask(chip_id_t chip) const {
         return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip);
     }
-    eth_coord_t get_chip_location(chip_id_t chip) const;
-    
+
     //! device driver and misc apis
     void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
