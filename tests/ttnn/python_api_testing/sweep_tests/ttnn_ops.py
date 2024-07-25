@@ -3645,3 +3645,20 @@ def sub_unary_bw(
     t2 = ttnn.unary_sub_bw(t0, t1, output_mem_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def fill_zero_bw(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.fill_zero_bw(t0, output_mem_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t1)

@@ -757,4 +757,8 @@ op_map = {
         "tt_op": ttnn_ops.sub_unary_bw,
         "pytorch_op": pytorch_ops.sub_unary_bw,
     },
+    "fill-zero-bw": {
+        "tt_op": ttnn_ops.fill_zero_bw,
+        "pytorch_op": pytorch_ops.fill_zero_bw,
+    },
 }

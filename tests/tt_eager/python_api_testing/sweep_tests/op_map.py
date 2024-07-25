@@ -120,10 +120,6 @@ op_map = {
         "tt_op": tt_lib_ops.fill_bw,
         "pytorch_op": pytorch_ops.fill_bw,
     },
-    "fill-zero-bw": {
-        "tt_op": tt_lib_ops.fill_zero_bw,
-        "pytorch_op": pytorch_ops.fill_zero_bw,
-    },
     "eltwise-full": {
         "tt_op": tt_lib_ops.full,
         "pytorch_op": pytorch_ops.full,
