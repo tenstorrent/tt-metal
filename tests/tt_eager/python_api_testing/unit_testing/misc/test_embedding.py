@@ -35,6 +35,7 @@ def run_embeddings_tests(
 
     out_layout = ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT
     ttz = ttnn.embedding(input_tensor, weights_tensor, layout=out_layout, memory_config=out_mem_config)
+    ttz = ttnn.reshape(ttz, [ttz.shape[0], 1, ttz.shape[1], ttz.shape[2]])
 
     if tilized:
         tt_data = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

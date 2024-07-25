@@ -142,6 +142,9 @@ class TtEmbeddings:
             padding_idx=self.pad_token,
             memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
         )
+        input_embeds = ttnn.reshape(
+            inputs_embeds, [inputs_embeds.shape[0], 1, inputs_embeds.shape[1], inputs_embeds.shape[2]]
+        )
         input_ids.deallocate()
 
         token_type_embeddings = ttnn.embedding(
@@ -150,6 +153,10 @@ class TtEmbeddings:
             layout=ttnn.TILE_LAYOUT,
             embeddings_type=ttnn.EmbeddingsType.BINARY,
             memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+        )
+        token_type_embeddings = ttnn.reshape(
+            token_type_embeddings,
+            [token_type_embeddings.shape[0], 1, token_type_embeddings.shape[1], token_type_embeddings.shape[2]],
         )
         token_type_ids.deallocate()
 
@@ -167,6 +174,15 @@ class TtEmbeddings:
                 layout=ttnn.TILE_LAYOUT,
                 embeddings_type=ttnn.EmbeddingsType.GENERIC,
                 memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+            )
+            position_embeddings_tt_tensor = ttnn.reshape(
+                position_embeddings_tt_tensor,
+                [
+                    position_embeddings_tt_tensor.shape[0],
+                    1,
+                    position_embeddings_tt_tensor.shape[1],
+                    position_embeddings_tt_tensor.shape[2],
+                ],
             )
             # Deallocate inputs_embeds and token_type_embeddings here to avoid having to move final output
             if self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:

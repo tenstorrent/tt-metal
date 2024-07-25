@@ -38,6 +38,7 @@ class TtFalconEmbeddings(torch.nn.Module):
             self.embd_weights,
             layout=ttnn.TILE_LAYOUT,
             dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
 
