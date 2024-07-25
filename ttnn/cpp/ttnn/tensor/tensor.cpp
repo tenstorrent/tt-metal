@@ -845,6 +845,35 @@ Tensor create_device_tensor(
     }
 }
 
+uint32_t get_expected_packed_size_in_bytes(
+    const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
+    ZoneScoped;
+    uint32_t packed_size_in_bytes;
+    if (memory_config.is_sharded()) {
+        TT_ASSERT(memory_config.shard_spec.has_value());
+
+        auto& shard_spec = memory_config.shard_spec.value();
+        auto& shard_shape = shard_spec.shape;
+
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
+
+        auto element_size = tensor_impl::element_size_bytes(data_type);
+        auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
+        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
+        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
+        packed_size_in_bytes =
+            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+    } else {
+        packed_size_in_bytes =
+            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+    }
+    return packed_size_in_bytes;
+}
+
 namespace detail {
 template <typename DataType>
 void* get_raw_host_data_ptr(const Tensor& tensor) {

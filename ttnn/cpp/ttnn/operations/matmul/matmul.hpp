@@ -43,6 +43,26 @@ ttnn::Tensor matmul(
     const std::optional<const ttnn::Tensor>& bias,
     const struct tt::operations::primary::Matmul& parameters);
 
+const std::string get_matmul_validate_string(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    const struct tt::operations::primary::Matmul& parameters);
+
+const uint32_t get_matmul_cbs_size_in_bytes(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    const struct tt::operations::primary::Matmul& parameters);
+
+const uint32_t get_matmul_output_tensor_size_in_bytes(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    const struct tt::operations::primary::Matmul& parameters);
+
+const BufferType get_matmul_output_tensor_buffer_type(
+    const struct tt::operations::primary::Matmul& parameters);
 }  // namespace matmul
 }  // namespace operations
 }  // namespace ttnn

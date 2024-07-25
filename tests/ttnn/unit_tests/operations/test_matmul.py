@@ -649,3 +649,21 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+def test_get_expected_usage_info(device):
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.ones([1, 1, 384, 256], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.ones([1, 1, 256, 64], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    assert ttnn.operations.matmul.get_matmul_cbs_size_in_bytes(a, b) == 1
+    assert ttnn.operations.matmul.get_linear_cbs_size_in_bytes(a, b) == 1
+    assert ttnn.operations.matmul.get_matmul_output_tensor_size_in_bytes(a, b) == 49152
+    assert ttnn.operations.matmul.get_linear_output_tensor_size_in_bytes(a, b) == 49152
+    assert ttnn.operations.matmul.get_matmul_output_tensor_buffer_type() == ttnn.BufferType.DRAM
+    assert ttnn.operations.matmul.get_linear_output_tensor_buffer_type() == ttnn.BufferType.DRAM
+    assert ttnn.operations.matmul.get_matmul_validate_string(a, b) == ""
+    assert ttnn.operations.matmul.get_linear_validate_string(a, b) == ""
+    assert ttnn.operations.matmul.get_linear_cbs_size_in_bytes(a, a) == 0
+    assert ttnn.operations.matmul.get_matmul_output_tensor_size_in_bytes(a, a) == 0
+    assert ttnn.operations.matmul.get_matmul_output_tensor_buffer_type() == ttnn.BufferType.DRAM
+    assert ttnn.operations.matmul.get_matmul_validate_string(a, a) != ""

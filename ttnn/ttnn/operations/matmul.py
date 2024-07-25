@@ -238,6 +238,204 @@ def linear(
     )
 
 
+def get_matmul_validate_string(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+) -> str:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_matmul_validate_string(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        core_grid=core_grid,
+    )
+
+
+def get_linear_validate_string(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    bias: Optional[ttnn.Tensor] = None,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+    activation: Optional[str] = None,
+    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+) -> str:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_linear_validate_string(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        activation=activation,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=core_grid,
+    )
+
+
+def get_matmul_cbs_size_in_bytes(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+) -> int:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_matmul_cbs_size_in_bytes(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        core_grid=core_grid,
+    )
+
+
+def get_linear_cbs_size_in_bytes(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    bias: Optional[ttnn.Tensor] = None,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+    activation: Optional[str] = None,
+    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+) -> int:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_linear_cbs_size_in_bytes(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        activation=activation,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=core_grid,
+    )
+
+
+def get_matmul_output_tensor_size_in_bytes(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+) -> int:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_matmul_output_tensor_size_in_bytes(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        core_grid=core_grid,
+    )
+
+
+def get_linear_output_tensor_size_in_bytes(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    bias: Optional[ttnn.Tensor] = None,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
+    program_config: Optional[MatmulProgramConfig] = None,
+    activation: Optional[str] = None,
+    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+) -> int:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_linear_output_tensor_size_in_bytes(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=memory_config,
+        dtype=dtype,
+        program_config=program_config,
+        activation=activation,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=core_grid,
+    )
+
+
+def get_matmul_output_tensor_buffer_type(
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.BufferType:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_matmul_output_tensor_buffer_type(
+        memory_config=memory_config,
+    )
+
+
+def get_linear_output_tensor_buffer_type(
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.BufferType:
+    """
+    Gets information about expected resource usage.
+    """
+    return ttnn._ttnn.operations.matmul.get_linear_output_tensor_buffer_type(
+        memory_config=memory_config,
+    )
+
+
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: matmul(self, *args, **kwargs)
 
 

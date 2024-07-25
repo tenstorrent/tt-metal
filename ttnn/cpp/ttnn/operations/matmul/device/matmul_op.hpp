@@ -4,6 +4,7 @@
 
 #pragma once
 #include <optional>
+#include <sstream>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -139,7 +140,6 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
 >;
 
-
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const std::optional<bool> bcast_batch = std::nullopt;
@@ -197,6 +197,35 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(const ttnn::t
 
 MatmulProgramConfig create_matmul_program_config(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<const CoreCoord> user_core_coord, std::optional<UnaryWithParam> fused_activation, std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 
+const struct Matmul generate_matmul_struct(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const struct Matmul& parameters);
+
+std::string get_matmul_validate_string(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    std::optional<const Tensor> optional_bias,
+    const struct Matmul& parameters);
+
+uint32_t get_matmul_cbs_size_in_bytes(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    std::optional<const Tensor> optional_bias,
+    const struct Matmul& parameters);
+
+uint32_t get_matmul_output_tensor_size_in_bytes(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    std::optional<const Tensor> optional_bias,
+    const struct Matmul& parameters);
+
+std::stringstream get_matmul_validate_stream(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    std::optional<const Tensor> optional_bias,
+    const struct Matmul& matmul);
+
 inline Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -211,20 +240,13 @@ inline Tensor matmul(
         optional_input_tensors.push_back(std::nullopt);
         output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
+    const struct Matmul& matmul = generate_matmul_struct(input_tensor_a, input_tensor_b, parameters);
 
     operation::launch_op(
-            [parameters] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            [matmul] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         const auto& input_tensor_a = input_tensors.at(0);
         const auto& input_tensor_b = input_tensors.at(1);
-        auto arch = input_tensor_a.device()->arch();
-        const bool has_user_grid = parameters.user_core_coord.has_value();
-        const bool has_program_config = parameters.program_config.has_value();
-        const auto increase_fidelity = !has_program_config && !has_user_grid;
-        auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-        auto kernel_config_val = init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity);
-        bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
-        TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
-        return operation::run(Matmul{parameters.program_config, broadcast_batch, parameters.output_mem_config, parameters.output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, parameters.untilize_out, parameters.user_core_coord, parameters.user_fused_activation, parameters.user_run_batched}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
+        return operation::run(matmul, {input_tensor_a, input_tensor_b}, optional_input_tensors);
     },
     {input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
     return output_tensors.at(0);

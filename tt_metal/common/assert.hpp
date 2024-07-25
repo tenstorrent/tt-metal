@@ -139,7 +139,7 @@ void tt_assert_log_message(const std::string& t, Ts const&... ts) {
 }
 
 template <typename... Ts>
-[[ noreturn ]] void tt_throw(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
+std::stringstream get_trace_message_ss(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
     std::stringstream trace_message_ss = {};
     trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << std::endl;
     if constexpr (sizeof...(messages) > 0) {
@@ -150,10 +150,21 @@ template <typename... Ts>
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
+    return trace_message_ss;
+}
+
+template <typename... Ts>
+[[ noreturn ]] void tt_throw_stream(std::stringstream& trace_message_ss) {
     Logger::get().flush();
     if (std::getenv("TT_ASSERT_ABORT"))
         abort();
     throw std::runtime_error(trace_message_ss.str());
+}
+
+template <typename... Ts>
+[[ noreturn ]] void tt_throw(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
+    std::stringstream trace_message_ss = get_trace_message_ss(file, line, assert_type, condition_str, messages...);
+    ::tt::assert::tt_throw_stream(trace_message_ss);
 }
 
 template <typename... Ts>
@@ -191,5 +202,14 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
             tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, ##__VA_ARGS__); \
             __builtin_unreachable();                                                         \
         }                                                                                    \
+    } while (0)
+#endif
+
+#ifndef TT_RETURN_FATAL_STREAM
+#define TT_RETURN_FATAL_STREAM(condition, ...)                                                                  \
+    do {                                                                                                        \
+        if (not(condition)) {                                                                                   \
+            return tt::assert::get_trace_message_ss(__FILE__, __LINE__, "TT_FATAL", #condition, ##__VA_ARGS__); \
+        }                                                                                                       \
     } while (0)
 #endif

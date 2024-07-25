@@ -400,6 +400,13 @@ static Tensor create_device_tensor(
     return create_device_tensor(shape.value(), dtype, layout, device, memory_config);
 }
 
+uint32_t get_expected_packed_size_in_bytes(
+    const Shape &shape,
+    DataType dtype,
+    Layout layout,
+    Device *device,
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);
 void *get_raw_host_data_ptr(const Tensor &tensor);
