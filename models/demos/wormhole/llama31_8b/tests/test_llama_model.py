@@ -11,6 +11,7 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     freqs_to_rotation_matrix,
     prepare_inputs_ttnn,
     sample,
+    encode_prompt_llama_instruct,
     HostEmbedding,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
@@ -28,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "iterations",
-    (17,),
+    (26,),
 )
 def test_llama_model_inference(device, iterations, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -56,8 +57,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     logger.info("Finished loading weights...")
 
     prompts = ["This is a test"] * model_args.max_batch_size
-
-    encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+    encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
@@ -99,10 +99,6 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
 
     seqlen = 1  # Generating one token per user at a time
     batch = model_args.max_batch_size
-
-    if run_ref_pt:
-        cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-        freqs_cis = torch.complex(cos, sin)
 
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
@@ -207,13 +203,11 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
                             logger.info(f"V Cache Passed!")
                         else:
                             logger.warning(f"V Cache Failed! PCC value is lower than {pcc}")
-                        # if not does_pass:
-                        # all_tests_pass = False
+                            all_tests_pass = False
 
-        logger.info(f"[pos={current_pos}] generated tokens: {len(all_outputs)}")
-        logger.info("[ttnn generation User 0] ", "".join(tokenizer.decode(all_outputs)))
+        logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
         if run_ref_pt:
-            logger.info("[Ref generation User 0] ", "".join(tokenizer.decode(all_outputs_ref)))
+            logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
 
     if run_ref_pt:
         if all_tests_pass:

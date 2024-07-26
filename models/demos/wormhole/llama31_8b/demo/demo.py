@@ -15,6 +15,7 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     cache_attention,
+    encode_prompt_llama_instruct,
     HostEmbedding,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
@@ -38,11 +39,10 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
-    # if instruct:
-    #     # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
-    #     encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]", bos=True, eos=False) for prompt in input_prompts]
-    # else:
-    encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+    if instruct:
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
+    else:
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
 
     prompt_lens = [len(x) for x in encoded_prompts]
 
