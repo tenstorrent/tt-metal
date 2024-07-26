@@ -60,7 +60,11 @@ enum class StorageType {
 
 struct AllGatherTensor{};
 bool operator==(const AllGatherTensor&, const AllGatherTensor&);
-struct ReplicateTensor {};
+struct ReplicateTensor {
+    int replication_factor = 1;
+    ReplicateTensor() = default;
+    ReplicateTensor(int replication_factor) : replication_factor(replication_factor) {}
+};
 bool operator==(const ReplicateTensor&, const ReplicateTensor&);
 struct ShardTensor {
     int shard_dimension;

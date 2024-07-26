@@ -33,6 +33,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
     num_to_corerange,
     ConcatMesh2DToTensor,
+    ShardTensor2dMesh,
 )
 import gc
 
@@ -113,19 +114,21 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            shape=(x.shape[2], x.shape[3] // 8 // llama_decoder_model.cluster_shape[0]),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        xs = ttnn.as_tensor(
+        xs = ttnn.from_torch(
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ACT_MEMCFG,
             device=llama_decoder_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            memory_config=ACT_MEMCFG,
+            mesh_mapper=ShardTensor2dMesh(
+                llama_decoder_model.device_mesh, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+            ),
         )
 
         rot_emb = generate_rot_emb(
@@ -229,7 +232,7 @@ def run_test_LlamaDecoder_inference(
         generation_length = 1
     else:
         generation_start_pos = UNIT_TEST_START_POS
-        generation_length = UNIT_TEST_GENERATION_LENGTH
+        generation_length = UNIT_TEST_GENERATION_LENGTH  # 1
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -264,8 +267,11 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+        tt_out = ttnn.to_torch(
+            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+        )
+
+        tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -323,7 +329,7 @@ def run_test_LlamaDecoder_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -334,7 +340,7 @@ def run_test_LlamaDecoder_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9995)],
+    [(32, 1, 0.995)],
     ids=["decode"],
 )
 @pytest.mark.parametrize(
@@ -357,7 +363,7 @@ def test_LlamaDecoder_inference(
     max_context_len,
     llama_version,
     cluster_shape,
-    # use_program_cache,
+    use_program_cache,
 ):
     if batch > max_batch_size:
         pytest.skip(f"Decode with {batch} users is not supported with large context")
