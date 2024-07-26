@@ -162,8 +162,27 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
         torch_input_tensor, pad_h, pad_w, stride_h, stride_w
     )
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 3, 1))
-    tt_output_tensor = pad_and_fold_with_permute_and_reshape_on_device(
-        device, torch_input_tensor, pad_h, pad_w, stride_h, stride_w
+    # pad on host
+    n, c, h, w = torch_input_tensor.shape
+    C = _nearest_y(c, 4)
+    padded_h = h + pad_h * 2
+    padded_w = w + pad_w * 2
+    w_pad32 = padded_w + (32 - padded_w % 32) % 32
+    pad_w_right = w_pad32 - (w + pad_w)
+    torch_input_tensor_padded = torch.nn.functional.pad(torch_input_tensor, (pad_w, pad_w_right, pad_h, pad_h))
+    # on device
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tt_output_tensor = ttl.tensor.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+        use_transpose_as_fold=True,
+        output_shape=(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w)),
+        pad_c=C - c,
+        pad_h=pad_h,
+        pad_w=0,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
