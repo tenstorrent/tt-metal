@@ -615,7 +615,7 @@ void gen_linear_read_cmd(Device *device,
     for (uint32_t i = 0; i < length_words; i++) {
         device_data.push_one(worker_core, device_data.at(worker_core, bank_id, offset + i));
     }
-    device_data.pad(worker_core, bank_id, 16); // XXXX L1_ALIGNMENT
+    device_data.pad(worker_core, bank_id, L1_ALIGNMENT);
 }
 
 void gen_dispatcher_delay_cmd(Device *device,
@@ -1204,6 +1204,18 @@ void gen_smoke_test(Device *device,
     gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32, device_data.size_at(worker_core, 0) - 32 / sizeof(uint32_t));
 
+    // Touch test write offset
+    // Making sure this really works by doing a write would break lots of
+    // existing test infra, so not tested yet. TODO
+    dispatch_cmds.resize(0);
+    uint32_t write_offset = 48;
+    gen_dispatcher_set_write_offset_cmd(dispatch_cmds, write_offset);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    write_offset = 0;
+    gen_dispatcher_set_write_offset_cmd(dispatch_cmds, write_offset);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
     // Test host
     if (!use_dram_exec_buf_g) {
         for (int multiplier = 1; multiplier <= 3; multiplier++) {
@@ -1533,7 +1545,7 @@ void configure_for_single_chip(Device *device,
     uint32_t dispatch_buffer_base = l1_buf_base_g;
     uint32_t prefetch_d_buffer_base = l1_buf_base_g;
     uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-    dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
+    dispatch_wait_addr_g = l1_unreserved_base_aligned + L1_ALIGNMENT;
     vector<uint32_t>zero_data(0);
     llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
@@ -2120,7 +2132,7 @@ void configure_for_multi_chip(Device *device,
     uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
     prefetch_q_base = l1_buf_base_g;
     prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
-    dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
+    dispatch_wait_addr_g = l1_unreserved_base_aligned + L1_ALIGNMENT;
     vector<uint32_t>zero_data(0);
     llrt::write_hex_vec_to_core(device_r->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
