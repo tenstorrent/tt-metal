@@ -103,7 +103,7 @@ class TtTransformer(nn.Module):
             )
             diagonal = 0
 
-            mask = tt_lib.tensor.tril(tensor, diagonal)
+            mask = ttnn.tril(tensor, diagonal)
             tensor.deallocate()
             # make the mask banded to account for sliding window
             diagonal = -self.args.sliding_window
