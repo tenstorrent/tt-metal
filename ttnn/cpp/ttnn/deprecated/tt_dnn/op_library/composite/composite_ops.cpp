@@ -249,31 +249,6 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _multigammaln)(a, output_mem_config);
 }
 
-// mish[x] = x*tanh[softplus[x]]
-// use transformation y = x*tanh[softplus[x]] by broadcast
-// Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor _mish(const Tensor& x, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({x}))};
-    operation::launch_op(
-        [output_mem_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& x = input_tensors.at(0);
-            Tensor sp_x = ttnn::softplus(x, 1.0f, 20.0f, output_mem_config);
-            Tensor tanh_x = ttnn::tanh(sp_x, output_mem_config);
-            sp_x.deallocate();
-            Tensor mish_x = ttnn::multiply(x, tanh_x, std::nullopt, output_mem_config);
-            return {mish_x};
-        },
-        {x},
-        output_tensors);
-    return output_tensors.at(0);
-}
-Tensor mish(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _mish)(a, output_mem_config);
-}
-
 // Theano defines this differently...
 /**
  *
@@ -842,31 +817,6 @@ Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, c
 }
 Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _repeat_interleave)(input_a, repeat, dim, output_mem_config);
-}
-
-// nextafter
-Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    const float eps = input_a.device()->sfpu_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = where(
-                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a,
-                output_mem_config);
-        }
-        result = where(
-            ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt,
-            output_mem_config);
-    }
-    return result;
-}
-Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _nextafter)(input_a, input_b, output_mem_config);
 }
 
 // addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2

@@ -2348,6 +2348,28 @@ def make_unary_op(ttl_tensor_unop):
     return unary_op
 
 
+def make_ttnn_unary_op(ttl_tensor_unop):
+    @setup_host_and_device
+    def unary_op(
+        x,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        output_mem_config=ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+        ),
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        t1 = ttl_tensor_unop(t0, memory_config=output_mem_config)
+
+        return tt2torch_tensor(t1)
+
+    return unary_op
+
+
 def make_unary_op_optional_output(ttl_tensor_unop):
     @setup_host_and_device
     def unary_op_optional_output(
@@ -2488,7 +2510,7 @@ eltwise_sigmoid_accurate = make_unary_op_optional_output(ttnn.sigmoid_accurate)
 eltwise_log_sigmoid = make_unary_op_optional_output(ttnn.log_sigmoid)
 eltwise_swish = make_unary_op(ttl.tensor.swish)
 eltwise_log1p = make_unary_op(ttl.tensor.log1p)
-eltwise_mish = make_unary_op(ttl.tensor.mish)
+eltwise_mish = make_ttnn_unary_op(ttnn.mish)
 eltwise_hardswish = make_unary_op(ttl.tensor.hardswish)
 eltwise_hardsigmoid = make_unary_op(ttl.tensor.hardsigmoid)
 eltwise_digamma = make_unary_op(ttl.tensor.digamma)
@@ -2590,7 +2612,7 @@ matmul = make_binary_op_ttnn(ttnn.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 
 eltwise_scatter = make_binary_op(ttl.tensor.scatter)
-eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
+eltwise_nextafter = make_binary_op_ttnn(ttnn.nextafter)
 eltwise_remainder = make_binary_op(ttl.tensor.remainder)
 eltwise_fmod = make_binary_op(ttl.tensor.fmod)
 
