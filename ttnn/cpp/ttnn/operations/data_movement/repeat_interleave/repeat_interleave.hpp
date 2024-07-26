@@ -22,6 +22,7 @@ struct ExecuteRepeatInterleave {
     // # This operation does not support the following cases:
     // #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
     // #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
+
     static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         uint32_t repeats,
