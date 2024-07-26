@@ -311,12 +311,10 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(C0)
 
         # Reduction matmul
-        C2 = ttnn.experimental.operations.primary.transformers.ssm_1d_sum_reduce(
+        C2 = ttnn.experimental.ssm.sum_reduce(
             C1,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-            output_dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(C1)
