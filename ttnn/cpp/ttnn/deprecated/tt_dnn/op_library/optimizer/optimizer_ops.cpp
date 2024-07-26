@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace tt {
 
@@ -48,7 +49,7 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
         return data_val;
     };
     Tensor data_val = rmsnorm(data);
-    Tensor weight_norm = ttnn::operations::unary::_clamp(data_val, 0.0f, 10.0f, output_mem_config);
+    Tensor weight_norm = ttnn::clamp(data_val, 0.0f, 10.0f, output_mem_config);
 
     Tensor adam_norm = rmsnorm(adam_step);
     Tensor ones = ones_like(weight_norm, output_mem_config);

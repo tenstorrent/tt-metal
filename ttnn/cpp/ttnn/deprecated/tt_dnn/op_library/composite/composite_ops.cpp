@@ -23,7 +23,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace tt {
 
@@ -662,7 +662,7 @@ Tensor full_like(
 // hardtanh
 Tensor _hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const MemoryConfig& output_mem_config) {
-    return ttnn::operations::unary::_clip(a, low, high, output_mem_config);
+    return ttnn::clip(a, low, high, output_mem_config);
 }
 Tensor hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const MemoryConfig& output_mem_config) {
