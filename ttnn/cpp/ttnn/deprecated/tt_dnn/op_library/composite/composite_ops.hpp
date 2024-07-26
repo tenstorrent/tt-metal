@@ -272,13 +272,6 @@ Tensor addalpha(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<Tensor> output_tensor = std::nullopt);
 
-// repeat interleave
-Tensor repeat_interleave(
-    const Tensor& input_a,
-    uint32_t repeat,
-    int32_t dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // lerp(input, end, weight) = start + weight * (end - start), weight is float
 Tensor lerp(
     const Tensor& input_a,
