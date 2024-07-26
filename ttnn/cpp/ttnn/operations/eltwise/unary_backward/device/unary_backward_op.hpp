@@ -8,6 +8,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -752,6 +753,9 @@ template <>
 struct OpHandler<UnaryBackwardOpType::ADD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
         return _add_bw(grad, input, alpha, output_mem_config);
+    }
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config ) {
+        return ttnn::operations::binary_backward::_add_bw_inter(grad, input_a, input_b, output_mem_config);
     }
 };
 

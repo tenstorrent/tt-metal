@@ -701,6 +701,65 @@ Example:
 
 }
 
+template <typename unary_backward_operation_t>
+void bind_unary_backward_overload(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+{2}
+
+Args:
+    * :attr:`grad_tensor`
+    * :attr:`input_tensor`
+
+Keyword args:
+    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+
+Example:
+
+    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> output = {1}(grad_tensor, input)
+)doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const float alpha,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(grad_tensor, input_tensor, alpha, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("alpha"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt}
+);
+
+}
+
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward(
@@ -908,7 +967,7 @@ void py_module(py::module& module) {
         mvlgamma is refered as multigammaln.
         Input value must be greater than 2.5f)doc");
 
-    detail::bind_unary_backward_opt(
+    detail::bind_unary_backward_overload(
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for addition on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc");

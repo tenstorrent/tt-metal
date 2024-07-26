@@ -133,8 +133,9 @@ std::vector<std::optional<Tensor>> _add_bw(
 }
 
 std::vector<ttnn::Tensor> _add_bw_inter(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    auto result =  _add_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto result =  _add_bw(0, grad, input, other, output_memory_config, {true, true}, std::nullopt, std::nullopt);
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(result.size());
 
