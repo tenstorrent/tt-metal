@@ -41,69 +41,66 @@ ComplexTensor _reciprocal(const ComplexTensor& input, const MemoryConfig& output
 ComplexTensor _polar(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryOpType OpType>
-struct OpHandler_complex_type1;
-
-template <ComplexUnaryOpType OpType>
-struct OpHandler_complex_type2;
+struct OpHandler;
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::REAL> {
+struct OpHandler<ComplexUnaryOpType::REAL> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _real(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::IMAG> {
+struct OpHandler<ComplexUnaryOpType::IMAG> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _imag(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::ANGLE> {
+struct OpHandler<ComplexUnaryOpType::ANGLE> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _angle(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::IS_IMAG> {
+struct OpHandler<ComplexUnaryOpType::IS_IMAG> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _is_imag(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::IS_REAL> {
+struct OpHandler<ComplexUnaryOpType::IS_REAL> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _is_real(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type1<ComplexUnaryOpType::ABS> {
+struct OpHandler<ComplexUnaryOpType::ABS> {
     static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _abs(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type2<ComplexUnaryOpType::CONJ> {
+struct OpHandler<ComplexUnaryOpType::CONJ> {
     static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _conj(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type2<ComplexUnaryOpType::RECIPROCAL> {
+struct OpHandler<ComplexUnaryOpType::RECIPROCAL> {
     static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _reciprocal(input, output_mem_config);
     }
 };
 
 template <>
-struct OpHandler_complex_type2<ComplexUnaryOpType::POLAR> {
+struct OpHandler<ComplexUnaryOpType::POLAR> {
     static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _polar(input, output_mem_config);
     }
@@ -111,12 +108,12 @@ struct OpHandler_complex_type2<ComplexUnaryOpType::POLAR> {
 
 template <ComplexUnaryOpType OpType>
 auto get_function_complex_unary() {
-    return &OpHandler_complex_type1<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 template <ComplexUnaryOpType OpType>
 auto get_function_complex_unary_type2() {
-    return &OpHandler_complex_type2<OpType>::handle;
+    return &OpHandler<OpType>::handle;
 }
 
 
