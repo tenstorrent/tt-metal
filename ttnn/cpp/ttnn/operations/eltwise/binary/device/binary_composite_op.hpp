@@ -11,6 +11,8 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 #include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+
 
 namespace ttnn::operations::binary{
 

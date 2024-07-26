@@ -447,12 +447,12 @@ Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::opti
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    const Tensor h_const = full_like(a, high);
+    const Tensor h_const = ttnn::full_like(a, high);
     Tensor a_max = tt::tt_metal::min(a, h_const, output_memory_config);
     if (low == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = full_like(a, low);
+        const Tensor l_const = ttnn::full_like(a, low);
         return tt::tt_metal::max(a_max, l_const, output_memory_config);
     }
 }
@@ -690,8 +690,8 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_eps = full_like(input_a, eps);
-    Tensor t1m_eps = full_like(input_a, (1 - eps));
+    Tensor t_eps = ttnn::full_like(input_a, eps);
+    Tensor t1m_eps = ttnn::full_like(input_a, (1 - eps));
     Tensor logit_input = ttnn::where(
         ttnn::ltz(t_eps, output_mem_config),
         input_a,

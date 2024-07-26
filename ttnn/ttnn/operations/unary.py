@@ -626,7 +626,9 @@ def _golden_function_normalize_global(input_tensor_a, *args, **kwargs):
     return input_tensor_a
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.unary.normalize_global, golden_function=_golden_function_normalize_global)
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.unary.normalize_global, golden_function=_golden_function_normalize_global
+)
 
 
 def _golden_function_rpow(input_tensor_a, dim, *args, **kwargs):

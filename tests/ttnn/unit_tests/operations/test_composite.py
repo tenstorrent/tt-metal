@@ -634,6 +634,7 @@ def test_unary_logical_not_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_for_grayskull("Not supported for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     (
