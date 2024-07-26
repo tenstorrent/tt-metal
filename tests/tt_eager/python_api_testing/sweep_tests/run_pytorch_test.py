@@ -113,6 +113,8 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
             env_dict_combinations = make_env_combinations(env_dict)
 
+            coregrid_dict = test_config.get("coregrid", {})
+
             for env_dict in env_dict_combinations:
                 shape_dict = test_config["shape"]
                 datagen_dict = test_config["datagen"]
@@ -130,10 +132,14 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                 # Optional test args for dtype, etc...
                 test_args = test_config.get("args", {})
 
+                if coregrid_dict:
+                    test_args["coregrid"] = coregrid_dict
+
                 # Set tests parameters --------------------------
                 test_tt_dtypes = []
                 test_tt_layouts = []
                 test_mem_configs = []
+                test_coregrid_configs = []
 
                 if "inputs" in test_args:
                     for input_spec in test_args["inputs"]:
@@ -177,6 +183,12 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                         else:
                             test_mem_configs[-1] = generation_funcs.supported_mem_configs
 
+                if "coregrid" in test_args:
+                    test_coregrid_configs.append(coregrid_dict.get("xmin", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("xmax", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("ymin", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("ymax", {}))
+
                 if "outputs" in test_args:
                     for out_spec in test_args["outputs"]:
                         test_mem_configs.append([])
@@ -204,6 +216,7 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                     test_tt_layouts,
                     test_mem_configs,
                     sanitize_args=sanitize_args,
+                    coregrid=test_coregrid_configs,
                 ):
                     data_seed = random.randint(0, 20000000)
                     # input_shapes = input_shapes.copy()

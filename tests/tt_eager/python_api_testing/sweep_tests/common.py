@@ -116,14 +116,26 @@ def align_to_interval(x, start_val, interval):
 
 
 def shapes_and_datagen(
-    shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types, sanitize_args=True
+    shape_dict,
+    datagen_dict,
+    test_args_gen,
+    test_tt_dtypes,
+    test_tt_layouts,
+    test_buffer_types,
+    sanitize_args=True,
+    coregrid=[],
 ):
     num_shapes = shape_dict["num-shapes"]
 
     # Helper
     def _gen_args(input_shapes):
         args = test_args_gen(
-            input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types, do_sanitize_args=sanitize_args
+            input_shapes,
+            test_tt_dtypes,
+            test_tt_layouts,
+            test_buffer_types,
+            do_sanitize_args=sanitize_args,
+            coregrid=coregrid,
         )
         args = list(args)
 
