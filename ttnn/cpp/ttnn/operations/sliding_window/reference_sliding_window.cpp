@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
+#include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 
 #include <cstdint>
 #include <numeric>

@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "ttnn/operations/sliding_window/utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"

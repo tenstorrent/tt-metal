@@ -11,8 +11,8 @@
 #include "ttnn/operations/pool/maxpool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/utils.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
