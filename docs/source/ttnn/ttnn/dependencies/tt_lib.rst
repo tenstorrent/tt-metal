@@ -286,8 +286,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.hypot
 
-.. autofunction:: tt_lib.tensor.mish
-
 .. autofunction:: tt_lib.tensor.polyval
 
 .. autofunction:: tt_lib.tensor.mac
@@ -605,8 +603,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.normalize_hw
 
 .. autofunction:: tt_lib.tensor.normalize_global
-
-.. autofunction:: tt_lib.tensor.nextafter
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
