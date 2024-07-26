@@ -99,6 +99,7 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
         start_pos=seq_len,  # Start position for decode mode
+        rotary_on_host=True,
     )
 
     # Select the corresponding seq_len of tokens for prefill
@@ -107,7 +108,7 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
     tt_decode_input = pt_decode_input
 
     start_pos = 0
-    current_pos = start_pos % model_args.sliding_window
+    current_pos = start_pos
 
     for iter in range(1):
         decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
@@ -167,22 +168,22 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
         prompts = ["Once"] * batch
         encoded_prompts_tensor = torch.tensor([tokenizer.encode(prompt) for prompt in prompts])
         decode_input_torch = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             decode_input_torch,
             model_args.dim,
             start_pos,
             model_args,
             tt_model.device_mesh,
         )
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, mode="decode")
+        tt_out = tt_model(decode_input, start_pos, current_pos, mode="decode")
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
         positions = torch.LongTensor([start_pos])
         ref_output = reference_model(decode_input_torch, positions).detach().float()
 
