@@ -32,10 +32,12 @@ namespace detail{
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
 }
 
+typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+
 struct KernelGroup {
     CoreType core_type;
     CoreRangeSet core_ranges;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
+    kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
     launch_msg_t launch_msg;
@@ -44,7 +46,7 @@ struct KernelGroup {
     KernelGroup(
         const Program &program,
         CoreType core_type,
-        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
+        kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
@@ -143,6 +145,7 @@ class Program {
 
     bool is_finalized() const { return this->finalized_; }
     void finalize();
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
@@ -221,7 +224,6 @@ class Program {
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
