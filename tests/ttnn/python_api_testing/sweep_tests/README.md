@@ -150,3 +150,30 @@ _args_ section can be written for each input separately as well. Eg:
     out-buffer-type: ["DRAM", "L1"]
   output-file: eltwise_add_sweep.csv
 ```
+
+### _coregrid_ coordinates range specification
+
+It is also possible (optionally) to specify ranges for core grid coordinates in case of operations which support this kind of settings (based on TTNN operation documentation). On the test level, we are able to specify additional section ‘core grid’ in YAML file.
+
+An example for _coregrid_ parameter specification is given (in this case for matmul operation)
+```
+  ...
+  - ttnn-matmul:
+      coregrid:
+        xmin: 2
+        xmax: 8
+        ymin: 3
+        ymax: 7
+      shape:
+        start-shape: [1, 1, 32, 32, 32]
+        end-shape: [6, 12, 512, 512, 512]
+  ...
+```
+
+In ‘coregrid’ section there is the set of parameters related to coregrid which can be specified:
+- ‘xmin’ : minimal value of core grid’s x coordinate
+- ‘xmax’: maximal value of core grid’s x coordinate
+- ‘ymin’ : minimal value of core grid’s y coordinate
+- ‘ymax’: maximal value of core grid’s y coordinate
+
+As outcome, the resulting coordinates for x will be in range [xmin, xmax], while y will be in range [ymin, ymax]. For given example, x would be in range [2, 8], while y would be in range [3, 7].
