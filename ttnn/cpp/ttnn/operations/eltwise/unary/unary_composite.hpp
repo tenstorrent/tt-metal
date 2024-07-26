@@ -62,6 +62,19 @@ struct ExecuteUnaryCompositeOp {
     }
 };
 
+//OpHandler_float : get_function_type_float
+template <UnaryCompositeOpType unary_comp_op_type>
+struct ExecuteUnaryCompositeOpWithFloat {
+
+    //Type : 1 inputs, 1 float
+    static ttnn::Tensor operator()(
+        const Tensor &input_tensor,
+        float param1,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, memory_config);
+        }
+};
+
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithDim
 {
@@ -260,6 +273,22 @@ constexpr auto geglu = ttnn::register_operation_with_auto_launch_op<
 constexpr auto swiglu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
+constexpr auto hardshrink = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::hardshrink",
+    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>();
+constexpr auto logical_not_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logical_not_",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
+constexpr auto softshrink = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::softshrink",
+    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>();
+constexpr auto logit = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logit",
+    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
+constexpr auto celu = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::celu",
+    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
+
 
 constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tril",

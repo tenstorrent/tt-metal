@@ -4,9 +4,10 @@
 
 import torch
 import pytest
+import random
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -613,6 +614,23 @@ def test_unary_geglu_ttnn(input_shapes, dim, device):
     golden_tensor = golden_fn(in_data, dim)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_logical_not_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.logical_not_(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logical_not_)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([input_tensor], [golden_tensor])
     assert comp_pass
 
 
@@ -634,6 +652,97 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 
     output_tensor = ttnn.swiglu(input_tensor, dim)
     golden_tensor = golden_fn(in_data, dim)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {random.randint(1, 100) for _ in range(5)},
+)
+def test_unary_hardshrink(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.hardshrink(input_tensor, lambd=param)
+    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
+    golden_tensor = golden_function(in_data, lambd=param)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {random.randint(1, 100) for _ in range(5)},
+)
+def test_unary_softshrink(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.softshrink(input_tensor, lambd=param)
+    golden_function = ttnn.get_golden_function(ttnn.softshrink)
+    golden_tensor = golden_function(in_data, lambd=param)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {random.uniform(-1e6, 1e6) for _ in range(5)},
+)
+def test_unary_logit(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
+    output_tensor = ttnn.logit(input_tensor, eps=param)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    golden_tensor = golden_function(in_data, eps=param)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {random.uniform(1, 100) for _ in range(5)},
+)
+def test_unary_celu(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.celu(input_tensor, alpha=param)
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    golden_tensor = golden_function(in_data, alpha=param)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
