@@ -443,6 +443,7 @@ def test_device_perf_bare_metal(
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -478,4 +479,5 @@ def test_device_perf_bare_metal(
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
+        is_ci_env=is_ci_env,
     )

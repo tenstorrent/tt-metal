@@ -35,11 +35,8 @@ def test_bw_rdiv(input_shapes, scalar, round_mode, device):
 
     if round_mode == "None":
         round_mode = None
-    pyt_y = torch.div(scalar, in_data, rounding_mode=round_mode)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
 
     status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -60,13 +57,8 @@ def test_bw_rdiv_default(input_shapes, scalar, device):
 
     tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.div(scalar, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
 
     status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status

@@ -27,9 +27,9 @@ PIPELINE_CSV_FIELDS = (
 JOB_CSV_FIELDS = (
     "github_job_id",
     "host_name",
-    "host_card_type",
-    "host_os",
-    "host_location",
+    "card_type",
+    "os",
+    "location",
     "name",
     "job_submission_ts",
     "job_start_ts",
@@ -80,22 +80,25 @@ def get_data_pipeline_datetime_from_datetime(requested_datetime):
     return requested_datetime.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def get_pipeline_row_from_github_info(github_context_json, github_pipeline_json, github_jobs_json):
+def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json):
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
+
+    logger.warning("Using hardcoded value for repository_url")
+    repository_url = "https://github.com/tenstorrent/tt-metal"
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
     sorted_jobs_start_times = sorted(jobs_start_times)
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
-    pipeline_end_ts = github_pipeline_json["created_at"]
+    pipeline_end_ts = github_pipeline_json["updated_at"]
     name = github_pipeline_json["name"]
 
     logger.warning("Using hardcoded value tt-metal for project value")
     project = "tt-metal"
 
-    trigger = github_context_json["event_name"]
+    trigger = github_runner_environment["github_event_name"]
 
     logger.warning("Using hardcoded value github for vcs_platform value")
     vcs_platform = "github"
@@ -109,6 +112,7 @@ def get_pipeline_row_from_github_info(github_context_json, github_pipeline_json,
 
     return {
         "github_pipeline_id": github_pipeline_id,
+        "repository_url": repository_url,
         "pipeline_submission_ts": pipeline_submission_ts,
         "pipeline_start_ts": pipeline_start_ts,
         "pipeline_end_ts": pipeline_end_ts,
@@ -139,14 +143,15 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return null host_location")
-        host_location = None
+        logger.debug("Detected null host_name, so will return unknown location and host_name")
+        location = "unknown"
+        host_name = "unknown"
     elif "GitHub Actions " in host_name:
-        host_location = "github"
+        location = "github"
     else:
-        host_location = "tt_cloud"
+        location = "tt_cloud"
 
-    if host_location == "github":
+    if location == "github":
         try:
             ubuntu_version = return_first_string_starts_with("ubuntu-", labels)
         except Exception as e:
@@ -154,15 +159,15 @@ def get_job_row_from_github_job(github_job):
             logger.error(f"{labels} for a GitHub runner seem to not specify an ubuntu version")
             raise e
         if ubuntu_version == "ubuntu-latest":
-            logger.warning("Found ubuntu-latest, replacing with ubuntu-22.04 but may not be case for long")
-            ubuntu_version = "ubuntu-22.04"
-    elif host_location == "tt_cloud":
+            logger.warning("Found ubuntu-latest, replacing with ubuntu-24.04 but may not be case for long")
+            ubuntu_version = "ubuntu-24.04"
+    elif location == "tt_cloud":
         logger.warning("Assuming ubuntu-20.04 for tt cloud, but may not be the case soon")
         ubuntu_version = "ubuntu-20.04"
     else:
-        ubuntu_version = None
+        ubuntu_version = "unknown"
 
-    host_os = ubuntu_version
+    os = ubuntu_version
 
     name = github_job["name"]
 
@@ -172,15 +177,24 @@ def get_job_row_from_github_job(github_job):
         "Using labels to heuristically look for card type, but we should be using future arch- label instead"
     )
     if "grayskull" in labels:
-        host_card_type = "grayskull"
+        card_type = "grayskull"
     elif "wormhole_b0" in labels:
-        host_card_type = "wormhole_b0"
+        card_type = "wormhole_b0"
     else:
-        host_card_type = "unknown"
+        card_type = "unknown"
 
     job_submission_ts = github_job["created_at"]
 
     job_start_ts = github_job["started_at"]
+
+    job_submission_ts_dt = get_datetime_from_github_datetime(job_submission_ts)
+    job_start_ts_dt = get_datetime_from_github_datetime(job_start_ts)
+
+    if job_submission_ts_dt > job_start_ts_dt:
+        logger.warning(
+            f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting equal for data"
+        )
+        job_submission_ts = job_start_ts
 
     job_end_ts = github_job["completed_at"]
 
@@ -188,8 +202,8 @@ def get_job_row_from_github_job(github_job):
 
     is_build_job = "build" in name or "build" in labels
 
-    logger.warning("Returning null for job_matrix_config because difficult to get right now")
-    job_matrix_config = "null"
+    logger.warning("Returning None for job_matrix_config because difficult to get right now")
+    job_matrix_config = None
 
     logger.warning("docker_image erroneously used in pipeline data model, but should be moved. Returning null")
     docker_image = None
@@ -197,9 +211,9 @@ def get_job_row_from_github_job(github_job):
     return {
         "github_job_id": github_job_id,
         "host_name": host_name,
-        "host_card_type": host_card_type,
-        "host_os": host_os,
-        "host_location": host_location,
+        "card_type": card_type,
+        "os": os,
+        "location": location,
         "name": name,
         "job_submission_ts": job_submission_ts,
         "job_start_ts": job_start_ts,
@@ -216,22 +230,19 @@ def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
 
 
 def create_csvs_for_data_analysis(
-    github_context_json_filename,
+    github_runner_environment,
     github_pipeline_json_filename,
     github_jobs_json_filename,
     github_pipeline_csv_filename=None,
     github_jobs_csv_filename=None,
 ):
-    with open(github_context_json_filename) as github_context_json_file:
-        github_context_json = json.load(github_context_json_file)
-
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
         github_pipeline_json = json.load(github_pipeline_json_file)
 
     with open(github_jobs_json_filename) as github_jobs_json_file:
         github_jobs_json = json.load(github_jobs_json_file)
 
-    pipeline_row = get_pipeline_row_from_github_info(github_context_json, github_pipeline_json, github_jobs_json)
+    pipeline_row = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
 
     job_rows = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json)
 
@@ -271,6 +282,15 @@ def get_github_benchmark_environment_csv_filenames():
     )
     logger.info(f"The following environment CSVs should be created: {csv_filenames}")
     return csv_filenames
+
+
+def get_github_runner_environment():
+    assert "GITHUB_EVENT_NAME" in os.environ
+    github_event_name = os.environ["GITHUB_EVENT_NAME"]
+
+    return {
+        "github_event_name": github_event_name,
+    }
 
 
 def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv_filename):

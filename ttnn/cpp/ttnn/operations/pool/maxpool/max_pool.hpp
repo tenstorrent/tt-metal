@@ -6,10 +6,10 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/run_operation.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 
 inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
@@ -183,7 +183,7 @@ namespace maxpool {
 
 
 // maxpool macro-op
-inline Tensor maxpool2d(const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device& device) {
+inline Tensor maxpool2d(const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device * device) {
     MemoryConfig memory_config = input_tensor.memory_config();
     const auto shard_grid = memory_config.shard_spec.value().grid;
     const auto shard_scheme = memory_config.memory_layout;

@@ -5,15 +5,14 @@
 #pragma once
 
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/multi_device.hpp"
+#include "ttnn/multi_device.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace ccl {
 
 struct ExecuteAllGather {
-
-    static ttnn::Tensor execute_on_main_thread(
+    static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,
@@ -25,6 +24,6 @@ struct ExecuteAllGather {
 }  // namespace ccl
 }  // namespace operations
 
-constexpr auto all_gather = ttnn::register_operation<ttnn::operations::ccl::ExecuteAllGather>("ttnn::all_gather");
+constexpr auto all_gather = ttnn::register_operation<"ttnn::all_gather", ttnn::operations::ccl::ExecuteAllGather>();
 
 }  // namespace ttnn

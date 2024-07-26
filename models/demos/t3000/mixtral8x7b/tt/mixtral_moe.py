@@ -36,6 +36,7 @@ class TtMoeLayer(LightweightModule):
         )
 
         self.num_devices = 8
+        self.tile_size = 32
         self.compute_kernel = args.get_compute_kernel_attn_config()
 
         self.expert_mask_11BB = ttnn.from_torch(
@@ -68,9 +69,9 @@ class TtMoeLayer(LightweightModule):
         )
         self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
 
-        reduce_mask_torch = torch.zeros(1, 1, self.args.max_batch_size, self.args.max_batch_size * 8)
-        for i in range(self.args.max_batch_size):
-            reduce_mask_torch[:, :, i, range(i, self.args.max_batch_size * 8, self.args.max_batch_size)] = 1
+        reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
+        for i in range(self.tile_size):
+            reduce_mask_torch[:, :, i, range(i, self.tile_size * 8, self.tile_size)] = 1
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
             dtype=ttnn.bfloat8_b,

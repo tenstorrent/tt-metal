@@ -6,7 +6,7 @@
 #include "unary_program_factory_multicore.hpp"
 #include "unary_program_factory_sharded.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

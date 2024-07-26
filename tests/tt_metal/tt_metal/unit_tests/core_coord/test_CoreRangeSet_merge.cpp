@@ -26,8 +26,8 @@ TEST_F(CoreCoordHarness, TestCoreRangeSetMergeCoreCoord)
     EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({sc3}).merge({sc4}).ranges() , std::set<::CoreRange>( {cr16}) );
     CoreRange rect ( {0,0}, {4,2});
     std::set<CoreRange> rect_pts;
-    for (unsigned y = rect.start.y; y <= rect.end.y; y++){
-        for (unsigned x = rect.start.x; x <= rect.end.x; x++){
+    for (unsigned y = rect.start_coord.y; y <= rect.end_coord.y; y++){
+        for (unsigned x = rect.start_coord.x; x <= rect.end_coord.x; x++){
             rect_pts.insert ( CoreRange( {x, y}, {x, y} ) );
         }
     }

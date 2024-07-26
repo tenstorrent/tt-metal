@@ -42,8 +42,8 @@ void ConfigureKernelGroup(
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
     std::optional<uint32_t> address = nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
             auto semaphores = program.semaphores_on_core(logical_core);
             if (semaphores.size() == NUM_SEMAPHORES) {
@@ -89,8 +89,8 @@ inline void SetRuntimeArgs(
     const std::vector<uint32_t> &runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
-        for (auto x = core_range.start.x; x <= core_range.end.x; ++x) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; ++y) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                 kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
             }
         }
@@ -105,8 +105,8 @@ inline void SetRuntimeArgs(
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (const auto &core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; ++x) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; ++y) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                     kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
                 }
             }
@@ -127,15 +127,15 @@ inline void SetRuntimeArgs(
             if constexpr (std::is_same_v<T, CoreCoord>) {
                 EnqueueSetRuntimeArgs(cq, kernel, core_spec, runtime_args, blocking);
             } else if constexpr (std::is_same_v<T, CoreRange>) {
-                for (auto x = core_spec.start.x; x <= core_spec.end.x; x++) {
-                    for (auto y = core_spec.start.y; y <= core_spec.end.y; y++) {
+                for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
+                    for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
                         EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 for (const auto &core_range : core_spec.ranges()) {
-                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                             EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
                         }
                     }
@@ -516,9 +516,9 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
         detail::DispatchStateCheck(false);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program.finalize_rt_args();
-            program.set_finalized();
+            program.finalize();
         }
+
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
 
@@ -625,32 +625,20 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
 
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
-                                const auto kernel = detail::GetKernel(program, optional_id.value());
+                                const auto &kernel = detail::GetKernel(program, optional_id.value());
                                 const auto &rt_args = kernel->runtime_args(logical_core);
 
-                                uint32_t kernel_config_base;
-                                // TODO: get this from the dispatch ring buffer
-                                if (core_type == CoreType::WORKER) {
-                                    kernel_config_base = L1_KERNEL_CONFIG_BASE;
-                                } else {
-                                    TT_ASSERT(core_type == CoreType::ETH);
-                                    if (kernel->is_idle_eth()) {
-                                        kernel_config_base = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
-                                    } else {
-                                        kernel_config_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-                                    }
-                                }
-
                                 if (rt_args.size() > 0) {
-                                    auto args_base_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
+                                    auto rt_args_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
                                     log_trace(
                                               tt::LogMetal,
                                               "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
@@ -658,9 +646,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                                               rt_args.size(),
                                               logical_core.str(),
                                               physical_core.str(),
-                                              args_base_addr,
+                                              rt_args_addr,
                                               rt_args);
-                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, args_base_addr);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, rt_args_addr);
                                 }
 
                                 const auto &common_rt_args = kernel->common_runtime_args();
@@ -755,9 +743,9 @@ Device *CreateDevice(
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
     ZoneScoped;
-    Device *dev = new Device(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }
@@ -842,8 +830,8 @@ uint32_t CreateSemaphore(
             std::optional<uint32_t> address;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto &core_range : crs.ranges()) {
-                CoreCoord start_core = core_range.start;
-                CoreCoord end_core = core_range.end;
+                CoreCoord start_core = core_range.start_coord;
+                CoreCoord end_core = core_range.end_coord;
                 std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
                     address = addr_candidate;

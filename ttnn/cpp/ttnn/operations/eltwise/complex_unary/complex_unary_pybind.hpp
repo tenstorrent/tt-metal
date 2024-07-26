@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -19,6 +19,7 @@ namespace operations {
 namespace complex_unary {
 
 namespace detail {
+using ComplexTensor = complex_binary::ComplexTensor;
 
 //OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 template <typename complex_unary_operation_t>

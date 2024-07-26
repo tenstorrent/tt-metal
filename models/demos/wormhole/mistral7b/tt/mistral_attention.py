@@ -44,7 +44,7 @@ class TtMistralAttention(nn.Module):
         self.dtype = dtype
 
         self.kv_seq_len = configuration.kv_seq_len
-        self.sliding_window = configuration.kv_seq_len
+        self.sliding_window = configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
         self.model_config = configuration.get_model_config()
@@ -114,7 +114,7 @@ class TtMistralAttention(nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.kv_seq_len,  # self.sliding_window,
+                    self.sliding_window,
                     self.head_dim,
                 )
             )
@@ -122,7 +122,7 @@ class TtMistralAttention(nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.kv_seq_len,  # self.sliding_window,
+                    self.sliding_window,
                     self.head_dim,
                 )
             )
@@ -142,7 +142,7 @@ class TtMistralAttention(nn.Module):
         # Pre-scaled head dimension (for softmax) to avoid fallbacking to host
         self.head_dims = [
             ttnn.from_torch(
-                torch.ones(1, self.n_heads, self.max_batch_size, self.head_dim)
+                torch.ones(1, self.n_heads, 32, self.head_dim)
                 * (self.head_dim**-0.5),  # [seqlen, n_heads, bsz, head_dim] [1,32,32,128]
                 device=self.devices[i],
                 layout=ttnn.TILE_LAYOUT,
@@ -193,7 +193,7 @@ class TtMistralAttention(nn.Module):
             for i in range(len(devices))
         ]
 
-        mask_Q_8D_torch = torch.zeros(1, 32, 32, 8 * 128)
+        mask_Q_8D_torch = torch.zeros(1, self.max_batch_size, 32, 8 * 128)
         for j in range(8):
             mask_Q_8D_torch[:, :, j * 4 : (j + 1) * 4, j * 128 : (j + 1) * 128] = 1
         self.mask_Q_8D = [
@@ -241,8 +241,9 @@ class TtMistralAttention(nn.Module):
             packer_l1_acc=True,
         )
         self.attention_grid = ttnn.experimental.tensor.CoreCoord(8, 4)
+        self.scale = self.head_dim**-0.5
 
-    def forward(
+    def forward_decode(
         self,
         xs: List[ttnn.Tensor],
         current_pos: int,
@@ -284,6 +285,13 @@ class TtMistralAttention(nn.Module):
                 dtype=self.dtype,
                 core_grid=self.grid_size,
             )
+
+            # Reshape such that true unpadded batch is tracked in shape
+            if self.max_batch_size < 32:
+                fqkv_shape = xqkv_fused.shape
+                xqkv_fused = ttnn.reshape(
+                    xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+                )
 
             # ttnn.deallocate(x)
 
@@ -337,8 +345,8 @@ class TtMistralAttention(nn.Module):
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            ttnn.experimental.tensor.update_cache(keys, k_heads, current_pos)  # self.current)
-            ttnn.experimental.tensor.update_cache(values, v_heads, current_pos)  # self.current)
+            ttnn.kv_cache.update_cache_for_token_(keys, k_heads, current_pos)
+            ttnn.kv_cache.update_cache_for_token_(values, v_heads, current_pos)
             self.layer_past_list[i] = [keys, values]
 
             ttnn.deallocate(k_heads)
@@ -355,6 +363,11 @@ class TtMistralAttention(nn.Module):
                 )  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
                 ttnn.deallocate(keys_sliced)
                 q_heads = q_heads * head_dim  # Scale q_heads instead of QK before softmax
+
+                # Reshape such that true unpadded batch is tracked in shape
+                if self.max_batch_size < 32:
+                    keys_sliced_T_shape = keys_sliced_T.shape
+                    keys_sliced_T = ttnn.reshape(keys_sliced_T, ttnn.Shape([32, 8, 128, keys_sliced_T_shape[3]]))
 
                 attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     q_heads,
@@ -373,8 +386,11 @@ class TtMistralAttention(nn.Module):
                     dim=-1,
                 )
 
+                # Reshape such that true unpadded batch is tracked in shape
+                if self.max_batch_size < 32:
+                    values_sliced_shape = values.shape
+                    values = ttnn.reshape(values, ttnn.Shape([32, 8, values_sliced_shape[2], 128]))
                 values_sliced = values[:, :, :layer_slice, :]
-
                 attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     attn_sliced,
                     values_sliced,
@@ -385,7 +401,6 @@ class TtMistralAttention(nn.Module):
 
                 ttnn.deallocate(attn_sliced)
                 ttnn.deallocate(values_sliced)
-
                 attn_output_cat = ttnn.transformer.concatenate_heads(
                     attn_output, memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"]
                 )
@@ -417,6 +432,8 @@ class TtMistralAttention(nn.Module):
                     q_heads_1QBD, dtype=ttnn.bfloat16, memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"]
                 )
                 q_heads_1BQD = ttnn.permute(q_heads_1QBD, (0, 2, 1, 3))
+                if self.max_batch_size < 32:
+                    q_heads_1BQD = q_heads_1BQD[:, : self.max_batch_size, :, :]
                 q_heads_1QBD.deallocate()
                 q_heads_1B_Q_8D_preshard = (
                     ttnn.matmul(
@@ -467,6 +484,11 @@ class TtMistralAttention(nn.Module):
                     program_config=self.reduce_program_config,
                     memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
                 )
+                if self.max_batch_size < 32:
+                    attn_output_1BQD_shape = attn_output_1BQD.shape
+                    attn_output_1BQD = ttnn.reshape(
+                        attn_output_1BQD, ttnn.Shape([1, 32, attn_output_1BQD_shape[2], 128])
+                    )
                 attn_output_1QBD = ttnn.permute(attn_output_1BQD, (0, 2, 1, 3))
 
                 attn_output_1BQD.deallocate()
@@ -493,3 +515,145 @@ class TtMistralAttention(nn.Module):
             return None  # tt_all_reduce(dense_outputs)
         else:
             return dense_outputs
+
+    def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+        seq_len = xs_11SH.shape[-2]
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        wqkv = self.wqkv_list[0]
+        wo = self.wo_list[0]
+        self.layer_past = self.layer_past_list[0]
+        ###
+        # QKV matmuls
+        ###
+
+        # reshaping long sequence to matmul fit on device
+        if seq_len > 2048:
+            xs_11SH = ttnn.reshape(xs_11SH, [1, 2, seq_len // 2, -1])
+        xqkv_fused = ttnn.linear(
+            xs_11SH,
+            wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        )
+        if seq_len > 2048:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        xs_11SH.deallocate(True)
+
+        # split qkv into heads
+        (
+            q_heads_1QSD_pre_rot,
+            k_heads_1KSD_pre_rot,
+            v_heads_1VSD,
+        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        xqkv_fused.deallocate(True)
+
+        ###
+        # Rotary embeddings
+        ###
+
+        q_heads_1QSD = ttnn.experimental.tensor.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        q_heads_1QSD_pre_rot.deallocate(True)
+
+        k_heads_1KSD = ttnn.experimental.tensor.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        k_heads_1KSD_pre_rot.deallocate(True)
+
+        # Fill KV-Cache
+        keys_BKSD = self.layer_past[0]
+        values_BKSD = self.layer_past[1]
+
+        k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        # sharding k_fill to deal with update_cache memory limitation
+        if seq_len > 128:
+            k_fill = ttnn.experimental.tensor.interleaved_to_sharded(
+                k_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
+            )
+        v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        # sharding v_fill to deal with update_cache memory limitation
+        if seq_len > 128:
+            v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
+                v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
+            )
+        ttnn.experimental.tensor.fill_cache(
+            keys_BKSD,
+            k_fill,
+            user_id,
+        )
+        ttnn.experimental.tensor.fill_cache(
+            values_BKSD,
+            v_fill,
+            user_id,
+        )
+
+        self.layer_past = [keys_BKSD, values_BKSD]
+
+        # SDPA
+
+        # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
+        k_heads_K1SD = ttnn.reshape(k_heads_1KSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
+        v_heads_V1SD = ttnn.reshape(v_heads_1VSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
+        q_heads_84SD = ttnn.reshape(
+            q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+        )
+        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+            q_heads_84SD,
+            k_heads_K1SD,
+            v_heads_V1SD,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+        )
+
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+
+        # deallocate keys and values
+        q_heads_84SD.deallocate(True)
+        k_heads_K1SD.deallocate(True)
+        v_heads_V1SD.deallocate(True)
+
+        ###
+        # Output matmul
+        ###
+        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output_1QSD,
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_output_1QSD.deallocate(True)
+
+        # reshaping long sequence to matmul fit on device
+        if seq_len > 2048:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 2, seq_len // 2, -1])
+        output_11SH = ttnn.linear(
+            attn_output_11SH,
+            wo,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+        )
+        if seq_len > 2048:
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+        attn_output_11SH.deallocate(True)
+        return [output_11SH]
+
+    def forward(
+        self, xs, current_pos, attn_masks=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
+    ):
+        if mode == "prefill":
+            return self.forward_prefill(xs[0], attn_masks[0], rot_mats, transformation_mats, user_id)
+        else:
+            return self.forward_decode(xs, current_pos, attn_masks)

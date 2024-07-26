@@ -6,14 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, get_single_rot_mat
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
@@ -23,17 +15,35 @@ from models.utility_functions import comp_pcc, comp_allclose
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 
-def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "batch",
+    (
+        32,
+        16,
+    ),
+)
+def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds, batch):
     """
     b: batch
     s: sequence length
     h: hidden size
     """
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
     pcc = 0.99
     dtype = ttnn.bfloat8_b
 
-    # Load state dictionary
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    if batch == 32:
+        generation_start_pos = 15000
+        max_seq_len = 16384
+    elif batch in [4, 8, 16]:
+        generation_start_pos = 30000
+        max_seq_len = 32768
+    else:
+        raise ValueError(f"Batch size {batch} not supported")
+
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)
@@ -53,21 +63,19 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         tt_model.device_mesh,
     )
 
-    generation_start_pos = 0
-    generation_length = 1
+    generation_length = 10
     all_tests_pass = True
 
     seqlen = 1
-    batch = 32
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
         pt_decode_input_bsh = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
-        decode_input_b1sh, attn_mask = prepare_inputs_ttnn(
+        decode_input_b1sh = prepare_inputs_ttnn(
             pt_decode_input_bsh,
             model_args.dim,
             start_pos,
@@ -76,12 +84,13 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         )
 
         # Run TT model
-        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, current_rot_mat)
+        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, None, current_rot_mat)
+
         tt_output_torch_b1h = (
             ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, 1, -1)
-        )
+            .view(32, 1, -1)
+        )[:batch, ...]
 
         # Reference model
         positions = torch.LongTensor([start_pos])

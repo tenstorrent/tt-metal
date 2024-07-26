@@ -251,9 +251,6 @@ Open the visualizer by running the following command:
 13. Query all operations
 ------------------------
 
-.. note::
-   This basic snippet is under construction, and may not work on all hardware architectures.
-
 .. code-block:: python
 
     import ttnn
@@ -261,15 +258,11 @@ Open the visualizer by running the following command:
 
 
 
-14. Disable Fallbacks
----------------------
+14. Falling back to torch
+-------------------------
 
-.. note::
-   This basic snippet is under construction, and may not work on all hardware architectures.
 
-Fallbacks are used when the operation is not supported by the device. The fallbacks are implemented in the host and are slower than the device operations.
-The user will be notified when a fallback is used. The fallbacks can be disabled by setting the following environment variable.
+.. code-block:: python
 
-.. code-block:: bash
-
-     export TTNN_THROW_EXCEPTION_ON_FALLBACK=True
+.. literalinclude:: ../../../../ttnn/examples/usage/falling_back_to_torch.py
+   :language: python

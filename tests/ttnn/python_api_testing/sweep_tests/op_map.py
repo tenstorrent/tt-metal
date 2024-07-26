@@ -417,10 +417,6 @@ op_map = {
         "tt_op": ttnn_ops.attention_softmax,
         "pytorch_op": ttnn_pytorch_ops.attention_softmax,
     },
-    "ttnn-addcmul-bw": {
-        "tt_op": ttnn_ops.addcmul_bw,
-        "pytorch_op": pytorch_ops.addcmul_bw,
-    },
     "ttnn-rmsnorm": {
         "tt_op": ttnn_ops.rmsnorm,
         "pytorch_op": ttnn_pytorch_ops.rmsnorm,
@@ -712,5 +708,73 @@ op_map = {
     "eltwise-scale_mask_softmax_in_place": {
         "tt_op": ttnn_ops.eltwise_scale_mask_softmax_in_place,
         "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
+    },
+    "unary-add-bw": {
+        "tt_op": ttnn_ops.unary_add_bw,
+        "pytorch_op": pytorch_ops.unary_add_bw,
+    },
+    "eltwise-add-bw": {
+        "tt_op": ttnn_ops.eltwise_add_bw,
+        "pytorch_op": pytorch_ops.add_bw,
+    },
+    "eltwise-rdiv": {
+        "tt_op": ttnn_ops.eltwise_rdiv,
+        "pytorch_op": pytorch_ops.eltwise_rdiv,
+    },
+    "eltwise-rsub": {
+        "tt_op": ttnn_ops.eltwise_rsub,
+        "pytorch_op": pytorch_ops.eltwise_rsub,
+    },
+    "log-bw": {
+        "tt_op": ttnn_ops.log_bw,
+        "pytorch_op": pytorch_ops.log_bw,
+    },
+    "neg-bw": {
+        "tt_op": ttnn_ops.neg_bw,
+        "pytorch_op": pytorch_ops.neg_bw,
+    },
+    "clamp-bw": {
+        "tt_op": ttnn_ops.clamp_bw,
+        "pytorch_op": pytorch_ops.clamp_bw,
+    },
+    "clamp-max-bw": {
+        "tt_op": ttnn_ops.clamp_max_bw,
+        "pytorch_op": pytorch_ops.clamp_max_bw,
+    },
+    "clamp-min-bw": {
+        "tt_op": ttnn_ops.clamp_min_bw,
+        "pytorch_op": pytorch_ops.clamp_min_bw,
+    },
+    "rsub-bw": {
+        "tt_op": ttnn_ops.rsub_bw,
+        "pytorch_op": pytorch_ops.rsub_bw,
+    },
+    "where-bw": {
+        "tt_op": ttnn_ops.where_bw,
+        "pytorch_op": pytorch_ops.where_bw,
+    },
+    "rsqrt-bw": {
+        "tt_op": ttnn_ops.rsqrt_bw,
+        "pytorch_op": pytorch_ops.rsqrt_bw,
+    },
+    "sqrt-bw": {
+        "tt_op": ttnn_ops.sqrt_bw,
+        "pytorch_op": pytorch_ops.sqrt_bw,
+    },
+    "addcmul-bw": {
+        "tt_op": ttnn_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
+    "addcdiv-bw": {
+        "tt_op": ttnn_ops.addcdiv_bw,
+        "pytorch_op": pytorch_ops.addcdiv_bw,
+    },
+    "addalpha-bw": {
+        "tt_op": ttnn_ops.addalpha_bw,
+        "pytorch_op": pytorch_ops.addalpha_bw,
+    },
+    "relu-bw": {
+        "tt_op": ttnn_ops.relu_bw,
+        "pytorch_op": pytorch_ops.relu_bw,
     },
 }

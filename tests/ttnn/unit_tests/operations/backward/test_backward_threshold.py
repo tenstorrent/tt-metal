@@ -25,13 +25,9 @@ def test_bw_threshold(input_shapes, threshold, value, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
 
-    pyt_y = torch.threshold(in_data, threshold=threshold, value=value)
     tt_output_tensor_on_device = ttnn.threshold_bw(grad_tensor, input_tensor, threshold, value)
 
-    in_data.retain_grad()
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.threshold_bw)
+    golden_tensor = golden_function(grad_data, in_data, threshold, value)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

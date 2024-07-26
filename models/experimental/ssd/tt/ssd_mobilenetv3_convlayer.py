@@ -14,7 +14,7 @@ from models.utility_functions import (
 from models.experimental.ssd.ssd_utils import create_batchnorm
 
 ACT_FN_1 = ttnn.relu
-ACT_FN_2 = tt_lib.tensor.hardswish
+ACT_FN_2 = ttnn.hardswish
 
 
 class TtMobileNetV3ConvLayer(nn.Module):

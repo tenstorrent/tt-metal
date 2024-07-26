@@ -226,12 +226,7 @@ class Transformer(nn.Module):
 
         self.freqs_cis = precompute_freqs_cis(self.args.head_dim, 128_000)
 
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        freqs_cis_i,
-        positions: torch.Tensor,
-    ):
+    def forward(self, input_ids: torch.Tensor, freqs_cis_i, positions: torch.Tensor, mode="decode"):
         h = input_ids  # self.tok_embeddings(input_ids)
         freqs_cis = freqs_cis_i  # [positions]
 
@@ -250,7 +245,8 @@ class Transformer(nn.Module):
             mask = torch.log(mask)
         for layer in self.layers:
             h = layer(h, freqs_cis, positions, mask)
-
+        if mode == "prefill":
+            return h.float()
         return self.output(self.norm(h)).float()
 
     def from_folder(

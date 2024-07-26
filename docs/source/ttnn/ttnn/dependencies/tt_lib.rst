@@ -276,27 +276,17 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div_no_nan
 
-.. autofunction:: tt_lib.tensor.log1p
-
 .. autofunction:: tt_lib.tensor.clip
 
 .. autofunction:: tt_lib.tensor.hardtanh
 
 .. autofunction:: tt_lib.tensor.cbrt
 
-.. autofunction:: tt_lib.tensor.hypot
-
-.. autofunction:: tt_lib.tensor.mish
-
 .. autofunction:: tt_lib.tensor.polyval
 
 .. autofunction:: tt_lib.tensor.mac
 
-.. autofunction:: tt_lib.tensor.hardsigmoid
-
 .. autofunction:: tt_lib.tensor.swish
-
-.. autofunction:: tt_lib.tensor.hardswish
 
 .. autofunction:: tt_lib.tensor.softsign
 
@@ -318,8 +308,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.atan2
 
-.. autofunction:: tt_lib.tensor.logical_xor
-
 .. autofunction:: tt_lib.tensor.logical_xori
 
 .. autofunction:: tt_lib.tensor.subalpha
@@ -332,15 +320,9 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logit
 
-.. autofunction:: tt_lib.tensor.lgamma
-
 .. autofunction:: tt_lib.tensor.logical_andi
 
-.. autofunction:: tt_lib.tensor.multigammaln
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.isclose
 
 .. autofunction:: tt_lib.tensor.digamma
 
@@ -590,8 +572,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.xlogy
 
-.. autofunction:: tt_lib.tensor.prod
-
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv
@@ -608,23 +588,9 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_global
 
-.. autofunction:: tt_lib.tensor.glu
-
-.. autofunction:: tt_lib.tensor.geglu
-
-.. autofunction:: tt_lib.tensor.reglu
-
-.. autofunction:: tt_lib.tensor.swiglu
-
-.. autofunction:: tt_lib.tensor.embeddings
-
-.. autofunction:: tt_lib.tensor.nextafter
-
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
 .. autofunction:: tt_lib.tensor.repeat
-
-.. autofunction:: tt_lib.tensor.repeat_interleave
 
 .. autofunction:: tt_lib.tensor.pow
 

@@ -295,6 +295,7 @@ class EnqueueProgramCommand : public Command {
    public:
     struct CachedProgramCommandSequence {
         HostMemDeviceCommand preamble_command_sequence;
+        HostMemDeviceCommand stall_command_sequence;
         std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
         uint32_t runtime_args_fetch_size_bytes;
         HostMemDeviceCommand program_command_sequence;
@@ -313,8 +314,9 @@ class EnqueueProgramCommand : public Command {
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed);
 
-    void assemble_preamble_commands(bool prefetch_stall);
-    void assemble_device_commands();
+    void assemble_preamble_commands(uint32_t tensix_l1_config_base, uint32_t eth_l1_config_base);
+    void assemble_stall_commands(bool prefetch_stall);
+    void assemble_device_commands(bool is_cached, uint32_t tensix_l1_kernel_config_base, uint32_t eth_l1_kernel_config_base);
     void assemble_runtime_args_commands();
 
     void process();

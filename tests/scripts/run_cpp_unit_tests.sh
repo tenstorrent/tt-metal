@@ -13,7 +13,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
     ./build/test/tt_metal/unit_tests_fast_dispatch
-    TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/tt_metal/unit_tests_fast_dispatch
     fi

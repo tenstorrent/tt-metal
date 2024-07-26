@@ -26,7 +26,7 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_wit
         ((torch.Size([1, 1, 64, 64])), (torch.Size([1, 1, 64, 32])), 3),
     ),
 )
-def test_bw_add(input_shapes, input_shapes_2, dimension, device):
+def test_bw_concat(input_shapes, input_shapes_2, dimension, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
 
     other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
@@ -39,6 +39,31 @@ def test_bw_add(input_shapes, input_shapes_2, dimension, device):
 
     golden_function = ttnn.get_golden_function(ttnn.concat_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, dimension)
+
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes, input_shapes_2",
+    (
+        ((torch.Size([12, 1, 30, 32])), (torch.Size([2, 1, 30, 32]))),
+        ((torch.Size([4, 1, 32, 32])), (torch.Size([5, 1, 32, 32]))),
+    ),
+)
+def test_bw_concat_Default(input_shapes, input_shapes_2, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
+
+    pyt_y = torch.cat((in_data, other_data))
+
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
+
+    tt_output_tensor_on_device = ttnn.concat_bw(grad_tensor, input_tensor, other_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.concat_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

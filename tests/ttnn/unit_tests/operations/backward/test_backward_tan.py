@@ -24,14 +24,10 @@ def test_bw_tan(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1.45, 1.45, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
 
-    pyt_y = torch.tan(in_data)
-
     tt_output_tensor_on_device = ttnn.tan_bw(grad_tensor, input_tensor)
 
-    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.tan_bw)
+    golden_tensor = golden_function(grad_data, in_data)
 
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor, 0.96)
     assert comp_pass

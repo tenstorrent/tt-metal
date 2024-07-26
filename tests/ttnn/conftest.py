@@ -40,7 +40,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def pre_and_post(request):
-    original_config = copy.copy(ttnn.CONFIG)
+    original_config = ttnn.Config(ttnn.CONFIG)
     if ttnn.CONFIG_PATH is not None:
         ttnn.load_config_from_json_file(ttnn.CONFIG_PATH)
     if ttnn.CONFIG_OVERRIDES is not None:
@@ -49,7 +49,7 @@ def pre_and_post(request):
     report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
     with ttnn.manage_config("report_name", ttnn.CONFIG.report_name or report_name):
         if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_name is not None:
-            logger.debug(f"ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(ttnn.CONFIG))}")
+            logger.debug(f"ttnn.CONFIG:\n{ttnn.CONFIG}")
             report_path = ttnn.CONFIG.report_path
             if report_path.exists():
                 logger.warning(f"Removing existing log directory: {report_path}")

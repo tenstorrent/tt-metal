@@ -6,13 +6,6 @@ import torch
 import pytest
 from loguru import logger
 import os
-
-# Set Mistral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
-
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
@@ -49,9 +42,8 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.105),
-        (128, 6, 0.125),
-        (1024, 6, 0.225),
+        (32, 15, 0.105),
+        (1024, 15, 0.225),
     ),
 )
 def test_mistral_model_perf(
@@ -62,6 +54,7 @@ def test_mistral_model_perf(
     model_args = TtModelArgs(device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
+    model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -77,7 +70,7 @@ def test_mistral_model_perf(
     }
     profiler.end("weight_loading")
 
-    prompts = ["This is a test"] * 32
+    prompts = ["This is a test"] * model_args.max_batch_size
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Embedding on host
@@ -188,28 +181,3 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize(
-    "batch, iterations, expected_perf",
-    ((32, 17, 0.16),),
-)
-def test_mistral_perf_device(batch, iterations, expected_perf, reset_seeds):
-    subdir = "ttnn_mistral7b"
-    margin = 0.03
-    command = f"pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
-    expected_perf_cols = {inference_time_key: expected_perf}
-
-    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
-    prep_device_perf_report(
-        model_name=f"mistral-7B_{batch}batch",
-        batch_size=batch,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-    )

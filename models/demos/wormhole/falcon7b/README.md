@@ -14,7 +14,7 @@ To run the model for a single user you can use the command line input:
 
 To run the demo using prewritten prompts for a batch of 32 users run (currently only supports same token-length inputs):
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-default_mode_1024_stochastic]`
+`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-default_mode_1024_stochastic]`
 
 - **Decoding method**: The default decoding method is top-k/top-p (stochastic) sampling, however greedy decoding can also be used by replacing `stochastic` with `greedy` in the command above.
 
@@ -22,7 +22,7 @@ To run the demo using prewritten prompts for a batch of 32 users run (currently 
 
 To measure the performance of generating the `i`'th token while the KV cache is filled with `i-1` rows (where `i` is 128 in the command below):
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-perf_mode_128_stochastic]`
+`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[user_input0-perf_mode_128_stochastic]`
 
 - **Supported sequence lengths**: Currently `i` can only be set to 128, 1024, or 2048 for performance measurement mode.
 

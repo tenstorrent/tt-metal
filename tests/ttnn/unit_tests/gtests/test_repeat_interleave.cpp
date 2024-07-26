@@ -6,9 +6,9 @@
 
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_metal/common/logger.hpp"
 

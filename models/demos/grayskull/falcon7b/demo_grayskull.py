@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
+from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 
 
 @pytest.mark.parametrize(

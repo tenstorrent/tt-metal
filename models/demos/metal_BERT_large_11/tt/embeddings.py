@@ -134,22 +134,29 @@ class TtEmbeddings:
         token_type_ids: ttl.tensor.Tensor,
         position_ids: Optional[ttl.tensor.Tensor] = None,
     ) -> ttl.tensor.Tensor:
-        inputs_embeds = ttl.tensor.embeddings(
+        inputs_embeds = ttnn.embedding(
             input_ids,
             self.word_embeddings_weight,
-            tilized=True,
-            embeddings_type=ttl.tensor.EmbeddingsType.PADDED,
-            pad_token=self.pad_token,
-            output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+            layout=ttnn.TILE_LAYOUT,
+            embeddings_type=ttnn.EmbeddingsType.PADDED,
+            padding_idx=self.pad_token,
+            memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+        )
+        input_embeds = ttnn.reshape(
+            inputs_embeds, [inputs_embeds.shape[0], 1, inputs_embeds.shape[1], inputs_embeds.shape[2]]
         )
         input_ids.deallocate()
 
-        token_type_embeddings = ttl.tensor.embeddings(
+        token_type_embeddings = ttnn.embedding(
             token_type_ids,
             self.token_type_embeddings_weight,
-            tilized=True,
-            embeddings_type=ttl.tensor.EmbeddingsType.BINARY,
-            output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+            layout=ttnn.TILE_LAYOUT,
+            embeddings_type=ttnn.EmbeddingsType.BINARY,
+            memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+        )
+        token_type_embeddings = ttnn.reshape(
+            token_type_embeddings,
+            [token_type_embeddings.shape[0], 1, token_type_embeddings.shape[1], token_type_embeddings.shape[2]],
         )
         token_type_ids.deallocate()
 
@@ -161,12 +168,21 @@ class TtEmbeddings:
                 inputs_embeds.deallocate()
                 token_type_embeddings.deallocate()
 
-            position_embeddings_tt_tensor = ttl.tensor.embeddings(
+            position_embeddings_tt_tensor = ttnn.embedding(
                 position_ids,
                 self.position_embeddings_weight,
-                tilized=True,
-                embeddings_type=ttl.tensor.EmbeddingsType.GENERIC,
-                output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+                layout=ttnn.TILE_LAYOUT,
+                embeddings_type=ttnn.EmbeddingsType.GENERIC,
+                memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+            )
+            position_embeddings_tt_tensor = ttnn.reshape(
+                position_embeddings_tt_tensor,
+                [
+                    position_embeddings_tt_tensor.shape[0],
+                    1,
+                    position_embeddings_tt_tensor.shape[1],
+                    position_embeddings_tt_tensor.shape[2],
+                ],
             )
             # Deallocate inputs_embeds and token_type_embeddings here to avoid having to move final output
             if self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:

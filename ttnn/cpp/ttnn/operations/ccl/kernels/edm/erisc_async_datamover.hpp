@@ -124,8 +124,7 @@ class ChannelBuffer final {
             ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
             goto_state(STATE::DONE);
         }
-    };
-
+    }
     // Resets the semaphore in local L1, which workers write to remotely.
     FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(local_semaphore_address, 0); }
 

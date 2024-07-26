@@ -82,7 +82,7 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program() :
-    id(program_counter++), worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
+    id(program_counter++), worker_crs_({}), local_circular_buffer_allocation_needed_(false), finalized_(false) {
     std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
     for (const auto &core_type : supported_core_types) {
         kernels_.insert({core_type, {}});
@@ -90,6 +90,10 @@ Program::Program() :
         kernel_groups_.insert({core_type, {}});
         core_to_kernel_group_index_table_.insert({core_type, {}});
     }
+
+    static constexpr uint32_t num_dispatchable_core_types = 2;
+    program_configs_.resize(num_dispatchable_core_types);
+    program_config_sizes_.resize(num_dispatchable_core_types);
 }
 
 KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type) {
@@ -133,12 +137,12 @@ KernelGroup::KernelGroup(
 
     std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
 
-    // The code below sets the brisc_noc_id for use by the device firmware
-    // Use 0 if neither brisc nor ncrisc specify a noc
+    // Slow dispatch uses fixed addresses for the kernel config, configured here statically
+    // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     if (core_type == CoreType::WORKER) {
-        // Dynamic address map
         this->launch_msg.kernel_config.kernel_config_base = L1_KERNEL_CONFIG_BASE;
     } else {
+        TT_ASSERT(core_type == CoreType::ETH);
         this->launch_msg.kernel_config.kernel_config_base =
             erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     }
@@ -151,6 +155,8 @@ KernelGroup::KernelGroup(
             this->launch_msg.kernel_config.enables |= 1 << class_id;
 
             if (core_type == CoreType::WORKER) {
+                // The code below sets the brisc_noc_id for use by the device firmware
+                // Use 0 if neither brisc nor ncrisc specify a noc
                 if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
@@ -273,8 +279,8 @@ void Program::update_kernel_groups(const CoreType &core_type) {
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
-                for (auto y = range.start.y; y <= range.end.y; y++) {
-                    for (auto x = range.start.x; x <= range.end.x; x++) {
+                for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                    for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[core_type][y * grid_extent_[core_type].x + x] = index;
 
                         auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
@@ -331,8 +337,8 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
     }
     // Mark which buffer indices are being used on each core the circular buffer is used on
     for (const CoreRange &core_range : core_range_set.ranges()) {
-        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 std::bitset<NUM_CIRCULAR_BUFFERS> &cb_indices = this->per_core_cb_indices_[logical_core];
 
@@ -581,8 +587,8 @@ void Program::populate_dispatch_data(Device *device) {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
                     dst_noc_unicast_info.push_back(std::make_pair(physical_coord, /*num_mcast_dests=*/0));
                 }
@@ -766,98 +772,132 @@ void Program::populate_dispatch_data(Device *device) {
 template <typename T, std::size_t dim2, std::size_t dim1, std::size_t dim0>
 using Array3D = std::array<std::array<std::array<T, dim0>, dim1>, dim2>;
 
-void Program::finalize_rt_args() {
+uint32_t Program::finalize_rt_args(CoreType core_type, uint32_t base_offset) {
 
-    // Iterate over kernels in the program and "levels" the number of RTAs based on the max
+    // Iterate over kernels in the program and "level" the number of RTAs based on the max
     // Unique RTAs are packed across dispatch classes
-    // Common RTAs come after unique RTAs and are also packed
-    static vector<CoreType>core_types = { CoreType::WORKER, CoreType::ETH }; // TODO: make this global
+    // Common RTAs come after unique RTAs
     vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
     vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX);
+    uint32_t max_unique_rta_size = 0;
+    uint32_t total_crta_size = 0;
 
-    for (CoreType core_type : core_types) {
-        uint32_t unique_rta_size = 0;
+    this->get_program_config(core_type).rta_offset = base_offset;
 
-        for (auto& kg : this->get_kernel_groups(core_type)) {
-            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-                max_rtas[dispatch_class] = 0;
-                auto& optional_id = kg.kernel_ids[dispatch_class];
-                if (optional_id) {
-                    auto kernel = detail::GetKernel(*this, optional_id.value());
-                    for (const CoreRange &core_range : kg.core_ranges.ranges()) {
-                        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                                CoreCoord core_coord(x, y);
-                                max_rtas[dispatch_class] =
-                                    std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
-                            }
+    for (auto& kg : this->get_kernel_groups(core_type)) {
+        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+            max_rtas[dispatch_class] = 0;
+            auto& optional_id = kg.kernel_ids[dispatch_class];
+            if (optional_id) {
+                auto kernel = detail::GetKernel(*this, optional_id.value());
+                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                            CoreCoord core_coord(x, y);
+                            max_rtas[dispatch_class] =
+                                std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
                         }
                     }
                 }
             }
-
-            uint32_t offset = 0;
-            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-                auto& optional_id = kg.kernel_ids[dispatch_class];
-                kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-                if (optional_id) {
-                    auto kernel = detail::GetKernel(*this, optional_id.value());
-                    kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
-                    kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = offset;
-                    offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-                } else {
-                    kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = 0;
-                }
-            }
-
-            kg.total_rta_size = offset;
-            offset = align(offset, L1_ALIGNMENT);
-            unique_rta_size = offset;
         }
 
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            max_crtas[dispatch_class] = 0;
-        }
-        // Find the max # common RTAs across all kernels for each dispatch class
-        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-            auto kernel = detail::GetKernel(*this, kernel_id);
-            if (core_type == kernel->get_kernel_core_type()) {
-                uint32_t dispatch_class = kernel->dispatch_class();
-                max_crtas[dispatch_class] =
-                    std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
-            }
-        }
-
-        // Calculate the address offset and size for common RTAs for each dispatch class
         uint32_t offset = 0;
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-            this->crta_offsets[core_type == CoreType::WORKER][dispatch_class] = unique_rta_size + offset;
-            this->crta_sizes[core_type == CoreType::WORKER][dispatch_class] = size;
-            offset += size;
-            offset = align(offset, L1_ALIGNMENT);
-        }
-
-        // Set the runtime_args_data sizing info based on the shared max
-        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-            auto kernel = detail::GetKernel(*this, kernel_id);
-            if (core_type == kernel->get_kernel_core_type()) {
-                uint32_t dispatch_class = kernel->dispatch_class();
-                kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
+            auto& optional_id = kg.kernel_ids[dispatch_class];
+            kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
+            if (optional_id) {
+                auto kernel = detail::GetKernel(*this, optional_id.value());
+                kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
+                kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = base_offset + offset;
+                offset += max_rtas[dispatch_class] * sizeof(uint32_t);
+            } else {
+                kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = 0;
             }
         }
 
-        // Set the kernel group common runtime arg offsets use in the launch message
-        for (auto& kg : this->get_kernel_groups(core_type)) {
-            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-                kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset = this->crta_offsets[core_type == CoreType::WORKER][dispatch_class];
-            }
-        }
-
-        // TODO: this is asserted here as the leveling above can break the limits enforced by the API
-        // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-        TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE);
+        kg.total_rta_size = offset;
+        offset = align(offset, L1_ALIGNMENT);
+        max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
+
+    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        max_crtas[dispatch_class] = 0;
+    }
+    // Find the max # common RTAs across all kernels for each dispatch class
+    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+        auto kernel = detail::GetKernel(*this, kernel_id);
+        if (core_type == kernel->get_kernel_core_type()) {
+            uint32_t dispatch_class = kernel->dispatch_class();
+            max_crtas[dispatch_class] =
+                std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
+        }
+    }
+
+    // Calculate the address offset and size for common RTAs for each dispatch class
+    uint32_t offset = 0;
+    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
+        this->get_program_config(core_type).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
+        this->get_program_config(core_type).crta_sizes[dispatch_class] = size;
+        offset += size;
+        offset = align(offset, L1_ALIGNMENT);
+    }
+    total_crta_size = offset;
+
+    // Set the runtime_args_data sizing info based on the shared max
+    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+        auto kernel = detail::GetKernel(*this, kernel_id);
+        if (core_type == kernel->get_kernel_core_type()) {
+            uint32_t dispatch_class = kernel->dispatch_class();
+            kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
+        }
+    }
+
+    // Set the kernel group common runtime arg offsets use in the launch message
+    for (auto& kg : this->get_kernel_groups(core_type)) {
+        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+            kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset = this->get_program_config(core_type).crta_offsets[dispatch_class];
+        }
+    }
+
+    // TODO: this is asserted here as the leveling above can break the limits enforced by the API
+    // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
+    TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE);
+
+    return max_unique_rta_size + total_crta_size;
+}
+
+// TODO: idea was to abstract away which core type is 0, 1 in this routine
+// however, this has to line up w/ the worker_buffer_manager
+// clean this up w/ a more general solution
+ProgramConfig& Program::get_program_config(CoreType core_type) {
+    TT_ASSERT(core_type == CoreType::WORKER || core_type == CoreType::ETH);
+    return this->program_configs_[core_type != CoreType::WORKER];
+ }
+
+uint32_t& Program::get_program_config_size(CoreType core_type) {
+    TT_ASSERT(core_type == CoreType::WORKER || core_type == CoreType::ETH);
+    return this->program_config_sizes_[core_type != CoreType::WORKER];
+ }
+
+void Program::finalize() {
+    static vector<CoreType>core_types = { CoreType::WORKER, CoreType::ETH }; // TODO: make this global
+
+    // Store the number of tensix "go signals" for use by CQ
+    // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
+    this->tensix_go_signal_count_ = 0;
+    for (auto& kg : this->get_kernel_groups(CoreType::WORKER)) {
+        this->tensix_go_signal_count_ += kg.core_ranges.size();
+    }
+
+    for (CoreType core_type : core_types) {
+        uint32_t offset = 0;
+        offset = finalize_rt_args(core_type, 0);
+        this->get_program_config_size(core_type) = offset;
+    }
+
+    finalized_ = true;
 }
 
 void Program::compile(Device *device) {
@@ -934,7 +974,6 @@ void Program::compile(Device *device) {
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
     compile_needed_[device->id()] = false;
-    this->loaded_onto_device = false;
 }
 
 Program::~Program() {}

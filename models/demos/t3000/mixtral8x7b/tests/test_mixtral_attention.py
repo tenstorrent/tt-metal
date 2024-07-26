@@ -6,14 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
@@ -28,6 +20,9 @@ from models.utility_functions import (
 
 
 def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
@@ -57,7 +52,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
         start_pos = generation_start_pos + i
-        attention_input, attn_mask = prepare_inputs_ttnn(
+        attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
             start_pos,
@@ -70,7 +65,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             attention_input,
             start_pos,
             current_pos,
-            attn_mask,
+            None,
             current_rot_mat,
         )
 

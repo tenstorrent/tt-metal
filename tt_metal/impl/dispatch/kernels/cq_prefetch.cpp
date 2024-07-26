@@ -28,24 +28,25 @@ constexpr uint32_t pcie_size = get_compile_time_arg_val(6);
 constexpr uint32_t prefetch_q_base = get_compile_time_arg_val(7);
 constexpr uint32_t prefetch_q_size = get_compile_time_arg_val(8);
 constexpr uint32_t prefetch_q_rd_ptr_addr = get_compile_time_arg_val(9);
+constexpr uint32_t prefetch_q_pcie_rd_ptr_addr = get_compile_time_arg_val(10);
 
-constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(10);
-constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(11);
+constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(11);
+constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
 
 // unused for prefetch_h
-constexpr uint32_t scratch_db_base = get_compile_time_arg_val(12);
-constexpr uint32_t scratch_db_size = get_compile_time_arg_val(13);
-constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(14);
+constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
+constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
+constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(15);
 
 // prefetch_d specific
-constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(15);
-constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(16);
-constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(17);
-constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(18);
-constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(19);
+constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
+constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(17);
+constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(18);
+constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(19);
+constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(20);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(20);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(21);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
 
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -78,10 +79,10 @@ static uint32_t rd_block_idx;
 constexpr uint32_t max_read_packed_cmd =
     CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS *
     sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
-constexpr uint32_t l1_cache_elements = max_read_packed_cmd;
+constexpr uint32_t l1_cache_elements = max_read_packed_cmd + 1;  // +1 for sentinel value
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
-    l1_to_local_cache_copy_chunk;
+    l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);;
 
 static uint32_t l1_cache[l1_cache_elements_rounded];
 
@@ -171,6 +172,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
 
     // Tell host we read
     *(volatile tt_l1_ptr uint32_t *) prefetch_q_rd_ptr_addr = (uint32_t)prefetch_q_rd_ptr;
+    *(volatile tt_l1_ptr uint32_t *) prefetch_q_pcie_rd_ptr_addr = (uint32_t)pcie_read_ptr;
 
     prefetch_q_rd_ptr++;
 
@@ -184,7 +186,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
 // This routine can be called in 8 states based on the boolean values cmd_ready, prefetch_q_ready, read_pending:
 //  - !cmd_ready, !prefetch_q_ready, !read_pending: stall on prefetch_q, issue read, read barrier
 //  - !cmd_ready, !prefetch_q_ready,  read pending: read barrier (and re-evaluate prefetch_q_ready)
-//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier (XXXX +issue read after?)
+//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier
 //  - !cmd_ready,  prefetch_q_ready,  read_pending: read barrier, issue read
 //  -  cmd_ready, !prefetch_q_ready, !read_pending: exit
 //  -  cmd_ready, !prefetch_q_ready,  read_pending: exit (no barrier yet)
@@ -195,7 +197,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
 // open question: should fetcher loop on prefetch_q_ready issuing reads until !prefetch_q_ready
 //  - !cmd_ready, !prefetch_q_ready, !read_pending: stall on prefetch_q, issue read, read barrier
 //  - !cmd_ready, !prefetch_q_ready,  read pending: read barrier on oldest tag
-//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier (XXXX +retry after?)
+//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier
 //  - !cmd_ready,  prefetch_q_ready,  read_pending: issue read, read barrier on oldest tag
 //  -  cmd_ready, !prefetch_q_ready, !read_pending: exit
 //  -  cmd_ready, !prefetch_q_ready,  read_pending: exit (no barrier yet)
@@ -345,7 +347,6 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr,
     // Round to nearest page
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
 
@@ -573,7 +574,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
     uint32_t amt_read = 0;
     while (amt_to_read >= page_size) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
         noc_async_read(noc_addr, scratch_read_addr, page_size);
         scratch_read_addr += page_size;
         page_id++;
@@ -600,7 +601,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
         amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
         amt_read = 0;
         while (amt_to_read >= page_size) {
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
             noc_async_read(noc_addr, scratch_read_addr, page_size);
             scratch_read_addr += page_size;
             page_id++;
@@ -663,7 +664,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
         uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > read_length) ? read_length : scratch_db_half_size - amt_read;
         uint32_t amt_read2 = 0;
         while (amt_read2 < amt_to_read2) {
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
             uint32_t read_size = (amt_to_read2 - amt_read2 >= page_size) ? page_size : amt_to_read2 - amt_read2;
             noc_async_read(noc_addr, scratch_read_addr, read_size);
             scratch_read_addr += read_size;
@@ -675,7 +676,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
         amt_to_read -= amt_read2;
 
         // note: below can walk off the end of the sub_cmds
-        // this is ok as right side of comparison in the while will be 0
+        // this is ok as we store a sentinel non-zero value
         read_length = sub_cmd->length;
         ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
     }
@@ -710,7 +711,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
             uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > read_length) ? read_length : scratch_db_half_size - amt_read;
             uint32_t amt_read2 = 0;
             while (amt_read2 < amt_to_read2) {
-                uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
                 uint32_t read_size = (amt_to_read2 - amt_read2 >= page_size) ? page_size : amt_to_read2 - amt_read2;
                 noc_async_read(noc_addr, scratch_read_addr, read_size);
                 scratch_read_addr += read_size;
@@ -722,7 +723,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
             amt_to_read -= amt_read2;
 
             // note: below can walk off the end of the sub_cmds
-            // this is ok as right side of comparison in the while will be 0
+            // this is ok as we store a sentinel non-zero value
             read_length = sub_cmd->length;
             ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
         }
@@ -766,13 +767,17 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
     uint32_t * l1_cache_pos = l1_cache;
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
         // wrap cmddat
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), remaining / sizeof(uint32_t), l1_cache_pos);
+        uint32_t amt = remaining / sizeof(uint32_t);
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), amt, l1_cache_pos);
         sub_cmds_length -= remaining;
         data_ptr = cmddat_q_base;
-        l1_cache_pos += remaining / sizeof(uint32_t);
+        l1_cache_pos += amt;
     }
 
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
+    uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), amt, l1_cache_pos);
+    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length);
     return stride;
@@ -870,13 +875,14 @@ void paged_read_into_cmddat_q(uint32_t read_ptr) {
     uint32_t page_size = 1 << log_page_size;
     uint32_t pages = exec_buf_state.pages;
 
-    uint32_t pages_at_once = (pages > NUM_DRAM_BANKS) ? NUM_DRAM_BANKS : pages; // XXXX tune
+    // TODO: tune how much is read
+    uint32_t pages_at_once = (pages > NUM_DRAM_BANKS) ? NUM_DRAM_BANKS : pages;
     uint32_t read_length = pages_at_once << log_page_size;
 
     InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     while (pages_at_once != 0) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
         noc_async_read(noc_addr, read_ptr, page_size);
         read_ptr += page_size;
         page_id++;
@@ -920,9 +926,9 @@ static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
         cmd_ptr = cmddat_q_base;
 
         // fetch more
-        noc_async_writes_flushed(); // XXXXX no no no no
+        noc_async_writes_flushed();
         paged_read_into_cmddat_q(cmd_ptr);
-        noc_async_read_barrier(); // XXXXX no no no no
+        noc_async_read_barrier();
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -932,7 +938,6 @@ static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
     // Round to nearest page
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
 
@@ -971,9 +976,9 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(uint32_t& cmd_ptr,
         cmd_ptr = cmddat_q_base;
 
         // fetch more
-        noc_async_writes_flushed(); // XXXXX no no no no
+        noc_async_writes_flushed();
         paged_read_into_cmddat_q(cmd_ptr);
-        noc_async_read_barrier(); // XXXXX no no no no
+        noc_async_read_barrier();
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -999,19 +1004,25 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(uint32_t& cmd_ptr,
     volatile uint32_t tt_l1_ptr * l1_ptr = (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd));
     uint32_t * l1_cache_pos = l1_cache;
     while (sub_cmds_length > remaining) {
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, remaining / sizeof(uint32_t), l1_cache_pos);
-        l1_cache_pos += remaining / sizeof(uint32_t);
+        uint32_t amt = remaining / sizeof(uint32_t);
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, amt, l1_cache_pos);
+
+        l1_cache_pos += amt;
         sub_cmds_length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr = cmddat_q_base;
         l1_ptr = (volatile uint32_t tt_l1_ptr *)(cmd_ptr);
         paged_read_into_cmddat_q(cmd_ptr);
-        noc_async_read_barrier(); // XXXXX no no no no
+        noc_async_read_barrier();
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
+
+    uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, amt, l1_cache_pos);
+    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length);
     return stride;
@@ -1036,7 +1047,7 @@ uint32_t process_exec_buf_cmd(uint32_t cmd_ptr_outer,
         uint32_t cmd_ptr = cmddat_q_base;
 
         paged_read_into_cmddat_q(cmd_ptr);
-        noc_async_read_barrier(); // XXXXX no no no no
+        noc_async_read_barrier();
 
         while (exec_buf_state.length > 0) {
             uint32_t stride;
@@ -1208,7 +1219,6 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
-    // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
 
@@ -1345,7 +1355,7 @@ void kernel_main_d() {
             cmd_ptr += stride;
         }
 
-        // XXXXX should free in blocks...
+        // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);

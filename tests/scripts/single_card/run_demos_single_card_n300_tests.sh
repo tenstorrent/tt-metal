@@ -8,7 +8,7 @@ run_n300_falcon7b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Perf verification for 128/1024/2048 seq lens
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

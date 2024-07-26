@@ -152,8 +152,8 @@ bool verify_results(
             auto common_rt_args_base_addr = get_runtime_arg_addr(kernel->processor(), true);
 
             for (auto &core_range : kernel->logical_coreranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core({x, y});
                         auto rt_args = kernel->common_runtime_args();
                         EXPECT_EQ(rt_args, common_rt_args);
@@ -181,8 +181,8 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     core_to_rt_args[logical_core] = initial_runtime_args;
                 }
@@ -195,8 +195,8 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
         std::vector<uint32_t> second_runtime_args = {202, 505};
         SetRuntimeArgs(program, 0, first_core_range, second_runtime_args);
         detail::WriteRuntimeArgsToDevice(this->devices_.at(id), program);
-        for (auto x = first_core_range.start.x; x <= first_core_range.end.x; x++) {
-            for (auto y = first_core_range.start.y; y <= first_core_range.end.y; y++) {
+        for (auto x = first_core_range.start_coord.x; x <= first_core_range.end_coord.x; x++) {
+            for (auto y = first_core_range.start_coord.y; y <= first_core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 core_to_rt_args[logical_core] = second_runtime_args;
             }
@@ -227,8 +227,8 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     core_to_rt_args[logical_core] = initial_runtime_args;
                 }
@@ -257,8 +257,8 @@ TEST_F(DeviceFixture, SetRuntimeArgsSubsetOfCoresCompute) {
         SetRuntimeArgs(program, 0, first_core_range, initial_runtime_args); // First core range only.
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
-        for (auto x = first_core_range.start.x; x <= first_core_range.end.x; x++) {
-            for (auto y = first_core_range.start.y; y <= first_core_range.end.y; y++) {
+        for (auto x = first_core_range.start_coord.x; x <= first_core_range.end_coord.x; x++) {
+            for (auto y = first_core_range.start_coord.y; y <= first_core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 core_to_rt_args[logical_core] = initial_runtime_args;
             }
@@ -283,8 +283,8 @@ TEST_F(DeviceFixture, SetRuntimeArgsUniqueValuesCompute) {
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate an rt arg val based on x and y.
                     uint32_t val_offset = x * 100 + y * 10;
@@ -319,8 +319,8 @@ TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
         // with fewer will just increment unused memory, no big deal.
         uint32_t max_unique_rt_args = 0;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     uint32_t num_rt_args = 2 + x + y;
                     max_unique_rt_args = std::max(max_unique_rt_args, num_rt_args);
                 }
@@ -331,8 +331,8 @@ TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate rt args length and val based on x,y arbitrarily.
                     uint32_t val_offset = x * 100 + y * 10;
@@ -389,8 +389,8 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     core_to_rt_args[logical_core] = initial_runtime_args;
                 }

@@ -9,15 +9,16 @@
 
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/kv_cache.hpp"
-#include "pybind11/operations/ternary.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
@@ -28,7 +29,7 @@
 #include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
-#include "ttnn/operations/embedding/embedding_ops_pybind.hpp"
+#include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
@@ -66,6 +67,7 @@ void py_module(py::module& module) {
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_bind_all_gather(m_ccl);
     ccl::py_bind_line_all_gather(m_ccl);
+    ccl::py_bind_reduce_scatter(m_ccl);
 
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);

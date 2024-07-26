@@ -5,7 +5,7 @@
 #include <iostream>
 
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
 TEST(TEST_JSON_CONVERSION, TEST_MEMORY_CONFIG) {

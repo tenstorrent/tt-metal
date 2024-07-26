@@ -43,7 +43,7 @@ def extract_profile_details(final_df, row, index, df):
     op_begin_ind = df.loc[df["OP CODE"] == "start " + row["op"]].index.tolist()
 
     if op_begin_ind:
-        extract_profile_detail(df, op_begin_ind, "execute_on_worker_thread", final_df, index)
+        extract_profile_detail(df, op_begin_ind, "operator()", final_df, index)
         extract_profile_detail(df, op_begin_ind, "compute_hash", final_df, index)
         extract_profile_detail(df, op_begin_ind, "check_program_cache_hit", final_df, index)
         extract_profile_detail(df, op_begin_ind, "create_output_tensors", final_df, index)

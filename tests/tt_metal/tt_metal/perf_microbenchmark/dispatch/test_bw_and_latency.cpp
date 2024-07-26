@@ -227,12 +227,12 @@ int main(int argc, char **argv) {
         if (page_size_as_runtime_arg_g) {
             vector<uint32_t> args;
             args.push_back(page_size_g);
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start, args);
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, args);
         }
 
         std::shared_ptr<Event> sync_event = std::make_shared<Event>();
 
-        CoreCoord w = device->physical_core_from_logical_core(worker_g.start, CoreType::WORKER);
+        CoreCoord w = device->physical_core_from_logical_core(worker_g.start_coord, CoreType::WORKER);
         log_info(LogTest, "Master core: {}", w.str());
         if (source_mem_g == 3) {
             log_info(LogTest, "Reading: {}", src_mem);
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Latency: {} us",
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() / (page_count_g * iterations_g));
         } else {
-            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
+            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());

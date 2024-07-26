@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/pool/avgpool/avg_pool.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/pool/avgpool/avg_pool.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_numpy/functions.hpp"
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"
 
 using tt::tt_metal::Host;

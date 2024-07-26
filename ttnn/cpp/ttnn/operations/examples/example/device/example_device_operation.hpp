@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-#include "tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
@@ -63,7 +63,8 @@ struct ExampleDeviceOperation {
 
     struct SingleCore {
         struct shared_variables_t {
-            int some_variable_from_create_to_use_in_override_runtime_arguments;
+            KernelHandle unary_reader_kernel_id;
+            KernelHandle unary_writer_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -81,8 +82,10 @@ struct ExampleDeviceOperation {
 
     struct MultiCore {
         struct shared_variables_t {
-            int some_variable_from_create_to_use_in_override_runtime_arguments;
-            int some_other_variable_from_create_to_use_in_override_runtime_arguments;
+            KernelHandle unary_reader_kernel_id;
+            KernelHandle unary_writer_kernel_id;
+            std::size_t num_cores;
+            std::size_t num_cores_y;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -115,8 +118,7 @@ struct ExampleDeviceOperation {
     static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // Optional methods
 
@@ -128,9 +130,9 @@ struct ExampleDeviceOperation {
     // In case the operation needs a custom create_op_performance_model, this method can be implemented
     /*
     static operation::OpPerformanceModel create_op_performance_model(
-        const operation_attributes_t& attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&);
     */
 };
 

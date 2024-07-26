@@ -6,7 +6,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
-        default: 9605916313
+        default: 10066309412
         type: number
   workflow_run:
     workflows:
@@ -37,48 +37,79 @@ jobs:
           echo "orchestrator: github (Static)"
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
-      - name: Output auxiliary values (workflow dispatch)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Get workflow run_id attempt number to analyze
+        id: get-run-id-and-attempt
+        shell: bash
+        run: |
+          event_name="${{ github.event_name }}"
+          if [[ "$event_name" == "workflow_dispatch" ]]; then
+            run_id="${{ inputs.test_workflow_run_id }}"
+            attempt_number="1"
+          elif [[ "$event_name" == "workflow_run" ]]; then
+            run_id="${{ github.event.workflow_run.id }}"
+            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
+            [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
+          else
+            echo "Unknown event name" && exit 1
+          fi
+
+          echo $run_id
+          echo $attempt_number
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
+      - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1 > workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs > workflow_jobs.json
-      - name: Output auxiliary values (workflow_run completed)
-        if: ${{ github.event_name == 'workflow_run' }}
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate > workflow_jobs.json
+      - name: Collect workflow artifact and job logs
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }} > workflow.json
-          echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
-      - name: Output github context values to file
-        run: |
-          echo '${{ toJSON(github) }}' > github_context.json
-      - name: Create CSVs and show
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          find generated/cicd/ -type f
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      - name: Install infra dependencies
+        run: pip3 install -r infra/requirements-infra.txt
+      - name: Create JSON
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_pipeline_csvs.py
+        run: python3 .github/scripts/data_analysis/create_pipeline_json.py
       - name: Show directory to see output files
         run: ls -hal
-      - name: Show CSVs output
-        run: cat *.csv
-      - name: Upload context data, even on failure
+      - name: Upload cicd data
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
+          username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
+      - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: context-data
+          name: workflow-run-data
           path: |
             if-no-files-found: warn
             path: |
+              pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
-              github_context.json
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U014XCQ9CF8 # tt-rkim
   test-produce-benchmark-environment:
     runs-on: ubuntu-latest
     steps:

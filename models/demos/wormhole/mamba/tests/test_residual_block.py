@@ -31,6 +31,7 @@ class PytorchResidualBlock(torch.nn.Module):
 
 
 @skip_for_grayskull("Grayskull not supported")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, pcc",
     (

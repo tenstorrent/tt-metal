@@ -30,13 +30,8 @@ def test_bw_polygamma(input_shapes, order, device):
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.polygamma(n, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.polygamma_bw)
+    golden_tensor = golden_function(grad_data, in_data, n)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -57,13 +52,8 @@ def test_bw_polygamma_range_pos(input_shapes, order, device):
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.polygamma(n, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.polygamma_bw)
+    golden_tensor = golden_function(grad_data, in_data, n)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -86,13 +76,8 @@ def test_bw_polygamma_zero(input_shapes, order, device):
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.polygamma(n, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.polygamma_bw)
+    golden_tensor = golden_function(grad_data, in_data, n)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -114,13 +99,8 @@ def test_bw_polygamma_grad_zero(input_shapes, order, device):
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.polygamma(n, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.polygamma_bw)
+    golden_tensor = golden_function(grad_data, in_data, n)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -142,13 +122,8 @@ def test_bw_polygamma_input_zero(input_shapes, order, device):
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
 
-    in_data.retain_grad()
-
-    pyt_y = torch.polygamma(n, in_data)
-
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
+    golden_function = ttnn.get_golden_function(ttnn.polygamma_bw)
+    golden_tensor = golden_function(grad_data, in_data, n)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status

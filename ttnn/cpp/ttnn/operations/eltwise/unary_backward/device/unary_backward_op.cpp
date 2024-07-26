@@ -5,24 +5,25 @@
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/backward/backward_ops.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
+#include "ttnn/operations/eltwise/ternary/where_op.hpp"
 
 
 namespace ttnn::operations::unary_backward {
 
 std::vector<ttnn::Tensor> _mul_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -290,26 +291,27 @@ std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad
     return grad_tensor;
 }
 
-std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
 
-std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor digamma_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    Tensor digamma_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_memory_config), std::nullopt, output_mem_config);
     Tensor digamma_result_2 = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
 
     Tensor grad_result = ttnn::add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        grad, tt::tt_metal::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
@@ -317,13 +319,13 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
 }
 
 std::vector<Tensor> _add_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
 
-std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
@@ -331,12 +333,13 @@ std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const MemoryConfig& outpu
 }
 
 std::vector<Tensor> _eq_bw(
-    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    return _unary_comp_bw(grad, output_memory_config);
 }
 
 std::vector<Tensor> _gt_bw(
-    const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
     return _unary_comp_bw(grad, output_mem_config);
 }
 
@@ -360,14 +363,15 @@ std::vector<Tensor> _ne_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
-std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_memory_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
 
-std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -496,19 +500,20 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const Memo
     return grad_tensor;
 }
 
-std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
     Tensor val = grad;
-    val = global_sum(val, output_mem_config);
-    Tensor result = tt::tt_metal::zeros_like(grad, output_mem_config);
+    val = global_sum(val, output_memory_config);
+    Tensor result = tt::tt_metal::zeros_like(grad, output_memory_config);
     result = ttnn::add(result, val, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
 
-std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = where(
+    Tensor grad_a = ttnn::where(
         ttnn::logical_or(
             ttnn::le(input, -3, std::nullopt, output_mem_config),
             ttnn::ge(input, 3, std::nullopt, output_mem_config),
@@ -523,7 +528,7 @@ std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, con
 
 // name: cos(Tensor self) -> Tensor
 // self: grad * -self.sin()
-std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result =
         ttnn::multiply(grad, (ttnn::neg(ttnn::sin(input_tensor, output_mem_config), output_mem_config)), std::nullopt, output_mem_config);
@@ -531,7 +536,7 @@ std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, cons
     return grad_tensor;
 }
 
-std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor in_rsqrt = ttnn::square(input, output_mem_config);
     in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
@@ -543,13 +548,13 @@ std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const Mem
         ttnn::gt(input, ttnn::operations::creation::full_like(input, 1.0), std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_a = where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
+    grad_a = ttnn::where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
     cond_result = ttnn::logical_or(
         ttnn::eq(input, ttnn::operations::creation::full_like(input, -1.0), std::nullopt, output_mem_config),
         ttnn::eq(input, ttnn::operations::creation::full_like(input, 1.0), std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_a = where(
+    grad_a = ttnn::where(
         ttnn::eq(cond_result, ttnn::operations::creation::full_like(input, 1.0), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
@@ -1189,7 +1194,7 @@ std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const Memo
 
 
 std::vector<Tensor> _fmod_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -1197,7 +1202,7 @@ std::vector<Tensor> _fmod_bw(
 
 
 std::vector<Tensor> _remainder_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -1475,7 +1480,7 @@ std::vector<Tensor> _prod_bw(
     const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = prod(input, all_dimensions, dim, output_memory_config);
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, output_memory_config);
     if(prod_result.get_layout()==Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE){
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
         }
@@ -1491,7 +1496,7 @@ std::vector<Tensor> _prod_bw(
     }
     // all_dimensions = False
     Tensor updated_grad = prod_result;
-    if (prod_result.get_legacy_shape() != grad.get_legacy_shape()) {
+    if (prod_result.get_legacy_shape().without_padding() != grad.get_legacy_shape()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
@@ -1501,14 +1506,11 @@ std::vector<Tensor> _prod_bw(
             Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-            Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
-            pad_updated_grad = pad_updated_grad.to(Layout::TILE);
-            pad_prod_result = pad_prod_result.to(Layout::TILE);
-            updated_grad = pad_updated_grad.to(input.device());
-            prod_result = pad_prod_result.to(input.device());
-            pad_updated_grad.deallocate();
-            pad_prod_result.deallocate();
+            if(updated_grad.storage_type() != StorageType::DEVICE && updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
+                Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
+                pad_updated_grad = pad_updated_grad.to(Layout::TILE);
+                updated_grad = pad_updated_grad.to(input.device());
+            }
         } else if (dim == 2 || dim == -2) {
             std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
@@ -1607,18 +1609,6 @@ std::vector<Tensor> _prod_bw(
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
     switch (OpType) {
-        case UnaryBackwardOpType::ASSIGN_BW:
-            return _assign_bw;
-        case UnaryBackwardOpType::MULTIGAMMALN_BW:
-            return _multigammaln_bw;
-        case UnaryBackwardOpType::LGAMMA_BW:
-            return _lgamma_bw;
-        case UnaryBackwardOpType::FILL_BW:
-            return _fill_bw;
-        case UnaryBackwardOpType::HARDSIGMOID_BW:
-            return _hardsigmoid_bw;
-        case UnaryBackwardOpType::COS_BW:
-            return _cos_bw;
         case UnaryBackwardOpType::ACOSH_BW:
             return _acosh_bw;
         case UnaryBackwardOpType::ACOS_BW:
@@ -1717,14 +1707,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1_w_float(UnaryBackwardOpType OpType){
     switch (OpType) {
-        case UnaryBackwardOpType::MUL_BW:
-            return _mul_bw;
-        case UnaryBackwardOpType::ADD_BW:
-            return _add_bw;
-        case UnaryBackwardOpType::EQ_BW:
-            return _eq_bw;
-        case UnaryBackwardOpType::GT_BW:
-            return _gt_bw;
         case UnaryBackwardOpType::LT_BW:
             return _lt_bw;
         case UnaryBackwardOpType::LE_BW:
@@ -1733,8 +1715,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _ge_bw;
         case UnaryBackwardOpType::NE_BW:
             return _ne_bw;
-        case UnaryBackwardOpType::SUB_BW:
-            return _sub_bw;
         case UnaryBackwardOpType::HARDSHRINK_BW:
             return _hardshrink_bw;
         case UnaryBackwardOpType::SOFTSHRINK_BW:
@@ -1749,10 +1729,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, float, con
             return _rpow_bw;
         case UnaryBackwardOpType::LOGITEPS_BW:
             return _logiteps_bw;
-        case UnaryBackwardOpType::FMOD_BW:
-            return _fmod_bw;
-        case UnaryBackwardOpType::REMAINDER_BW:
-            return _remainder_bw;
         case UnaryBackwardOpType::DIV_NO_NAN_BW:
             return _div_no_nan_bw;
         case UnaryBackwardOpType::POLYGAMMA_BW:

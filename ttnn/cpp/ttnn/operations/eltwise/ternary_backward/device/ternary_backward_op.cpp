@@ -7,7 +7,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/experimental/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -109,6 +109,8 @@ std::vector<Tensor> _lerp_overload(
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);
+    Tensor zero = ttnn::multiply(grad, ttnn::subtract(end, input, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero);
     return grad_tensor;
 }
 

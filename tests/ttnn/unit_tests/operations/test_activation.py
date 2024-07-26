@@ -256,14 +256,36 @@ def test_scalarB_elu(device, h, w, scalar):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_celu(device, h, w, alpha):
-    run_activation_test_scalarB(device, h, w, alpha, ttnn.celu, F.celu)
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.celu(input_tensor_a, alpha=alpha)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("scalar", [0.5, 1.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_hardshrink(device, h, w, scalar):
-    run_activation_test_scalarB(device, h, w, scalar, ttnn.hardshrink, F.hardshrink)
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
+    torch_output_tensor = golden_function(torch_input_tensor_a, lambd=scalar)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.hardshrink(input_tensor_a, lambd=scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("scalar", [0.88])
@@ -291,7 +313,18 @@ def test_scalarB_prelu(device, h, w, scalar):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_softshrink(device, h, w, scalar):
-    run_activation_test_scalarB(device, h, w, scalar, ttnn.softshrink, F.softshrink)
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.softshrink)
+    torch_output_tensor = golden_function(torch_input_tensor_a, lambd=scalar)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.softshrink(input_tensor_a, lambd=scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_function, torch_function, pcc=0.99):

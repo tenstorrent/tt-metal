@@ -23,13 +23,15 @@ What steps are needed to add ttnn operation in C++?
 
 What steps are needed to add ttnn operation in Python?
 ------------------------------------------------------
-1. Take an existing registerd C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
+1. Take an existing registered C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
    The operation will be auto-registered in python. If the operation is called `ttnn::add` in C++, then the python binding will be `ttnn.add`.
 2. (Optional) Attach golden function to the operation using `ttnn.attach_golden_function`. This is useful for debugging and testing.
 
 
 Example of Adding a new Device Operation
 ****************************************
+
+Let's implement `ttnn.example` (It will just copy the input tensor to the output tensor on the device)
 
 C++ Implementation
 ------------------

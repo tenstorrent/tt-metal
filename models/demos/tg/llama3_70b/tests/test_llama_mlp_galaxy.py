@@ -21,6 +21,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     comp_pcc,
     should_skip_model_load,
     ShardTensor2dMesh,
+    ConcatMesh2DToTensor,
 )
 import gc
 
@@ -40,9 +41,8 @@ class PytorchLlamaMLPModel(torch.nn.Module):
 
 def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
     if llama_mlp_model.model_config["LLM_MODE"] == "decode":
-        M, K = 32, 8192
+        M, K = 32, 8192 // llama_mlp_model.cluster_shape[0]
 
-        K = K // llama_mlp_model.cluster_shape[0]
         act_mem_config = ttnn.create_sharded_memory_config(
             shape=(M, K // 8),
             core_grid=ttnn.CoreGrid(y=1, x=8),
@@ -126,7 +126,10 @@ def run_test_LlamaMLP_inference(
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+    )
+    tt_out = tt_out[:, 0:1, :, :]
 
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
@@ -141,7 +144,7 @@ def run_test_LlamaMLP_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "llama_version",

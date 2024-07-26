@@ -77,6 +77,11 @@ def bcast_hw_shape_func(input_shape):
     return input_shape, input_shape_1
 
 
+def bcast_hw_shape_func_11(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, 1]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -446,6 +451,11 @@ all_binary_ops = [
         "name": "ttnn.mul",
     },
     {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_hw",
+        "shape_func": bcast_hw_shape_func_11,
+    },
+    {
         "op": ttnn.divide,
         "name": "ttnn.divide",
     },
@@ -635,7 +645,7 @@ all_binary_ops = [
         "name": "ttnn.xlogy",
     },
     {
-        "op": tt_lib.tensor.embeddings,
+        "op": ttnn.embedding,
         "name": "tt_lib.tensor.embeddings",
         "layout": "ROW_MAJOR",
         "shape_func": embeddings_shape_func,
@@ -1450,35 +1460,35 @@ def logical_noti(x):
 
 
 def glu_1(x):
-    tt_lib.tensor.glu(x, -1)
+    ttnn.glu(x, -1)
 
 
 def geglu_1(x):
-    tt_lib.tensor.geglu(x, -1)
+    ttnn.geglu(x, -1)
 
 
 def reglu_1(x):
-    tt_lib.tensor.reglu(x, -1)
+    ttnn.reglu(x, -1)
 
 
 def swiglu_1(x):
-    tt_lib.tensor.swiglu(x, -1)
+    ttnn.swiglu(x, -1)
 
 
 def glu_2(x):
-    tt_lib.tensor.glu(x, -2)
+    ttnn.glu(x, -2)
 
 
 def geglu_2(x):
-    tt_lib.tensor.geglu(x, -2)
+    ttnn.geglu(x, -2)
 
 
 def reglu_2(x):
-    tt_lib.tensor.reglu(x, -2)
+    ttnn.reglu(x, -2)
 
 
 def swiglu_2(x):
-    tt_lib.tensor.swiglu(x, -2)
+    ttnn.swiglu(x, -2)
 
 
 def repeat(x):
@@ -1486,15 +1496,15 @@ def repeat(x):
 
 
 def repeat_interleave_0(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 0)
+    ttnn.repeat_interleave(x, 4, 0)
 
 
 def repeat_interleave_1(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 1)
+    ttnn.repeat_interleave(x, 4, 1)
 
 
 def repeat_interleave_2(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 2)
+    ttnn.repeat_interleave(x, 4, 2)
 
 
 def pow_int(x):
@@ -2192,35 +2202,35 @@ all_unary_ops = [
     },
     {
         "op": glu_1,
-        "name": "tt_lib.tensor.glu_dim_3",
+        "name": "ttnn.glu_dim_3",
     },
     {
         "op": geglu_1,
-        "name": "tt_lib.tensor.geglu_dim_3",
+        "name": "ttnn.geglu_dim_3",
     },
     {
         "op": reglu_1,
-        "name": "tt_lib.tensor.reglu_dim_3",
+        "name": "ttnn.reglu_dim_3",
     },
     {
         "op": swiglu_1,
-        "name": "tt_lib.tensor.swiglu_dim_3",
+        "name": "ttnn.swiglu_dim_3",
     },
     {
         "op": glu_2,
-        "name": "tt_lib.tensor.glu_dim_2",
+        "name": "ttnn.glu_dim_2",
     },
     {
         "op": geglu_2,
-        "name": "tt_lib.tensor.geglu_dim_2",
+        "name": "ttnn.geglu_dim_2",
     },
     {
         "op": reglu_2,
-        "name": "tt_lib.tensor.reglu_dim_2",
+        "name": "ttnn.reglu_dim_2",
     },
     {
         "op": swiglu_2,
-        "name": "tt_lib.tensor.swiglu_dim_2",
+        "name": "ttnn.swiglu_dim_2",
     },
     {
         "op": repeat,
@@ -2228,16 +2238,16 @@ all_unary_ops = [
     },
     {
         "op": repeat_interleave_0,
-        "name": "tt_lib.tensor.repeat_interleave_dim_0",
+        "name": "ttnn.repeat_interleave_dim_0",
     },
     {
         "op": repeat_interleave_1,
-        "name": "tt_lib.tensor.repeat_interleave_dim_1",
+        "name": "ttnn.repeat_interleave_dim_1",
         "num_repeats": 2,
     },
     {
         "op": repeat_interleave_2,
-        "name": "tt_lib.tensor.repeat_interleave_dim_2",
+        "name": "ttnn.repeat_interleave_dim_2",
         "num_repeats": 2,
     },
     {

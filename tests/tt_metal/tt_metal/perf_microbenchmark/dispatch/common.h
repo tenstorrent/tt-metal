@@ -152,8 +152,8 @@ DeviceData::DeviceData(Device *device,
             this->all_data[core][bank_id].bank_offset = bank_offset;
         }
     } else {
-        for (uint32_t y = workers.start.y; y <= workers.end.y; y++) {
-            for (uint32_t x = workers.start.x; x <= workers.end.x; x++) {
+        for (uint32_t y = workers.start_coord.y; y <= workers.end_coord.y; y++) {
+            for (uint32_t x = workers.start_coord.x; x <= workers.end_coord.x; x++) {
                 CoreCoord core = {x, y};
                 CoreCoord phys_core = device->worker_core_from_logical_core(core);
                 this->all_data[core][0] = one_core_data_t();
@@ -233,8 +233,8 @@ void DeviceData::push_one(CoreCoord core, uint32_t datum) {
 void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
 
     bool counted = false;
-    for (auto y = cores.start.y; y <= cores.end.y; y++) {
-        for (auto x = cores.start.x; x <= cores.end.x; x++) {
+    for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
+        for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
             CoreCoord core = {x, y};
             if (core_and_bank_present(core, 0)) {
                 if (not counted || not is_mcast) {
@@ -287,8 +287,8 @@ void DeviceData::relevel(CoreRange range) {
     size_t max = 0;
 
     constexpr uint32_t bank = 0;
-    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
-        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             if (this->all_data[core][bank].data.size() > max) {
                 max = this->all_data[core][bank].data.size();
@@ -296,8 +296,8 @@ void DeviceData::relevel(CoreRange range) {
         }
     }
 
-    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
-        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             this->all_data[core][bank].data.resize(max);
             this->all_data[core][bank].valid.resize(max);
@@ -633,8 +633,8 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
             }
         }
 
-        cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t))); // XXXXX L1_ALIGNMENT16/sizeof(uint)
-        data.pad(core, bank_id, L1_ALIGNMENT); // L1_ALIGNMENT16
+        cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT / sizeof(uint32_t)));
+        data.pad(core, bank_id, L1_ALIGNMENT);
         first_core = false;
     }
 }
@@ -648,21 +648,21 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     bool first_core = true;
-    CoreCoord first_worker = range.start;
+    CoreCoord first_worker = range.start_coord;
     uint32_t data_base = generated_data.size();
     for (uint32_t i = 0; i < size_words; i++) {
         uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
         generated_data.push_back(datum);
     }
-    generated_data.resize(padded_size(generated_data.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+    generated_data.resize(padded_size(generated_data.size(), L1_ALIGNMENT / sizeof(uint32_t)));
 
-    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
-        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
             for (uint32_t i = 0; i < size_words; i++) {
                 data.push_one(core, bank_id, generated_data[data_base + i]);
             }
-            data.pad(core, bank_id, 16); // L1_ALIGNMENT16
+            data.pad(core, bank_id, L1_ALIGNMENT);
         }
     }
 }
@@ -780,7 +780,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
         cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
     }
-    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t))); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t)));
 
     generate_random_packed_payload(cmds, worker_cores, device_data, size_words, repeat);
 
@@ -806,7 +806,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
-    TT_FATAL((cmd.write_linear.addr & (16 - 1)) == 0); // XXXXX L1_ALIGNMENT16
+    TT_FATAL((cmd.write_linear.addr & (L1_ALIGNMENT - 1)) == 0);
 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
@@ -845,13 +845,13 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start, CoreType::WORKER);
-    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end, CoreType::WORKER);
+    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start_coord, CoreType::WORKER);
+    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end_coord, CoreType::WORKER);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start);
+    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_coord);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
 
@@ -958,7 +958,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
     bool repeat = std::rand() % 2;
     if (repeat) {
         // TODO fix this if/when we add mcast
-        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), L1_ALIGNMENT); // L1_ALIGNMENT16
+        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), L1_ALIGNMENT);
         if (xfer_size_bytes + sizeof (CQDispatchCmd) + sub_cmds_size > dispatch_buffer_page_size_g) {
             static bool warned = false;
             if (!warned) {
@@ -985,7 +985,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     vector<uint32_t> sizes;
     for (int i = 0; i < ntransactions; i++) {
         constexpr uint32_t max_pages = 4;
-        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / 16)) + 1; // XXXXX L1_ALIGNMENT16
+        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / L1_ALIGNMENT)) + 1;
         uint32_t xfer_size_words = xfer_size_16b * 4;
         uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
         if (perf_test_g) {
@@ -1020,21 +1020,21 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
         CoreRange range = workers;
         if (!perf_test_g) {
             // Not random, but gives some variation
-            uint32_t span = workers.end.x - workers.start.x + 1;
-            range.end.x = std::rand() % span + range.start.x;
-            span = workers.end.y - workers.start.y + 1;
-            range.end.y = std::rand() % span + range.start.y;
+            uint32_t span = workers.end_coord.x - workers.start_coord.x + 1;
+            range.end_coord.x = std::rand() % span + range.start_coord.x;
+            span = workers.end_coord.y - workers.start_coord.y + 1;
+            range.end_coord.y = std::rand() % span + range.start_coord.y;
         }
 
         device_data.relevel(range);
 
         CQDispatchWritePackedLargeSubCmd sub_cmd;
-        CoreCoord physical_start = device->physical_core_from_logical_core(range.start, CoreType::WORKER);
-        CoreCoord physical_end = device->physical_core_from_logical_core(range.end, CoreType::WORKER);
+        CoreCoord physical_start = device->physical_core_from_logical_core(range.start_coord, CoreType::WORKER);
+        CoreCoord physical_end = device->physical_core_from_logical_core(range.end_coord, CoreType::WORKER);
         sub_cmd.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-        sub_cmd.addr = device_data.get_result_data_addr(range.start);
+        sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
-        sub_cmd.num_mcast_dests = (range.end.x - range.start.x + 1) * (range.end.y - range.start.y + 1);
+        sub_cmd.num_mcast_dests = (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
 
         for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
             cmds.push_back(((uint32_t *)&sub_cmd)[i]);
@@ -1042,7 +1042,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
 
         generate_random_packed_large_payload(data, range, device_data, xfer_size_bytes / sizeof(uint32_t));
     }
-    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT / sizeof(uint32_t)));
 
     for (uint32_t datum : data) {
         cmds.push_back(datum);
@@ -1077,11 +1077,25 @@ inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
 
+inline void gen_dispatcher_set_write_offset_cmd(vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
+
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+    cmd.set_write_offset.offset0 = wo0;
+    cmd.set_write_offset.offset1 = wo1;
+    cmd.set_write_offset.offset2 = wo2;
+    uint32_t payload_length = 0;
+    add_dispatcher_cmd(cmds, cmd, payload_length);
+}
+
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
-    add_dispatcher_cmd(cmds, cmd, 0);
+    uint32_t payload_length = 0;
+    add_dispatcher_cmd(cmds, cmd, payload_length);
 }

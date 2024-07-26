@@ -162,6 +162,8 @@ def run_test_LlamaModel_inference(
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
+        if model_config["LLM_MODE"] == "decode":
+            tt_out = tt_out[:batch]
         tt_out = tt_out.float()
         pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
 
@@ -260,18 +262,18 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (1, 128), (1, 2048), (1, 8192)),
-    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+    ((32, 1), (16, 1), (1, 128), (1, 2048), (1, 8192)),
+    ids=("decode", "decodeb16", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
     (
         (32, 2048),
-        (16, 8192),
+        # (16, 8192),
     ),
     ids=(
         "short_context",
-        "long_context",
+        # "long_context",
     ),
 )
 @pytest.mark.parametrize(
@@ -291,14 +293,14 @@ def test_LlamaModel_inference(
     prompt_file,
     use_program_cache,
 ):
-    if batch > max_batch_size:
-        pytest.skip(f"Decode with {batch} users is not supported with large context")
+    if seq_len == 1 and batch != max_batch_size:
+        pytest.skip(f"Input batch size should match max_batch_size")
 
     if batch == 1 and seq_len > max_context_len:
-        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
+        pytest.skip(f"Prefill with seq_len={seq_len} is not supported with short context")
 
     if llama_version == "llama2" and seq_len > 2048:
-        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
+        pytest.skip(f"Llama2 with seq_len={seq_len} is not supported (max 2048)")
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,

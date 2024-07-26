@@ -113,9 +113,9 @@ protected:
         }
         if (num_hw_cqs > 1) {
             // Running multi-CQ test. User must set this explicitly.
-            auto num_cqs = getenv("TT_METAL_NUM_HW_CQS");
+            auto num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
             if (num_cqs == nullptr or strcmp(num_cqs, "2")) {
-                TT_THROW("This suite must be run with TT_METAL_NUM_HW_CQS=2");
+                TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
                 GTEST_SKIP();
             }
         }

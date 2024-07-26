@@ -67,8 +67,8 @@ namespace tt::tt_metal {
             tt::log_debug("{}Called deallocate circular buffers", std::string(depth,'-'));
         }
 
-        template<class ReturnType, class... Args>
-        void track_begin_op(std::string_view function_name/*, Args&&... args*/) {
+        template<class... Args>
+        void track_begin_op(std::string_view function_name, Args&&... args) {
             tt::log_info( "{}Called Begin Op:{}", std::string(depth,'-'), function_name);
             //auto all_tensors = gather_tensors(args...);
             depth++;

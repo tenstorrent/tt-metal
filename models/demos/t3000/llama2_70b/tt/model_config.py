@@ -95,6 +95,12 @@ def get_model_config(
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "SDPA_COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
         "L1_MEMCFG": L1_MEMCFG,
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "BFLOAT16_DTYPE": BFLOAT16_DTYPE,
@@ -108,11 +114,6 @@ def get_model_config(
     head_dim = model_config_entries["head_dim"]
     n_heads = model_config_entries["num_attention_heads"]
     n_kv_heads = model_config_entries["num_kv_heads"]
-
-    if llm_mode == "decode":
-        shard_height = batch
-    else:
-        shard_height = seq_len
 
     shard_spec_64_cores_grid = ttl.tensor.CoreRangeSet(
         {
@@ -162,6 +163,20 @@ def get_model_config(
             ),
         }
     )
+
+    if llm_mode == "decode":
+        model_config["PADDED_BATCH_SIZE"] = 32
+        shard_height = model_config["PADDED_BATCH_SIZE"]
+        if batch == 16:
+            batch_grid_size = [8, 2]
+            batch_core_range = shard_spec_16_cores_grid
+        elif batch == 32:
+            batch_grid_size = [8, 4]
+            batch_core_range = shard_spec_32_cores_grid
+        else:
+            raise NotImplementedError(f"Batch size {batch} not supported for decode mode!")
+    else:
+        shard_height = seq_len
 
     # Constants based on hidden_dim
     shard_width_hidden_dim_across_32_cores = hidden_size // 32
@@ -440,27 +455,29 @@ def get_model_config(
             False,
         ),
     )
-    model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
-        out_subblock_h=1,
-        out_subblock_w=4,
-        per_core_M=1,
-        per_core_N=4,
-    )
-    model_config["ROT_MAT_MM_IN1_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                head_dim,
-                head_dim,  # head dim
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+    if llm_mode == "decode":
+        model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=batch_grid_size,
+            in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        model_config["ROT_MAT_MM_IN1_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                batch_core_range,
+                [
+                    head_dim,
+                    head_dim,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
     model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.BufferType.L1,
@@ -475,61 +492,22 @@ def get_model_config(
         ),
     )
     if llm_mode == "decode":
-        model_config["ATTN_BATCHED_MM_PROGCFG_LAMBDA"] = lambda seq_tiles: ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            in0_block_w=head_dim // 32,  # HEAD_DIM // TILE_SIZE
-            out_subblock_h=1,  # TODO: Maximize
-            out_subblock_w=1,  # TODO: Maximize
-            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
-            per_core_N=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
+        model_config[
+            "SDPA_DECODE_PROGRAM_CONFIG"
+        ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],  # Can be increased, but could result in di/dt?
+            q_chunk_size=0,  # unused
+            k_chunk_size=0,  # unused
         )
-        model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    shard_height,  # Each core has 32 users
-                    1,  # Dynamic (padded seqlen)
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
+
+        model_config["SDPA_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                batch_core_range, (32, head_dim), ttnn.ShardOrientation.ROW_MAJOR, False  # padded local heads
             ),
         )
-        model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"] = lambda seq_tiles: ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            in0_block_w=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
-            out_subblock_h=1,  # TODO: Maximize
-            out_subblock_w=1,  # TODO: Maximize
-            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
-            per_core_N=head_dim // 32,  # HEAD_DIM // TILE_SIZE
-        )
-        model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    shard_height,  # Each core has 32 users
-                    head_dim,  # head dim
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
-        model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_8_cores_grid,  # Volume must match # of attn heads
-                [
-                    shard_height,  # Each core has 32 users
-                    head_dim,  # head dim
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+
     else:
         q_chunk_size = 128
         k_chunk_size = 64 if seq_len == 128 else 256
@@ -539,33 +517,7 @@ def get_model_config(
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
         )
-    if llm_mode == "decode":
-        model_config["BATCHED_SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 4),  # In-place softmax on 32 cores sharded on batch dim
-            subblock_w=1,
-            block_h=shard_height // 32,
-            block_w=1,  # Dynamic
-        )
-    else:
-        model_config["BATCHED_SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 4 if seq_len == 128 else 8),
-            subblock_w=1,
-            block_h=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
-            block_w=1,  # Dynamic
-        )
-    model_config["SELFOUT_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+
     if llm_mode == "decode":
         model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),

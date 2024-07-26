@@ -29,6 +29,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
     CQ_PREFETCH_CMD_WAIT_FOR_EVENT = 10,      // wait_for_event: stall until dispatcher signals event completion
     CQ_PREFETCH_CMD_TERMINATE = 11,           // quit
+    CQ_PREFETCH_CMD_MAX_COUNT,                // for checking legal IDs
 };
 
 // Dispatcher CMD ID enums
@@ -47,7 +48,9 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_DELAY = 11,             // insert delay (for testing)
     CQ_DISPATCH_CMD_EXEC_BUF_END = 12,      // dispatch_d notify prefetch_h that exec_buf has completed
     CQ_DISPATCH_CMD_REMOTE_WRITE = 13,      // dispatch_d issues write to address on L-Chip through dispatch_h
-    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
+    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 14,  // set the offset to add to all non-host destination addresses (relocation)
+    CQ_DISPATCH_CMD_TERMINATE = 15,         // quit
+    CQ_DISPATCH_CMD_MAX_COUNT,              // for checking legal IDs
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -149,17 +152,18 @@ struct CQDispatchBaseCmd {
 
 struct CQDispatchWriteCmd {
     uint8_t num_mcast_dests;    // 0 = unicast, 1+ = multicast
-    uint16_t pad1;
+    uint8_t write_offset_index;
+    uint8_t pad1;
     uint32_t noc_xy_addr;
     uint32_t addr;
     uint32_t length;
 } __attribute__((packed));
 
 struct CQDispatchWriteHostCmd {
-    uint8_t pad1;
-    uint16_t pad2;
+    uint8_t is_event; // one flag, false=read buffer
+    uint16_t pad1;
+    uint32_t pad2;
     uint32_t pad3;
-    uint32_t pad4;
     uint32_t length;
 } __attribute__((packed));
 
@@ -179,8 +183,9 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_RELAY = 0x03;
 struct CQDispatchWritePackedCmd {
     uint8_t flags;            // see above
     uint16_t count;           // number of sub-cmds (max 1020 unicast, 510 mcast). Max num sub-cmds = (dispatch_constants::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) / sizeof(CQDispatchWritePacked*castSubCmd)
-    uint32_t addr;            // common memory address across all packed SubCmds
+    uint16_t write_offset_index;
     uint16_t size;            // size of each packet, stride is padded to L1 alignment and less than dispatch_cb_page_size
+    uint32_t addr;            // common memory address across all packed SubCmds
 } __attribute__((packed));
 
 struct CQDispatchWritePackedUnicastSubCmd {
@@ -199,7 +204,7 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint16_t num_mcast_dests;
 } __attribute__((packed));
 
-inline __attribute__((always_inline)) uint32_t get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
+constexpr inline __attribute__((always_inline)) uint32_t get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(CQDispatchWritePackedMulticastSubCmd);
     return packed_write_max_multicast_sub_cmds;
 }
@@ -214,9 +219,7 @@ struct CQDispatchWritePackedLargeCmd {
     uint8_t pad1;
     uint16_t count;           // number of sub-cmds
     uint16_t alignment;
-    uint16_t pad2;
-    uint32_t pad3;
-    uint32_t pad4;
+    uint16_t write_offset_index;
 } __attribute__((packed));
 
 struct CQDispatchWaitCmd {
@@ -247,6 +250,15 @@ struct CQDispatchRemoteWriteCmd {
     uint32_t addr;
 } __attribute__((packed));
 
+
+struct CQDispatchSetWriteOffsetCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t offset0;
+    uint32_t offset1;
+    uint32_t offset2;
+} __attribute__((packed));
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -260,6 +272,7 @@ struct CQDispatchCmd {
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;
+        CQDispatchSetWriteOffsetCmd set_write_offset;
     } __attribute__((packed));
 };
 

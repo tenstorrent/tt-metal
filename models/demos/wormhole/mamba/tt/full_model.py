@@ -115,8 +115,11 @@ class MambaTT(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
 
-    def to_prefill(self):
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
         self.return_logits = False
+        for i in range(self.num_layers):
+            self.layers[i].to_prefill(prefill_config)
 
     def to_decode(self, decode_config):
         self.configs = decode_config
@@ -127,7 +130,7 @@ class MambaTT(torch.nn.Module):
     def embedding(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
         x = ttnn.embedding(
-            x, self.embedding_weights, output_dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            x, self.embedding_weights, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.embedding always returns (B, L, E)
         return ttnn.reshape(x, [1, 1, self.configs["outer_dim"], x.shape[2]])
 
@@ -181,3 +184,7 @@ class MambaTT(torch.nn.Module):
             x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
             x = x.view((self.configs["batch_size"], self.configs["seq_len"], -1))
             return x
+
+    def reset(self):
+        for layer in self.layers:
+            layer.reset()

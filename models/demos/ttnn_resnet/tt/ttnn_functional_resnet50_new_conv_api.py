@@ -454,6 +454,7 @@ class resnet50:
         model_config,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=None,
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
@@ -466,6 +467,7 @@ class resnet50:
         self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
+        self.mesh_mapper = mesh_mapper
         if is_grayskull():
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -501,6 +503,7 @@ class resnet50:
             deallocate_activation=True,
             parallel_config_override=max_pool_parallel_config_override,
             channels=self.conv1_output_channels,
+            mesh_mapper=self.mesh_mapper,
         )
 
         self.layer1 = self._make_layer(
@@ -647,7 +650,7 @@ class resnet50:
             )
         return layers
 
-    def preprocessing(self, torch_input_tensor):
+    def preprocessing(self, torch_input_tensor, inputs_mesh_mapper=None):
         resnet50_first_conv_kernel_size = 3
         resnet50_first_conv_stride = 2
         input_tensor = pad_and_fold_conv_activation_for_unity_stride(
@@ -658,7 +661,7 @@ class resnet50:
             resnet50_first_conv_stride,
         )
         input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
         return input_tensor
 
     def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:

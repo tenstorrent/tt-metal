@@ -12,7 +12,7 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
     Create a benchmark data object and populate the object with the given measurements.
 
     Pre-requisites:
-    - The measurements dictionary should contain the following keys: "compile_prefill", "compile_decode", "prefill_t/s", "decode_t/s", "decode_t/s/u"
+    - The measurements dictionary should contain the following keys: "compile_prefill", "compile_decode", "prefill_t/s", "prefill_time_to_token", "decode_t/s", "decode_t/s/u"
     - The profiler object should contain the start and end times for the steps "compile_prefill", "compile_decode", "inference_prefill", "inference_decode"
 
     Optional (should be provided if measuring perf, not required for token verification):
@@ -29,6 +29,7 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
             "compile_prefill",
             "compile_decode",
             "prefill_t/s",
+            "prefill_time_to_token",
             "decode_t/s",
             "decode_t/s/u",
         ]
@@ -49,6 +50,17 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
             N_warmup_iter["inference_prefill"] if "inference_prefill" in N_warmup_iter else None
         ),
         target=targets["prefill_t/s"] if "prefill_t/s" in targets else None,
+    )
+    benchmark_data.add_measurement(
+        profiler,
+        0,
+        "inference_prefill",
+        "time_to_token",
+        measurements["prefill_time_to_token"],
+        step_warm_up_num_iterations=(
+            N_warmup_iter["inference_prefill"] if "inference_prefill" in N_warmup_iter else None
+        ),
+        target=None,
     )
     benchmark_data.add_measurement(
         profiler,
@@ -98,6 +110,7 @@ def verify_perf(measurements: dict, expected_perf_metrics: dict):
     expected_measurements = {
         "compile_prefill": False,
         "compile_decode": False,
+        "prefill_time_to_token": False,
         "prefill_t/s": True,
         "decode_t/s": True,
         "decode_t/s/u": True,

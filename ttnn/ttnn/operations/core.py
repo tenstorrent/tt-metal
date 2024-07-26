@@ -331,9 +331,7 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze()
 
-    if not ttnn.CONFIG.enable_fast_runtime_mode:
-        tensor = TorchTensor(tensor)
-    return tensor
+    return TorchTensor(tensor)
 
 
 def _golden_function(tensor, *args, **kwargs):
