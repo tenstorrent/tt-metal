@@ -206,7 +206,7 @@ void process_write_host_h() {
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
             host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
-            block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
+            block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
         }
         noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);
         // This will update the write ptr on device and host
@@ -215,7 +215,7 @@ void process_write_host_h() {
         noc_async_writes_flushed();
         block_noc_writes_to_clear[rd_block_idx] +=
             (xfer_size + NOC_MAX_BURST_SIZE - 1) /
-            NOC_MAX_BURST_SIZE;  // XXXXX maybe just write the noc internal api counter
+            NOC_MAX_BURST_SIZE;
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -330,7 +330,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
         }
 
         noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);  // XXXX optimize, take all available
+        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -476,7 +476,7 @@ void process_write_paged() {
         uint32_t xfer_size =
             page_size > dispatch_cb_page_size ? min(dispatch_cb_page_size, page_size - dst_addr_offset) : page_size;
         uint64_t dst = addr_gen.get_noc_addr(
-            page_id, dst_addr_offset);  // XXXX replace this w/ walking the banks to save mul on GS
+            page_id, dst_addr_offset);
         // "Reserve" pages for the next write from this block
         block_noc_writes_to_clear[rd_block_idx]++;
         // Get a Dispatch page if needed
@@ -1072,8 +1072,8 @@ void kernel_main() {
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
 
-        // XXXXX move this inside while loop waiting for get_dispatch_cb_page above
-        // XXXXX can potentially clear a partial block when stalled w/ some more bookkeeping
+        // TODO move this inside while loop waiting for get_dispatch_cb_page above?
+        // TODO can potentially clear a partial block when stalled w/ some more bookkeeping?
         cb_block_release_pages<
             upstream_noc_xy,
             upstream_dispatch_cb_sem_id,
