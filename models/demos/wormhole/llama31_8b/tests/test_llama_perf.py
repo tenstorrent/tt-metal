@@ -32,8 +32,9 @@ import tt_lib
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.105),
-        (1024, 6, 0.225),
+        (32, 6, 0.135),
+        (128, 6, 0.155),
+        (1024, 6, 0.215),
     ),
 )
 def test_llama_model_perf(
