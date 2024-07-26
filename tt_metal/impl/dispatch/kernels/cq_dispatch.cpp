@@ -469,7 +469,7 @@ void process_write_paged() {
     uint64_t dst_addr_offset = 0;  // Offset into page.
 
     DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
-           << " dispatch_cb_page_size: " << dispatch_cb_page_size;
+           << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
 
     while (write_length != 0) {
         // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
@@ -573,7 +573,6 @@ void process_write_packed(uint32_t flags) {
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
     uint32_t stride =
         (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE) ? 0 : round_up_pow2(xfer_size, L1_ALIGNMENT);
-    DPRINT << data_ptr << " " << cmd_ptr << " " << xfer_size << " " << dispatch_cb_page_size << ENDL();
     ASSERT(stride != 0 || data_ptr - cmd_ptr + xfer_size <= dispatch_cb_page_size);
 
     volatile uint32_t tt_l1_ptr *l1_addr = (uint32_t *)(cmd_ptr + sizeof(CQDispatchCmd));
@@ -807,7 +806,7 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     uint32_t checksum = 0;
     uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQDispatchCmd));
     uint32_t size = cmd->debug.size;
-    DPRINT << "checksum: " << cmd->debug.size << ENDL();
+    //    DPRINT << "checksum: " << cmd->debug.size << ENDL();
 
     // Dispatch checksum only handles running checksum on a single page
     // Host code prevents larger from flowing through
@@ -836,14 +835,15 @@ static void process_wait() {
     uint32_t count = cmd->wait.count;
 
     if (barrier) {
+        DPRINT << " DISPATCH BARRIER\n";
         noc_async_write_barrier();
     }
 
     DEBUG_STATUS("PWW");
     volatile tt_l1_ptr uint32_t *sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(addr);
-    DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
     uint32_t heartbeat = 0;
     if (wait) {
+        DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
         while (!wrap_ge(*sem_addr, count)) {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         }
