@@ -10,13 +10,21 @@ set(TTNN_UNIT_TESTS_SRC
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
+add_executable(test_multi_device ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_device.cpp)
 
-target_link_libraries(unit_tests_ttnn PUBLIC test_common_libs ttnn tt_metal)
-target_include_directories(unit_tests_ttnn PRIVATE
-    ${UMD_HOME}
-    ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tests
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-set_target_properties(unit_tests_ttnn PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
+# Common function to set up target properties
+function(setup_ttnn_test_target target_name)
+    target_link_libraries(${target_name} PUBLIC test_common_libs ttnn tt_metal)
+    target_include_directories(${target_name} PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_target_properties(${target_name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
+endfunction()
+
+# Set up properties for both targets
+setup_ttnn_test_target(unit_tests_ttnn)
+setup_ttnn_test_target(test_multi_device)
