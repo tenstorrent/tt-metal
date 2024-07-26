@@ -129,7 +129,7 @@ class TGFixture : public GalaxyFixture
         this->SkipTestSuiteIfNotGalaxyMotherboard();
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
-        if (!(num_devices == 36 && num_pcie_devices == 4))
+        if (!(num_devices == 32 && num_pcie_devices == 4))
         {
             GTEST_SKIP();
         }
@@ -151,7 +151,7 @@ class TGGFixture : public GalaxyFixture
         this->SkipTestSuiteIfNotGalaxyMotherboard();
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
-        if (!(num_devices == 72 && num_pcie_devices == 8))
+        if (!(num_devices == 64 && num_pcie_devices == 8))
         {
             GTEST_SKIP();
         }
