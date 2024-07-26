@@ -63,8 +63,6 @@ if is_wormhole_b0():
                 "lerp_ternary",
                 "addcmul",
                 "addcdiv",
-                "min",
-                "max",
                 "swish",
                 "log1p",
                 "mish",
@@ -90,27 +88,6 @@ if is_wormhole_b0():
                 "cosh",
                 "tanhshrink",
                 "xlogy",
-                "asinh",
-                "acosh",
-                "atanh",
-                "atan2",
-                "subalpha",
-                "bias_gelu_unary",
-                "addalpha",
-                "logit",
-                "logical_ori",
-                "logical_xor",
-                "logical_xori",
-                "logical_noti",
-                "logical_andi",
-                "isclose",
-                "digamma",
-                "lgamma",
-                "multigammaln",
-                "polygamma",
-                "nextafter",
-                "scatter",
-                "celu",
             ),
             shapes,
         )
@@ -239,4 +216,43 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         partial(custom_compare, function=fn),
         device,
         test_args,
+        ttnn_op=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "fn, input_shapes",
+    list(
+        product(
+            (
+                "min",
+                "max",
+            ),
+            shapes,
+        )
+    ),  # Single core, and multi-core
+)
+def test_run_min_max_test(fn, input_shapes, device, function_level_defaults):
+    generator = generation_funcs.gen_rand
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generator, low=-100, high=100),
+            torch.bfloat16,
+        )
+    ]
+    comparison_func = comparison_funcs.comp_equal
+    num_inputs = 1
+    input_shapes = input_shapes * num_inputs
+    datagen_func = datagen_func * num_inputs
+    test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+
+    rank = len(input_shapes[0])
+    choices = [(rank - 1,), (rank - rank,)]
+    idx = np.random.choice(len(choices), 1)
+    dims = choices[idx.item()]
+
+    test_args.update({"dim": dims})
+
+    run_single_pytorch_test(
+        f"ttnn-{fn}", input_shapes, datagen_func, partial(custom_compare, function=fn), device, test_args, ttnn_op=True
     )
