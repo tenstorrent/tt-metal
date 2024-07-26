@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Latency: {} us",
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() / (page_count_g * iterations_g));
         } else {
-            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
+            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());
