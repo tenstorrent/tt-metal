@@ -5,21 +5,19 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-
-#include "ttnn/operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 using namespace tt;
-using ttnn::operations::unary::UnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
 using namespace tt::constants;
@@ -331,8 +329,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(
+                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {
@@ -1043,8 +1041,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(
+                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {

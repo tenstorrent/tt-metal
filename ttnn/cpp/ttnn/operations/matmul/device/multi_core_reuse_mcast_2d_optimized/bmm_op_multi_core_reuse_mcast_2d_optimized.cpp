@@ -5,18 +5,18 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "ttnn/operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 using namespace tt;
-using ttnn::operations::unary::UnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_optimized_helpers {
 using namespace tt::constants;
@@ -453,8 +453,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(
+                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {
@@ -547,7 +547,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in1_receiver.num_cores() > 0) {
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
             /* in0_sender_in1_receiver, // If not using half-half noc setup */
             in1_receiver,
             tt_metal::DataMovementConfig{
@@ -576,7 +577,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
             in0_receiver_in1_receiver_interleaved_other_cores.value(),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -793,8 +795,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
     const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
-    const auto& in0_sender_interleaved_cores =
-        grid_to_cores(in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
+    const auto& in0_sender_interleaved_cores = grid_to_cores(
+        in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
     const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
