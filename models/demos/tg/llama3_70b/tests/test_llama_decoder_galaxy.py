@@ -363,7 +363,7 @@ def test_LlamaDecoder_inference(
     max_context_len,
     llama_version,
     cluster_shape,
-    use_program_cache,
+    # use_program_cache,
 ):
     if batch > max_batch_size:
         pytest.skip(f"Decode with {batch} users is not supported with large context")
