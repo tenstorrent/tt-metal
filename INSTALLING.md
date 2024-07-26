@@ -94,7 +94,9 @@ cd tt-metal
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-3. Install either from source, or from our release wheel.
+3. Install either from source, or from our release wheel. Note that if you are
+going to try using the model demos, we highly recommend you install from
+source.
 
 ### Option 1: From source
 
