@@ -151,15 +151,15 @@ def unary_pow_bw(x, y):
 
 
 def clamp_bw(x, y):
-    ttnn.clamp_bw(x, y, 0.1, 0.9)
+    ttnn.clamp_bw(x, y, min=0.1, max=0.9)
 
 
 def clamp_min_bw(x, y):
-    ttnn.clamp_min_bw(x, y, 0.1)
+    ttnn.clamp_bw(x, y, min=0.1)
 
 
 def clamp_max_bw(x, y):
-    ttnn.clamp_max_bw(x, y, 0.9)
+    ttnn.clamp_bw(x, y, max=0.9)
 
 
 def gelu_bw_none(x, y):
@@ -434,7 +434,7 @@ def softshrink_bw(x, y):
 
 
 def unary_div_bw(x, y):
-    ttnn.div_bw(x, y, 3, round_mode="None")
+    ttnn.div_bw(x, y, 3.0, round_mode="None")
 
 
 all_binary_ops = [
@@ -646,7 +646,7 @@ all_binary_ops = [
     },
     {
         "op": ttnn.embedding,
-        "name": "tt_lib.tensor.embeddings",
+        "name": "ttnn.embedding",
         "layout": "ROW_MAJOR",
         "shape_func": embeddings_shape_func,
     },
@@ -1951,6 +1951,7 @@ all_unary_ops = [
     {
         "op": tilize,
         "name": "ttnn.tilize",
+        "layout": "ROW_MAJOR",
     },
     {
         "op": tt_lib.tensor.untilize,
@@ -1968,6 +1969,7 @@ all_unary_ops = [
     {
         "op": ttnn.tilize_with_zero_padding,
         "name": "ttnn.tilize_with_zero_padding",
+        "layout": "ROW_MAJOR",
     },
     {
         "op": pad,
@@ -2534,18 +2536,23 @@ def div_bw(x, y, z):
     ttnn.div_bw(x, y, z, round_mode="None")
 
 
+def add_bw(x, y, z):
+    ttnn.add_bw(x, y, z)
+
+
 def primary_moreh_norm_backward(x, y, z):
     tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
 
 
-def fused_linear(x, weight, bias):
+def linear(x, weight, bias):
     ttnn.linear(x, weight, bias=bias)
 
 
-def fused_linear_shape_func(input_shape):
-    x_shape = [1, 1, input_shape[-2], input_shape[-1]]
-    weight_shape = [1, 1, input_shape[-2], input_shape[-1]]
-    bias_shape = [1, 1, 32, input_shape[-1]]
+def linear_shape_func(input_shape):
+    N = input_shape[-1]
+    x_shape = [1, input_shape[-2], N]
+    weight_shape = [N, N]
+    bias_shape = [1, N]
     return x_shape, weight_shape, bias_shape
 
 
@@ -2634,7 +2641,7 @@ all_ternary_ops = [
         "name": "ttnn.min_bw",
     },
     {
-        "op": ttnn.add_bw,
+        "op": add_bw,
         "name": "ttnn.add_bw",
     },
     # {
@@ -2726,9 +2733,9 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.moreh_norm_backward",
     },
     {
-        "op": fused_linear,
+        "op": linear,
         "name": "ttnn.linear",
-        "shape_func": fused_linear_shape_func,
+        "shape_func": linear_shape_func,
     },
     {
         "op": ttnn.ge_bw,
