@@ -75,6 +75,7 @@ def test_mixtral_model_inference(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
+        rotary_on_host=True,
     )
 
     # Select the first token from the prompts for initial decoding
@@ -84,9 +85,9 @@ def test_mixtral_model_inference(
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             model_args.dim,
             start_pos,
@@ -95,15 +96,15 @@ def test_mixtral_model_inference(
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
+        tt_out = tt_model(decode_input, start_pos, current_pos)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
 
         # Run reference model
         positions = torch.LongTensor([start_pos])

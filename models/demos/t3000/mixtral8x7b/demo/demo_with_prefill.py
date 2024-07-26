@@ -40,7 +40,13 @@ class Emb(torch.nn.Module):
 
 @torch.no_grad()
 def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env):
-    assert batch_size == 32, "Batch size must be 32"
+    if batch_size == 32:
+        max_seq_len = 16384
+    elif batch_size in [4, 8, 16]:
+        max_seq_len = 32768
+    else:
+        raise ValueError(f"Batch size {batch_size} not supported")
+
     dtype = ttnn.bfloat8_b
 
     embed_on_host = True  # Do embedding and argmax on host. TODO Seeing bad output when on device
@@ -52,7 +58,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         input_prompts = load_inputs(user_input, batch_size)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(device_mesh.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(
+        device_mesh.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
+    )
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -116,6 +124,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
         start_pos=prefill_seq_len,
+        rotary_on_host=True,
     )
     logger.info("Finished loading weights to device.")
 
@@ -190,10 +199,10 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
 
         iteration_time_start = time()
         start_pos = generation_start_pos + iteration
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
         if embed_on_host:
-            decode_input_11BH, attn_mask = prepare_inputs_ttnn(
+            decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
                 start_pos,
@@ -202,17 +211,17 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
             )
 
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, attn_mask)
+        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos)
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
             tt_output_torch = (
                 ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0]
                 .squeeze(1)
-                .view(batch_size, 1, -1)
+                .view(32, 1, -1)
                 .detach()
                 .float()
-            )
+            )[:batch_size, ...]
             # tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
             # Argmax on host to get the new generated tokens
             tt_token_batch = sample(tt_output_torch, temperature=0, top_p=0.8)

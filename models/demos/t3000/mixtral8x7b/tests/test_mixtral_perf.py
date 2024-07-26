@@ -33,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
@@ -92,6 +93,7 @@ def test_mixtral_model_perf(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
+        rotary_on_host=True,
     )
 
     profiler.end("TtMixtral_model_setup")
@@ -131,6 +133,7 @@ def test_mixtral_model_perf(
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "prefill_seqlen, expected_compile_time, expected_inference_time",
     (
@@ -347,10 +350,10 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
     for i in range(generation_length):
         pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
         start_pos = generation_start_pos + i
-        current_pos = start_pos % tt_model.args.sliding_window
+        current_pos = start_pos
 
         profiler.start(f"prepare_inputs_for_inference_{i}")
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             tt_model.args.dim,
             start_pos,
@@ -362,7 +365,7 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
         profiler.start(f"python_dispatch_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
+        tt_out = tt_model(decode_input, start_pos, current_pos)
         profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor
@@ -370,10 +373,10 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
 
         profiler.end(f"model_run_for_inference_{i}")
         profiler.end(f"result_wait_for_inference_{i}")

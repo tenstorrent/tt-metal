@@ -13,6 +13,7 @@ class TtMixtralAttention(LightweightModule):
     def __init__(self, device_mesh, state_dict, args, layer_num, dtype):
         super().__init__()
         self.num_devices = 8
+        self.tile_size = 32
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.model_args = args
@@ -128,9 +129,9 @@ class TtMixtralAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-        reduce_mask_torch = torch.zeros(1, 1, self.max_batch_size, self.max_batch_size * 8)
-        for i in range(self.max_batch_size):
-            reduce_mask_torch[:, :, i, range(i, self.max_batch_size * 8, self.max_batch_size)] = 1
+        reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
+        for i in range(self.tile_size):
+            reduce_mask_torch[:, :, i, range(i, self.tile_size * 8, self.tile_size)] = 1
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
             device=self.device_mesh,
@@ -154,15 +155,13 @@ class TtMixtralAttention(LightweightModule):
         xs,
         start_pos,
         current_pos,
-        attn_masks,
         rot_mat,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
         current_pos: start_pos
-        attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
-        rot_mat: rotation matrix for each device
+        rot_mats: rotation matrix for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
@@ -170,12 +169,10 @@ class TtMixtralAttention(LightweightModule):
         D : head_dim (128)
         P : padded_layer_past_len
         """
-        padded_layer_past_len = nearest_32(start_pos + 1)
+
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
-        attn_mask_1B4P = attn_masks
-
         ###
         # QKV matmuls
         ###
@@ -188,6 +185,13 @@ class TtMixtralAttention(LightweightModule):
             program_config=self.model_config["QKV_MM_OUTPUT_PROGCFG"],
             compute_kernel_config=self.compute_kernel,
         )
+
+        # Reshape such that true unpadded batch is tracked in shape
+        if self.max_batch_size < 32:
+            fqkv_shape = xqkv_fused.shape
+            xqkv_fused = ttnn.reshape(
+                xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+            )
 
         # split qkv into heads
         (
@@ -237,60 +241,16 @@ class TtMixtralAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
-            keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
-        )
-
-        ###
-        # Attention
-        ###
-        # transpose keys
-        keys_1BDP = ttnn.experimental.tensor.transpose(
-            keys_1BPD,
-            -2,
-            -1,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-        )
-        keys_1BPD.deallocate(True)
-
-        # scores matmul
-
-        attn_1B4P = ttnn.matmul(
+        attn_output_1B4D = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
             q_heads_1B4D,
-            keys_1BDP,
-            dtype=ttnn.bfloat16,
-            program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            memory_config=self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len),
-            compute_kernel_config=self.compute_kernel_attn,
-        )
-        q_heads_1B4D.deallocate(True)
-        keys_1BDP.deallocate(True)
-
-        # Softmax and scaling
-
-        attn_1B4P = ttnn.scale_mask_softmax_in_place(
-            attn_1B4P,
-            self.scale,
-            attn_mask_1B4P,
-            program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
-            is_causal_mask=True,
-        )
-
-        # values matmul
-        values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
-            values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
-        )
-
-        attn_output_1B4D = ttnn.matmul(
-            attn_1B4P,
+            keys_1BPD,
             values_1BPD,
-            dtype=ttnn.bfloat16,
-            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
-            program_config=self.model_config["VALUES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            compute_kernel_config=self.compute_kernel_attn,
+            [current_pos for _ in range(self.max_batch_size)],
+            scale=self.scale,
+            program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+            compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
-        attn_1B4P.deallocate(True)
-        values_1BPD.deallocate(True)
 
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
@@ -319,6 +279,19 @@ class TtMixtralAttention(LightweightModule):
         return dense_outputs_11BH
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+        """
+        x: (1, 1, seq_len, hidden_dim)
+        attn_masks: (1, 1, seq_len, seq_len)
+        rot_mats: rotation matrices for each device
+        transformation_mats: transformation matrix (rotary embedding) for each device
+        user_id: user id for the kv cache
+
+        Tensors are postfixed with 4 characters that represent their 4-D shape:
+        S : seq_len
+        H : dim (4096)
+        D : head_dim (128)
+        """
+
         seq_len = xs_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
@@ -446,4 +419,5 @@ class TtMixtralAttention(LightweightModule):
         if mode == "prefill":
             return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
         else:
-            return self.forward_decode(xs, start_pos, current_pos, attn_masks, rot_mats)
+            assert attn_masks is None, "attn_masks should be None for decode mode"
+            return self.forward_decode(xs, start_pos, current_pos, rot_mats)

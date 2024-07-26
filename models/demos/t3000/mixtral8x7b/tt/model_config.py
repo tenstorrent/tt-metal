@@ -22,8 +22,8 @@ class TtModelArgs:
     sliding_window = 4096
     vocab_size = 32000
 
-    max_batch_size = 32
-    max_seq_len = 4096
+    max_batch_size = 32  # default
+    max_seq_len = 8192 * 2  # default
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
@@ -67,7 +67,10 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device=None, instruct=False, dummy_weights=False):
+    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=16384, max_batch_size=32):
+        self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
+
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
@@ -118,6 +121,18 @@ class TtModelArgs:
             ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1
         )
 
+        # Useful core grid based on batch size
+        if self.max_batch_size == 32:
+            core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
+        elif self.max_batch_size == 16:
+            core_grid_by_batch = ttnn.CoreGrid(y=2, x=8)
+        elif self.max_batch_size == 8:
+            core_grid_by_batch = ttnn.CoreGrid(y=1, x=8)
+        elif self.max_batch_size == 4:
+            core_grid_by_batch = ttnn.CoreGrid(y=1, x=4)
+        else:
+            raise ValueError(f"Batch size {self.max_batch_size} not supported")
+
         # Create sharded memory configs for different ops
         self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, 32),
@@ -147,7 +162,7 @@ class TtModelArgs:
 
         self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid_by_batch,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -164,6 +179,21 @@ class TtModelArgs:
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=False,
+        )
+
+        self.model_config[
+            "SDPA_DECODE_PROGCFG"
+        ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=32,
+            k_chunk_size=32,
+        )
+
+        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
         self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"] = cached_lambda(
