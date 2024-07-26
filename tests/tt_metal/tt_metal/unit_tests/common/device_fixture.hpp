@@ -80,15 +80,6 @@ class DeviceSingleCardFixture : public ::testing::Test {
 
 class GalaxyFixture : public ::testing::Test {
    protected:
-    void SkipTestSuiteIfSlowDispatchNotSet()
-    {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-    }
-
     void SkipTestSuiteIfNotGalaxyMotherboard()
     {
         const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
@@ -113,7 +104,6 @@ class GalaxyFixture : public ::testing::Test {
 
     void SetUp() override
     {
-        this->SkipTestSuiteIfSlowDispatchNotSet();
         this->SkipTestSuiteIfNotGalaxyMotherboard();
         this->InitializeDevices();
     }
@@ -137,7 +127,6 @@ class TGFixture : public GalaxyFixture
 
     void SetUp() override
     {
-        this->SkipTestSuiteIfSlowDispatchNotSet();
         this->SkipTestSuiteIfNotTG();
         this->InitializeDevices();
     }
@@ -159,7 +148,6 @@ class TGGFixture : public GalaxyFixture
 
     void SetUp() override
     {
-        this->SkipTestSuiteIfSlowDispatchNotSet();
         this->SkipTestSuiteIfNotTGG();
         this->InitializeDevices();
     }
