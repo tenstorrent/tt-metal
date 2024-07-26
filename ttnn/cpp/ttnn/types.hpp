@@ -9,7 +9,7 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "ttnn/experimental/tensor/tensor.hpp"
 #include "ttnn/experimental/tensor/types.hpp"
-
+#include "tt_metal/graph_tracking.hpp"
 namespace ttnn {
 namespace types {
 

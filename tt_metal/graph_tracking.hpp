@@ -49,9 +49,9 @@ namespace tt::tt_metal {
             static GraphTracker tracker;
             return tracker;
         }
-        void track_allocate(Buffer* buffer, uint64_t size, bool bottom_up) {
+        void track_allocate(Buffer* buffer, bool bottom_up) {
             auto alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
-            tt::log_info("{}Called Allocate id: {}, size: {}, bottom_up: {}", std::string(depth,'-'), alloc_id, size, bottom_up);
+            tt::log_info("{}Called Allocate id: {}, size: {}, bottom_up: {}", std::string(depth,'-'), alloc_id, buffer->size(), bottom_up);
         }
 
         void track_deallocate(Buffer* buffer) {
@@ -73,13 +73,13 @@ namespace tt::tt_metal {
             //auto all_tensors = gather_tensors(args...);
             depth++;
         }
-
-        void track_end_op() {
+        template<class ReturnType>
+        void track_end_op(ReturnType&& output_tensors) {
             tt::log_info( "Called End Op");
             depth--;
         }
 
-        bool hook_allocate(Buffer* buffer, uint64_t size, bool bottom_up) {
+        bool hook_allocate(Buffer* buffer, bool bottom_up) {
             return false;
         }
 

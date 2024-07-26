@@ -207,12 +207,6 @@ struct operation_t {
                 detail::execute_on_worker_thread_return_t<concrete_operation_t, args_t&&...>;
             GraphTracker::instance().track_begin_op<execute_on_worker_thread_return_t, args_t...>(this->cpp_fully_qualified_name);
 
-            struct scope_exit_t {
-                ~scope_exit_t() {
-                    GraphTracker::instance().track_end_op();
-                }
-            } scope_exit;
-
             const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
             const OptionalConstTensors optional_input_tensors =
                 detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
@@ -248,7 +242,7 @@ struct operation_t {
                 enable_autoformat);
 
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-
+            GraphTracker::instance().track_end_op(output_tensors);
             if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
                 return output_tensors.at(0);
             } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
