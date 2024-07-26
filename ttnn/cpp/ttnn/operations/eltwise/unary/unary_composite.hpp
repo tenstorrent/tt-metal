@@ -101,15 +101,16 @@ struct ExecuteUnaryCompositeOpWithInt {
         }
 };
 
-// re-implement tt_eager composite unary op => ttnn composite unary ops.
-inline Tensor rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt, std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
-    Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
-
-    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return ttnn::where(ttnn::eqz(queue_id, input_tensor, output_memory_config), t_inf, result, output_memory_config, optional_output_tensor);
-}
+struct ExecuteRdiv {
+    static Tensor operator()(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
+        return OpHandler<UnaryCompositeOpType::RDIV>::handle(queue_id, input_tensor, value, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
+    }
+};
 
 }  // namespace unary
 }  // namespace operations
@@ -158,8 +159,7 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
             original_shape);                                                                           \
     })
 
-constexpr auto rdiv = REGISTER_OPERATION_FROM_FUNCTION("ttnn::rdiv", WRAP_WITH_RESHAPE(ttnn::operations::unary::rdiv));
-
+constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
 constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
     "ttnn::pow",

@@ -46,6 +46,7 @@ enum class UnaryCompositeOpType {
     GEGLU,
     SWIGLU,
     POW,
+    RDIV,
     TRIL,
     TRIU,
     ROUND,
@@ -89,6 +90,7 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
+Tensor _rdiv(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -351,6 +353,13 @@ struct OpHandler<UnaryCompositeOpType::POW> {
     }
     static Tensor handle(uint8_t q_id, const Tensor& input, uint32_t exponent, const std::optional<MemoryConfig>& mem_cfg, std::optional<Tensor> output) {
         return _power(q_id, input, exponent, mem_cfg, output);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::RDIV> {
+    static Tensor handle(uint8_t queue_id, const Tensor& input_tensor, float value, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor){
+        return _rdiv(queue_id, input_tensor, value,  memory_config, optional_output_tensor);
     }
 };
 
