@@ -22,8 +22,7 @@ struct ExecuteComplexBinaryType1 {
         const ComplexTensor &input_tensor_a_arg,
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config) {
-        auto op_type = get_function_complex_binary<complex_binary_op_type>();
-        return op_type(input_tensor_a_arg, input_tensor_b_arg, memory_config);
+        return OpHandler<complex_binary_op_type>::handle(input_tensor_a_arg, input_tensor_b_arg, memory_config);
     }
 };
 

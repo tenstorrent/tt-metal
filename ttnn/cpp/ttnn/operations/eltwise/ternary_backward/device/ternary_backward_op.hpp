@@ -32,12 +32,6 @@ std::vector<OptionalTensor> _where_bw(uint8_t, const Tensor&, const Tensor&, con
 template <TernaryBackwardOpType OpType>
 struct OpHandler;
 
-template <TernaryBackwardOpType OpType>
-struct OpHandler_float;
-
-template <TernaryBackwardOpType OpType>
-struct OpHandler_Where;
-
 template <>
 struct OpHandler<TernaryBackwardOpType::LERP_BW> {
     static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
@@ -47,7 +41,7 @@ struct OpHandler<TernaryBackwardOpType::LERP_BW> {
 };
 
 template <>
-struct OpHandler_float<TernaryBackwardOpType::ADDCMUL_BW> {
+struct OpHandler<TernaryBackwardOpType::ADDCMUL_BW> {
     static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
                                         float value, const MemoryConfig& mem_cfg) {
         return _addcmul_bw(t1, t2, t3, t4, value, mem_cfg);
@@ -55,7 +49,7 @@ struct OpHandler_float<TernaryBackwardOpType::ADDCMUL_BW> {
 };
 
 template <>
-struct OpHandler_float<TernaryBackwardOpType::ADDCDIV_BW> {
+struct OpHandler<TernaryBackwardOpType::ADDCDIV_BW> {
     static std::vector<Tensor> handle(const Tensor& t1, const Tensor& t2, const Tensor& t3, const Tensor& t4,
                                         float value, const MemoryConfig& mem_cfg) {
         return _addcdiv_bw(t1, t2, t3, t4, value, mem_cfg);
@@ -63,26 +57,12 @@ struct OpHandler_float<TernaryBackwardOpType::ADDCDIV_BW> {
 };
 
 template <>
-struct OpHandler_Where<TernaryBackwardOpType::WHERE_BW> {
+struct OpHandler<TernaryBackwardOpType::WHERE_BW> {
     static std::vector<OptionalTensor> handle(uint8_t queue_id, const Tensor& t1, const Tensor& t2, const Tensor& t3,
                                                      const Tensor& t4, const MemoryConfig& mem_cfg, const std::vector<bool>& are_required_outputs,
                                                      OptionalTensor input_grad, OptionalTensor other_grad) {
         return _where_bw(queue_id, t1, t2, t3, t4, mem_cfg, are_required_outputs, input_grad, other_grad);
     }
 };
-
-// Template functions to get the function pointers
-template <TernaryBackwardOpType OpType>
-auto get_ternary_fn() {
-    return &OpHandler<OpType>::handle;
-}
-template <TernaryBackwardOpType OpType>
-auto get_ternary_fn_float() {
-    return &OpHandler_float<OpType>::handle;
-}
-template <TernaryBackwardOpType OpType>
-auto get_ternary_fn_opt_output() {
-    return &OpHandler_Where<OpType>::handle;
-}
 
 }  // namespace ttnn::operations::ternary_backward
