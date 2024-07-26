@@ -788,5 +788,5 @@ op_map = {
     "ne-bw": {
         "tt_op": ttnn_ops.ne_bw,
         "pytorch_op": pytorch_ops.ne_bw,
-    },    
+    },
 }
