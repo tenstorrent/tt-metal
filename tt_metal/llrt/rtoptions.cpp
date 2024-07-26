@@ -92,6 +92,11 @@ RunTimeOptions::RunTimeOptions() {
             TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
         }
     }
+
+    const char *dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
+    if (dispatch_data_collection_str != nullptr) {
+        enable_dispatch_data_collection = true;
+    }
 }
 
 const std::string &RunTimeOptions::get_root_dir() {

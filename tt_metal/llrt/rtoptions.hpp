@@ -99,6 +99,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
+    bool enable_dispatch_data_collection = false;
+
    public:
     RunTimeOptions();
 
@@ -239,7 +241,10 @@ class RunTimeOptions {
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
     inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
-    void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+    inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+
+    inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
+    inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.

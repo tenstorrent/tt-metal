@@ -24,6 +24,7 @@ struct kernel_bins_transfer_info {
     std::vector<std::uint32_t> dst_base_addrs;  // BRISC, NCRISC, TRISC etc..
     std::vector<std::uint32_t> page_offsets;    // offsets into paged buffer in DRAM
     std::vector<std::uint32_t> lengths;         // WriteLinear lengths
+    std::vector<tt::RISCV> riscvs;              // RISC that each span is targeted for, for binaries
 };
 
 struct ProgramTransferInfo {
