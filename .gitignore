@@ -110,8 +110,6 @@ src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
 .ipynb_checkpoints/
 ttnn/tutorials/DiT/
 
-ttnn/ttnn/.rpath_checked__ttnn
-
 .envrc
 
 # tt_lib and _ttnn stubs
@@ -126,4 +124,4 @@ ttnn/ttnn/.rpath_checked*
 .cpmcache
 
 ClangBuildAnalyzer.ini
-ttnn/ttnn/.rpath_checked*
+ttnn/ttnn/.rpath_checked__ttnn
