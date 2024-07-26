@@ -3628,6 +3628,10 @@ def rsub_bw(
 
 
 def where_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor1
+    w,  # other_tensor2
     device,
     dtype,
     layout,
@@ -3639,8 +3643,8 @@ def where_bw(
     y = y > 0
 
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_ttnn_tensor(y, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_ttnn_tensor(y, device, layout[3], input_mem_config[3], dtype[3])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_ttnn_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
 
     t4 = ttnn.where_bw(t0, t1, t2, t3, memory_config=output_mem_config)
 
