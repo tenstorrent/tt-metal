@@ -5,20 +5,9 @@ import os
 import torch
 import pytest
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 import tt_lib
-
-if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
-    from tracy import signpost
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     preprocess_inputs_prefill,
@@ -60,7 +49,14 @@ def test_mixtral_model_perf(
     expected_inference_time,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     dtype = ttnn.bfloat8_b
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
@@ -101,7 +97,7 @@ def test_mixtral_model_perf(
     profiler.end("TtMixtral_model_setup")
 
     # Call the function
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model warmup")
     profiler.start(f"end_to_end_inference_with_compile")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
@@ -112,7 +108,7 @@ def test_mixtral_model_perf(
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
     profiler.clear()
     profiler.start(f"end_to_end_inference")
@@ -163,7 +159,14 @@ def test_mixtral_model_with_prefill_perf(
     expected_inference_time,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     dtype = ttnn.bfloat8_b
     batch_size = 32
 
@@ -227,7 +230,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.end("TtMixtral_model_setup")
 
     # Prefill (run warmup for single user before running perf for all users)
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill warmup")
     profiler.clear()
     profiler.start(f"e2e_prefill_warmup")
@@ -240,7 +243,7 @@ def test_mixtral_model_with_prefill_perf(
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
     profiler.clear()
     profiler.start(f"e2e_prefill_{batch_size}_users")
@@ -253,7 +256,7 @@ def test_mixtral_model_with_prefill_perf(
     generation_start_pos = prefill_seq_len
     generation_length = 1
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode warmup")
     profiler.clear()
     profiler.start(f"e2e_decode_warmup")
@@ -266,7 +269,7 @@ def test_mixtral_model_with_prefill_perf(
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")
     profiler.clear()
     profiler.start(f"e2e_decode_{batch_size}_users")

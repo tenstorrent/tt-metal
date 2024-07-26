@@ -29,9 +29,9 @@ class TtModelArgs:
     num_experts_per_tok = 2
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("MIXTRAL_CKPT_DIR", "/proj_sw/user_dev/hf_data/mistral/Mixtral-8x7B-v0.1")
-    DEFAULT_TOKENIZER_PATH = os.getenv("MIXTRAL_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/mistral/Mixtral-8x7B-v0.1")
-    DEFAULT_CACHE_PATH = os.getenv("MIXTRAL_CACHE_PATH", "/proj_sw/user_dev/hf_data/mistral/Mixtral-8x7B-v0.1")
+    DEFAULT_CKPT_DIR = os.getenv("MIXTRAL_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("MIXTRAL_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/")
+    DEFAULT_CACHE_PATH = os.getenv("MIXTRAL_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/")
 
     # Keys to be used by the different modules of Mixtral
     OP_KEYS = (
