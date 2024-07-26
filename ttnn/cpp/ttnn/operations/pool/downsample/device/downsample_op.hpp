@@ -11,7 +11,7 @@ namespace ttnn {
 
 namespace operations {
 
-namespace data_movement {
+namespace downsample {
 
 // TODO: Accept parallelization
 
@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 // uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
 // }
 
-} // namespace data_movement
+} // namespace downsample
 
 }  // namespace operations
 
