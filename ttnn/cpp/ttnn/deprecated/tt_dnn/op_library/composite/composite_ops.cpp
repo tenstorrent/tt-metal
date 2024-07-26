@@ -123,16 +123,6 @@ Tensor swish(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _swish)(a, output_mem_config);
 }
 
-// log1p 1
-// use transformation y = log(1.0 + x) by broadcast
-Tensor _log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor x_1 = ttnn::add(x, 1.0f, std::nullopt, output_mem_config);
-    Tensor result_log1p = ttnn::log(x_1, output_mem_config);
-    return result_log1p;
-}
-Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _log1p)(x, output_mem_config);
-}
 
 // tanhshrink(x) = x - tanh(x)
 Tensor _tanhshrink(const Tensor& x, const MemoryConfig& output_mem_config) {
@@ -142,111 +132,6 @@ Tensor _tanhshrink(const Tensor& x, const MemoryConfig& output_mem_config) {
 }
 Tensor tanhshrink(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _tanhshrink)(a, output_mem_config);
-}
-
-Tensor _lgamma(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor result(x);
-    {
-        Tensor t(x);
-        {
-            Tensor temp_log(x);
-            {
-                Tensor temp(x);
-                Tensor input = ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config);
-                {
-                    Tensor z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-                        76.18009172947146f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(z1, 1.0f, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 2.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -86.50532032941677f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 3.0f, std::nullopt, output_mem_config), output_mem_config),
-                        24.01409824083091f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 4.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -1.231739572450155f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 5.0f, std::nullopt, output_mem_config), output_mem_config),
-                        0.1208650973866179e-2f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 6.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -0.5395239384953e-5f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-                }
-                {
-                    Tensor t_log(x);
-                    {
-                        t = ttnn::add(input, 5.5f, std::nullopt, output_mem_config);
-                        t_log = ttnn::log(t, output_mem_config);
-                    }
-                    temp_log = ttnn::log(temp, output_mem_config);
-                    result = ttnn::add(
-                        ttnn::multiply(
-                            ttnn::add(input, 0.5f, std::nullopt, output_mem_config), t_log, std::nullopt, output_mem_config),
-                        0.918938531357171f,
-                        std::nullopt,
-                        output_mem_config);
-                }
-            }
-            result = ttnn::add(result, temp_log, std::nullopt, output_mem_config);
-        }
-        result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
-        {
-            {
-                Tensor t_one = ones_like(x, output_mem_config);
-                result = where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result, output_mem_config);
-            }
-            {
-                Tensor t_two = mk_filled_tensor_like(x, 2.0f, output_mem_config);
-                result = where(ttnn::eq(x, t_two, std::nullopt, output_mem_config), 0.0f, result, output_mem_config);
-            }
-        }
-    }
-    return result;
-}
-Tensor lgamma(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lgamma)(a, output_mem_config);
-}
-
-// multivariate log-gamma function
-// Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
-Tensor _multigammaln(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor result = lgamma(x, output_mem_config);
-    result = ttnn::add(
-        result, lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::add(
-        result, lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::add(
-        result, lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::add(result, 3.434189657547f, std::nullopt, output_mem_config);
-    return result;
-}
-
-Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _multigammaln)(a, output_mem_config);
 }
 
 // Theano defines this differently...
@@ -319,39 +204,6 @@ Tensor _clip(const Tensor& a, float low, float high, const MemoryConfig& output_
 }
 Tensor clip(const Tensor& a, float low, float high, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _clip)(a, low, high, output_mem_config);
-}
-
-// Function Hard Sigmoid
-//     Ref: https://github.com/Theano/Theano/blob/master/theano/tensor/nnet/sigm.py
-//
-//     slope = tensor.constant(0.2, dtype=out_dtype)
-//     shift = tensor.constant(0.5, dtype=out_dtype)
-//
-//     x1 = (x * slope) + shift
-//     y = tensor.clip(x1, 0, 1)
-//
-// PyTorch version:
-// hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-Tensor _hardsigmoid(const Tensor& a, float scale, float shift, const MemoryConfig& output_mem_config) {
-    Tensor a_mac = mac(a, scale, shift, output_mem_config);  // multiply and add.
-    Tensor a_clip = ttnn::relu_max(a_mac, 1.0f, output_mem_config);
-    return a_clip;
-}
-Tensor hardsigmoid(const Tensor& a, float scale, float shift, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardsigmoid)(a, scale, shift, output_mem_config);
-}
-
-// Function @hard_swish
-// use transformation y = x * hardsigmoid( x ) by broadcast
-// Ref: PyTorch
-// hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor _hardswish(const Tensor& a, float scale, float shift, const MemoryConfig& output_mem_config) {
-    Tensor a_sigmoid = hardsigmoid(a, scale, shift, output_mem_config);
-    Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt, output_mem_config);
-    return result_sq;
-}
-Tensor hardswish(const Tensor& a, float scale, float shift, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hardswish)(a, scale, shift, output_mem_config);
 }
 
 // compute polyval by Horner's rule
@@ -649,61 +501,10 @@ Tensor lerp(
     return operation::decorate_as_composite(__func__, _lerp_overload)(input_a, input_b, input_c, output_mem_config);
 }
 
-Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config);
-    Tensor in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
-    Tensor in_b_neq_zero = ttnn::nez(input_b, output_mem_config);
-    Tensor result = where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero, output_mem_config);
-    return result;
-}
-
-// ∣input−other∣≤ atol+rtol×∣other∣
-Tensor _isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const MemoryConfig& output_mem_config) {
-    Tensor value1 = input_a;
-    Tensor value2 = input_b;
-    if (!equal_nan) {
-        // If equal_nan false, then two NaN will not be considered be equal
-        // As below operation's computes the NaN and make it as false based on the formula.
-        // Input 1 = 1, Input = 0 => 1 - 0 <= atol + rtol * |0|, hence comparison explicily false.
-        value1 = where(ttnn::isnan(value1, output_mem_config), 1.0f, value1, output_mem_config);
-        value2 = where(ttnn::isnan(value2, output_mem_config), 0.0f, value2, output_mem_config);
-    }
-    Tensor is_close_lhs = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
-    Tensor is_close_rhs(input_b);
-    {
-        Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
-        is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
-    }
-    return where(
-        ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),
-        ones_like(value2, output_mem_config),
-        zeros_like(value2, output_mem_config),
-        output_mem_config);
-}
-Tensor isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _isclose)(
-        input_a, input_b, rtol, atol, equal_nan, output_mem_config);
-}
-
 // ldexp(input,other)=input * (2^other)
 Tensor _ldexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::multiply(input_a, ttnn::exp2(input_b, output_mem_config), std::nullopt, output_mem_config);
     return result;
-}
-Tensor logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _logical_xor)(input_a, input_b, output_mem_config);
 }
 
 Tensor _logical_ori(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config) {
@@ -1266,20 +1067,6 @@ Tensor _normalize_global(const Tensor& y, const MemoryConfig& output_mem_config)
 }
 Tensor normalize_global(const Tensor& y, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _normalize_global)(y, output_mem_config);
-}
-
-// TODO: can be a fused binop
-// hypot(a,b) = sqrt[ a^2 + b^2 ]
-Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor a_sq = ttnn::square(input_a, output_mem_config);
-    Tensor b_sq = ttnn::square(input_b, output_mem_config);
-    Tensor c_sq = ttnn::add(a_sq, b_sq, std::nullopt, output_mem_config);
-    a_sq.deallocate();
-    b_sq.deallocate();
-    return ttnn::sqrt(c_sq, output_mem_config);
-}
-Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _hypot)(input_a, input_b, output_mem_config);
 }
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
