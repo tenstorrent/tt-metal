@@ -1186,10 +1186,6 @@ op_map = {
         "tt_op": tt_lib_ops.abs_bw,
         "pytorch_op": pytorch_ops.abs_bw,
     },
-    "relu-bw": {
-        "tt_op": tt_lib_ops.relu_bw,
-        "pytorch_op": pytorch_ops.relu_bw,
-    },
     "gt-bw": {
         "tt_op": tt_lib_ops.gt_bw,
         "pytorch_op": pytorch_ops.gt_bw,
