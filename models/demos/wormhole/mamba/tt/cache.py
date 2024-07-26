@@ -52,12 +52,12 @@ class TensorCache:
             self.cache[entry_idx][user_idx], device=self.device, memory_config=self.cache_memory_config
         )
 
-    def concat_users(self, entry_idx: int, layout=ttnn.TILE_LAYOUT):
+    def concat_users(self, entry_idx: int, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         assert entry_idx < len(self.cache), f"Expected key {entry_idx} to exist in cache"
         values = self.cache[entry_idx]
         if self.on_host:
             values = [
-                ttnn.to_device(values[i], device=self.device, memory_config=self.cache_memory_config)
+                ttnn.to_device(values[i], device=self.device, memory_config=memory_config)
                 for i in range(self.num_users)
             ]
         return ttnn.to_layout(ttnn.concat(values, dim=2), layout)
@@ -65,18 +65,10 @@ class TensorCache:
     def reset(self):
         for entry_idx in range(len(self.cache)):
             for user_idx in range(self.num_users):
-                ttnn.deallocate(self.cache[entry_idx][user_idx])
-
-        self.cache = [
-            [
-                ttnn.from_torch(
+                self.cache[entry_idx][user_idx] = ttnn.from_torch(
                     torch.zeros(self.entry_shape),
                     device=self.cache_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=self.cache_memory_config,
                     dtype=ttnn.bfloat16,
                 )
-                for _ in range(self.num_users)
-            ]
-            for _ in range(self.entries_per_user)
-        ]
