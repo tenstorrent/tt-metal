@@ -93,7 +93,7 @@ if is_wormhole_b0():
                 "atanh",
                 "atan2",
                 # TO-DO:
-                # "subalpha",
+                "subalpha",
                 # "bias_gelu_unary",
                 "addalpha",
                 "logit",
