@@ -7,14 +7,6 @@ import pytest
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, preprocess_inputs, load_inputs
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
@@ -46,6 +38,9 @@ class Emb(torch.nn.Module):
 def test_mixtral_model_inference(
     t3k_device_mesh, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
     dtype = ttnn.bfloat8_b
     seqlen = 1  # Generating one token per user at a time
     batch = 32

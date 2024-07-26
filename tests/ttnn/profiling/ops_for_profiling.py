@@ -77,6 +77,11 @@ def bcast_hw_shape_func(input_shape):
     return input_shape, input_shape_1
 
 
+def bcast_hw_shape_func_11(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, 1]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -444,6 +449,11 @@ all_binary_ops = [
     {
         "op": ttnn.mul,
         "name": "ttnn.mul",
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_hw",
+        "shape_func": bcast_hw_shape_func_11,
     },
     {
         "op": ttnn.divide,
@@ -1486,15 +1496,15 @@ def repeat(x):
 
 
 def repeat_interleave_0(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 0)
+    ttnn.repeat_interleave(x, 4, 0)
 
 
 def repeat_interleave_1(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 1)
+    ttnn.repeat_interleave(x, 4, 1)
 
 
 def repeat_interleave_2(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 2)
+    ttnn.repeat_interleave(x, 4, 2)
 
 
 def pow_int(x):
@@ -2228,16 +2238,16 @@ all_unary_ops = [
     },
     {
         "op": repeat_interleave_0,
-        "name": "tt_lib.tensor.repeat_interleave_dim_0",
+        "name": "ttnn.repeat_interleave_dim_0",
     },
     {
         "op": repeat_interleave_1,
-        "name": "tt_lib.tensor.repeat_interleave_dim_1",
+        "name": "ttnn.repeat_interleave_dim_1",
         "num_repeats": 2,
     },
     {
         "op": repeat_interleave_2,
-        "name": "tt_lib.tensor.repeat_interleave_dim_2",
+        "name": "ttnn.repeat_interleave_dim_2",
         "num_repeats": 2,
     },
     {

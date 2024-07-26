@@ -6,16 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-    # Prefill prompt files too large to keep in repo
-    os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
-
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -50,7 +40,14 @@ class Emb(torch.nn.Module):
         1024 * 32,
     ),
 )
-def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
+def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_seeds, seq_len, is_ci_env):
+    # Set additional Mistral flag for CI
+    if is_ci_env:
+        os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
+
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
     n_layers = 32
     pcc = 0.93
     dtype = ttnn.bfloat8_b

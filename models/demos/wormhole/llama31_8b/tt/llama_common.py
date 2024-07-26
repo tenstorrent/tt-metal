@@ -17,6 +17,27 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
+    """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+    {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
+    {{ user_msg_1 }}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+    {{ model_answer_1 }}<|eot_id|>
+    """
+    begin_of_text = [tokenizer.special_tokens["<|begin_of_text|>"]]
+    start_header = [tokenizer.special_tokens["<|start_header_id|>"]]
+    end_header = [tokenizer.special_tokens["<|end_header_id|>"]]
+    end_turn = [tokenizer.special_tokens["<|eot_id|>"]]
+    system = tokenizer.encode("system", bos=False, eos=False)
+    user = tokenizer.encode("user", bos=False, eos=False)
+    assistant = tokenizer.encode("assistant", bos=False, eos=False)
+    prompt = tokenizer.encode(prompt_text, bos=False, eos=False)
+
+    system_prompt = start_header + system + end_header + system_prompt_text + end_turn if system_prompt_text else []
+    user_prompt = start_header + user + end_header + prompt + end_turn
+    assistant_reply = start_header + assistant + end_header
+    return begin_of_text + system_prompt + user_prompt + assistant_reply
+
+
 def generate_cos_sin_cache_ttnn(
     tt_devices,
     head_dim,

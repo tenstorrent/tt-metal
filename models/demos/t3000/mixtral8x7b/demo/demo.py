@@ -8,14 +8,6 @@ import pytest
 from loguru import logger
 from time import time
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
@@ -44,7 +36,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
-def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
+def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env):
     assert batch_size == 32, "Batch size must be 32"
 
     dtype = ttnn.bfloat8_b
@@ -225,7 +217,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         iteration_time = time() - iteration_time_start
         tokens_per_second_per_user = 1 / iteration_time
         # Print out generated outputs for each user at the end of every iteration
-        if os.getenv("CI") != "true":  # Avoid printing every iteration in CI
+        if not is_ci_env:  # Avoid printing every iteration in CI
             if len(user_input) == 1:
                 logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
             else:
@@ -238,15 +230,14 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         )
 
     # In CI only print the final generated output to avoid spamming the logs
-    if os.getenv("CI") == "true":
+    if is_ci_env:
         if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
         else:
             for user in range(batch_size):
                 logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    # When running in CI, check the output against the expected output to avoid accuracy regressions
-    if os.getenv("CI") == "true":
+        # When running in CI, check the output against the expected output to avoid accuracy regressions
         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
         with open(expected_output, "r") as f:
             expected_out = json.load(f)
@@ -265,8 +256,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         logger.info("[CI-Only] Output token validation passed!")
 
 
-# Avoid running this test when in CI
-@pytest.mark.skipif(os.getenv("CI") == "true", reason="Non-CI tests")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
@@ -275,24 +264,17 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
-    return run_mixtral_demo(
-        user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
-    )
+def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+    if is_ci_env and instruct_weights == True:
+        pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
 
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
 
-# CI only runs general-weights demo
-@pytest.mark.skipif(not os.getenv("CI") == "true", reason="CI-only test")
-@pytest.mark.parametrize(
-    "input_prompts, instruct_weights",
-    [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
-    ],
-    ids=[
-        "general_weights",
-    ],
-)
-def test_mixtral8x7b_demo_CI(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
     return run_mixtral_demo(
-        user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
+        user_input=input_prompts,
+        batch_size=32,
+        device_mesh=t3k_device_mesh,
+        instruct_mode=instruct_weights,
+        is_ci_env=is_ci_env,
     )

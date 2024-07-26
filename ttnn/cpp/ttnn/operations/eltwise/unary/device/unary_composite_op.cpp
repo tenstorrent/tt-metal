@@ -447,12 +447,12 @@ Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::opti
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    const Tensor h_const = full_like(a, high);
+    const Tensor h_const = ttnn::full_like(a, high);
     Tensor a_max = tt::tt_metal::min(a, h_const, output_memory_config);
     if (low == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = full_like(a, low);
+        const Tensor l_const = ttnn::full_like(a, low);
         return tt::tt_metal::max(a_max, l_const, output_memory_config);
     }
 }
@@ -507,7 +507,6 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
     Tensor t2 = ttnn::multiply(ttnn::gtz(t0, output_mem_config), input_tensor, std::nullopt, output_mem_config);
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
-
 
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
@@ -663,6 +662,117 @@ Tensor _rdiv(uint8_t queue_id, const Tensor& input_tensor, float value, const st
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
     return ttnn::where(ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
+}
+
+// Function: hardshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
+Tensor _hardshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(param >= 0);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(ttnn::add(a, param, std::nullopt, output_mem_config)), a, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(ttnn::subtract(a, param, std::nullopt, output_mem_config)), a, std::nullopt, output_mem_config);
+    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+}
+
+// Function: softshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
+Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(param >= 0);
+    Tensor t_a_plus_param = ttnn::add(a, param, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
+    t_a_plus_param.deallocate();
+    Tensor t_a_minus_param = ttnn::subtract(a, param, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param, std::nullopt, output_mem_config);
+    t_a_minus_param.deallocate();
+    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
+}
+
+
+
+// logit(input, eps)=log(input / 1 - input)
+Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_eps = ttnn::full_like(input_a, eps);
+    Tensor t1m_eps = ttnn::full_like(input_a, (1 - eps));
+    Tensor logit_input = ttnn::where(
+        ttnn::ltz(t_eps, output_mem_config),
+        input_a,
+        ttnn::where(
+            ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
+            t_eps,
+            ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)
+            )
+        );
+    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
+    Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
+    linput_m1.deallocate();
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor logit_result = ttnn::where(
+        ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+        t_inf,
+        ttnn::where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
+        );
+    return logit_result;
+}
+
+// Celu
+// torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
+Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    float recip_val = 1.0f / alpha;
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, recip_val},
+    UnaryWithParam{UnaryOpType::EXP, 1.0f},
+    UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f}, UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
+
+    Tensor result = ttnn::unary_chain(input_a, ops_chain, output_mem_config);
+    result = ttnn::where(ttnn::gtz(input_a, output_mem_config), input_a, result);
+    return result;
+}
+
+// // tanhshrink(x) = x - tanh(x)
+Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::logical_not(x, output_mem_config, x);
+}
+
+// rpow: y = k**(a) = exp( a**log(k) )
+Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(k > 0.0, "rpow cannot be calcualted for non-positive numbers");
+    float log_k = logf(k);
+
+    Tensor result = ttnn::multiply(a, log_k);
+    return ttnn::exp(result, false);
+}
+
+using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
+Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+
+    // format to HW
+    Tensor y_hw = reshape(y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+
+    // compute @fn
+    Tensor z_0 = fn(y_hw, output_mem_config);
+    TT_FATAL(y_hw.get_legacy_shape() == z_0.get_legacy_shape(), "shape match");
+    y_hw.deallocate();
+
+    // reformat
+    Tensor z_1 = reshape(z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+    z_0.deallocate();
+
+    return z_1;
+}
+
+// Global Norm
+Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    return _make_global_from_hw_impl(_normalize, y, output_mem_config);
+}
+
+Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor trunc_res = trunc(input);
+    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
+    return result;
 }
 
 }  // namespace ttnn::operations::unary

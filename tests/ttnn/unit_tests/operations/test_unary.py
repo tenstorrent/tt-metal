@@ -302,7 +302,18 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_functio
 @pytest.mark.parametrize("w", [128])
 @skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_logit(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.logit, torch.logit)
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])

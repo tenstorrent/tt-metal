@@ -432,6 +432,16 @@ def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 
 
 @setup_host_and_device
+def normalize_global(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.normalize_global(t0)
+
+    output = tt2torch_tensor(t1)
+
+    return output
+
+
+@setup_host_and_device
 def normalize_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.normalize_hw(t0)
@@ -1277,7 +1287,7 @@ def repeat_interleave(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.repeat_interleave(t0, repeat, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.repeat_interleave(t0, repeat, dim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1319,7 +1329,7 @@ def eltwise_isclose(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.isclose(t0, t1, rtol, atol, equal_nan, output_mem_config=output_mem_config)
+    t2 = ttnn.isclose(t0, t1, rtol=rtol, atol=atol, equal_nan=equal_nan, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -2458,7 +2468,6 @@ def make_unary_op_optional_output_with_fast_approx(ttl_tensor_unop):
 # mean_global = make_unary_op(ttl.tensor.global_mean)
 # var_global = make_unary_op(ttl.tensor.global_var)
 # std_global = make_unary_op(ttl.tensor.global_std)
-normalize_global = make_unary_op(ttl.tensor.normalize_global)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op_optional_output(ttnn.cos)
 eltwise_sin = make_unary_op_optional_output(ttnn.sin)
@@ -2489,8 +2498,8 @@ eltwise_tanh = make_unary_op_optional_output(ttnn.tanh)
 eltwise_asinh = make_unary_op(ttl.tensor.asinh)
 eltwise_acosh = make_unary_op(ttl.tensor.acosh)
 eltwise_tanhshrink = make_unary_op(ttl.tensor.tanhshrink)
-eltwise_lgamma = make_unary_op(ttl.tensor.lgamma)
-eltwise_multigammaln = make_unary_op(ttl.tensor.multigammaln)
+eltwise_lgamma = make_ttnn_unary_op(ttnn.lgamma)
+eltwise_multigammaln = make_ttnn_unary_op(ttnn.multigammaln)
 eltwise_softsign = make_unary_op(ttl.tensor.softsign)
 eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
@@ -2509,10 +2518,10 @@ eltwise_sigmoid = make_unary_op_optional_output(ttnn.sigmoid)
 eltwise_sigmoid_accurate = make_unary_op_optional_output(ttnn.sigmoid_accurate)
 eltwise_log_sigmoid = make_unary_op_optional_output(ttnn.log_sigmoid)
 eltwise_swish = make_unary_op(ttl.tensor.swish)
-eltwise_log1p = make_unary_op(ttl.tensor.log1p)
+eltwise_log1p = make_ttnn_unary_op(ttnn.log1p)
 eltwise_mish = make_ttnn_unary_op(ttnn.mish)
-eltwise_hardswish = make_unary_op(ttl.tensor.hardswish)
-eltwise_hardsigmoid = make_unary_op(ttl.tensor.hardsigmoid)
+eltwise_hardswish = make_ttnn_unary_op(ttnn.hardswish)
+eltwise_hardsigmoid = make_ttnn_unary_op(ttnn.hardsigmoid)
 eltwise_digamma = make_unary_op(ttl.tensor.digamma)
 eltwise_silu = make_unary_op_optional_output(ttnn.silu)
 eltwise_square = make_unary_op_optional_output(ttnn.square)
@@ -2923,6 +2932,7 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 
     t2 = ttnn.embedding(t0, t1, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+    t2 = ttnn.reshape(t2, [t2.shape[0], 1, t2.shape[1], t2.shape[2]])
 
     tt_data = t2.cpu().to_torch()
 
