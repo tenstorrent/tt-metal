@@ -232,15 +232,12 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, 
         layer_num=0,
         dtype=dtype,
         configuration=model_args,
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=0,
     )
     for iter in range(iterations):
         pos = iter
-        tt_out = tt_model(
-            [attention_input],
-            pos,
-        )
+        tt_out = tt_model([attention_input], pos, rot_mats=rot_emb_matrix_list)
 
     ttnn.deallocate(tt_model.wqkv_list[0])
     ttnn.deallocate(tt_model.wo_list[0])
@@ -330,3 +327,39 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return xs_1BSH, attn_mask, attn_mask_torch
+
+
+def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_scaled=True):
+    freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    if use_scaled:
+        freqs = apply_scaling(freqs_unscaled)
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    rot_matrix = torch.zeros(dhead, dhead)
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    rot_matrix = rot_matrix.transpose(-1, -2)
+
+    # Support for start_pos different than 0
+    freqs = start_pos * freqs_unscaled
+    if use_scaled:
+        freqs = apply_scaling(freqs)
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    current_rot_mat = torch.zeros(dhead, dhead)
+    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    return ttnn.from_torch(
+        current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    ), ttnn.from_torch(
+        rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )

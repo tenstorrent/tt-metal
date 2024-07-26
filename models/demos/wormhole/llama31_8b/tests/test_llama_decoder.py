@@ -9,7 +9,7 @@ import ttnn
 from models.demos.wormhole.llama31_8b.tt.llama_common import (
     precompute_freqs,
     prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
+    get_single_rot_mat,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_decoder import TtTransformerBlock
 from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
@@ -38,16 +38,11 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        device,
+        start_pos=0,
+    )
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
@@ -57,7 +52,7 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         state_dict=state_dict,
         layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=generation_start_pos,
     )
 
@@ -85,7 +80,7 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, pos)
+        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
@@ -105,6 +100,9 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         else:
             logger.warning("Llama Decoder Block Failed!")
             all_tests_pass = False
+
+        # Update rotation matrix for next iteration
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
     if all_tests_pass:
         logger.info(f"All {generation_length} Llama decode iterations Passed!")

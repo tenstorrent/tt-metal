@@ -12,8 +12,7 @@ import pytest
 from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
+    get_single_rot_mat,
     cache_attention,
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
@@ -95,24 +94,12 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     else:
         emb_prefill_inputs = None
 
-    # Return the rotational embedding matrix on device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
-
     return (
         emb_inputs_decode,
         pt_tokenized_inputs_decode,
         emb_prefill_inputs,
         input_mask,
-        rot_emb_matrix_list,
+        None,
         prefill_seq_len,
         encoded_prompts,
     )
@@ -171,8 +158,14 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     generation_start_pos = prefill_seq_len
     max_generated_tokens = 120
     users_decoding = True
+    # pre-compute the rotational embedding matrix and send to device
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        device,
+        start_pos=0,
+    )
     logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
+    cache_attention(device, state_dict, model_args, current_rot_mat, dtype, max_generated_tokens)
 
     # if instruct_mode:
     #     tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -252,11 +245,12 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         )
 
         # Run ttnn mistral model
-        tt_out = tt_model(decode_input, current_pos)
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
         )  # [batch, seq, hidden_dim]
-
+        # Update rotation matrix for next iteration
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         # If temperature is 0, does greedy decoding (top-1)
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
 
