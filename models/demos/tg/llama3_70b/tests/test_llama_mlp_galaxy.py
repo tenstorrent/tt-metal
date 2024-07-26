@@ -181,7 +181,7 @@ def test_LlamaMLP_inference(
     max_context_len,
     llama_version,
     cluster_shape,
-    use_program_cache,
+    # use_program_cache, # SEE GH ISSUE: Line all-gather program cache issue
 ):
     if batch > max_batch_size:
         pytest.skip(f"Decode with {batch} users is not supported with large context")

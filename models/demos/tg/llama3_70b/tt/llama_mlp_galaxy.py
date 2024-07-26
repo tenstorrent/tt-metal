@@ -21,6 +21,8 @@ class TtLlamaMLP_galaxy:
         layer_num,
         hidden_size: int,
         model_config,
+        row_reduction_mat=None,
+        col_reduction_mat=None,
         cache_path=None,
         read_cache=False,
     ):
@@ -37,11 +39,36 @@ class TtLlamaMLP_galaxy:
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
 
+        if row_reduction_mat is not None:
+            self.row_reduction_mat = row_reduction_mat
+        else:
+            self.row_reduction_mat = self.get_reduction_mat(int(3.5 * 1024 * 4), reduction_factor=4)
+        if col_reduction_mat is not None:
+            self.col_reduction_mat = col_reduction_mat
+        else:
+            self.col_reduction_mat = self.get_reduction_mat(int(2 * 1024 * 8), reduction_factor=8)
+
         self.get_mlp_model_config()
         self.load_weights()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
+
+    def get_reduction_mat(self, hidden_size, reduction_factor):
+        reduction_mat = torch.eye(hidden_size // reduction_factor, hidden_size // reduction_factor)
+        reduction_mat = reduction_mat.repeat(reduction_factor, 1)
+
+        reduction_mat_tt = ttnn.as_tensor(
+            reduction_mat.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            cache_file_name=self.cache_path / f"reduction_matrix_{hidden_size}_{reduction_factor}.weight",
+        )
+
+        return reduction_mat_tt
 
     def get_mlp_model_config(self):
         if self.model_config["LLM_MODE"] == "decode":
@@ -129,6 +156,14 @@ class TtLlamaMLP_galaxy:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.FF1_ACT_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32, 2048 // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
     def load_weights(self):
         assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
         assert not hasattr(self, "w3_list"), "w3_list is already an attribute of this object"
@@ -198,87 +233,62 @@ class TtLlamaMLP_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        reduction of a multi-device tensor
-        """
-        concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
+    def tt_all_reduce(self, input_tensor, cluster_axis, dim=3, memory_config=None):
+        # Ensure the input tensor is in the correct memory configuration
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        out = torch.sum(out, dim=1, keepdim=True)
+        # Get the full device tensors list from the input tensor
+        device_tensors = ttnn.get_device_tensors(input_tensor)
 
-        shape = (
-            out.shape[2],
-            out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
-        )
+        num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
 
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+        def gather_tensors(indices):
+            tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
+            return ttnn.line_all_gather(
+                tensors,
+                dim,
+                num_links=2,
+                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
-        else:
-            act_mem_config = None
 
-        act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
-        out_tt = ttnn.from_torch(
-            out,
+        aggregated_outputs = []
+
+        if cluster_axis == 0:
+            # Process row-wise when cluster_axis is 0
+            for row in range(num_rows):
+                start_idx = row * num_cols
+                end_idx = start_idx + num_cols
+                indices = range(start_idx, end_idx)
+                gathered_tensor = gather_tensors(indices)
+                aggregated_outputs.append(gathered_tensor)
+
+        elif cluster_axis == 1:
+            # Process column-wise when cluster_axis is 1
+            for col in range(num_cols):
+                indices = range(col, len(device_tensors), num_cols)
+                gathered_tensor = gather_tensors(indices)
+                aggregated_outputs.append(gathered_tensor)
+
+        # Flatten device tensors
+        flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+
+        final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
+
+        final_output_tensor = ttnn.matmul(
+            final_output_tensor,
+            self.row_reduction_mat if cluster_axis == 0 else self.col_reduction_mat,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        return out_tt
-
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        shape = (out.shape[2], out.shape[3] // 32)
-
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            act_mem_config = None
-
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
+        return final_output_tensor
 
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         w1_out = ttnn.matmul(
             x,
             self.w1,
             # program_config=self.FF1_DRAM_SHARDED_PROGCFG,
-            # core_grid=ttnn.CoreGrid(y=1, x=8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -288,7 +298,7 @@ class TtLlamaMLP_galaxy:
             x,
             self.w3,
             # program_config=self.FF1_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            # core_grid=ttnn.CoreGrid(y=1, x=8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -298,20 +308,17 @@ class TtLlamaMLP_galaxy:
         w1_out = self.tt_all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
         w3_out = self.tt_all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
-        # w1_out = ttnn.all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-        # w3_out = ttnn.all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
-
         w1_out = ttnn.silu(w1_out)
 
         w1_out = ttnn.to_memory_config(w1_out, self.FF2_ACT_MEMCFG)
+        w3_out = ttnn.to_memory_config(w3_out, self.FF2_ACT_MEMCFG)
 
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
         w1_out.deallocate(True)
         w3_out.deallocate(True)
@@ -320,7 +327,7 @@ class TtLlamaMLP_galaxy:
             hidden_states,
             self.w2,
             # program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            # core_grid=ttnn.CoreGrid(y=1, x=8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -329,6 +336,7 @@ class TtLlamaMLP_galaxy:
         hidden_states = self.tt_all_reduce(
             hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
-        # hidden_states = ttnn.all_reduce(hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+        hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
 
         return hidden_states
