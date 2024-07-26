@@ -166,7 +166,7 @@ class CMakeBuild(build_ext):
             self.copy_file(src, full_lib_path)
 
     def is_editable_install_(self):
-        return not os.path.exists(self.build_lib)
+        return self.inplace
 
 
 # Include tt_metal_C for kernels and src/ and tools
