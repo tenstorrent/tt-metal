@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "noc_nonblocking_api.h"
+#include "limits.h"
 
 using namespace sfpi;
 
@@ -22,12 +23,12 @@ inline void calculate_floor()
         vFloat result = dst_reg[0];
         vFloat v = result;
         vInt tmp = float_to_int16(result); //TODO: Replace float_to_int16 to float_to_int32 once it is available
-        result= int32_to_float(tmp);
+        result = int32_to_float(tmp);
         v_if (result > v){
             result = result - 1;
         }
         v_endif;
-        v_if (v < -32768 || v > 32767){
+        v_if (v < SHRT_MIN || v > SHRT_MAX){
             result = v;
         }
         v_endif;
