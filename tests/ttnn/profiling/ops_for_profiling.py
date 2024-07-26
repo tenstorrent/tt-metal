@@ -77,6 +77,11 @@ def bcast_hw_shape_func(input_shape):
     return input_shape, input_shape_1
 
 
+def bcast_hw_shape_func_11(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, 1]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -444,6 +449,11 @@ all_binary_ops = [
     {
         "op": ttnn.mul,
         "name": "ttnn.mul",
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_hw",
+        "shape_func": bcast_hw_shape_func_11,
     },
     {
         "op": ttnn.divide,
