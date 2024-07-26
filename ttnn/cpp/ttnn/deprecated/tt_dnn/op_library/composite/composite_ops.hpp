@@ -476,9 +476,6 @@ Tensor var_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation
 Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 // Tensor std(const Tensor& y,const Tensor& mean_y);
 
-// Function normalize
-// use transformation y = (y - mean(y))/std(y) by broadcast
-Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor normalize_global(
     const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
