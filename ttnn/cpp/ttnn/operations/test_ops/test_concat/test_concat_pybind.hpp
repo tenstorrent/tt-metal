@@ -16,7 +16,7 @@ namespace ttnn::operations::test_ops::detail {
 
 template <typename test_operation_t>
 void bind_test_concat(py::module& module, const test_operation_t &operation) {
-    const auto concat_doc = R"doc( Concats :attr:`tensors` in the given :attr:`dim`.
+    auto concat_doc = R"doc( Concats :attr:`tensors` in the given :attr:`dim`.
 
                             Args:
                                 * :attr:`tensors`: the tensors to be concatenated.
@@ -40,24 +40,25 @@ void bind_test_concat(py::module& module, const test_operation_t &operation) {
                                 )doc";
 
     using OperationType = decltype(operation);
-    ttnn::bind_registered_operation(
+    bind_registered_operation(
         module,
         operation,
         concat_doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType &self,
-                const std::vector<ttnn::Tensor> &tensors,
-                const int dim,
-                std::optional<ttnn::Tensor> &optional_output_tensor,
-                std::optional<ttnn::MemoryConfig> &memory_config
-                ) {
-                    return self(tensors, dim, optional_output_tensor, memory_config);
+            [] (const test_operation_t &self,
+                const std::vector<ttnn::Tensor> &input_tensors,
+                const int dim
+                // std::optional<ttnn::Tensor> &optional_output_tensor,
+                // std::optional<ttnn::MemoryConfig> &memory_config
+                ) -> ttnn::Tensor {
+                    // return self(input_tensors, dim, optional_output_tensor, memory_config);
+                    return self(input_tensors, dim);
                 },
-                py::arg("tensors"),
-                py::arg("dim") = 0,
+                py::arg("input_tensors"),
                 py::kw_only(),
-                py::arg("output_tensor").noconvert() = std::nullopt,
-                py::arg("memory_config") = std::nullopt,
+                py::arg("dim") = 3,
+                // py::arg("output_tensor").noconvert() = std::nullopt,
+                // py::arg("memory_config") = std::nullopt,
         }
     );
 }

@@ -20,7 +20,6 @@ struct Concat {
     
     struct operation_attributes_t {
         unint32_t dim;
-        const MemoryConfig output_mem_config;
     };
 
     struct tensor_args_t {
@@ -83,5 +82,5 @@ struct Concat {
 
 }
 }
-constexpr auto test_concat = ttnn::test_concat<operations::test_ops::Concat>("ttnn::test_concat");
+// constexpr auto test_concat = ttnn::test_concat<operations::test_ops::Concat>("ttnn::test_concat");
 }

@@ -6,7 +6,7 @@
 
 #include <pybind11/pybind11.h>
 
-#include "ttnn/operations/test_ops/Concat/concat_pybind.hpp"
+#include "ttnn/operations/test_ops/test_concat/test_concat_pybind.hpp"
 
 namespace ttnn::operations::test_ops {
 

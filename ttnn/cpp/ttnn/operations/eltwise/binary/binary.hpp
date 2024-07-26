@@ -90,6 +90,17 @@ inline Tensor execute_on_worker_thread(
 template <BinaryOpType binary_op_type, bool in_place>
 struct BinaryOperation {
 
+
+
+
+
+
+
+
+
+
+
+
     static Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
@@ -148,6 +159,20 @@ struct BinaryOperation {
                 binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
             BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
 
     static Tensor execute_on_worker_thread(
         const Tensor &input_tensor_a_arg,
