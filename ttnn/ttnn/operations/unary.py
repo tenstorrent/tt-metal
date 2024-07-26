@@ -614,4 +614,37 @@ def _golden_function_swiglu(input_tensor_a, dim, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.swiglu, golden_function=_golden_function_swiglu)
+
+
+def _golden_function_normalize_global(input_tensor_a, *args, **kwargs):
+    import torch
+
+    mx = torch.mean(input_tensor_a, [0, 1, 2, 3], keepdim=True)
+    sx = torch.std(input_tensor_a, [0, 1, 2, 3], keepdim=True)
+    input_tensor_a = (input_tensor_a - mx) / sx
+
+    return input_tensor_a
+
+
+ttnn.attach_golden_function(
+    ttnn._ttnn.operations.unary.normalize_global, golden_function=_golden_function_normalize_global
+)
+
+
+def _golden_function_rpow(input_tensor_a, dim, *args, **kwargs):
+    import torch
+
+    return torch.pow(dim, input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.rpow, golden_function=_golden_function_rpow)
+
+
+def _golden_function_frac(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.frac(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.frac, golden_function=_golden_function_frac)
 __all__ = []
