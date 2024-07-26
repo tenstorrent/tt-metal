@@ -89,6 +89,7 @@ Pointwise Unary
    ttnn/bitwise_right_shift
    ttnn/cbrt
    ttnn/celu
+   ttnn/clamp
    ttnn/clip
    ttnn/clone
    ttnn/cos
@@ -133,6 +134,7 @@ Pointwise Unary
    ttnn/mish
    ttnn/multigammaln
    ttnn/neg
+   ttnn/normalize_hw
    ttnn/prelu
    ttnn/reglu
    ttnn/relu
@@ -143,6 +145,7 @@ Pointwise Unary
    ttnn/rsqrt
    ttnn/rdiv
    ttnn/rsub
+   ttnn/selu
    ttnn/sigmoid
    ttnn/sigmoid_accurate
    ttnn/sign
@@ -160,6 +163,7 @@ Pointwise Unary
    ttnn/polygamma
    ttnn/rad2deg
    ttnn/reciprocal
+   ttnn/round
    ttnn/sqrt
    ttnn/square
    ttnn/swiglu
@@ -167,6 +171,7 @@ Pointwise Unary
    ttnn/triu
    ttnn/tanhshrink
    ttnn/threshold
+   ttnn/trunc
    ttnn/mul_bw
    ttnn/clamp_bw
    ttnn/hardtanh_bw

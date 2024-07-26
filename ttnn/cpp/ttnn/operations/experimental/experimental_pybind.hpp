@@ -8,12 +8,15 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
     // Transformer ops
     transformer::detail::bind_experimental_transformer_operations(module);
+    reduction::detail::bind_argmax_operation(module);
+    reduction::detail::bind_argmin_operation(module);
 }
 
 }  // namespace ttnn::operations::experimental

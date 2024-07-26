@@ -32,6 +32,7 @@ struct ExecuteArgMax {
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return operator()(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
     }
+
 };
 
 }  // namespace operations::reduction
