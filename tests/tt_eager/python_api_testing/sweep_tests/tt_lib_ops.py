@@ -432,6 +432,16 @@ def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 
 
 @setup_host_and_device
+def normalize_global(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.normalize_global(t0)
+
+    output = tt2torch_tensor(t1)
+
+    return output
+
+
+@setup_host_and_device
 def normalize_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.normalize_hw(t0)
@@ -2458,7 +2468,6 @@ def make_unary_op_optional_output_with_fast_approx(ttl_tensor_unop):
 # mean_global = make_unary_op(ttl.tensor.global_mean)
 # var_global = make_unary_op(ttl.tensor.global_var)
 # std_global = make_unary_op(ttl.tensor.global_std)
-normalize_global = make_unary_op(ttl.tensor.normalize_global)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op_optional_output(ttnn.cos)
 eltwise_sin = make_unary_op_optional_output(ttnn.sin)

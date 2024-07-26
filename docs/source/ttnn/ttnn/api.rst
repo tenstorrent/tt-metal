@@ -109,6 +109,7 @@ Pointwise Unary
    ttnn/gelu
    ttnn/glu
    ttnn/hardshrink
+   ttnn/normalize_global
    ttnn/hardsigmoid
    ttnn/hardswish
    ttnn/hardtanh
@@ -130,6 +131,7 @@ Pointwise Unary
    ttnn/log2
    ttnn/log_sigmoid
    ttnn/logical_not
+   ttnn/frac
    ttnn/logit
    ttnn/mish
    ttnn/multigammaln
@@ -290,6 +292,7 @@ Pointwise Binary
    ttnn/logical_or_
    ttnn/logical_xor_
    ttnn/pow
+   ttnn/rpow
    ttnn/ldexp
    ttnn/logical_and
    ttnn/logical_or

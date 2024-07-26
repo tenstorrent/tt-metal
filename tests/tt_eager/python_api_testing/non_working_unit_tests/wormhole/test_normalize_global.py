@@ -9,6 +9,7 @@ import random
 import pytest
 import torch
 import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -21,7 +22,8 @@ def run_normalize_global_test(input_shape, dtype, dlayout, in_mem_config, out_me
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
 
     # compute ref value
-    ref_value = pytorch_ops.normalize_global(x)
+    golden_function = ttnn.get_golden_function(ttnn.normalize_global)
+    ref_value = golden_function(x)
 
     tt_result = tt_lib_ops.normalize_global(
         x=x,
@@ -42,7 +44,7 @@ def run_normalize_global_test(input_shape, dtype, dlayout, in_mem_config, out_me
 
 test_sweep_args = [
     (
-        (4, 8, 32, 22),
+        (4, 8, 32, 32),
         [ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -52,7 +54,7 @@ test_sweep_args = [
         14854324,
     ),
     (
-        (4, 8, 32, 22),
+        (4, 8, 32, 32),
         [ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -62,7 +64,7 @@ test_sweep_args = [
         14854324,
     ),
     (
-        (4, 12, 32, 104),
+        (4, 12, 32, 128),
         [ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -72,7 +74,7 @@ test_sweep_args = [
         14854324,
     ),
     (
-        (4, 12, 32, 104),
+        (4, 12, 32, 128),
         [ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR],
         [
