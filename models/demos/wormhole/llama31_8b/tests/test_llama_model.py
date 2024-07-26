@@ -8,7 +8,7 @@ import os
 import ttnn
 from models.demos.wormhole.llama31_8b.tt.llama_common import (
     precompute_freqs,
-    freqs_to_rotation_matrix,
+    get_single_rot_mat,
     prepare_inputs_ttnn,
     sample,
     encode_prompt_llama_instruct,
@@ -71,16 +71,11 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     generation_length = iterations
 
     # pre-compute the rotational embedding matrix and send to device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        device,
+        start_pos=0,
+    )
 
     # Load TTNN model
     tt_model = TtTransformer(
@@ -90,7 +85,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=generation_start_pos,
     )
 
@@ -123,11 +118,14 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, pos)
+        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
+
+        # Update rotation matrix for next iteration
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
         if run_ref_pt:  # Run reference model
             # freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
