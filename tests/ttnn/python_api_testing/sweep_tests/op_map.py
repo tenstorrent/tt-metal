@@ -773,4 +773,8 @@ op_map = {
         "tt_op": ttnn_ops.addalpha_bw,
         "pytorch_op": pytorch_ops.addalpha_bw,
     },
+    "relu-bw": {
+        "tt_op": ttnn_ops.relu_bw,
+        "pytorch_op": pytorch_ops.relu_bw,
+    },
 }
