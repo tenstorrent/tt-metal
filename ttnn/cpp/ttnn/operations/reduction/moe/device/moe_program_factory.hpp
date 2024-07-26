@@ -1,25 +1,21 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
 #include "tt_metal/common/math.hpp"
-#include "tt_eager/tt_dnn/op_library/math.hpp"
 
 namespace ttnn::operations::reduction::detail {
 
-operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_tensor, const Tensor &topk_mask_tensor, const Tensor &expert_mask_tensor, const uint16_t k, Tensor &out_tensor) {
+operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_tensor, const Tensor &expert_mask_tensor, const Tensor &topk_mask_tensor, const uint16_t k, Tensor &out_tensor) {
     tt::tt_metal::Program program{};
 
-    tt::log_info("starting moe_single_core_interleaved");
     CoreRange core({0, 0}, {0, 0});
-    tt::log_info("core: {}", core);
 
-    bool fp32_dest_acc_en = false;
+    bool fp32_dest_acc_en = true;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::DataFormat topk_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.get_dtype());
     tt::DataFormat expert_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.get_dtype());
@@ -58,12 +54,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
 
-    tt::log_info("core: {}", core);
-    tt::log_info("num_input_tiles: {}", num_input_tiles);
-    tt::log_info("num_out_tiles: {}", num_out_tiles);
-    tt::log_info("Ht: {}", Ht);
-    tt::log_info("Wt: {}", Wt);
-
     // INPUT CBs
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four tiles of space
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -72,17 +62,17 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
 		.set_page_size(input_cb_index, input_tile_size);
     auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, input_cb_config);
 
-    uint32_t topk_mask_cb_index = tt::CB::c_in1;
-    tt::tt_metal::CircularBufferConfig topk_mask_cb_config = tt::tt_metal::CircularBufferConfig(
-        cb_in_units * topk_mask_tile_size, {{topk_mask_cb_index, topk_mask_cb_data_format}})
-        .set_page_size(topk_mask_cb_index, topk_mask_tile_size);
-    auto cb_topk_mask_tensor = tt::tt_metal::CreateCircularBuffer(program, core, topk_mask_cb_config);
-
-    uint32_t expert_mask_cb_index = tt::CB::c_in2;
+    uint32_t expert_mask_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig expert_mask_cb_config = tt::tt_metal::CircularBufferConfig(
         cb_in_units * expert_mask_tile_size, {{expert_mask_cb_index, expert_mask_cb_data_format}})
         .set_page_size(expert_mask_cb_index, expert_mask_tile_size);
     auto cb_expert_mask_tensor = tt::tt_metal::CreateCircularBuffer(program, core, expert_mask_cb_config);
+
+    uint32_t topk_mask_cb_index = tt::CB::c_in2;
+    tt::tt_metal::CircularBufferConfig topk_mask_cb_config = tt::tt_metal::CircularBufferConfig(
+        cb_in_units * topk_mask_tile_size, {{topk_mask_cb_index, topk_mask_cb_data_format}})
+        .set_page_size(topk_mask_cb_index, topk_mask_tile_size);
+    auto cb_topk_mask_tensor = tt::tt_metal::CreateCircularBuffer(program, core, topk_mask_cb_config);
 
     // identity scale input
     uint32_t scale_cb_index = tt::CB::c_in3;
@@ -145,17 +135,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         .set_page_size(out_cb_index, out_tile_size);
     auto cb_out0_id = tt::tt_metal::CreateCircularBuffer( program, core, c_out0_config );
 
-    tt::log_info("input_cb_index: {}", input_cb_index);
-    tt::log_info("topk_mask_cb_index: {}", topk_mask_cb_index);
-    tt::log_info("expert_mask_cb_index: {}", expert_mask_cb_index);
-    tt::log_info("scale_cb_index: {}", scale_cb_index);
-    tt::log_info("index_cb_index: {}", index_cb_index);
-    tt::log_info("input_transposed_cb_index: {}", input_transposed_cb_index);
-    tt::log_info("index_transposed_cb_index: {}", index_transposed_cb_index);
-    tt::log_info("values_cb_index: {}", values_cb_index);
-    tt::log_info("output_ind_cb_index: {}", output_ind_cb_index);
-    tt::log_info("out_cb_index: {}", out_cb_index);
-
     std::vector<uint32_t> reader_compile_time_args = {
                                                         input_cb_index,
                                                         index_cb_index,
@@ -192,15 +171,15 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
                                                         Ht,
                                                         k,
                                                         packed_identity_scalar};
-    tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_binary_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     SetRuntimeArgs(
         program,
-        binary_writer_kernel_id,
+        unary_writer_kernel_id,
         core,
         {
             out_buffer->address(),
@@ -235,25 +214,40 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         tt::tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
         const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
 
         auto input_buffer = input_buffers.at(0);
+        auto topk_mask_buffer = input_buffers.at(2);
+        auto expert_mask_buffer = input_buffers.at(1);
         auto output_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         auto &reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
         reader_runtime_args[0] = input_buffer->address();
+        reader_runtime_args[1] = topk_mask_buffer->address();
+        reader_runtime_args[2] = expert_mask_buffer->address();
+        tt::log_info("reader_runtime_args[0]: {}", reader_runtime_args[0]);
+        tt::log_info("reader_runtime_args[1]: {}", reader_runtime_args[1]);
+        tt::log_info("reader_runtime_args[2]: {}", reader_runtime_args[2]);
 
-        auto &writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, core);
+        auto &writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
         writer_runtime_args[0] = output_buffer->address();
+        tt::log_info("writer_runtime_args[0]: {}", writer_runtime_args[0]);
 
 
     };
+
+    tt::log_info("reader_runtime_args[0]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[0]);
+    tt::log_info("reader_runtime_args[1]: beff u{}",GetRuntimeArgs(program, unary_writer_kernel_id)[0]);
+    // tt::log_info("reader_runtime_args[1]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[1]);
+    // tt::log_info("reader_runtime_args[2]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[2]);
+    // tt::log_info("writer_runtime_args[0]: beff u{}",out_buffer->address());
+
 
 
     return {std::move(program), override_runtime_args_callback};

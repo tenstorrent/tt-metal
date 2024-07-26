@@ -15,11 +15,20 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/unpack.h"
 #include "compute_kernel_api/pack.h"
-
+#include "debug/dprint.h"
+#include "ckernel_sfpu.h"
+using namespace ckernel;
 // topk llk needs a global variable atm
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
-
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    UNPACK(( DPRINT << "======" << ENDL() ));
+    for (uint16_t r = 0; r < 32; ++ r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
+    }
+    UNPACK(( DPRINT << "++++++" << ENDL() ));
+}
 namespace NAMESPACE {
 template<uint32_t in0, uint32_t in1, uint32_t num_tiles>
 void max_block_inplace() {
@@ -101,7 +110,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
             release_dst(tt::DstMode::Half);
         }
     }
-    cb_pop_front(in1_cb, cols);
+    //cb_pop_front(in1_cb, cols);
 }
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
@@ -313,6 +322,7 @@ void top_k() {
                 release_dst(tt::DstMode::Half);
                 a = !a;
             }
+
             cb_reserve_back(input_transposed_cb_index, Wt);
             cb_reserve_back(index_transposed_cb_index, Wt);
 
@@ -357,6 +367,8 @@ void top_k() {
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);
     }
+    //sfpu::_init_sfpu_config_reg();
+    sfpu::_llk_math_eltwise_unary_sfpu_init_();
 }
 
 void MAIN {
@@ -376,16 +388,19 @@ void MAIN {
     constexpr uint32_t K = get_compile_time_arg_val(12);
     constexpr uint32_t logk = get_compile_time_arg_val(13);
     constexpr uint32_t logWt = get_compile_time_arg_val(14);
+
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
+
     constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
 
     // mask out invalid experts
     add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt);
-
+    //print_full_tile(input_cb_index);
     // top-k
     top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
-
+    //sfpu::_init_sfpu_config_reg();
+    print_full_tile(values_cb_index);
     // mask out all experts except the top-k
     add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt);
     eqz_block_inplace(output_ind_cb_index, Ht*Kt);

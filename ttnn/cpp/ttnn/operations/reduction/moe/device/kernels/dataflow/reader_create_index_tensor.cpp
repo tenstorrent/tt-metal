@@ -106,10 +106,10 @@ void kernel_main() {
         }
 
         //expert mask
-        for (uint32_t j = 0; j < Kt; ++j) {
+        for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(cb_expert_mask, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_expert_mask);
-            noc_async_read_tile(i*Kt + j, s2, l1_write_addr);
+            noc_async_read_tile(i*Wt + j, s2, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_expert_mask, onetile);
         }
