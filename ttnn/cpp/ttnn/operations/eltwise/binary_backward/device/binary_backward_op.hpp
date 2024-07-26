@@ -57,6 +57,10 @@ std::vector<Tensor> _logaddexp_bw( const Tensor& grad, const Tensor& input, cons
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _logaddexp2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _squared_difference_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+template <bool>
+std::vector<Tensor> _min_or_max_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<ttnn::Tensor> _subalpha_bw( const Tensor& grad, const Tensor& input, const Tensor& other, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -137,6 +141,34 @@ template <>
 struct OpHandler<BinaryBackwardOpType::ASSIGN_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _assign_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::LOGADDEXP2_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _logaddexp2_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::SQUARED_DIFFERENCE_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _squared_difference_bw(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::MIN_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _min_or_max_bw<false>(grad, input, other, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<BinaryBackwardOpType::MAX_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _min_or_max_bw<true>(grad, input, other, output_mem_config);
     }
 };
 
