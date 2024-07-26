@@ -100,6 +100,7 @@ def test_torch_bloom_for_causal_lm():
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull(reason_str="#10797: OOM")
 def test_ttnn_bloom_for_causal_lm(device, batch_size=8):
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)

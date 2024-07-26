@@ -22,6 +22,7 @@ def torch_random(shape, low, high, dtype):
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])

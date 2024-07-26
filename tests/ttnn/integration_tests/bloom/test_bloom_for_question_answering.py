@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
 def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, batch_size=8, max_length=384):
     torch.manual_seed(0)
