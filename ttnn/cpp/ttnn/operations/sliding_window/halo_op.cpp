@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo_op.hpp"
 
 namespace ttnn::operations::halo {
 

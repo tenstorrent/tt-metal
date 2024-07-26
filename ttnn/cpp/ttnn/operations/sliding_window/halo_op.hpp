@@ -9,7 +9,7 @@
 
 // #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 
 namespace ttnn::operations {
