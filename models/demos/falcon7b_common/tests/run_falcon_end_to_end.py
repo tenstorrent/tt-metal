@@ -165,27 +165,28 @@ def run_test_FalconCausalLM_end_to_end(
     )
     profiler.end("TtFalcon_model_setup")
 
+    # Generate dummy kv_cache --------------------------------------------------------------
+    (
+        past_key_values,
+        tt_layer_past,
+        kv_len,
+    ) = get_rand_falcon_inputs(
+        llm_mode,
+        seq_len,
+        batch,
+        kv_cache_len,
+        devices,
+        global_batch,
+        head_dim,
+        max_position_embeddings,
+        configuration,
+        model_config,
+        num_layers=num_layers,
+        generate_attention_inputs=False,
+    )
+
     if not device_perf:
         # Do warmp up run unless testing device perf -------------------------------------------
-        # Generate dummy kv_cache --------------------------------------------------------------
-        (
-            past_key_values,
-            tt_layer_past,
-            kv_len,
-        ) = get_rand_falcon_inputs(
-            llm_mode,
-            seq_len,
-            batch,
-            kv_cache_len,
-            devices,
-            global_batch,
-            head_dim,
-            max_position_embeddings,
-            configuration,
-            model_config,
-            num_layers=num_layers,
-            generate_attention_inputs=False,
-        )
 
         profiler.start("processing_of_input")
         # TODO: Generate attention_mask on device
