@@ -27,51 +27,11 @@ using ttnn::operations::unary::UnaryWithParam;
 operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool untilize_out);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t per_core_M, uint32_t per_core_N, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool skip_compute, bool skip_in0_mcast, bool skip_write_back);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out);
-
-
-/**
- * Generalized blocked matmul with support for tilize and untilize and mixed-prec
- */
-struct BMMTilizeUntilize {
-    const DataType out_dt_;
-    const uint32_t in0_nblocks_h_, in0_nblocks_w_, in1_nblocks_w_;
-    const uint32_t in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_;
-    const uint32_t out_subblock_ntiles_h_, out_subblock_ntiles_w_;
-    const bool tilize_in0_, untilize_out_;
-    const bool has_bias_;
-    const DeviceComputeKernelConfig compute_kernel_config;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-};
-
-/**
- * Blocked Matmul, with support for tilize a and untilize output.
- * NOTE: Takes blocks and subblock information as arguments.
- */
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias, DataType out_dt,
-                           uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
-                           uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
-                           uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_in0, bool untilize_out, bool has_bias,
-                           std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
-                                    const Tensor &in0, const Tensor &in1, Tensor &bias, DataType out_dt,
-                                    uint32_t in0_height_nblocks, uint32_t in0_width_nblocks, uint32_t in1_width_nblocks,
-                                    uint32_t in0_block_height_ntiles, uint32_t in0_block_width_ntiles, uint32_t in1_block_width_ntiles,
-                                    uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                                    bool tilize_in0, bool untilize_out, bool has_bias,
-                                    Tensor &out, DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace tt_metal
 
