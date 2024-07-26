@@ -4,15 +4,13 @@
 
 #pragma once
 
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
 
@@ -23,8 +21,8 @@ using MatmulMultiCoreReuseMultiCast1DProgramConfig =
 // MatmulProgramConfig is the Union of the above types
 using MatmulProgramConfig = tt::operations::primary::MatmulProgramConfig;
 
-using ttnn::operations::unary::UnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
 namespace operations {
 namespace matmul {
