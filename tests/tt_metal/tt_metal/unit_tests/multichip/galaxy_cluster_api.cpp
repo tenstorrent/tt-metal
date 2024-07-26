@@ -102,8 +102,6 @@ TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
         {
             uint32_t num_rows_harvested = 0;
             uint32_t harvest_mask = tt::Cluster::instance().get_harvested_rows(device_id);
-            std::cout << device_id << endl;
-            std::cout << harvest_mask << endl;
             while (harvest_mask)
             {
                 if (harvest_mask & 1)
@@ -112,8 +110,6 @@ TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
                 }
                 harvest_mask = harvest_mask >> 1;
             }
-            std::cout << num_rows_harvested << endl;
-            std::cout << endl;
             ASSERT_TRUE(num_rows_harvested == 1);
         }
     }
