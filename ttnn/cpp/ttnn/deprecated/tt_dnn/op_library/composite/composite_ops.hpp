@@ -56,15 +56,6 @@ Tensor mac(
 Tensor mac(
     const Tensor& a, float b, float c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// Function sign
-// compute sgn(x) = (x>=0) - (x<=0);
-// inline
-// Tensor sign(const Tensor& x);
-
-// log1p 1
-// use transformation y = log(1.0 + x) by broadcast
-Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // Function Selu - scaled exponential linear
 // use transformation y = scale * alpha * (exp(X)-1) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
@@ -103,23 +94,9 @@ Tensor max(
 Tensor tanhshrink(
     const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor lgamma(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// multivariate log-gamma function
-Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor logical_andi(
     const Tensor& input_a,
     float immediate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// ∣input−other∣≤ atol+rtol×∣other∣
-Tensor isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
@@ -219,12 +196,6 @@ Tensor xlogy(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// logical_xor
-Tensor logical_xor(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // logical_noti
 Tensor logical_noti(
     const Tensor& input_a,
@@ -286,12 +257,6 @@ Tensor lerp(
     const Tensor& input_c,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// hypot(a,b) = sqrt[ a^2 + b^2 ]
-Tensor hypot(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor scatter(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -306,23 +271,6 @@ Tensor threshold(
 
 // cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 Tensor cbrt(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// PyTorch version:
-// hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-//
-// for Theano version use scale = 1.0/5.0f = 0.2f with shift = 0.5f.
-Tensor hardsigmoid(
-    const Tensor& tensor_a,
-    float scale = 1.0f / 6.0f,
-    float shift = 0.5f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor hardswish(
-    const Tensor& a,
-    float scale = 1.0f / 6.0f,
-    float shift = 0.5f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 Tensor where(
