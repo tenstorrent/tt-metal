@@ -9,7 +9,7 @@ import ttnn
 from transformers.models import bloom
 
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

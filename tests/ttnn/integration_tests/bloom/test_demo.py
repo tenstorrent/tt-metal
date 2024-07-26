@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.demos.grayskull.functional_bloom.demo.demo_causal_lm import test_demo as demo_cg_json
 from models.demos.grayskull.functional_bloom.demo.demo_causal_lm import test_demo_hellaswag as demo_cg_hellaswag
