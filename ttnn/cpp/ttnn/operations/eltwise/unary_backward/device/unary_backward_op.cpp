@@ -643,7 +643,7 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const std
 }
 // square
 // result:  2 * input * grad_data
-std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
@@ -776,7 +776,7 @@ std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const std::
     return grad_tensor;
 }
 
-std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_tensor = ttnn::operations::creation::zeros_like(input);
     Tensor one_tensor = ttnn::operations::creation::ones_like(input);
@@ -799,7 +799,7 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
     return grad_tensor;
 }
 
-std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -808,7 +808,7 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const Memor
 
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
@@ -827,7 +827,7 @@ std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const Memo
 
 // Selu
 // result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
-std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_lambd = ttnn::multiply(grad, 1.0507f, std::nullopt, output_mem_config);
     Tensor grad_result = where(
@@ -1614,16 +1614,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Memo
     switch (OpType) {
         case UnaryBackwardOpType::ACOSH_BW:
             return _acosh_bw;
-        case UnaryBackwardOpType::RELU6_BW:
-            return _relu6_bw;
-        case UnaryBackwardOpType::ABS_BW:
-            return _abs_bw;
-        case UnaryBackwardOpType::SILU_BW:
-            return _silu_bw;
-        case UnaryBackwardOpType::SELU_BW:
-            return _selu_bw;
-        case UnaryBackwardOpType::SQUARE_BW:
-            return _square_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

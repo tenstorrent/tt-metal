@@ -1143,27 +1143,27 @@ void py_module(py::module& module) {
         ttnn::log_bw,
         R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_op(
         module,
         ttnn::relu6_bw,
         R"doc(Performs backward operations for relu6 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_op(
         module,
         ttnn::abs_bw,
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_op(
         module,
         ttnn::silu_bw,
         R"doc(Performs backward operations for silu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_op(
         module,
         ttnn::selu_bw,
         R"doc(Performs backward operations for selu on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_op(
         module,
         ttnn::square_bw,
         R"doc(Performs backward operations for square on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
