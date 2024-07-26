@@ -41,6 +41,7 @@ bool ncrisc_enabled_g;
 bool trisc_enabled_g;
 bool lazy_g;
 bool time_just_finish_g;
+bool use_global_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -58,6 +59,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, " -kg: number of kernel groups (default 1)");
+        log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
         log_info(LogTest, "  -rs:run \"slow\" kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -rf:run \"fast\" kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -nf:run <n> fast kernels between slow kernels (default 0)");
@@ -80,6 +82,7 @@ void init(int argc, char **argv) {
     n_sems_g = test_args::get_command_option_uint32(input_args, "-S", 0);
     n_kgs_g = test_args::get_command_option_uint32(input_args, "-kg", 1);
     lazy_g = test_args::has_command_option(input_args, "-z");
+    use_global_g = test_args::has_command_option(input_args, "-g");
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
     fast_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rf", 0);
     slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
@@ -140,6 +143,9 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
     };
     if (run_cycles != 0) {
         defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
+    }
+    if (use_global_g) {
+        defines.insert(std::pair<string, string>("KERNEL_GLOBAL", "1"));
     }
 
     for (uint32_t i = 0; i < n_sems_g; i++) {
