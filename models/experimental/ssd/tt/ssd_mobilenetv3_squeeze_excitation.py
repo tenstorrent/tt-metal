@@ -57,7 +57,7 @@ class TtSqueezeExcitation(torch.nn.Module):
         )
 
         self.activation = ttnn.relu
-        self.scale_activation = tt_lib.tensor.hardsigmoid
+        self.scale_activation = ttnn.hardsigmoid
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         scale = self.avgpool(input)
