@@ -9,7 +9,6 @@
 #include <random>
 
 #include "n300_device_fixture.hpp"
-#include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
