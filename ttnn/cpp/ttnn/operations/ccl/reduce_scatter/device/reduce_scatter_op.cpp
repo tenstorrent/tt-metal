@@ -68,13 +68,14 @@ static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_typ
 
 namespace operations{
 namespace ccl{
-Tensor reduce_scatter_impl(
+Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t scatter_dim,
+    ReduceOpMath math_op,
     const uint32_t num_links,
-    const MemoryConfig& output_mem_config,
-    const ttnn::ccl::Topology topology) {
+    const MemoryConfig& output_mem_config) {
+    ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
@@ -122,16 +123,6 @@ Tensor reduce_scatter_impl(
     return output_tensors.at(0);
 }
 
-Tensor reduce_scatter(
-    const Tensor& input_tensor,
-    const uint32_t scatter_dim,
-    ReduceOpMath math_op,
-    const uint32_t num_links,
-    const MemoryConfig& output_mem_config) {
-    ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
-    return reduce_scatter_impl(
-        input_tensor, binary_op_type, scatter_dim, num_links, output_mem_config,ttnn::ccl::Topology::Ring);
-}
 } // namespace ccl
 } // namespace operations
 
