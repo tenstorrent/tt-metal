@@ -1516,23 +1516,23 @@ def pow_float(x):
 
 
 def argmax_1(x):
-    tt_lib.tensor.argmax(x, dim=-1)
+    ttnn.argmax(x, dim=-1)
 
 
 def argmax_2(x):
-    tt_lib.tensor.argmax(x, dim=-2)
+    ttnn.argmax(x, dim=-2)
 
 
 def argmax_3(x):
-    tt_lib.tensor.argmax(x, dim=-3)
+    ttnn.argmax(x, dim=-3)
 
 
 def argmax_4(x):
-    tt_lib.tensor.argmax(x, dim=-4)
+    ttnn.argmax(x, dim=-4)
 
 
 def argmax_all(x):
-    tt_lib.tensor.argmax(x, dim=-1, all=True)
+    ttnn.argmax(x, dim=-1, all=True)
 
 
 def argmin_1(x):
@@ -2264,22 +2264,22 @@ all_unary_ops = [
     },
     {
         "op": argmax_1,
-        "name": "tt_lib.tensor.argmax_dim_3",
+        "name": "ttnn.argmax_dim_3",
         "num_repeats": 2,
     },
     {
         "op": argmax_2,
-        "name": "tt_lib.tensor.argmax_dim_2",
+        "name": "ttnn.argmax_dim_2",
         "num_repeats": 2,
     },
     {
         "op": argmax_3,
-        "name": "tt_lib.tensor.argmax_dim_1",
+        "name": "ttnn.argmax_dim_1",
         "num_repeats": 2,
     },
     {
         "op": argmax_all,
-        "name": "tt_lib.tensor.argmax_all",
+        "name": "ttnn.argmax_all",
         "num_repeats": 2,
     },
     {

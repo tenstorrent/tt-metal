@@ -529,8 +529,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.repeat
 
-.. autofunction:: tt_lib.tensor.argmax
-
 Loss Functions
 ==============
 
