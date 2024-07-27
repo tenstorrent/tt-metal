@@ -1186,18 +1186,6 @@ op_map = {
         "tt_op": tt_lib_ops.abs_bw,
         "pytorch_op": pytorch_ops.abs_bw,
     },
-    "gt-bw": {
-        "tt_op": tt_lib_ops.gt_bw,
-        "pytorch_op": pytorch_ops.gt_bw,
-    },
-    "lt-bw": {
-        "tt_op": tt_lib_ops.gt_bw,
-        "pytorch_op": pytorch_ops.gt_bw,
-    },
-    "ne-bw": {
-        "tt_op": tt_lib_ops.ne_bw,
-        "pytorch_op": pytorch_ops.ne_bw,
-    },
     "binary-le-bw": {
         "tt_op": tt_lib_ops.binary_le_bw,
         "pytorch_op": pytorch_ops.binary_le_bw,

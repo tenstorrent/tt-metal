@@ -16,6 +16,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "tt_numpy/functions.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -1026,20 +1027,6 @@ Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, tt::tt_metal::_std_overload)(y, output_mem_config);
 }
 
-// Function normalize
-// use transformation y = (y - mean(y))/std(y) by broadcast
-Tensor _normalize(const Tensor& y, const MemoryConfig& output_mem_config) {
-    Tensor mean_y = mean_hw(y);
-    Tensor y_minus_mean_y = ttnn::subtract(y, mean_y);
-    Tensor std_y = tt::tt_metal::_std(y, mean_y, y_minus_mean_y, output_mem_config);
-    Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
-    Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y);
-    return z;
-}
-Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _normalize)(y, output_mem_config);
-}
-
 using HWFunctionT = std::function<Tensor(const Tensor& y, const MemoryConfig&)>;
 Tensor _make_global_from_hw_impl(
     HWFunctionT fn, const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
@@ -1063,7 +1050,7 @@ Tensor _make_global_from_hw_impl(
 
 // Global Norm
 Tensor _normalize_global(const Tensor& y, const MemoryConfig& output_mem_config) {
-    return _make_global_from_hw_impl(normalize_hw, y, output_mem_config);
+    return _make_global_from_hw_impl(ttnn::normalize_hw, y, output_mem_config);
 }
 Tensor normalize_global(const Tensor& y, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _normalize_global)(y, output_mem_config);
