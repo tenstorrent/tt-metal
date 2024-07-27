@@ -52,17 +52,6 @@ struct ExecuteBinaryCompositeOpsIsClose
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsPolyval
-{
-    static Tensor operator()(
-        const Tensor& input_tensor_a,
-        const std::vector<float>& coeffs,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
-    }
-};
-
-template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteDivLikeOps
 {
     static Tensor operator()(
@@ -157,14 +146,5 @@ constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_xor_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
-constexpr auto scatter = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::scatter",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
-constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::outer",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>>();
-constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::polyval",
-    operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
 
 }  // namespace ttnn
