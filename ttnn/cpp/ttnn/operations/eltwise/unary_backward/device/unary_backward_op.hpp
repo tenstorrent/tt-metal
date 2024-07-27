@@ -120,6 +120,11 @@ std::vector<Tensor> _fill_bw( const Tensor& grad, const Tensor& input, const std
 std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _relu_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _logit_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _floor_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _round_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -239,6 +244,41 @@ template <>
 struct OpHandler<UnaryBackwardOpType::ACOSH_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _acosh_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::RELU_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _relu_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOGIT_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _logit_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::FLOOR_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _floor_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::ROUND_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _round_bw(grad, input, output_mem_config);
+    }
+};
+
+template <>
+struct OpHandler<UnaryBackwardOpType::LOG_BW> {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
+        return _log_bw(grad, input, output_mem_config);
     }
 };
 

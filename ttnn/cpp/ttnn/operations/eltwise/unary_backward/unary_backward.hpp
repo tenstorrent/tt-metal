@@ -368,10 +368,10 @@ constexpr auto neg_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::NEG_BW>>();
 constexpr auto relu_bw = ttnn::register_operation<
     "ttnn::relu_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
 constexpr auto logit_bw = ttnn::register_operation<
     "ttnn::logit_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOGIT_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOGIT_BW>>();
 constexpr auto hardshrink_bw = ttnn::register_operation<
     "ttnn::hardshrink_bw",
     operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW>>();
@@ -392,13 +392,13 @@ constexpr auto rpow_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RPOW_BW>>();
 constexpr auto floor_bw = ttnn::register_operation<
     "ttnn::floor_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::FLOOR_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::FLOOR_BW>>();
 constexpr auto round_bw = ttnn::register_operation<
     "ttnn::round_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::ROUND_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::ROUND_BW>>();
 constexpr auto log_bw = ttnn::register_operation<
     "ttnn::log_bw",
-    operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
 constexpr auto relu6_bw = ttnn::register_operation<
     "ttnn::relu6_bw",
     operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::UnaryBackwardOpType::RELU6_BW>>();
