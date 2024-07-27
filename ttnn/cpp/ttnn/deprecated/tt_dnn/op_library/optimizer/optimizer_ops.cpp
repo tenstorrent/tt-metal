@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 
 namespace tt {
 
@@ -53,7 +54,7 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     Tensor ones = ones_like(weight_norm, output_mem_config);
 
     Tensor trust_ratio_mid = ttnn::multiply(weight_norm, ttnn::reciprocal(ttnn::add(adam_norm, eps, std::nullopt, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
-    Tensor trust_ratio = where(ttnn::gtz(weight_norm, output_mem_config), where(ttnn::gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
+    Tensor trust_ratio = ttnn::where(ttnn::gtz(weight_norm, output_mem_config), ttnn::where(ttnn::gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
 
     Tensor param = ttnn::subtract(
         data,

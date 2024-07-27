@@ -13,6 +13,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -367,6 +368,8 @@ Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     return result;
 }
 
+// Function variance of whole tensor.
+// Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
     const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     constexpr float correction = 0.0f;
@@ -773,7 +776,7 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor trunc_res = trunc(input);
+    Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;
 }

@@ -1508,11 +1508,11 @@ def repeat_interleave_2(x):
 
 
 def pow_int(x):
-    tt_lib.tensor.pow(x, 3)
+    ttnn.pow(x, 3)
 
 
 def pow_float(x):
-    tt_lib.tensor.pow(x, 3.3)
+    ttnn.pow(x, 3.3)
 
 
 def argmax_1(x):
