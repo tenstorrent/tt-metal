@@ -75,10 +75,10 @@ static uint32_t wr_block_idx;
 
 static uint32_t cb_fence;  // walks through cb page by page
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
-
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
+static uint32_t write_offset[3];  // added to write address on non-host writes
 
-uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+constexpr uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS *
     sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t);
@@ -206,7 +206,7 @@ void process_write_host_h() {
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
             host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
-            block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
+            block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
         }
         noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);
         // This will update the write ptr on device and host
@@ -215,7 +215,7 @@ void process_write_host_h() {
         noc_async_writes_flushed();
         block_noc_writes_to_clear[rd_block_idx] +=
             (xfer_size + NOC_MAX_BURST_SIZE - 1) /
-            NOC_MAX_BURST_SIZE;  // XXXXX maybe just write the noc internal api counter
+            NOC_MAX_BURST_SIZE;
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -330,7 +330,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
         }
 
         noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);  // XXXX optimize, take all available
+        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -377,7 +377,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
-    uint32_t dst_addr = cmd->write_linear.addr;
+    uint32_t write_offset_index = cmd->write_linear.write_offset_index;
+    uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     while (length != 0) {
@@ -476,7 +477,7 @@ void process_write_paged() {
         uint32_t xfer_size =
             page_size > dispatch_cb_page_size ? min(dispatch_cb_page_size, page_size - dst_addr_offset) : page_size;
         uint64_t dst = addr_gen.get_noc_addr(
-            page_id, dst_addr_offset);  // XXXX replace this w/ walking the banks to save mul on GS
+            page_id, dst_addr_offset);
         // "Reserve" pages for the next write from this block
         block_noc_writes_to_clear[rd_block_idx]++;
         // Get a Dispatch page if needed
@@ -563,7 +564,8 @@ void process_write_packed(uint32_t flags) {
         (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t), l1_cache);
 
     uint32_t xfer_size = cmd->write_packed.size;
-    uint32_t dst_addr = cmd->write_packed.addr;
+    uint32_t write_offset_index = cmd->write_packed.write_offset_index;
+    uint32_t dst_addr = cmd->write_packed.addr + write_offset[write_offset_index];
 
     ASSERT(xfer_size <= dispatch_cb_page_size);
 
@@ -577,7 +579,7 @@ void process_write_packed(uint32_t flags) {
     volatile uint32_t tt_l1_ptr *l1_addr = (uint32_t *)(cmd_ptr + sizeof(CQDispatchCmd));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
-    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
+    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " " << dst_addr << " " << ENDL();
     uint32_t writes = 0;
     uint32_t mcasts = 0;
     WritePackedSubCmd *sub_cmd_ptr = (WritePackedSubCmd *)l1_cache;
@@ -678,6 +680,8 @@ void process_write_packed_large() {
 
     uint32_t count = cmd->write_packed_large.count;
     uint32_t alignment = cmd->write_packed_large.alignment;
+    uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
+    uint32_t local_write_offset = write_offset[write_offset_index];
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeSubCmd);
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
@@ -693,7 +697,7 @@ void process_write_packed_large() {
 
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
@@ -960,6 +964,17 @@ re_run_command:
             cmd_ptr += sizeof(CQDispatchCmd);
             break;
 
+        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+            DPRINT << "write offset: " <<
+                cmd->set_write_offset.offset0 << " " <<
+                cmd->set_write_offset.offset1 << " " <<
+                cmd->set_write_offset.offset2 << ENDL();
+            write_offset[0] = cmd->set_write_offset.offset0;
+            write_offset[1] = cmd->set_write_offset.offset1;
+            write_offset[2] = cmd->set_write_offset.offset2;
+            cmd_ptr += sizeof(CQDispatchCmd);
+            break;
+
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch terminate\n";
             if (is_d_variant && !is_h_variant) {
@@ -1045,6 +1060,9 @@ void kernel_main() {
     wr_block_idx = 0;
     block_noc_writes_to_clear[0] = noc_nonposted_writes_num_issued[noc_index] + 1;
     cmd_ptr = dispatch_cb_base;
+    write_offset[0] = 0;
+    write_offset[1] = 0;
+    write_offset[2] = 0;
 
     {
         uint32_t completion_queue_wr_ptr_and_toggle = *get_cq_completion_write_ptr();
@@ -1072,8 +1090,8 @@ void kernel_main() {
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
 
-        // XXXXX move this inside while loop waiting for get_dispatch_cb_page above
-        // XXXXX can potentially clear a partial block when stalled w/ some more bookkeeping
+        // TODO move this inside while loop waiting for get_dispatch_cb_page above?
+        // TODO can potentially clear a partial block when stalled w/ some more bookkeeping?
         cb_block_release_pages<
             upstream_noc_xy,
             upstream_dispatch_cb_sem_id,

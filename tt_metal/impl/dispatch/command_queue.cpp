@@ -40,6 +40,12 @@ std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
 
+enum DispatchWriteOffsets {
+    DISPATCH_WRITE_OFFSET_ZERO = 0,
+    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
+    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
+};
+
 // TODO: Delete entries when programs are deleted to save memory
 thread_local std::unordered_map<uint64_t, EnqueueProgramCommand::CachedProgramCommandSequence>
     EnqueueProgramCommand::cached_program_command_sequences = {};
@@ -305,7 +311,24 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
-void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
+void EnqueueProgramCommand::assemble_preamble_commands(
+    uint32_t tensix_l1_config_base,
+    uint32_t eth_l1_config_base) {
+
+    constexpr uint32_t uncached_cmd_sequence_sizeB =
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+
+    this->cached_program_command_sequences[program.id].preamble_command_sequence =
+        HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
+
+    // Send write offsets
+    this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
+        0, tensix_l1_config_base, eth_l1_config_base);
+}
+
+void EnqueueProgramCommand::assemble_stall_commands(
+    bool prefetch_stall) {
+
     if (prefetch_stall) {
         // Wait command so previous program finishes
         // Wait command with barrier for binaries to commit to DRAM
@@ -314,7 +337,7 @@ void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        this->cached_program_command_sequences[program.id].preamble_command_sequence =
+        this->cached_program_command_sequences[program.id].stall_command_sequence =
             HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
@@ -323,15 +346,16 @@ void EnqueueProgramCommand::assemble_preamble_commands(bool prefetch_stall) {
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
         this->cached_program_command_sequences[program.id]
-            .preamble_command_sequence.add_dispatch_wait_with_prefetch_stall(
+            .stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
                 true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         constexpr uint32_t cached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        this->cached_program_command_sequences[program.id].preamble_command_sequence =
+
+        this->cached_program_command_sequences[program.id].stall_command_sequence =
             HostMemDeviceCommand(cached_cmd_sequence_sizeB);
-        this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_wait(
+        this->cached_program_command_sequences[program.id].stall_command_sequence.add_dispatch_wait(
             false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     }
 }
@@ -393,7 +417,8 @@ void generate_runtime_args_cmds(
     std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>>& rt_args_data,
     const uint32_t max_prefetch_command_size,
     const uint32_t packed_write_max_unicast_sub_cmds,
-    bool no_stride = false) {
+    bool no_stride,
+    enum DispatchWriteOffsets write_offset_index) {
     static_assert(
         std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
         std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -440,7 +465,8 @@ void generate_runtime_args_cmds(
             rt_data_and_sizes,
             packed_write_max_unicast_sub_cmds,
             offset_idx,
-            no_stride);
+            no_stride,
+            write_offset_index);
 
         // Update kernel RTA pointers to point into the generated command
         // Future RTA updates through the API will update the command sequence directly
@@ -492,7 +518,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             }
         }
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            uint32_t common_size = program.crta_sizes[core_type == CoreType::WORKER][dispatch_class];
+            uint32_t common_size = program.get_program_config(core_type).crta_sizes[dispatch_class];
             if (common_size != 0) {
                 command_count++;
             }
@@ -500,7 +526,6 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     }
 
     this->cached_program_command_sequences[program.id].runtime_args_command_sequences.reserve(command_count);
-
     // Unique Runtime Args (Unicast)
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
@@ -536,26 +561,20 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                         }
                     }
                 }
-
-                // TODO: eventually get this from the dispatch ring buffer
-                uint32_t kernel_config_base;
-                if (core_type == CoreType::WORKER) {
-                    kernel_config_base = L1_KERNEL_CONFIG_BASE;
-                } else {
-                    TT_ASSERT(core_type == CoreType::ETH);
-                    kernel_config_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-                }
-
+                uint32_t rta_offset = program.get_program_config(core_type).rta_offset;
                 generate_runtime_args_cmds(
                     this->cached_program_command_sequences[program.id].runtime_args_command_sequences,
-                    kernel_config_base,
+                    rta_offset,
                     unique_sub_cmds,
                     unique_rt_data_and_sizes,
                     kg.total_rta_size / sizeof(uint32_t),
                     unique_rt_args_data,
                     max_prefetch_command_size,
                     packed_write_max_unicast_sub_cmds,
-                    false);
+                    false,
+                    core_type == CoreType::WORKER ?
+                        DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE :
+                        DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                 unique_sub_cmds.clear();
                 unique_rt_data_and_sizes.clear();
                 unique_rt_args_data.clear();
@@ -563,7 +582,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         }
 
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            uint32_t common_size = program.crta_sizes[core_type == CoreType::WORKER][dispatch_class];
+            uint32_t common_size = program.get_program_config(core_type).crta_sizes[dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);
                 if (kernel->get_kernel_core_type() != core_type)
@@ -614,11 +633,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             }
 
             if (common_size != 0) {
-                uint32_t common_offset = program.crta_offsets[core_type == CoreType::WORKER][dispatch_class];
-
-                uint32_t common_args_addr = (core_type == CoreType::ETH)
-                                                ? eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE + common_offset
-                                                : L1_KERNEL_CONFIG_BASE + common_offset;
+                uint32_t crta_offset = program.get_program_config(core_type).crta_offsets[dispatch_class];
 
                 // Common rtas are always expected to fit in one prefetch cmd
                 // TODO: use a linear write instead of a packed-write
@@ -626,14 +641,17 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     [&](auto&& sub_cmds) {
                         generate_runtime_args_cmds(
                             this->cached_program_command_sequences[program.id].runtime_args_command_sequences,
-                            common_args_addr,
+                            crta_offset,
                             sub_cmds,
                             common_rt_data_and_sizes,
                             common_size / sizeof(uint32_t),
                             common_rt_args_data,
                             max_prefetch_command_size,
                             packed_write_max_unicast_sub_cmds,
-                            true);
+                            true,
+                            core_type == CoreType::WORKER ?
+                                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE :
+                                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                         sub_cmds.clear();
                     },
                     common_sub_cmds);
@@ -652,9 +670,13 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     this->cached_program_command_sequences[program.id].runtime_args_fetch_size_bytes = runtime_args_fetch_size_bytes;
 }
 
-void EnqueueProgramCommand::assemble_device_commands() {
+void EnqueueProgramCommand::assemble_device_commands(
+    bool is_cached,
+    uint32_t tensix_l1_kernel_config_base,
+    uint32_t eth_l1_kernel_config_base) {
+
     auto& cached_program_command_sequence = this->cached_program_command_sequences[this->program.id];
-    if (!program.is_finalized()) {
+    if (not is_cached) {
         // Calculate size of command and fill program indices of data to update
         // TODO: Would be nice if we could pull this out of program
         uint32_t cmd_sequence_sizeB = 0;
@@ -932,6 +954,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.kernel_config_base = tensix_l1_kernel_config_base;
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
@@ -943,6 +966,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     .noc_xy_addr = this->device->get_noc_multicast_encoding(
                         this->noc_index, CoreRange(physical_start, physical_end)),
                     .num_mcast_dests = (uint32_t)core_range.size()});
+
                 multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
             }
         }
@@ -959,6 +983,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.kernel_config_base = eth_l1_kernel_config_base;
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1144,47 +1169,80 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
             i++;
         }
+        uint32_t go_signal_count = 0;
         for (auto& go_signal : cached_program_command_sequence.go_signals) {
             go_signal->kernel_config.dispatch_core_x = this->dispatch_core.x;
             go_signal->kernel_config.dispatch_core_y = this->dispatch_core.y;
+            if (go_signal_count < program.tensix_go_signal_count_) {
+                go_signal->kernel_config.kernel_config_base = tensix_l1_kernel_config_base;
+            } else {
+                go_signal->kernel_config.kernel_config_base = eth_l1_kernel_config_base;
+            }
+            go_signal_count++;
         }
     }
 }
 
 void EnqueueProgramCommand::process() {
-    // Calculate all commands size and determine how many fetch q entries to use
 
+    bool is_cached = true;
+    if (not program.is_finalized()) {
+        program.finalize();
+        is_cached = false;
+    }
+
+    const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
+        this->manager.get_config_buffer_mgr().reserve(program.program_config_sizes_);
+    bool stall_first = reservation.first.need_sync;
+    // Note: since present implementation always stalls, we always free up to "now"
+    this->manager.get_config_buffer_mgr().free(reservation.first.sync_count);
+    this->manager.get_config_buffer_mgr().alloc(this->expected_num_workers_completed +
+                                                program.program_transfer_info.num_active_cores);
+    uint32_t tensix_l1_write_offset = reservation.second[0].addr;
+    uint32_t eth_l1_write_offset = reservation.second[1].addr;
+
+    // Calculate all commands size and determine how many fetch q entries to use
     // Preamble, some waits and stalls
     // can be written directly to the issue queue
-    if (not program.is_finalized()) {
-        // TODO: only build kernel groups here, remove on-the-fly state validation and validate here
-        program.finalize_rt_args();
-
-        this->assemble_preamble_commands(true);
+    if (not is_cached) {
+        this->assemble_preamble_commands(tensix_l1_write_offset, eth_l1_write_offset);
+        this->assemble_stall_commands(true);
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands();
-        // Main Command Sequence
-        this->assemble_device_commands();
     } else {
-        static constexpr uint32_t count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+        static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+        static constexpr uint32_t tensix_l1_write_offset_offset =
+            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
+        static constexpr uint32_t eth_l1_write_offset_offset =
+            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
         TT_ASSERT(
             this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(),
             "Program cache hit, but no stored command sequence");
+
+        this->cached_program_command_sequences[program.id].stall_command_sequence.update_cmd_sequence(
+            wait_count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
+
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
-            count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
-        this->assemble_device_commands();
+            tensix_l1_write_offset_offset, &tensix_l1_write_offset, sizeof(uint32_t));
+        this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
+            eth_l1_write_offset_offset, &eth_l1_write_offset, sizeof(uint32_t));
     }
+
+    // Main Command Sequence
+    this->assemble_device_commands(is_cached, tensix_l1_write_offset, eth_l1_write_offset);
 
     const auto& cached_program_command_sequence = this->cached_program_command_sequences[program.id];
 
     uint32_t preamble_fetch_size_bytes = cached_program_command_sequence.preamble_command_sequence.size_bytes();
+
+    uint32_t stall_fetch_size_bytes = cached_program_command_sequence.stall_command_sequence.size_bytes();
 
     uint32_t runtime_args_fetch_size_bytes = cached_program_command_sequence.runtime_args_fetch_size_bytes;
 
     uint32_t program_fetch_size_bytes = cached_program_command_sequence.program_command_sequence.size_bytes();
 
     uint32_t total_fetch_size_bytes =
-        preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
+        stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
@@ -1196,9 +1254,23 @@ void EnqueueProgramCommand::process() {
             cached_program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
         write_ptr += preamble_fetch_size_bytes;
 
+        if (stall_first) {
+            // Must stall before writing runtime args
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            write_ptr += stall_fetch_size_bytes;
+        }
+
         for (const auto& cmds : cached_program_command_sequence.runtime_args_command_sequences) {
             this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
             write_ptr += cmds.size_bytes();
+        }
+
+        if (not stall_first) {
+            // Didn't stall before runtime args, stall before remaining commands
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            write_ptr += stall_fetch_size_bytes;
         }
 
         this->manager.cq_write(
@@ -1219,6 +1291,18 @@ void EnqueueProgramCommand::process() {
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
         this->manager.fetch_queue_write(preamble_fetch_size_bytes, this->command_queue_id);
 
+        if (stall_first) {
+            // Must stall before writing runtime args
+            this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
+            uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            this->manager.fetch_queue_reserve_back(this->command_queue_id);
+            this->manager.fetch_queue_write(stall_fetch_size_bytes, this->command_queue_id);
+        }
+
         // TODO: We can pack multiple RT args into one fetch q entry
         for (const auto& cmds : cached_program_command_sequence.runtime_args_command_sequences) {
             uint32_t fetch_size_bytes = cmds.size_bytes();
@@ -1231,6 +1315,18 @@ void EnqueueProgramCommand::process() {
             this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
         }
 
+        if (not stall_first) {
+            // Must stall before writing runtime args
+            this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
+            uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            this->manager.cq_write(
+                cached_program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+            this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            this->manager.fetch_queue_reserve_back(this->command_queue_id);
+            this->manager.fetch_queue_write(stall_fetch_size_bytes, this->command_queue_id);
+        }
+
         this->manager.issue_queue_reserve(program_fetch_size_bytes, this->command_queue_id);
         write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         this->manager.cq_write(
@@ -1241,10 +1337,9 @@ void EnqueueProgramCommand::process() {
         this->manager.fetch_queue_write(program_fetch_size_bytes, this->command_queue_id);
     }
 
-    // Front load generating and caching preamble without stall during program loading stage
-    if (not program.is_finalized()) {
-        this->assemble_preamble_commands(false);
-        program.set_finalized();
+    // Front load generating and caching stall_commands without stall during program loading stage
+    if (not is_cached) {
+        this->assemble_stall_commands(false);
     }
 }
 
@@ -1459,7 +1554,9 @@ void EnqueueTerminateCommand::process() {
 
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
-    manager(device->sysmem_manager()), completion_queue_thread{} {
+    manager(device->sysmem_manager()),
+    completion_queue_thread{} {
+
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
     this->id = id;

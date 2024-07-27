@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "unary_composite_op.hpp"
 
 #include <functional>
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
-#include "unary_composite_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -447,12 +448,12 @@ Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::opti
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    const Tensor h_const = full_like(a, high);
+    const Tensor h_const = ttnn::full_like(a, high);
     Tensor a_max = tt::tt_metal::min(a, h_const, output_memory_config);
     if (low == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = full_like(a, low);
+        const Tensor l_const = ttnn::full_like(a, low);
         return tt::tt_metal::max(a_max, l_const, output_memory_config);
     }
 }
@@ -690,8 +691,8 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_eps = full_like(input_a, eps);
-    Tensor t1m_eps = full_like(input_a, (1 - eps));
+    Tensor t_eps = ttnn::full_like(input_a, eps);
+    Tensor t1m_eps = ttnn::full_like(input_a, (1 - eps));
     Tensor logit_input = ttnn::where(
         ttnn::ltz(t_eps, output_mem_config),
         input_a,
@@ -733,4 +734,48 @@ Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfi
 Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
 }
+
+// rpow: y = k**(a) = exp( a**log(k) )
+Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(k > 0.0, "rpow cannot be calcualted for non-positive numbers");
+    float log_k = logf(k);
+
+    Tensor result = ttnn::multiply(a, log_k);
+    return ttnn::exp(result, false);
+}
+
+using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
+Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+
+    // format to HW
+    Tensor y_hw = tt::tt_metal::reshape(
+        y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+
+    // compute @fn
+    Tensor z_0 = fn(y_hw, output_mem_config);
+    TT_FATAL(y_hw.get_legacy_shape() == z_0.get_legacy_shape(), "shape match");
+    y_hw.deallocate();
+
+    // reformat
+    Tensor z_1 = tt::tt_metal ::reshape(
+        z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+    z_0.deallocate();
+
+    return z_1;
+}
+
+// Global Norm
+Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& output_mem_config) {
+    return _make_global_from_hw_impl(_normalize, y, output_mem_config);
+}
+
+Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    Tensor trunc_res = trunc(input);
+    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
+    return result;
+}
+
 }  // namespace ttnn::operations::unary

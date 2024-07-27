@@ -248,6 +248,7 @@ class TtLlamaAttention(nn.Module):
         xs: List[ttnn.Tensor],
         current_pos: int,
         attn_masks: Optional[List[ttnn.Tensor]] = None,
+        rot_mat=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
@@ -313,7 +314,7 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(xqkv_fused)
 
             # Update rotary matrix on device
-            rotary_mat = self.rot_mat[current_pos]
+            rotary_mat = rot_mat
 
             q_heads = ttnn.linear(
                 q_heads_pre_rot,
@@ -656,4 +657,4 @@ class TtLlamaAttention(nn.Module):
         if mode == "prefill":
             return self.forward_prefill(xs[0], attn_masks[0], rot_mats, transformation_mats, user_id)
         else:
-            return self.forward_decode(xs, current_pos, attn_masks)
+            return self.forward_decode(xs, current_pos, attn_masks, rot_mats)

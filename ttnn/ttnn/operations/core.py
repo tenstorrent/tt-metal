@@ -274,19 +274,14 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
     return tensor
 
 
-try:
-
-    class TorchTensor(torch.Tensor):
-        @classmethod
-        def __torch_function__(cls, func, types, args=(), kwargs=None):
-            # this tells torch to treat TorchTensor just like torch.Tensor's.
-            # Otherwise, torch will complain that it doesn't know how to handle it.
-            types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-            func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
-            return super().__torch_function__(func, types, args, kwargs)
-
-except:
-    ...
+class TorchTensor(torch.Tensor):
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        # this tells torch to treat TorchTensor just like torch.Tensor's.
+        # Otherwise, torch will complain that it doesn't know how to handle it.
+        types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
+        func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
+        return super().__torch_function__(func, types, args, kwargs)
 
 
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
@@ -336,9 +331,7 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze()
 
-    if not ttnn.CONFIG.enable_fast_runtime_mode:
-        tensor = TorchTensor(tensor)
-    return tensor
+    return TorchTensor(tensor)
 
 
 def _golden_function(tensor, *args, **kwargs):

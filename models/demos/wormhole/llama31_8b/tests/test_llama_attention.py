@@ -8,11 +8,7 @@ import os
 import ttnn
 from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
 from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
-from models.demos.wormhole.llama31_8b.tt.llama_common import (
-    precompute_freqs,
-    prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
-)
+from models.demos.wormhole.llama31_8b.tt.llama_common import precompute_freqs, prepare_inputs_ttnn, get_single_rot_mat
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
@@ -38,21 +34,16 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
     batch = model_args.max_batch_size
     seq_len = 1
 
-    # pre-compute the rotational embedding matrix and send to device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
-
     generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
+
+    # pre-compute the rotational embedding matrix and send to device
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        device,
+        start_pos=0,
+    )
 
     tt_model = TtLlamaAttention(
         [device],
@@ -61,7 +52,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         layer_num=0,
         dtype=dtype,
         configuration=model_args,
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=generation_start_pos,
     )
 
@@ -72,6 +63,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
+
         attention_input, pos = prepare_inputs_ttnn(
             tt_attention_input,
             current_pos,
@@ -80,10 +72,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
             device,
         )
 
-        tt_out = tt_model(
-            [attention_input],
-            pos,
-        )
+        tt_out = tt_model([attention_input], pos, rot_mats=current_rot_mat)
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
@@ -106,6 +95,9 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         else:
             logger.warning(f"[pos={current_pos}] Llama_Attention Failed!")
             all_tests_pass = False
+
+        # Update rotation matrix for next iteration
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
         if True:  # FIXME: Issue #10648
             # Check kv cache

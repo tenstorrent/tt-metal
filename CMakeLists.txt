@@ -72,6 +72,17 @@ option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
+
+option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
+if(ENABLE_BUILD_TIME_TRACE)
+    if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+        message(STATUS "Adding compile option: -ftime-trace")
+        add_compile_options("-ftime-trace")
+    else()
+        message(FATAL "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
+    endif()
+endif()
+
 # Default to building everything as a shared lib
 if($ENV{TT_METAL_CREATE_STATIC_LIB})
     option(BUILD_SHARED_LIBS "Create shared library" OFF)

@@ -236,21 +236,22 @@ other: grad / (1 + pow(2, self - other))
 */
 
 std::vector<ttnn::Tensor> _logaddexp2_bw(
-    const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input_a, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor oppow =
-        ttnn::add(rpow(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), 2, output_mem_config), 1, std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::add(rpow(ttnn::subtract(other, input_a, std::nullopt, output_memory_config), 2, output_memory_config), 1, std::nullopt, output_memory_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_a);
-    oppow = ttnn::add(rpow(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), 2, output_mem_config), 1, std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_mem_config), std::nullopt, output_mem_config);
+    oppow = ttnn::add(rpow(ttnn::subtract(input_a, other, std::nullopt, output_memory_config), 2, output_memory_config), 1, std::nullopt, output_memory_config);
+    Tensor grad_b = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
 
 std::vector<ttnn::Tensor> _squared_difference_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor difference = ttnn::subtract(input, other);
     Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, difference, std::nullopt, output_mem_config), 2, std::nullopt, output_mem_config);
@@ -406,7 +407,7 @@ std::vector<Tensor> _lt_bw(const Tensor& grad, const Tensor& input, const Tensor
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
 template <bool min_or_max>
 std::vector<Tensor> _min_or_max_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor zeros_t = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     std::vector<Tensor> grad_tensor;
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
@@ -437,6 +438,11 @@ std::vector<Tensor> _min_or_max_bw(
     return grad_tensor;
 }
 
+template std::vector<Tensor> _min_or_max_bw<true>(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+
+template std::vector<Tensor> _min_or_max_bw<false>(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _div_bw(
     const Tensor& grad,
@@ -561,10 +567,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     switch (OpType) {
         case BinaryBackwardOpType::EMBEDDING_BW:
             return _embedding_bw;
-        case BinaryBackwardOpType::LOGADDEXP2_BW:
-            return _logaddexp2_bw;
-        case BinaryBackwardOpType::SQUARED_DIFFERENCE_BW:
-            return _squared_difference_bw;
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_inter;
         case BinaryBackwardOpType::EQ_BW:
@@ -577,10 +579,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _ne_bw;
         case BinaryBackwardOpType::GE_BW:
             return _ge_bw;
-        case BinaryBackwardOpType::MIN_BW:
-            return _min_or_max_bw<false>;
-        case BinaryBackwardOpType::MAX_BW:
-            return _min_or_max_bw<true>;
         case BinaryBackwardOpType::MUL_BW:
             return _mul_bw_inter;
         default:

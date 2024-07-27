@@ -56,8 +56,10 @@ enum class UnaryCompositeOpType {
     LOGIT,
     CELU,
     LOGICAL_NOT_,
+    RPOW,
+    NORMALIZE_GLOBAL,
+    FRAC,
 };
-
 Tensor _tanhshrink (const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -95,9 +97,9 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
-Tensor _rdiv(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor _rdiv(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _hardshrink(const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -105,6 +107,9 @@ Tensor _softshrink(const Tensor& a, float lambd = 0.5f, const std::optional<Memo
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _celu(const Tensor& a, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_ (const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>& );
+Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _frac (const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -163,6 +168,13 @@ template <>
 struct OpHandler<UnaryCompositeOpType::COSH> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _cosh(t1, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::NORMALIZE_GLOBAL> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _normalize_global(t1, mem_cfg);
     }
 };
 
@@ -410,4 +422,17 @@ struct OpHandler<UnaryCompositeOpType::LOGICAL_NOT_> {
     }
 };
 
+template <>
+struct OpHandler<UnaryCompositeOpType::RPOW> {
+    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _rpow(t1, param, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::FRAC> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _frac(t1, mem_cfg);
+    }
+};
 }
