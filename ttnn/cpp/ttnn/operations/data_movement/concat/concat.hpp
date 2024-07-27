@@ -96,7 +96,7 @@ struct Concat {
                 shape_vec.push_back(shape[i]);
                 full_shape_vec.push_back(full_shape[i]);
             }
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape::from_vector(shape_vec, full_shape_vec));
+            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(shape_vec, full_shape_vec));
         }
 
         return output_tensor;

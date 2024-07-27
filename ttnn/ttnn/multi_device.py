@@ -9,7 +9,13 @@ from typing import List, Dict
 import ttnn
 
 
+def get_device_mesh_core_grid(device_mesh):
+    compute_with_storage_grid_size = device_mesh.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+
+
 DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
+DeviceMesh.core_grid = property(get_device_mesh_core_grid)
 
 
 def get_num_devices() -> List[int]:
@@ -55,7 +61,7 @@ def open_device_mesh(
 
 def close_device_mesh(device_mesh):
     """
-    close_device(multi_device: ttnn.Multi) -> None:
+    close_device_mesh(multi_device: ttnn.Multi) -> None:
 
     Close the device and remove it from the device cache.
     """
@@ -86,6 +92,19 @@ def create_device_mesh(
         yield device_mesh
     finally:
         close_device_mesh(device_mesh)
+
+
+def synchronize_devices(devices):
+    """
+    synchronize_device(device: ttnn.Device) -> None:
+
+    Synchronize the device with host by waiting for all operations to complete.
+    """
+    if isinstance(devices, ttnn.Device):
+        ttnn._ttnn.deprecated.device.Synchronize(devices)
+    else:
+        for device in devices.get_device_ids():
+            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device))
 
 
 class TensorToMesh:

@@ -39,7 +39,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
         host_data[i] = bfloat16(static_cast<float>(1));
     }
     // Create golden data using tt_eager APIs
-    Tensor np_tensor = tt::numpy::full<float>(input_shape.value(), static_cast<float>(1), DataType::BFLOAT16).to(Layout::TILE).to(device);
+    Tensor np_tensor = tt::numpy::full<float>(input_shape.value, static_cast<float>(1), DataType::BFLOAT16)
+                           .to(Layout::TILE)
+                           .to(device);
     std::vector<int64_t> reduce_dims = {3};
     Tensor np_out = tt::operations::primary::moreh_sum(np_tensor, reduce_dims);
     Tensor np_out_host = np_out.cpu();
