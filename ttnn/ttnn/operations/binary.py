@@ -290,13 +290,31 @@ def _golden_function_nextafter(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.nextafter, golden_function=_golden_function_nextafter)
 
 
-def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
+def _golden_function_scatter(input_tensor_a, input_tensor_b, *args, **kwargs):
+    input_tensor_b[:, :, : input_tensor_a.shape[-2], : input_tensor_a.shape[-1]] = input_tensor_a
+    return input_tensor_b
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.scatter, golden_function=_golden_function_scatter)
+
+
+def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
+    return torch.outer(input_tensor_a.squeeze(), input_tensor_b.squeeze())
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.isclose, golden_function=_golden_function_isclose)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.outer, golden_function=_golden_function_outer)
+
+
+def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
+    result = 0.0
+    for coeff in coeffs:
+        result = result * input_tensor_a + coeff
+    return result
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.polyval, golden_function=_golden_function_polyval)
 
 
 def _golden_function_div(input_tensor_a, input_tensor_b, round_mode, *args, **kwargs):
@@ -360,53 +378,19 @@ def torch_squared_difference(x, y, *args, **kwargs):
     return torch.square(torch.sub(x, y))
 
 
-def torch_polyval(input_tensor, coeff):
-    curVal = 0
-    for curValIndex in range(len(coeff) - 1):
-        curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
-    return curVal + coeff[len(coeff) - 1]
+def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
+    import torch
+
+    return torch.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, coeff: List[float], **_):
-    return torch_polyval(input_tensor, coeff)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.isclose, golden_function=_golden_function_isclose)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.polyval",
-    golden_function=_golden_function,
-)
-def polyval(
-    input_tensor: ttnn.Tensor,
-    coeff: List[float],
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    dtype: Optional[ttnn.DataType] = None,
-) -> ttnn.Tensor:
-    r"""
-    polyval(input_tensor_a: ttnn.Tensor, coeff: List[float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+def torch_squared_difference(x, y, *args, **kwargs):
+    import torch
 
-    Returns tensor with the polyval of all of elements of the input tensor input with coefficients coeffs.
-
-    .. math::
-        \mathrm{{input\_tensor\_a}}_i , \mathrm{{coeff}}_i
-
-    Args:
-        * :attr:`input_tensor_a`
-        * :attr:`coeff`
-
-    Keyword args:
-        :attr:`memory_config`
-        :attr:`dtype`
-
-
-    """
-
-    output = ttnn.experimental.tensor.polyval(
-        input_tensor,
-        coeff,
-        output_mem_config=memory_config,
-    )
-    return output
+    return torch.square(torch.sub(x, y))
 
 
 __all__ = []
