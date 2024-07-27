@@ -777,4 +777,16 @@ op_map = {
         "tt_op": ttnn_ops.relu_bw,
         "pytorch_op": pytorch_ops.relu_bw,
     },
+    "gt-bw": {
+        "tt_op": ttnn_ops.gt_bw,
+        "pytorch_op": pytorch_ops.gt_bw,
+    },
+    "lt-bw": {
+        "tt_op": ttnn_ops.gt_bw,
+        "pytorch_op": pytorch_ops.gt_bw,
+    },
+    "ne-bw": {
+        "tt_op": ttnn_ops.ne_bw,
+        "pytorch_op": pytorch_ops.ne_bw,
+    },
 }
