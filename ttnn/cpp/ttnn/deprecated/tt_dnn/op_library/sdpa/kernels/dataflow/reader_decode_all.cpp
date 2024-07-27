@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include <vector>
 
 #include "debug/dprint.h"
 
@@ -24,20 +25,27 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(3);  // head dim
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
     constexpr uint32_t num_cores = get_compile_time_arg_val(5);
-    constexpr uint32_t cur_batch =  get_compile_time_arg_val(6);
-    constexpr bool is_q_sharded = get_compile_time_arg_val(7);
-    constexpr bool is_worker = get_compile_time_arg_val(8);
-    constexpr uint32_t reduce_core_noc_x          = get_compile_time_arg_val(9);
-    constexpr uint32_t reduce_core_noc_y          = get_compile_time_arg_val(10);
+    constexpr bool is_q_sharded = get_compile_time_arg_val(6);
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
     const uint32_t v_addr  = get_arg_val<uint32_t>(2);
-
     const uint32_t PSt = get_arg_val<uint32_t>(3);  // padded layer length in tiles
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(4);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
     const uint32_t k_chunk_start = get_arg_val<uint32_t>(5);
     const uint32_t k_chunk_end = get_arg_val<uint32_t>(6);
+    const uint32_t cur_batch =  get_arg_val<uint32_t>(7);
+    const bool is_worker = get_arg_val<uint32_t>(8) == 1;
+
+    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(9 + B));
+
+    uint32_t reduce_core_noc_x = all_reducer_noc_x[cur_batch];
+    uint32_t reduce_core_noc_y = all_reducer_noc_y[cur_batch];
+
+    if (k_chunk_start == k_chunk_end) {
+        return; // early exit because no computes needs to be done
+    }
 
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -62,12 +70,12 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // First, read Q entirely, it could be interleaved or sharded
-    constexpr uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
-    constexpr uint32_t q_chunk_tiles_bytes = q_chunk_tiles * q_tile_bytes;
+    uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
+    uint32_t q_chunk_tiles_bytes = q_chunk_tiles * q_tile_bytes;
 
     if constexpr(is_q_sharded){
         uint64_t q_read_addr;
-        if constexpr(is_worker){
+        if (is_worker){
             q_read_addr = get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, q_addr);
         } else {
             q_read_addr = get_noc_addr(q_addr);

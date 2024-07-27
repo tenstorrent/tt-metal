@@ -445,7 +445,6 @@ void MAIN {
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
-    constexpr uint32_t do_reduce = get_compile_time_arg_val(17);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -481,6 +480,12 @@ void MAIN {
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(0);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
     const uint32_t k_chunk_start = get_arg_val<uint32_t>(1);
     const uint32_t k_chunk_end = get_arg_val<uint32_t>(2);
+    const bool do_reduce = get_arg_val<uint32_t>(3) == 1;
+    // const uin32_t idle_core = get_arg_val<uint32_t>(4);
+
+    if (k_chunk_start == k_chunk_end) {
+        return; // early exit because no computes needs to be done
+    }
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
