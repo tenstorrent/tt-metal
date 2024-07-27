@@ -605,22 +605,22 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 }
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(DeviceFixture, SingleCoreSingleTileMatmul) {
+TEST_F(DeviceFixture, TestSingleCoreSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->devices_.at(id)));
     }
 }
-TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileMatmul) {
+TEST_F(DeviceFixture, TestSingleCoreSingleBlockSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 1, 1));
     }
 }
-TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileAccumulationMatmul) {
+TEST_F(DeviceFixture, TestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 2, 1));
     }
 }
-TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileNoAccumulationMatmul) {
+TEST_F(DeviceFixture, TestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
     }

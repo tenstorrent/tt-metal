@@ -158,6 +158,7 @@ from ttnn.multi_device import (
     get_pcie_device_ids,
     get_device_ids,
     create_device_mesh,
+    synchronize_devices,
     TensorToMesh,
     ShardTensorToMesh,
     ReplicateTensorToMesh,

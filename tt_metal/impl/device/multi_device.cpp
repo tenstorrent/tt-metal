@@ -134,6 +134,18 @@ int DeviceMesh::num_devices() const
     return mesh_devices.size();
 }
 
+CoreCoord DeviceMesh::compute_with_storage_grid_size() const {
+    return mesh_devices.at(0).second->compute_with_storage_grid_size();
+}
+
+CoreCoord DeviceMesh::dram_grid_size() const {
+    return mesh_devices.at(0).second->dram_grid_size();
+}
+
+tt::ARCH DeviceMesh::arch() const {
+    return mesh_devices.at(0).second->arch();
+}
+
 void DeviceMesh::close_devices() {
     tt::tt_metal::detail::CloseDevices(managed_devices);
     mesh_devices.clear();
