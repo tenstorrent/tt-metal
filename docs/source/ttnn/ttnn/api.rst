@@ -315,9 +315,7 @@ Pointwise Binary
    ttnn/ne
    ttnn/isclose
    ttnn/polyval
-   ttnn/scatter
    ttnn/nextafter
-   ttnn/outer
    ttnn/maximum
    ttnn/minimum
    ttnn/atan2_bw
