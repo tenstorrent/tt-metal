@@ -2193,8 +2193,8 @@ all_unary_ops = [
         "name": "tt_lib.tensor.std_hw",
     },
     {
-        "op": tt_lib.tensor.normalize_hw,
-        "name": "tt_lib.tensor.normalize_hw",
+        "op": ttnn.normalize_hw,
+        "name": "ttnn.normalize_hw",
     },
     {
         "op": tt_lib.tensor.normalize_global,
