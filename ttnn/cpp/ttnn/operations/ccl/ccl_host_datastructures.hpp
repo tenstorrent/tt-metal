@@ -62,7 +62,12 @@ struct EriscDatamoverConfig {
 struct CCLOpConfig {
    public:
     CCLOpConfig(
-        const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
+     // We currently pass non-const vectors because we take the address of an an const ref
+     // can accept an r-value, which will not necessarily have a persistent address after
+     // the constructor returns. In general this is an indication that this data structure
+     // should be redesigned, in particular to hold some sort of shared pointer or the like
+     // to a tensor to ensure lifetime correctness.
+     std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors, Topology topology) :
         input_tensors(&input_tensors),
         output_tensors(&output_tensors),
         input_sharded(input_tensors.at(0).is_sharded()),
@@ -84,6 +89,8 @@ struct CCLOpConfig {
                                               : std::nullopt),
         shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
         topology(topology) {
+        TT_ASSERT(this->input_tensors->size() > 0);
+        TT_ASSERT(this->output_tensors->size() > 0);
         TT_ASSERT(!this->is_input_sharded() || input_shard_size_bytes.has_value());
         TT_ASSERT(!this->is_output_sharded() || output_shard_size_bytes.has_value());
     }

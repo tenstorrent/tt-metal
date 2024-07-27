@@ -27,14 +27,14 @@ void bind_reduce_scatter(py::module& module, const ccl_operation_t& operation, c
         doc,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
-               const std::vector<ttnn::Tensor>& input_tensors,
+               const ttnn::Tensor& input_tensor,
                const uint32_t scatter_dim,
                ReduceOpMath math_op,
                const uint32_t num_links,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(input_tensors, scatter_dim, math_op, num_links, memory_config);
+               const ttnn::MemoryConfig& memory_config) -> ttnn::Tensor {
+                return self(input_tensor, scatter_dim, math_op, num_links, memory_config);
             },
-            py::arg("input_tensors"),
+            py::arg("input_tensor"),
             py::arg("scatter_dim"),
             py::arg("math_op"),
             py::kw_only(),
