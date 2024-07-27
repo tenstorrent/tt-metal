@@ -75,7 +75,7 @@ def test_reduce_scatter_nightly(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async=False,
+    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
