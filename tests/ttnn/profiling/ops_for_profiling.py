@@ -1536,23 +1536,23 @@ def argmax_all(x):
 
 
 def argmin_1(x):
-    tt_lib.tensor.argmin(x, dim=-1)
+    ttnn.argmin(x, dim=-1)
 
 
 def argmin_2(x):
-    tt_lib.tensor.argmin(x, dim=-2)
+    ttnn.argmin(x, dim=-2)
 
 
 def argmin_3(x):
-    tt_lib.tensor.argmin(x, dim=-3)
+    ttnn.argmin(x, dim=-3)
 
 
 def argmin_4(x):
-    tt_lib.tensor.argmin(x, dim=-4)
+    ttnn.argmin(x, dim=-4)
 
 
 def argmin_all(x):
-    tt_lib.tensor.argmin(x, dim=-1, all=True)
+    ttnn.argmin(x, dim=-1, all=True)
 
 
 def primary_moreh_softmax_0(x):
@@ -2284,22 +2284,22 @@ all_unary_ops = [
     },
     {
         "op": argmin_1,
-        "name": "tt_lib.tensor.argmin_dim_3",
+        "name": "ttnn.argmin_dim_3",
         "num_repeats": 2,
     },
     {
         "op": argmin_2,
-        "name": "tt_lib.tensor.argmin_dim_2",
+        "name": "ttnn.argmin_dim_2",
         "num_repeats": 2,
     },
     {
         "op": argmin_3,
-        "name": "tt_lib.tensor.argmin_dim_1",
+        "name": "ttnn.argmin_dim_1",
         "num_repeats": 2,
     },
     {
         "op": argmin_all,
-        "name": "tt_lib.tensor.argmin_all",
+        "name": "ttnn.argmin_all",
         "num_repeats": 2,
     },
     {

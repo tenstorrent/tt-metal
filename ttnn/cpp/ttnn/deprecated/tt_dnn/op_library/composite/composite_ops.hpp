@@ -282,12 +282,6 @@ Tensor argmax(
     bool all = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor argmin(
-    const Tensor& input_a,
-    int64_t dim = 0,
-    bool all = false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 }  // namespace tt_metal
 
 }  // namespace tt

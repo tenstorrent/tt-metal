@@ -143,30 +143,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         )doc");
 
     m_tensor.def(
-        "argmin",
-        &argmin,
-        py::arg("input").noconvert(),
-        py::arg("dim"),
-        py::arg("all") = false,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns the indices of the minimum value of elements in the ``input`` tensor
-            If ``all`` is set to ``true`` irrespective of given dimension it will return the indices of minimum value of all elements in given ``input``
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor argmin is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "dim", "Dimension to perform argmin", "int", "", "Yes"
-                "all", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
         "lerp",
         py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
         py::arg("input").noconvert(),

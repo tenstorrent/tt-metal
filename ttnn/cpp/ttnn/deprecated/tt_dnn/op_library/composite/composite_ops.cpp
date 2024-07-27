@@ -871,17 +871,6 @@ Tensor argmax(
     return operation::decorate_as_composite(__func__, _argmax)(input_a, dim, all, output_mem_config);
 }
 
-Tensor _argmin(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
-    Tensor neg_input = ttnn::neg(input_a, output_mem_config);
-    return (argmax(neg_input, _dim, all, output_mem_config));
-}
-Tensor argmin(
-    const Tensor& input_a,
-    int64_t dim,
-    bool all,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _argmin)(input_a, dim, all, output_mem_config);
-}
 }  // namespace tt_metal
 
 }  // namespace tt
