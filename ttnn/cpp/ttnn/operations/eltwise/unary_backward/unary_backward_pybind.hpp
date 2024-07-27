@@ -977,17 +977,17 @@ void py_module(py::module& module) {
         ttnn::neg_bw,
         R"doc(Performs backward operations for neg on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_wo_float(
         module,
         ttnn::relu_bw,
         R"doc(Performs backward operations for relu on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_wo_float(
         module,
         ttnn::logit_bw,
         R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_wo_float(
         module,
         ttnn::floor_bw,
         R"doc(Performs backward operations for floor on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
@@ -1022,12 +1022,12 @@ void py_module(py::module& module) {
         ttnn::rpow_bw,
         R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_wo_float(
         module,
         ttnn::round_bw,
         R"doc(Performs backward operations for round on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_wo_float(
         module,
         ttnn::log_bw,
         R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
