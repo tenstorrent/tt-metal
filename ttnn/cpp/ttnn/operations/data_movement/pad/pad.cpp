@@ -125,29 +125,16 @@ ttnn::Tensor ExecutePad::operator()(
 
     ttnn::Tensor output_tensor;
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        if(original_rank == 1) {
-            output_tensor =  pad_impl<tt::tt_metal::Array1D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 2) {
-            output_tensor =  pad_impl<tt::tt_metal::Array2D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 3) {
-            output_tensor =  pad_impl<tt::tt_metal::Array3D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 4) {
-            output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 5) {
-            output_tensor =  pad_impl<tt::tt_metal::Array5D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 6) {
-            output_tensor =  pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 7) {
-            output_tensor =  pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
-        }
-        else if(original_rank == 8) {
-            output_tensor =  pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+        switch (original_rank) {
+            case 1: output_tensor = pad_impl<tt::tt_metal::Array1D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 2: output_tensor = pad_impl<tt::tt_metal::Array2D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 3: output_tensor = pad_impl<tt::tt_metal::Array3D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 4: output_tensor = pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 5: output_tensor = pad_impl<tt::tt_metal::Array5D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            default: TT_FATAL("Unsupported tensor rank");
         }
     }
     else {
