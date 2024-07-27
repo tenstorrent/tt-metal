@@ -300,8 +300,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
-.. autofunction:: tt_lib.tensor.polygamma
-
 .. autofunction:: tt_lib.tensor.frac
 
 .. autofunction:: tt_lib.tensor.floor_div

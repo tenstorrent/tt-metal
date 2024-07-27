@@ -250,10 +250,6 @@ Tensor eps(
 Tensor logit(
     const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// polygamma
-Tensor polygamma(
-    const Tensor& input_a, uint32_t k, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor logical_xori(
     const Tensor& input_a,
     float immediate,

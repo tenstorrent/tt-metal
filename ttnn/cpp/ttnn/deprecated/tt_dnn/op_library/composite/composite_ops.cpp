@@ -493,30 +493,6 @@ Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_co
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
 }
 
-// polygamma support for the range of input(1, 10) and n(1, 10)
-Tensor _polygamma(const Tensor& input_a, uint32_t k, const MemoryConfig& output_mem_config) {
-    float k_der = 1.0f + k;
-    float fact_val = std::tgamma(k_der);
-    float pos_neg = 1.0f;
-    if (k == 2 || k == 4 || k == 6 || k == 8 || k == 10) {
-        pos_neg = -1.0f;
-    }
-    Tensor temp(input_a);
-    {
-        Tensor z1 = ttnn::reciprocal(ttnn::power(input_a, k_der, output_mem_config), output_mem_config);
-        temp = z1;
-        for (int idx = 1; idx < 11; idx++) {
-            z1 = ttnn::reciprocal(ttnn::power(ttnn::add(input_a, idx, std::nullopt, output_mem_config), k_der, output_mem_config), output_mem_config);
-            temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-        }
-    }
-    fact_val *= pos_neg;
-    return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
-}
-Tensor polygamma(const Tensor& input_a, uint32_t value, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _polygamma)(input_a, value, output_mem_config);
-}
-
 // logical_xori
 Tensor _logical_xori(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
     if (std::fpclassify(value) == FP_ZERO) {
