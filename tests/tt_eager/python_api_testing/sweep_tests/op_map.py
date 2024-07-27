@@ -140,10 +140,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_i0,
         "pytorch_op": pytorch_ops.i0,
     },
-    "eltwise-logical_noti": {
-        "tt_op": tt_lib_ops.eltwise_logical_noti,
-        "pytorch_op": pytorch_ops.logical_noti,
-    },
     "eltwise-bitwise_complement": {
         "tt_op": None,  # tt_lib_ops.eltwise_bitwise_complement,
         "pytorch_op": None,  # pytorch_ops.bitwise_complement,
@@ -296,10 +292,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_logical_and,
         "pytorch_op": pytorch_ops.logical_and,
     },
-    "eltwise-logical_andi": {
-        "tt_op": tt_lib_ops.eltwise_logical_andi,
-        "pytorch_op": pytorch_ops.logical_andi,
-    },
     "eltwise-leaky_relu": {
         "tt_op": tt_lib_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
@@ -407,10 +399,6 @@ op_map = {
     "lamb-optimizer": {
         "tt_op": tt_lib_ops.lamb_optimizer,
         "pytorch_op": pytorch_ops.lamb_optimizer,
-    },
-    "eltwise-logical_xori": {
-        "tt_op": tt_lib_ops.eltwise_logical_xori,
-        "pytorch_op": pytorch_ops.logical_xori,
     },
     "eltwise-log": {
         "tt_op": tt_lib_ops.eltwise_log,
@@ -596,10 +584,6 @@ op_map = {
     "eltwise-logical_or": {
         "tt_op": tt_lib_ops.eltwise_logical_or,
         "pytorch_op": pytorch_ops.logical_or,
-    },
-    "eltwise-logical_ori": {
-        "tt_op": tt_lib_ops.eltwise_logical_ori,
-        "pytorch_op": pytorch_ops.logical_ori,
     },
     # Eltwise binary with optional output
     "eltwise-ne-optional": {
