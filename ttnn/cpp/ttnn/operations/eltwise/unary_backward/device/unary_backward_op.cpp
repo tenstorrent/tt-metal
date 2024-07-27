@@ -18,7 +18,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/where_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -982,7 +982,7 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const std:
         where(
             ttnn::lt(input, ttnn::operations::creation::full_like(input, -88.5), std::nullopt, output_mem_config),
             t_inf,
-            ttnn::multiply(grad, unary::_cosh(input, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(grad, ttnn::cosh(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         output_mem_config);
     t_inf.deallocate();
@@ -1095,7 +1095,7 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const std:
             ttnn::lt(input,
             ttnn::operations::creation::full_like(input, -88.50, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config), std::nullopt, output_mem_config),
             t_neg_inf,
-            ttnn::multiply(grad, unary::_sinh(input, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(grad, ttnn::sinh(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         output_mem_config);
     t_neg_inf.deallocate();
@@ -1608,16 +1608,6 @@ std::vector<Tensor> _prod_bw(
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
-}
-
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const MemoryConfig&)> UnaryBackwardFunction::get_function_type1(UnaryBackwardOpType OpType){
-    switch (OpType) {
-        case UnaryBackwardOpType::ACOSH_BW:
-            return _acosh_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
 }
 
 }  // namespace ttnn::operations::unary
