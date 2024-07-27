@@ -10,19 +10,18 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct ExecutePermute {
-    static inline ttnn::Tensor operator()(
+    static ttnn::Tensor operator()(
         uint8_t queue_id,
-        const ttnn::Tensor& input_tensor,
-        const std::vector<int64_t>& dims,
-        const std::optional<MemoryConfig>& memory_config,
-        bool composite = true);
-
-    static inline auto operator()(
         const ttnn::Tensor& input_tensor,
         const std::vector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config);
 
-    static inline auto operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims);
+    static ttnn::Tensor operator()(
+        const ttnn::Tensor& input_tensor,
+        const std::vector<int64_t>& dims,
+        const std::optional<MemoryConfig>& memory_config);
+
+    static ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims);
 };
 
 }  // namespace operations::data_movement
