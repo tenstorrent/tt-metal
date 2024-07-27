@@ -789,12 +789,6 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryCo
     return operation::decorate_as_composite(__func__, _sfpu_eps)(shape, layout, device, output_mem_config);
 }
 
-// triu : select upper triangular region of input matrix
-Tensor _triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<bfloat16>(
-        input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
-    return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
-}
 Tensor triu(
     const Tensor& input_a,
     int32_t dim /* = -1 */,

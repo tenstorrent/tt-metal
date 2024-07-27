@@ -1170,7 +1170,7 @@ def eltwise_unary_lt(
 def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     diag = kwargs.get("diag", 0)
-    t1 = ttl.tensor.triu(tx, diag, output_mem_config)
+    t1 = ttnn.triu(tx, diag, memory_config=output_mem_config)
     return tt2torch_tensor(t1)
 
 
