@@ -47,7 +47,7 @@ def run_reduce_scatter_test(
     if len(t3k_device_mesh.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
 
-    debug = True
+    debug = False
 
     (is_known_failure, message) = is_unsupported_case(
         per_chip_output_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
@@ -67,7 +67,6 @@ def run_reduce_scatter_test(
 
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
     input_tensors = [
-        # torch.rand(canonical_input_shape).bfloat16() if not debug else torch.arange(numel).reshape(canonical_input_shape).bfloat16()
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
         for _ in range(num_devices)
     ]
@@ -85,18 +84,18 @@ def run_reduce_scatter_test(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # Run the op
-    # for i in range(num_iters):
-    output_tensor_mesh = ttnn.reduce_scatter(
-        input_tensor_mesh,
-        scatter_dim=scatter_dim,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=mem_config,
-    )
+    for i in range(num_iters):
+        output_tensor_mesh = ttnn.reduce_scatter(
+            input_tensor_mesh,
+            scatter_dim=scatter_dim,
+            math_op=math_op,
+            num_links=num_links,
+            memory_config=mem_config,
+        )
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
-    logger.info(f"Done iteration 0")
+        for device_id in t3k_device_mesh.get_device_ids():
+            ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
+        logger.info(f"Done iteration {i}")
 
     # Compute golden
     # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering

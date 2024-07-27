@@ -678,7 +678,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
    ttnn::ccl::Topology topology) {
-    log_info(tt::LogOp,"HEY!!!");
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
         input_tensor.get_legacy_shape()[scatter_split_dim] ==
