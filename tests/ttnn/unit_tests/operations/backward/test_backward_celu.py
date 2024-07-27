@@ -22,7 +22,7 @@ def test_bw_celu(input_shapes, device):
 
     alpha = 1
 
-    tt_output_tensor_on_device = ttnn.celu_bw(grad_tensor, input_tensor, alpha)
+    tt_output_tensor_on_device = ttnn.celu_bw(grad_tensor, input_tensor, alpha=alpha)
 
     golden_function = ttnn.get_golden_function(ttnn.celu_bw)
     golden_tensor = golden_function(grad_data, in_data, alpha)

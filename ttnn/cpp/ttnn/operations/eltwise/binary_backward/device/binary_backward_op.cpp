@@ -563,38 +563,5 @@ std::vector<ttnn::Tensor> _mul_bw_inter(
     return output_tensors;
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::EMBEDDING_BW:
-            return _embedding_bw;
-        case BinaryBackwardOpType::ADD_BW:
-            return _add_bw_inter;
-        case BinaryBackwardOpType::EQ_BW:
-            return _eq_bw_inter;
-        case BinaryBackwardOpType::LE_BW:
-            return _le_bw;
-        case BinaryBackwardOpType::LT_BW:
-            return _lt_bw;
-        case BinaryBackwardOpType::NE_BW:
-            return _ne_bw;
-        case BinaryBackwardOpType::GE_BW:
-            return _ge_bw;
-        case BinaryBackwardOpType::MUL_BW:
-            return _mul_bw_inter;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_string(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::BIAS_GELU_BW:
-            return _bias_gelu_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
 
 }  // namespace ttnn::operations::binary_backward

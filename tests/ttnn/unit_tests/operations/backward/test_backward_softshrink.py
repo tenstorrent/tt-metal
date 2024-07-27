@@ -27,7 +27,7 @@ def test_bw_softshrink(input_shapes, lambd, device):
 
     pyt_y = torch.nn.functional.softshrink(in_data, lambd=lambd)
 
-    tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd)
+    tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
     pyt_y.backward(gradient=grad_data)
 

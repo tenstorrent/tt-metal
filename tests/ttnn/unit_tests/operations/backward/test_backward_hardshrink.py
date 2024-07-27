@@ -21,7 +21,7 @@ def test_bw_hardshrink(input_shapes, lambd, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd)
+    tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
     golden_function = ttnn.get_golden_function(ttnn.hardshrink_bw)
     golden_tensor = golden_function(grad_data, in_data, lambd)
