@@ -114,7 +114,7 @@ static ttnn::Tensor pad_impl(
 
 // This function signature is similar to pytorch's signature
 // Any rank tensor supported
-ttnn::Tensor operator()(
+ttnn::Tensor ExecutePad::operator()(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     std::vector<std::pair<uint32_t, uint32_t>> padding,
