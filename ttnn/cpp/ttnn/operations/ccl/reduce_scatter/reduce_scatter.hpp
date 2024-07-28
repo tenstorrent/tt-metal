@@ -12,14 +12,14 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteReduceScatter {
-    static std::vector<ttnn::Tensor> operator()(
-        const std::vector<ttnn::Tensor>& input_tensors,
+    static ttnn::Tensor operator()(
+        const ttnn::Tensor& input_tensor,
         const uint32_t scatter_dim,
         ReduceOpMath math_op,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-        return ttnn::operations::ccl::reduce_scatter(input_tensors, scatter_dim, math_op, num_links, out_memory_config);
+        MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+        return ttnn::operations::ccl::reduce_scatter(input_tensor, scatter_dim, math_op, num_links, out_memory_config);
     }
 };
 

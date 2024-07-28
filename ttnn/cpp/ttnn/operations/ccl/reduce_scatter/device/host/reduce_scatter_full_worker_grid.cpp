@@ -394,8 +394,8 @@ static void add_worker_config_to_edm_builders(
 static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     tt::tt_metal::Program& program,
     Device const* device,
-   ttnn::ccl::RingTopology const& topology_config,
-   ttnn::ccl::CCLOpConfig const& op_config,
+    ttnn::ccl::RingTopology const& topology_config,
+    ttnn::ccl::CCLOpConfig const& op_config,
     ReduceScatterWorkerArgBuilder const& worker_arg_builder,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
@@ -668,8 +668,8 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
 }
 
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<Tensor>& output_tensors,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
     ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t scatter_split_dim,
     const uint32_t num_links,
@@ -680,22 +680,24 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
    ttnn::ccl::Topology topology) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
-        input_tensors.at(0).get_legacy_shape()[scatter_split_dim] ==
-            output_tensors.at(0).get_legacy_shape()[scatter_split_dim] * ring_size,
+        input_tensor.get_legacy_shape()[scatter_split_dim] ==
+            output_tensor.get_legacy_shape()[scatter_split_dim] * ring_size,
         "Input and output tensor shapes must match");
     TT_ASSERT(
-        input_tensors.at(0).buffer()->num_pages() % ring_size == 0,
+        input_tensor.buffer()->num_pages() % ring_size == 0,
         "Reduce scatter current only supports even divisibility of input tensor(s) across ranks");
 
     /////////////// Constants/Configuration
     /// Constants/Configuration
-   ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
+    std::vector<Tensor> input_tensors = {input_tensor};
+    std::vector<Tensor> output_tensors = {output_tensor};
+    ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
     auto const& op_config =ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> input_tensor_config =
-        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensors.at(0));
+        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
-        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensors.at(0));
-    uint32_t per_step_dim_size = input_tensors.at(0).get_legacy_shape()[scatter_split_dim] / ring_size;
+        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
+    uint32_t per_step_dim_size = input_tensor.get_legacy_shape()[scatter_split_dim] / ring_size;
     uint32_t input_tensor_num_units_per_scatter_dim =
         per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
     TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
@@ -708,8 +710,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         num_edm_channels, op_config.get_page_size(), buffer_sharing_mode, edm_termination_mode);
     TT_ASSERT(num_edm_channels > 0);
 
-    Tensor const& local_chip_tensor = input_tensors.at(0);
-    Tensor const& local_chip_output_tensor = output_tensors.at(0);
+    Tensor const& local_chip_tensor = input_tensor;
+    Tensor const& local_chip_output_tensor = output_tensor;
 
     std::map<string, string> worker_defines;
     std::vector<KernelHandle> worker_receiver_kernels;

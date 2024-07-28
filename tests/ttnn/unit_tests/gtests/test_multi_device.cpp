@@ -36,4 +36,13 @@ TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
     EXPECT_EQ(device_tensors.size(), 8);
 }
 
+TEST_F(T3kMultiDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStorage) {
+    DeviceMesh* device_mesh = this->device_mesh_.get();
+    const auto input_tensor = ttnn::ones(ttnn::Shape(std::array<uint32_t, 2>{32, 32}), ttnn::bfloat16);
+    const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
+    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(replicated_tensor);
+
+    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+}
+
 }  // namespace ttnn::multi_device::test

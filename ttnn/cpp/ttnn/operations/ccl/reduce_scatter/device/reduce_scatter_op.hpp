@@ -34,8 +34,8 @@ struct ReduceScatter {
 namespace ccl {
 namespace reduce_scatter_detail {
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<Tensor>& output_tensors,
+    const Tensor& input_tensors,
+    const Tensor& output_tensors,
     ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t scatter_split_dim,
     const uint32_t num_links,
@@ -49,8 +49,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
 namespace operations{
 namespace ccl{
-    std::vector<Tensor> reduce_scatter(
-    const std::vector<Tensor> &input_tensors,
+    Tensor reduce_scatter(
+    const Tensor &input_tensor,
     const uint32_t scatter_split_dim,
     ReduceOpMath reduce_op  = ReduceOpMath::SUM,
     const uint32_t num_links = 1,

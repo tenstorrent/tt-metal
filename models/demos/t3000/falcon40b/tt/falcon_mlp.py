@@ -124,12 +124,14 @@ class TtFalconMLP:
             hidden_states
         )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
 
-        hidden_states = ttnn.reduce_scatter(
-            hidden_states,
-            scatter_dim=3,
-            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
-            num_links=1,  # only unidirectional supported for now
-            memory_config=self.model_config["DEFAULT_MEMCFG"],
+        hidden_states = ttnn.get_device_tensors(
+            ttnn.reduce_scatter(
+                ttnn.aggregate_as_tensor(hidden_states),
+                scatter_dim=3,
+                math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+                num_links=1,  # only unidirectional supported for now
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
+            )
         )
 
         hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
@@ -198,12 +200,14 @@ class TtFalconMLP:
             self.output
         )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
 
-        hidden_states = ttnn.reduce_scatter(
-            hidden_states,
-            scatter_dim=3,
-            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
-            num_links=1,  # only one link supported for now
-            memory_config=self.model_config["DEFAULT_MEMCFG"],
+        hidden_states = ttnn.get_device_tensors(
+            ttnn.reduce_scatter(
+                ttnn.aggregate_as_tensor(hidden_states),
+                scatter_dim=3,
+                math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+                num_links=1,  # only one link supported for now
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
+            )
         )
 
         hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
