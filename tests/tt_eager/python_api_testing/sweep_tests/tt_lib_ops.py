@@ -475,7 +475,7 @@ def eltwise_polyval(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.polyval(t0, coeffs, output_mem_config=output_mem_config)
+    t1 = ttnn.polyval(t0, coeffs, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -2618,9 +2618,9 @@ eltwise_min = make_binary_op(ttl.tensor.min)
 eltwise_max = make_binary_op(ttl.tensor.max)
 
 matmul = make_binary_op_ttnn(ttnn.matmul)
-outer = make_binary_op(ttl.tensor.outer)
+outer = make_binary_op_ttnn(ttnn.outer)
 
-eltwise_scatter = make_binary_op(ttl.tensor.scatter)
+eltwise_scatter = make_binary_op_ttnn(ttnn.scatter)
 eltwise_nextafter = make_binary_op_ttnn(ttnn.nextafter)
 eltwise_remainder = make_binary_op(ttl.tensor.remainder)
 eltwise_fmod = make_binary_op(ttl.tensor.fmod)
