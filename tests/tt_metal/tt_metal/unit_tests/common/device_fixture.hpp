@@ -108,6 +108,15 @@ class GalaxyFixture : public ::testing::Test {
         this->InitializeDevices();
     }
 
+    void TearDown() override
+    {
+        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        for (Device* device : this->devices_)
+        {
+            tt::tt_metal::CloseDevice(device);
+        }
+    }
+
     std::vector<tt::tt_metal::Device*> devices_;
 };
 
