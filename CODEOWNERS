@@ -114,10 +114,17 @@ ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dma
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/setup.py @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @TT-BrianLiu
+ttnn/cpp/ttnn/operations/pool/ @mywoodstock @pavlejosipovic
+ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @pavlejosipovic
+ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
+ttnn/cpp/ttnn/operations/eltwise/ @arakhmati @eyonland
+ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @tarafdarTT @sjameelTT
+ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
+ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/moreh* @razorback3 @dongjin-na
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
-
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**
