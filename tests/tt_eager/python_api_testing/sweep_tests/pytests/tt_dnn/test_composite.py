@@ -269,7 +269,7 @@ def test_run_min_max_test(fn, input_shapes, device, function_level_defaults):
     test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
 
     rank = len(input_shapes[0])
-    choices = [(rank - 1,), (rank - rank,)]
+    choices = [(rank - 1,), (rank - 2,)]
     idx = np.random.choice(len(choices), 1)
     dims = choices[idx.item()]
 
