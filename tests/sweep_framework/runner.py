@@ -27,6 +27,14 @@ def git_hash():
         return "Couldn't get git hash!"
 
 
+def get_hostname():
+    return subprocess.check_output(["uname", "-n"]).decode("ascii").strip()
+
+
+def get_username():
+    return os.environ["USER"]
+
+
 def run(test_module, input_queue, output_queue):
     device = ttnn.open_device(0)
     try:
@@ -74,49 +82,47 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["e2e_perf"] = None
-            result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            results.append(result)
-            suite_pbar.update()
-            continue
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
-        if p is None:
-            p = Process(target=run, args=(test_module, input_queue, output_queue))
-            p.start()
-        try:
-            if MEASURE_PERF:
-                # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+            if p is None:
+                p = Process(target=run, args=(test_module, input_queue, output_queue))
+                p.start()
+            try:
+                if MEASURE_PERF:
+                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                    input_queue.put(test_vector)
+                    output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
-                output_queue.get(block=True, timeout=timeout)
-            input_queue.put(test_vector)
-            response = output_queue.get(block=True, timeout=timeout)
-            status, message, e2e_perf = response[0], response[1], response[2]
-            if status:
-                result["status"] = TestStatus.PASS
-                result["message"] = message
-            else:
-                if "Out of Memory: Not enough space to allocate" in message:
-                    result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                elif "Watcher" in message:
-                    result["status"] = TestStatus.FAIL_WATCHER
+                response = output_queue.get(block=True, timeout=timeout)
+                status, message, e2e_perf = response[0], response[1], response[2]
+                if status:
+                    result["status"] = TestStatus.PASS
+                    result["message"] = message
                 else:
-                    result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-                result["exception"] = message
-            if e2e_perf and MEASURE_PERF:
-                result["e2e_perf"] = e2e_perf
-            else:
-                result["e2e_perf"] = None
-        except Empty as e:
-            print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-            p.terminate()
-            p = None
-            smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
-            if smi_process.returncode == 0:
-                print("SWEEPS: TT-SMI Reset Complete Successfully")
-            result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
+                    if "Out of Memory: Not enough space to allocate" in message:
+                        result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                    elif "Watcher" in message:
+                        result["status"] = TestStatus.FAIL_WATCHER
+                    else:
+                        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                    result["exception"] = message
+                if e2e_perf and MEASURE_PERF:
+                    result["e2e_perf"] = e2e_perf
+                else:
+                    result["e2e_perf"] = None
+            except Empty as e:
+                print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+                p.terminate()
+                p = None
+                smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
+                if smi_process.returncode == 0:
+                    print("SWEEPS: TT-SMI Reset Complete Successfully")
+                result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result["host"] = get_hostname()
+        result["user"] = get_username()
 
         suite_pbar.update()
         results.append(result)
