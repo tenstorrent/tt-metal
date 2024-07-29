@@ -8,10 +8,9 @@ import ttnn
 import tt_lib as ttl
 from typing import Callable
 
-from models.demos.wormhole.mamba.reference.args import ModelArgs
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.mamba_one_step_ssm import TtMambaSSM
+from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
 from models.demos.wormhole.mamba.tt.cache import TensorCache
+from models.demos.wormhole.mamba.tt.mamba_ssm import TtMambaSSM
 from models.demos.wormhole.mamba.tt.mamba_conv import MambaConvConfig, MambaConv
 
 
