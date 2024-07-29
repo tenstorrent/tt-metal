@@ -58,18 +58,12 @@ tests/scripts/tgg/ @ttmchiou
 
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT
-# tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
-tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller
-# tt_metal/impl/device/ @TT-billteng
-tt_metal/impl/buffers/ @tarafdarTT
-# tt_metal/impl/program/ @TT-billteng
-# tt_metal/impl/ @abhullar-tt @TT-billteng
+tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller @aliuTT
 
 # metal - dispatch
-tt_metal/impl/dispatch/ @pgkeller @tt-asaigal
-tt_metal/impl/dispatch/kernels/packet_* @ubcheema
-tt_metal/impl/dispatch/kernels/eth_* @ubcheema
-tt_metal/kernels/dataflow/dispatch/ @tarafdarTT @pgkeller
+tt_metal/impl/dispatch/ @pgkeller @tt-asaigal @aliuTT
+tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
+tt_metal/impl/dispatch/kernels/eth_* @ubcheema @aliuTT
 docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema

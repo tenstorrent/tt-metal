@@ -5,9 +5,8 @@
 import torch
 import pytest
 from loguru import logger
-from typing import Optional
 import ttnn
-from models.demos.wormhole.mamba.tt.full_model import TtTensorLoader
+from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock

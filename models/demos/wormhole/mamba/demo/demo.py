@@ -33,7 +33,7 @@ def get_tt_metal_model(
     seq_len: int = 1,
     num_layers: int = 64,
 ):
-    from models.demos.wormhole.mamba.tt.full_model import MambaTT
+    from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
     from models.demos.wormhole.mamba.tt import model_config
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)

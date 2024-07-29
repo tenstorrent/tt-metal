@@ -65,8 +65,7 @@ worker_l1_size:
   1499136
 
 dram_bank_size:
-  # 4278190080 TODO (abhullar): upper 2GB of DRAM is untested on some BH machines. Test this limitation
-  2147483648
+  4278190080
 
 eth_l1_size:
   262144
