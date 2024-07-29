@@ -9,9 +9,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
-#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 
 namespace ttnn::operations::binary{
@@ -35,6 +33,9 @@ enum class BinaryCompositeOpType {
     LOGICAL_AND_,
     LOGICAL_OR_,
     LOGICAL_XOR_,
+    SCATTER,
+    OUTER,
+    POLYVAL,
 };
 
 Tensor _hypot(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -58,6 +59,10 @@ Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfi
 Tensor _logical_or_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_and_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_xor_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _scatter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _outer(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _polyval(const Tensor&, const std::vector<float>&, const std::optional<MemoryConfig>&);
+
 
 // OpHandler struct template
 template <BinaryCompositeOpType OpType>
@@ -195,6 +200,27 @@ struct OpHandler<BinaryCompositeOpType::FLOOR_DIV> {
     }
     static Tensor handle(const Tensor& t1, float value, const std::optional<MemoryConfig>& mem_cfg) {
         return _floor_div_overload(t1, value, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<BinaryCompositeOpType::SCATTER> {
+    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
+        return _scatter(t1, t2, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<BinaryCompositeOpType::OUTER> {
+    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
+        return _outer(t1, t2, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<BinaryCompositeOpType::POLYVAL> {
+    static Tensor handle(const Tensor& t1, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& mem_cfg) {
+        return _polyval(t1, coeffs, mem_cfg);
     }
 };
 
