@@ -566,7 +566,7 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
         const auto& tensor_storage = std::get<MultiDeviceStorage>(tensor.get_storage());
         return tensor_storage.strategy;
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
         const auto& tensor_storage = std::get<MultiDeviceHostStorage>(tensor.get_storage());
         return tensor_storage.strategy;
     }
