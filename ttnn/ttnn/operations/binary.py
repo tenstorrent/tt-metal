@@ -173,10 +173,10 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function(a, b, *args, **kwargs):
     import torch
 
-    return torch.nn.functional.gelu(torch.add(x, y))
+    return torch.nn.functional.gelu(torch.add(a, b))
 
 
 ttnn.attach_golden_function(ttnn.bias_gelu, golden_function=_golden_function)
@@ -360,53 +360,31 @@ def torch_squared_difference(x, y, *args, **kwargs):
     return torch.square(torch.sub(x, y))
 
 
-def torch_polyval(input_tensor, coeff):
-    curVal = 0
-    for curValIndex in range(len(coeff) - 1):
-        curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
-    return curVal + coeff[len(coeff) - 1]
+def _golden_function_scatter(input_tensor_a, input_tensor_b, *args, **kwargs):
+    input_tensor_b[:, :, : input_tensor_a.shape[-2], : input_tensor_a.shape[-1]] = input_tensor_a
+    return input_tensor_b
 
 
-def _golden_function(input_tensor: ttnn.Tensor, coeff: List[float], **_):
-    return torch_polyval(input_tensor, coeff)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.scatter, golden_function=_golden_function_scatter)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.polyval",
-    golden_function=_golden_function,
-)
-def polyval(
-    input_tensor: ttnn.Tensor,
-    coeff: List[float],
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    dtype: Optional[ttnn.DataType] = None,
-) -> ttnn.Tensor:
-    r"""
-    polyval(input_tensor_a: ttnn.Tensor, coeff: List[float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
 
-    Returns tensor with the polyval of all of elements of the input tensor input with coefficients coeffs.
-
-    .. math::
-        \mathrm{{input\_tensor\_a}}_i , \mathrm{{coeff}}_i
-
-    Args:
-        * :attr:`input_tensor_a`
-        * :attr:`coeff`
-
-    Keyword args:
-        :attr:`memory_config`
-        :attr:`dtype`
+    return torch.outer(input_tensor_a.squeeze(), input_tensor_b.squeeze())
 
 
-    """
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.outer, golden_function=_golden_function_outer)
 
-    output = ttnn.experimental.tensor.polyval(
-        input_tensor,
-        coeff,
-        output_mem_config=memory_config,
-    )
-    return output
+
+def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
+    result = 0.0
+    for coeff in coeffs:
+        result = result * input_tensor_a + coeff
+    return result
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.polyval, golden_function=_golden_function_polyval)
 
 
 __all__ = []
