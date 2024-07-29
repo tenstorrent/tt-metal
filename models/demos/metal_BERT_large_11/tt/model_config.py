@@ -196,7 +196,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
-        grid_size = [12, batch]
+        grid_size = tt_lib.tensor.CoreCoord(tuple([12, batch]))
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
@@ -293,14 +293,14 @@ def get_model_config(batch, device_grid_size, model_config_str):
     elif model_config_str == "BFLOAT8_B-SHARDED":
         activation_grid_dim = 8
         if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-            grid_size = [batch, activation_grid_dim]
+            grid_size = tt_lib.tensor.CoreCoord(tuple([batch, activation_grid_dim]))
             shard_orientation = (
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR
                 if is_wormhole_b0()
                 else tt_lib.tensor.ShardOrientation.COL_MAJOR
             )
         elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-            grid_size = [activation_grid_dim, batch]
+            grid_size = tt_lib.tensor.CoreCoord(tuple([activation_grid_dim, batch]))
             shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
         else:
             assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
