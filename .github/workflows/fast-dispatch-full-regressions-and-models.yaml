@@ -52,7 +52,7 @@ jobs:
               arch: wormhole_b0,
               runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 40
+              timeout: 55
             },
             {
               name: "WH N300 ttnn nightly",
