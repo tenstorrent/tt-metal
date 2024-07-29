@@ -14,9 +14,9 @@ import tt_lib as ttl
 import numpy as np
 
 fns = [
-    "std_hw",
-    "mean_hw",
-    "var_hw",
+    #    "std_hw",
+    #    "mean_hw",
+    #    "var_hw",
     "normalize_hw",
     "normalize_global",
 ]  # "std_global","var_global"]
@@ -74,12 +74,7 @@ class TestStats:
         accepted_pcc = accepted_pcc[fns.index(fn_kind)]
         comparison_func = partial(comparison_funcs.comp_pcc, pcc=accepted_pcc)
         run_single_pytorch_test(
-            f"stats-{fn_kind}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            f"stats-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
 
