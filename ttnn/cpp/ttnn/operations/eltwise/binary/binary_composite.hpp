@@ -7,6 +7,9 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/device/binary_composite_op.hpp"
+#include "ttnn/operations/eltwise/binary/device/binary_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -89,6 +92,59 @@ struct ExecuteBinaryCompositeOpsDiv
     }
 };
 
+
+template <BinaryOpType binary_op_type, bool in_place>
+struct ExecuteBiasGelu {
+    static Tensor operator()(
+        uint8_t queue_id,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+
+            return BinaryOperation<binary_op_type, in_place>::operator()(
+                queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
+    }
+
+    static Tensor operator()(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+
+            return BinaryOperation<binary_op_type, in_place>::operator()(
+                DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
+    }
+
+    static Tensor operator()(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_a,
+        const float bias,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+
+            return ttnn::gelu(queue_id, ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor), true, memory_config, optional_output_tensor);
+    }
+
+    static Tensor operator()(
+        const ttnn::Tensor &input_tensor_a,
+        const float bias,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<FusedActivations> activations = std::nullopt) {
+
+            return operator()(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations);
+    }
+
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -146,5 +202,8 @@ constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_xor_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
+constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::bias_gelu",
+    operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU, false>>();
 
 }  // namespace ttnn

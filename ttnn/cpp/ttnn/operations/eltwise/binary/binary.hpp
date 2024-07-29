@@ -386,9 +386,6 @@ constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op
 constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
-constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::bias_gelu",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::BIAS_GELU, false>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
