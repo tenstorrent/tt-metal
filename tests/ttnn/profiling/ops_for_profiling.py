@@ -82,6 +82,16 @@ def bcast_hw_shape_func_11(input_shape):
     return input_shape, input_shape_1
 
 
+def bcast_h_shape_func_1(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, input_shape[-1]]
+    return input_shape, input_shape_1
+
+
+def bcast_w_shape_func_1(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], input_shape[-2], 1]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -207,7 +217,7 @@ def unary_eq_bw(x, y):
 
 
 def logiteps_bw(x, y):
-    ttnn.logiteps_bw(x, y, 0.0001)
+    ttnn.logiteps_bw(x, y, eps=0.0001)
 
 
 def fmod_bw(x, y):
@@ -418,19 +428,19 @@ def angle_bw(x, y):
 
 
 def celu_bw(x, y):
-    ttnn.celu_bw(x, y, 1)
+    ttnn.celu_bw(x, y, alpha=1)
 
 
 def hardshrink_bw(x, y):
-    ttnn.hardshrink_bw(x, y, 0.5)
+    ttnn.hardshrink_bw(x, y, lambd=0.5)
 
 
 def leaky_relu_bw(x, y):
-    ttnn.leaky_relu_bw(x, y, 0.3)
+    ttnn.leaky_relu_bw(x, y, negative_slope=0.3)
 
 
 def softshrink_bw(x, y):
-    ttnn.softshrink_bw(x, y, 0.5)
+    ttnn.softshrink_bw(x, y, lambd=0.5)
 
 
 def unary_div_bw(x, y):
@@ -449,6 +459,16 @@ all_binary_ops = [
     {
         "op": ttnn.mul,
         "name": "ttnn.mul",
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_h",
+        "shape_func": bcast_h_shape_func_1,
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_w",
+        "shape_func": bcast_w_shape_func_1,
     },
     {
         "op": ttnn.mul,
@@ -1170,11 +1190,11 @@ def leaky_relu(x):
 
 
 def softshrink(x):
-    ttnn.softshrink(x, 70)
+    ttnn.softshrink(x, lambd=70)
 
 
 def hardshrink(x):
-    ttnn.hardshrink(x, 1)
+    ttnn.hardshrink(x, lambd=1)
 
 
 def elu(x):
@@ -1194,7 +1214,7 @@ def bias_gelu_unary(x):
 
 
 def logit(x):
-    ttnn.logit(x, 0.0001)
+    ttnn.logit(x, eps=0.0001)
 
 
 def logical_andi(x):
@@ -1307,14 +1327,6 @@ def zeros(x):
 
 def empty(x):
     ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
-
-
-def tril(x):
-    ttnn.tril(x, 1)
-
-
-def triu(x):
-    ttnn.triu(x, 1)
 
 
 def sum_dim_2(x):
@@ -2024,12 +2036,12 @@ all_unary_ops = [
         "name": "ttnn.empty",
     },
     {
-        "op": tril,
+        "op": ttnn.tril,
         "name": "ttnn.tril",
         "num_repeats": 3,
     },
     {
-        "op": triu,
+        "op": ttnn.triu,
         "name": "ttnn.triu",
         "num_repeats": 3,
     },
