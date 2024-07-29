@@ -64,7 +64,6 @@ tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller @aliuTT
 tt_metal/impl/dispatch/ @pgkeller @tt-asaigal @aliuTT
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/dispatch/kernels/eth_* @ubcheema @aliuTT
-tt_metal/kernels/dataflow/dispatch/ @tarafdarTT @pgkeller @aliuTT
 docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
