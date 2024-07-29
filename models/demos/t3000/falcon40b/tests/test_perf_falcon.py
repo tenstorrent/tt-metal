@@ -353,6 +353,10 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
+@pytest.mark.parametrize(
+    "async_mode",
+    (True,),
+)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -370,6 +374,7 @@ def test_perf_bare_metal(
     t3k_device_mesh,
     use_program_cache,
     is_ci_env,
+    async_mode,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -379,6 +384,8 @@ def test_perf_bare_metal(
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     devices = t3k_device_mesh.get_devices()
+    for device in devices:
+        device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
