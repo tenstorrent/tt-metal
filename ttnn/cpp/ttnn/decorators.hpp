@@ -12,6 +12,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include "tt_metal/graph_tracking.hpp"
 namespace ttnn {
 namespace decorators {
 
@@ -198,6 +199,7 @@ struct operation_t {
         requires(auto_launch_op)
     auto operator()(args_t&&... args) const {
         ZoneScopedN("Run ttnn operation (using auto async)");
+        GraphTracker::instance().track_begin_op(cpp_fully_qualified_name, args...);
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
@@ -240,7 +242,7 @@ struct operation_t {
             enable_autoformat);
 
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-
+        GraphTracker::instance().track_end_op(output_tensors);
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);
         } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
