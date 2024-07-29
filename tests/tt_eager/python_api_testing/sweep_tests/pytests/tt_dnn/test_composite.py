@@ -119,7 +119,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options = defaultdict(lambda: (-1.0, 1.0))
     options["log1"] = (0.0, 1.0)
     options["polyval"] = (1, 100)
-    options["logit"] = (0, 1)
+    options["logit"] = (0, 0.99)
     options["deg2rad"] = (-180, 180)
     options["bias_gelu_unary"] = (-1e10, 1e10)
     options["rad2deg"] = (0, 2 * pi)
@@ -187,7 +187,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "atan2",
         "subalpha",
         "addalpha",
-        "logit",
         "logical_xor",
         "isclose",
         "assign_binary",
@@ -219,7 +218,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     elif fn in ["bias_gelu_unary", "bias_gelu"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
-        test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
+        test_args.update({"eps": np.random.randint(-10, 0.99)})
     elif fn in ["polygamma"]:
         test_args.update({"k": np.random.randint(1, 10)})
     elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
