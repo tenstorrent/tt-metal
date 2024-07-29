@@ -284,6 +284,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             DEBUG_STATUS("HQW");
             uint32_t heartbeat = 0;
             while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
+                invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
             }
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
@@ -535,7 +536,9 @@ inline uint32_t process_prefetch_h_wait_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     volatile tt_l1_ptr uint32_t* event_addr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd->event_wait.sync_event_addr);
-    while (*event_addr < cmd->event_wait.sync_event);
+    do {
+        invalidate_l1_cache();
+    } while (*event_addr < cmd->event_wait.sync_event);
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
 }
 
@@ -872,9 +875,10 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
     uint32_t heartbeat = 0;
-    while (*sem_addr != count) {
+    do {
+        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    }
+    } while (*sem_addr != count);
     DEBUG_STATUS("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
