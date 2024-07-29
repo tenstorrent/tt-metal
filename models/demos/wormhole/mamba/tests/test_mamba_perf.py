@@ -142,7 +142,7 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
         inference_iterations = 2
     else:
         inference_iterations = 1
-    command = f"pytest models/demos/wormhole/mamba/tests/test_full_model.py::test_device_perf[{inference_iterations}]"
+    command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[{inference_iterations}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # convert expected perf (ms) to samples/s
