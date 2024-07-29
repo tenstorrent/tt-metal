@@ -72,6 +72,7 @@ def test_run_addalpha(
         comparison_func,
         device,
         test_args,
+<<<<<<< HEAD
     )
 
 
@@ -122,4 +123,7 @@ def test_run_addalpha_optional_output(
         comparison_func,
         device,
         test_args,
+=======
+        ttnn_op=True,
+>>>>>>> #10147: Migrated ops asinh to celu from tt-dnn/test_composite.py
     )

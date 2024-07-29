@@ -140,10 +140,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_i0,
         "pytorch_op": pytorch_ops.i0,
     },
-    "eltwise-lgamma": {
-        "tt_op": tt_lib_ops.eltwise_lgamma,
-        "pytorch_op": pytorch_ops.lgamma,
-    },
     "eltwise-logical_noti": {
         "tt_op": tt_lib_ops.eltwise_logical_noti,
         "pytorch_op": pytorch_ops.logical_noti,
@@ -151,10 +147,6 @@ op_map = {
     "eltwise-bitwise_complement": {
         "tt_op": None,  # tt_lib_ops.eltwise_bitwise_complement,
         "pytorch_op": None,  # pytorch_ops.bitwise_complement,
-    },
-    "eltwise-logical_xor": {
-        "tt_op": tt_lib_ops.eltwise_logical_xor,
-        "pytorch_op": pytorch_ops.logical_xor,
     },
     "eltwise-ltz": {
         "tt_op": tt_lib_ops.eltwise_ltz,
@@ -184,10 +176,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_abs,
         "pytorch_op": pytorch_ops.abs,
     },
-    "eltwise-digamma": {
-        "tt_op": tt_lib_ops.eltwise_digamma,
-        "pytorch_op": pytorch_ops.digamma,
-    },
     "eltwise-isfinite": {
         "tt_op": tt_lib_ops.eltwise_isfinite,
         "pytorch_op": pytorch_ops.isfinite,
@@ -211,10 +199,6 @@ op_map = {
     "eltwise-sign": {
         "tt_op": tt_lib_ops.eltwise_sign,
         "pytorch_op": pytorch_ops.sign,
-    },
-    "eltwise-multigammaln": {
-        "tt_op": tt_lib_ops.eltwise_multigammaln,
-        "pytorch_op": pytorch_ops.multigammaln,
     },
     "eltwise-elu": {
         "tt_op": tt_lib_ops.eltwise_elu,
@@ -280,21 +264,9 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_atan,
         "pytorch_op": pytorch_ops.atan,
     },
-    "eltwise-atanh": {
-        "tt_op": tt_lib_ops.eltwise_atanh,
-        "pytorch_op": pytorch_ops.atanh,
-    },
     "eltwise-acos": {
         "tt_op": tt_lib_ops.eltwise_acos,
         "pytorch_op": pytorch_ops.acos,
-    },
-    "eltwise-asinh": {
-        "tt_op": tt_lib_ops.eltwise_asinh,
-        "pytorch_op": pytorch_ops.asinh,
-    },
-    "eltwise-acosh": {
-        "tt_op": tt_lib_ops.eltwise_acosh,
-        "pytorch_op": pytorch_ops.acosh,
     },
     "eltwise-exp": {
         "tt_op": tt_lib_ops.eltwise_exp,
@@ -335,10 +307,6 @@ op_map = {
     "eltwise-logical_andi": {
         "tt_op": tt_lib_ops.eltwise_logical_andi,
         "pytorch_op": pytorch_ops.logical_andi,
-    },
-    "eltwise-atan2": {
-        "tt_op": tt_lib_ops.eltwise_atan2,
-        "pytorch_op": pytorch_ops.atan2,
     },
     "eltwise-leaky_relu": {
         "tt_op": tt_lib_ops.eltwise_leaky_relu,
@@ -444,10 +412,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_erfinv,
         "pytorch_op": pytorch_ops.erfinv,
     },
-    "eltwise-nextafter": {
-        "tt_op": tt_lib_ops.eltwise_nextafter,
-        "pytorch_op": pytorch_ops.nextafter,
-    },
     "eltwise-subalpha": {
         "tt_op": tt_lib_ops.eltwise_subalpha,
         "pytorch_op": pytorch_ops.subalpha,
@@ -455,14 +419,6 @@ op_map = {
     "lamb-optimizer": {
         "tt_op": tt_lib_ops.lamb_optimizer,
         "pytorch_op": pytorch_ops.lamb_optimizer,
-    },
-    "eltwise-logit": {
-        "tt_op": tt_lib_ops.eltwise_logit,
-        "pytorch_op": pytorch_ops.logit,
-    },
-    "eltwise-polygamma": {
-        "tt_op": tt_lib_ops.eltwise_polygamma,
-        "pytorch_op": pytorch_ops.polygamma,
     },
     "eltwise-logical_xori": {
         "tt_op": tt_lib_ops.eltwise_logical_xori,
@@ -656,10 +612,6 @@ op_map = {
     "eltwise-logical_ori": {
         "tt_op": tt_lib_ops.eltwise_logical_ori,
         "pytorch_op": pytorch_ops.logical_ori,
-    },
-    "eltwise-isclose": {
-        "tt_op": tt_lib_ops.eltwise_isclose,
-        "pytorch_op": pytorch_ops.isclose,
     },
     # Eltwise binary with optional output
     "eltwise-ne-optional": {

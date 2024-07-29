@@ -88,6 +88,28 @@ if is_wormhole_b0():
                 "cosh",
                 "tanhshrink",
                 "xlogy",
+                "asinh",
+                "acosh",
+                "atanh",
+                "atan2",
+                # TO-DO:
+                # "subalpha",
+                # "bias_gelu_unary",
+                "addalpha",
+                "logit",
+                # "logical_ori",
+                "logical_xor",
+                # "logical_xori",
+                # "logical_noti",
+                # "logical_andi",
+                "isclose",
+                "digamma",
+                "lgamma",
+                "multigammaln",
+                "polygamma",
+                "nextafter",
+                # "scatter",
+                # "celu",
             ),
             shapes,
         )
@@ -170,6 +192,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "isclose",
         "assign_binary",
         "nextafter",
+        # "scatter",
     ]:
         num_inputs = 2
 

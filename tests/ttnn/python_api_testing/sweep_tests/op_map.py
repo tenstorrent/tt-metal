@@ -120,7 +120,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_sigmoid_accurate,
         "pytorch_op": pytorch_ops.sigmoid,
     },
-    "ttnn-eltwise-polygamma": {
+    "eltwise-polygamma": {
         "tt_op": ttnn_ops.eltwise_polygamma,
         "pytorch_op": pytorch_ops.polygamma,
     },
@@ -184,7 +184,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_relu6,
         "pytorch_op": pytorch_ops.relu6,
     },
-    "ttnn-eltwise-isclose": {
+    "eltwise-isclose": {
         "tt_op": ttnn_ops.eltwise_isclose,
         "pytorch_op": pytorch_ops.isclose,
     },
@@ -264,7 +264,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
     },
-    "ttnn-eltwise-lgamma": {
+    "eltwise-lgamma": {
         "tt_op": ttnn_ops.eltwise_lgamma,
         "pytorch_op": pytorch_ops.lgamma,
     },
@@ -288,7 +288,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_log_sigmoid,
         "pytorch_op": pytorch_ops.log_sigmoid,
     },
-    "ttnn-eltwise-logit": {
+    "eltwise-logit": {
         "tt_op": ttnn_ops.eltwise_logit,
         "pytorch_op": pytorch_ops.logit,
     },
@@ -296,7 +296,7 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_mish,
         "pytorch_op": pytorch_ops.mish,
     },
-    "ttnn-eltwise-multigammaln": {
+    "eltwise-multigammaln": {
         "tt_op": ttnn_ops.eltwise_multigammaln,
         "pytorch_op": pytorch_ops.multigammaln,
     },
@@ -441,7 +441,7 @@ op_map = {
         "tt_op": ttnn_ops.acos,
         "pytorch_op": pytorch_ops.acos,
     },
-    "ttnn-acosh": {
+    "eltwise-acosh": {
         "tt_op": ttnn_ops.acosh,
         "pytorch_op": pytorch_ops.acosh,
     },
@@ -449,7 +449,7 @@ op_map = {
         "tt_op": ttnn_ops.asin,
         "pytorch_op": pytorch_ops.asin,
     },
-    "ttnn-asinh": {
+    "eltwise-asinh": {
         "tt_op": ttnn_ops.asinh,
         "pytorch_op": pytorch_ops.asinh,
     },
@@ -457,11 +457,11 @@ op_map = {
         "tt_op": ttnn_ops.atan,
         "pytorch_op": pytorch_ops.atan,
     },
-    "ttnn-atan2": {
+    "eltwise-atan2": {
         "tt_op": ttnn_ops.atan2,
         "pytorch_op": pytorch_ops.atan2,
     },
-    "ttnn-atanh": {
+    "eltwise-atanh": {
         "tt_op": ttnn_ops.atanh,
         "pytorch_op": pytorch_ops.atanh,
     },
@@ -521,7 +521,7 @@ op_map = {
         "tt_op": ttnn_ops.clone,
         "pytorch_op": pytorch_ops.clone,
     },
-    "ttnn-digamma": {
+    "eltwise-digamma": {
         "tt_op": ttnn_ops.digamma,
         "pytorch_op": pytorch_ops.digamma,
     },
@@ -581,7 +581,7 @@ op_map = {
         "tt_op": ttnn_ops.ldexp,
         "pytorch_op": pytorch_ops.ldexp,
     },
-    "ttnn-logical_xor": {
+    "eltwise-logical_xor": {
         "tt_op": ttnn_ops.logical_xor,
         "pytorch_op": pytorch_ops.logical_xor,
     },
@@ -617,7 +617,7 @@ op_map = {
         "tt_op": ttnn_ops.arange,
         "pytorch_op": pytorch_ops.arange,
     },
-    "ttnn-nextafter": {
+    "eltwise-nextafter": {
         "tt_op": ttnn_ops.nextafter,
         "pytorch_op": pytorch_ops.nextafter,
     },

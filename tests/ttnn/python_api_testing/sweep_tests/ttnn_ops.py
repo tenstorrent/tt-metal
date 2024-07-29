@@ -537,7 +537,7 @@ def eltwise_logit(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.logit(t0, eps, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.logit(t0, eps=0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1366,7 +1366,7 @@ def eltwise_softshrink(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softshrink(t0, _lambda, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.softshrink(t0, lambd=_lambda, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1479,7 +1479,7 @@ def eltwise_polygamma(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.polygamma(t0, k, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.polygamma(t0, k=k, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1768,7 +1768,7 @@ def eltwise_isclose(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.isclose(t0, t1, rtol, atol, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.isclose(t0, t1, rtol=rtol, atol=atol, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 
@@ -2110,7 +2110,7 @@ def hardshrink(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardshrink(t0, _lambda, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.hardshrink(t0, lambd=_lambda, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
