@@ -135,8 +135,7 @@ static void dump_l1_status(FILE *f, Device *device, CoreCoord core, const launch
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
     data = tt::llrt::read_hex_vec_from_core(device->id(), core, MEM_L1_BASE, sizeof(uint32_t));
-    // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
-    if (data[0] != 0x2010006f) {
+    if (data[0] != llrt::generate_risc_startup_addr(false)) {
         log_running_kernels(launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.str(), data[0]);
     }
