@@ -89,6 +89,7 @@ bool split_prefetcher_g;
 bool split_dispatcher_g;
 uint32_t prefetch_d_buffer_size_g;
 bool use_dram_exec_buf_g = false;
+bool relay_max_packed_paged_submcds = false;
 uint32_t exec_buf_log_page_size_g;
 
 CoreCoord first_worker_g = { 0, 1 };
@@ -135,6 +136,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -packetized_en: packetized path enabled (default false)");
         log_info(LogTest, "  -device_id: Device on which the test will be run, default = 0");
         log_info(LogTest, "  -x: execute commands from dram exec_buf (default 0)");
+        log_info(LogTest, "  -mpps: give prefetcher the maximum number of packed data submcds to relay to dispatcher");
         log_info(LogTest, "-xpls: execute buffer log dram page size (default {})", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
         log_info(LogTest, "  -s: seed for randomized tests (default 1)");
         exit(0);
@@ -160,6 +162,7 @@ void init(int argc, char **argv) {
     split_prefetcher_g = test_args::has_command_option(input_args, "-spre");
     split_dispatcher_g = test_args::has_command_option(input_args, "-sdis");
     use_dram_exec_buf_g = test_args::has_command_option(input_args, "-x");
+    relay_max_packed_paged_submcds = test_args::has_command_option(input_args, "-mpps");
     exec_buf_log_page_size_g = test_args::get_command_option_uint32(input_args, "-xpls", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
 
     packetized_path_en_g = test_args::has_command_option(input_args, "-packetized_en");
@@ -882,7 +885,7 @@ void gen_packed_read_test(Device *device,
     bool done = false;
     while (!done) {
         uint32_t packed_read_page_size = std::rand() % 3 + 9; // 512, 1024, 2048
-        uint32_t n_sub_cmds = (std::rand() % 7) + 1;
+        uint32_t n_sub_cmds =  relay_max_packed_paged_submcds ?  CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS : (std::rand() % 7) + 1;
 
         vector<uint32_t> lengths;
         uint32_t total_length = 0;

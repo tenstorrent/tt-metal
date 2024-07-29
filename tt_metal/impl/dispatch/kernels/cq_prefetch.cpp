@@ -82,7 +82,7 @@ constexpr uint32_t max_read_packed_cmd =
 constexpr uint32_t l1_cache_elements = max_read_packed_cmd + 1;  // +1 for sentinel value
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
-    l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);;
+    l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);
 
 static uint32_t l1_cache[l1_cache_elements_rounded];
 
@@ -775,6 +775,9 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
     }
 
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    // Check that the final write does not overflow the L1 cache and corrupt the stack
+    // End address of final write is: curr_offset_into_cache + write_size_rounded_up_to_copy_chunk
+    ASSERT((uint32_t)(l1_cache_pos + ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) * l1_to_local_cache_copy_chunk - l1_cache) < l1_cache_elements_rounded);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), amt, l1_cache_pos);
     // Store a sentinal non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
@@ -1020,6 +1023,9 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(uint32_t& cmd_ptr,
     }
 
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    // Check that the final write does not overflow the L1 cache and corrupt the stack.
+    // End address of final write is: curr_offset_into_cache + write_size_rounded_up_to_copy_chunk
+    ASSERT((uint32_t)(l1_cache_pos + ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) * l1_to_local_cache_copy_chunk - l1_cache) < l1_cache_elements_rounded);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, amt, l1_cache_pos);
     // Store a sentinal non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayPagedPackedSubCmd *)&l1_cache_pos[amt])->length = 1;
