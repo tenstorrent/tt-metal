@@ -324,13 +324,38 @@ namespace kernel_profiler{
 		    profiler_control_buffer[deviceIndex] +
 		    profiler_control_buffer[hostIndex];
 
+                bool do_noc = false;
+                uint32_t dram_offset = 0 ;
+                uint32_t send_size = 0;
 		if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
 		{
-		    uint32_t dram_offset =
+		    dram_offset =
 			(core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
 			hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
 			profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
+                    send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
+
+                    do_noc = true;
+		    profiler_control_buffer[hostIndex] = currEndIndex;
+		}
+		else if (profiler_control_buffer[RUN_COUNTER] < 1)
+		{
+                    dram_offset =
+                        (core_flat_id % profiler_core_count_per_dram) *
+                        PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                        hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
+
+                    send_size = CUSTOM_MARKERS * sizeof(uint32_t);
+
+                    do_noc = true;
+                    mark_dropped_timestamps(hostIndex);
+		}
+                else{
+                    mark_dropped_timestamps(hostIndex);
+                }
+
+                if (do_noc){
 		    const InterleavedAddrGen<true> s = {
 			.bank_base_address = dram_profiler_address,
 			.page_size = pageSize
@@ -338,35 +363,10 @@ namespace kernel_profiler{
 
 		    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-		    noc_async_write(
-			    PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
-			    dram_bank_dst_noc_addr,
-			    profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
-
-		    profiler_control_buffer[hostIndex] = currEndIndex;
-		}
-		else if (profiler_control_buffer[RUN_COUNTER] < 1)
-		{
-                    uint32_t dram_offset =
-                        (core_flat_id % profiler_core_count_per_dram) *
-                        PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                        hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
-
-                    const InterleavedAddrGen<true> s = {
-                        .bank_base_address = dram_profiler_address,
-                        .page_size = pageSize
-                    };
-
-                    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
-
                     noc_async_write(
                             PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
                             dram_bank_dst_noc_addr,
-                            CUSTOM_MARKERS * sizeof(uint32_t));
-                    mark_dropped_timestamps(hostIndex);
-		}
-                else{
-                    mark_dropped_timestamps(hostIndex);
+                            send_size);
                 }
 		profiler_control_buffer[deviceIndex] = 0;
 	    }
@@ -523,7 +523,15 @@ namespace kernel_profiler{
 
 #define DeviceZoneScopedN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
+#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+
 #define DeviceZoneScopedND( name , nocBuffer, nocIndex ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>(); kernel_profiler::nocWriteBuffer = nocBuffer; kernel_profiler::nocWriteIndex = &nocIndex;
+
+#else
+
+#define DeviceZoneScopedND( name , nocBuffer, nocIndex )
+
+#endif
 
 #define DeviceZoneScopedMainN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
