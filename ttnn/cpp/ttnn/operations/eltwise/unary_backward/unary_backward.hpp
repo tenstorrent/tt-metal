@@ -48,6 +48,7 @@ struct ExecuteUnaryBackwardFloat {
 
 };
 
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardWoFloat {
     static std::vector<Tensor> operator()(
@@ -249,11 +250,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     "ttnn::acosh_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
-
-constexpr auto add_bw = ttnn::register_operation<
-    "ttnn::add_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::ADD_BW>>();
 
 constexpr auto eq_bw = ttnn::register_operation<
     "ttnn::eq_bw",

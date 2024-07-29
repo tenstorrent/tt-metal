@@ -293,12 +293,6 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
     return grad_tensor;
 }
 
-std::vector<Tensor> _add_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
 
 std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;

@@ -183,4 +183,8 @@ constexpr auto le_bw = ttnn::register_operation<"ttnn::le_bw",operations::binary
 
 constexpr auto ne_bw = ttnn::register_operation<"ttnn::ne_bw",operations::binary_backward::ExecuteBackwardComparison>();
 
+constexpr auto add_bw = ttnn::register_operation<
+    "ttnn::add_bw",
+    operations::binary_backward::ExecuteUnaryBackwardAdd>();
+
 }  // namespace ttnn

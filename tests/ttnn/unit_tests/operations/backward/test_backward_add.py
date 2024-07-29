@@ -82,15 +82,15 @@ def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("alpha", [1.0, 0.5, 0.035])
-def test_bw_unary_add(input_shapes, alpha, device):
+@pytest.mark.parametrize("scalar", [1.0, 0.5, 0.035])
+def test_bw_add_scalar(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, alpha=alpha)
+    tt_output_tensor_on_device = ttnn.add_bw(grad_tensor, input_tensor, scalar)
 
     golden_function = ttnn.get_golden_function(ttnn.add_bw)
-    golden_tensor = golden_function(grad_data, in_data, alpha)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
