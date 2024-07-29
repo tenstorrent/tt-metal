@@ -111,6 +111,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     uint32_t completion_rd_toggle;
     uint32_t available_space;
     do {
+        invalidate_l1_cache();
         completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
         completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
         completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
@@ -238,6 +239,7 @@ inline void process_remote_write_h(uint32_t block_noc_writes_to_clear[]) {
 
 void process_exec_buf_end_h() {
     if (split_prefetch) {
+        invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(prefetch_h_local_downstream_sem_addr));
 
@@ -835,9 +837,10 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait) {
         DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
-        while (!wrap_ge(*sem_addr, count)) {
+        do {
+            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        }
+        } while (!wrap_ge(*sem_addr, count));
     }
     DEBUG_STATUS("PWD");
 

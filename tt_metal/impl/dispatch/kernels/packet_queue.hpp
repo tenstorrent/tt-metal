@@ -334,6 +334,7 @@ public:
         if (!this->cb_mode) {
             return 0;
         }
+        invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* local_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
         // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
@@ -349,6 +350,7 @@ public:
         if (!this->cb_mode) {
             return false;
         }
+        invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* local_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
         // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
