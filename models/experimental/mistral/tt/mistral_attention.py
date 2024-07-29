@@ -157,14 +157,10 @@ class TtAttention(nn.Module):
             self.cache_v[:bsz].scatter_(dim=1, index=scatter_pos, src=xv[:, -self.sliding_window :])
         else:
             self.cache_k = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device)
-                )
+                ttnn.scatter(torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device))
             )
             self.cache_v = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device)
-                )
+                ttnn.scatter(torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device))
             )
 
         if positions.shape[0] > 1:
