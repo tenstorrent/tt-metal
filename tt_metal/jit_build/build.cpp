@@ -459,13 +459,13 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
-        lflags += " -Wl,-Map=" + out_dir + "linker.map";
+        lflags += "-Wl,-Map=" + out_dir + "linker.map ";
     }
 
     string cmd;
     cmd = "cd " + out_dir + " && ";
     cmd += env_.gpp_;
-    cmd += this->lflags_;
+    cmd += lflags;
     cmd += this->link_objs_;
 
     if (!this->is_fw_) {
