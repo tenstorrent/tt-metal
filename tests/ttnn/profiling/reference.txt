@@ -74,7 +74,7 @@ tt_lib.tensor.global_mean,200,0.735,0.828,0.8,0.471
 tt_lib.tensor.global_min,200,0.908,0.919,0.904,0.519
 tt_lib.tensor.global_sum,200,0.651,0.704,0.69,0.434
 ttnn.glu_dim_2,200,0.09,0.096,0.266,0.043
-ttnn.glu_dim_3,200,0.09,0.093,0.266,0.042
+ttnn.glu_dim_3,200,0.12,0.128,0.266,0.054
 tt_lib.tensor.imag,200,0.025,0.027,0.058,0.011
 tt_lib.tensor.imag_bw,200,0.133,0.137,0.274,0.076
 tt_lib.tensor.lamb_optimizer,80,3.468,3.474,6.687,2.054
@@ -94,8 +94,8 @@ tt_lib.tensor.pow_float,200,0.329,0.342,1.268,0.186
 tt_lib.tensor.pow_int,200,0.025,0.028,0.102,0.01
 tt_lib.tensor.real,200,0.027,0.029,0.06,0.012
 tt_lib.tensor.real_bw,200,0.124,0.127,0.275,0.075
-ttnn.reglu_dim_2,200,0.089,0.095,0.246,0.044
-ttnn.reglu_dim_3,200,0.091,0.092,0.245,0.043
+ttnn.reglu_dim_2,200,0.102,0.107,0.245,0.045
+ttnn.reglu_dim_3,200,0.105,0.111,0.244,0.045
 tt_lib.tensor.repeat,200,0.025,0.027,0.368,0.009
 tt_lib.tensor.repeat_interleave_dim_0,200,0.032,0.034,0.377,0.01
 tt_lib.tensor.repeat_interleave_dim_1,80,0.397,0.399,322.452,0.215
@@ -148,7 +148,7 @@ ttnn.celu_bw,200,1.988,2.032,2.46,0.128
 ttnn.clamp_bw,200,0.149,0.161,0.686,0.062
 ttnn.clamp_max_bw,200,0.092,0.096,0.341,0.031
 ttnn.clamp_min_bw,200,0.092,0.109,0.375,0.035
-ttnn.clip,200,0.583,0.611,1.968,0.326
+ttnn.clip,200,2.088,2.12,2.686,0.142
 ttnn.clone,200,0.025,0.027,0.101,0.009
 ttnn.concat_bw_dim_0,200,0.07,0.074,0.203,0.022
 ttnn.concat_bw_dim_1,200,0.071,0.075,0.204,0.022
