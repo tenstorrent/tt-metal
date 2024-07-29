@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="1" failures="4" skipped="1" tests="13" time="0.053" timestamp="2024-07-29T15:45:15.375428" hostname="e12cs07"><testcase classname="tests.infra.data_collection.test_cicd" name="test_pass" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[4-1]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[4-2]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties><failure message="Exception: Failure in parametrized">arg1 = 2, arg2 = 4
+
+    @pytest.mark.parametrize("arg1", (1, 2, 3))
+    @pytest.mark.parametrize("arg2", (4, 5, 6))
+    def test_parametrized(arg1, arg2):
+        if arg1 == 2:
+&gt;           raise Exception("Failure in parametrized")
+E           Exception: Failure in parametrized
+
+tests/infra/data_collection/test_cicd.py:13: Exception</failure></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[4-3]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[5-1]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[5-2]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties><failure message="Exception: Failure in parametrized">arg1 = 2, arg2 = 5
+
+    @pytest.mark.parametrize("arg1", (1, 2, 3))
+    @pytest.mark.parametrize("arg2", (4, 5, 6))
+    def test_parametrized(arg1, arg2):
+        if arg1 == 2:
+&gt;           raise Exception("Failure in parametrized")
+E           Exception: Failure in parametrized
+
+tests/infra/data_collection/test_cicd.py:13: Exception</failure></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[5-3]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[6-1]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[6-2]" time="0.000"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties><failure message="Exception: Failure in parametrized">arg1 = 2, arg2 = 6
+
+    @pytest.mark.parametrize("arg1", (1, 2, 3))
+    @pytest.mark.parametrize("arg2", (4, 5, 6))
+    def test_parametrized(arg1, arg2):
+        if arg1 == 2:
+&gt;           raise Exception("Failure in parametrized")
+E           Exception: Failure in parametrized
+
+tests/infra/data_collection/test_cicd.py:13: Exception</failure></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_parametrized[6-3]" time="0.001"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_fail" time="0.000"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties><failure message="Exception: Failure">def test_fail():
+&gt;       raise Exception("Failure")
+E       Exception: Failure
+
+tests/infra/data_collection/test_cicd.py:18: Exception</failure></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_skipped" time="0.000"><skipped type="pytest.skip" message="Problem with this test">/home/rkim/tt-metal/tests/infra/data_collection/test_cicd.py:21: Problem with this test</skipped></testcase><testcase classname="tests.infra.data_collection.test_cicd" name="test_error" time="0.000"><properties><property name="start_timestamp" value="2024-07-29T15:45:15" /><property name="end_timestamp" value="2024-07-29T15:45:15" /></properties><error message="failed on setup with &quot;Exception: Error in fixture&quot;">@pytest.fixture
+    def cause_error():
+&gt;       raise Exception("Error in fixture")
+E       Exception: Error in fixture
+
+tests/infra/data_collection/test_cicd.py:28: Exception</error></testcase></testsuite></testsuites>
