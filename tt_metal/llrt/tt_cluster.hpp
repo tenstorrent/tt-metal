@@ -206,8 +206,6 @@ class Cluster {
         return this->device_to_host_mem_channel_.at(device_id);
     }
 
-    uint32_t get_tensix_soft_reset_addr() const;
-
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
     const std::set<chip_id_t> &get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
         TT_ASSERT(
