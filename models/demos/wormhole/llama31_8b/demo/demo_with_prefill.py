@@ -108,9 +108,9 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     # Set Llama flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
-        os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 
