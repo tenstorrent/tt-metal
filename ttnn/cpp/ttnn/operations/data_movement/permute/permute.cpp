@@ -33,7 +33,7 @@ inline bool has_tile_padding(const Tensor& t) {
     return false;
 }
 
-Tensor permute_impl(const Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
+ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
     Device * device;
 
     // Get the device
@@ -116,10 +116,10 @@ Tensor permute_impl(const Tensor &a, const std::vector<uint32_t>& dims, const Me
     return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
 }
 
-Tensor permute_launch(const Tensor &a, const std::vector<std::int64_t>& dims, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a}))};
+ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_t>& dims, const MemoryConfig& output_mem_config) {
+    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
     operation::launch_with_autoformat(
-        [dims, output_mem_config]  (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [dims, output_mem_config]  (const std::vector<ttnn::Tensor>& input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             std::vector<uint32_t> normalized_dims(dims.size());
             std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
@@ -132,13 +132,27 @@ Tensor permute_launch(const Tensor &a, const std::vector<std::int64_t>& dims, co
         }, {a}, output_tensors);
     return output_tensors.at(0);
 }
+
+Tensor composite_invoke(
+    const ttnn::Tensor& input_tensor,
+    const std::vector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+
+    auto output_tensor = permute_launch(input_tensor, dims, memory_config.value_or(input_tensor.memory_config()));
+    return output_tensor;
 }
+
+} // detail namespace
 
 ttnn::Tensor ExecutePermute::operator()(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    bool composite) {
+
+    if (composite)
+        return detail::composite_invoke(input_tensor, dims, memory_config);
 
     const bool initial_input_tensor_on_device = detail::is_on_device(input_tensor);
     const auto input_layout = input_tensor.get_layout();
@@ -205,4 +219,4 @@ ttnn::Tensor ExecutePermute::operator()(const ttnn::Tensor& input_tensor, const 
     return operator()(input_tensor, dims, std::nullopt);
 }
 
-}
+} // ttnn::operations::data_movement namespace
