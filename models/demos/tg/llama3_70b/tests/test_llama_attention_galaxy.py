@@ -115,8 +115,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
 
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 32 // llama_attention_model.cluster_shape[0]),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            shape=(x.shape[2], x.shape[3] // 8 // llama_attention_model.cluster_shape[0]),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,

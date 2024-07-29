@@ -299,7 +299,8 @@ class TtLlamaDecoder_galaxy:
             gamma=self.attn_norm_sharded,
         )
 
-        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.ATTN_ACT_MEMCFG)
+        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.MLP_ACT_MEMCFG)
+        # attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.ATTN_ACT_MEMCFG)
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks)
         attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.MLP_ACT_MEMCFG)
 

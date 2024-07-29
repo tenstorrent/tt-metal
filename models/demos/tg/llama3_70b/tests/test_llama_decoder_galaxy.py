@@ -232,7 +232,7 @@ def run_test_LlamaDecoder_inference(
         generation_length = 1
     else:
         generation_start_pos = UNIT_TEST_START_POS
-        generation_length = UNIT_TEST_GENERATION_LENGTH  # 1
+        generation_length = 1  # 1
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))

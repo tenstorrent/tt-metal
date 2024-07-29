@@ -14,6 +14,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     num_to_corerange,
 )
+from models.utility_functions import nearest_32
 
 
 class TtLlamaAttention_galaxy:
@@ -118,6 +119,7 @@ class TtLlamaAttention_galaxy:
                 fused_activation=None,
                 mcast_in0=True,
             )
+
             self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -173,6 +175,54 @@ class TtLlamaAttention_galaxy:
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
             )
 
+            weight_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(
+                            self.device_mesh.get_device(0).dram_grid_size().x - 1,
+                            self.device_mesh.get_device(0).dram_grid_size().y - 1,
+                        ),
+                    )
+                }
+            )
+
+            M, K, N = 32, 2048, 1280
+
+            shard_shape = (K, nearest_32(N // 12))  # padded cols to divide by 12
+            shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+            self.qkv_mem_cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
+            )
+
+            selfout_K, selfout_N = 1024, 2048
+
+            shard_shape = (K, nearest_32(N // 12))  # padded cols to divide by 12
+            shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+            self.selfout_mem_cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
+            )
+
+            self.FUSED_QKV_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=K
+                // 8
+                // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
+            self.SELFOUT_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=selfout_K
+                // 8
+                // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=selfout_N
+                // 8
+                // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
     def init_kv_cache(self):
         """
         Generates empty KV cache and pushed to device memory
@@ -215,12 +265,12 @@ class TtLlamaAttention_galaxy:
         assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
         assert not hasattr(self, "wo_list"), "wo_list is already an attribute of this object"
         # Load weights
-        wqkv_cache_str = f"{self.layer_name}.attention.wqkv_fused_galaxy_2d.weight"
+        wqkv_cache_str = f"{self.layer_name}.attention.wqkv_fused_galaxy_2d_dram_sharded.weight"
         wq_str = f"{self.layer_name}.attention.wq.weight"
         wk_str = f"{self.layer_name}.attention.wk.weight"
         wv_str = f"{self.layer_name}.attention.wv.weight"
         wo_str = f"{self.layer_name}.attention.wo.weight"
-        wo_cache_str = f"{self.layer_name}.attention.wo_galaxy_2d.weight"
+        wo_cache_str = f"{self.layer_name}.attention.wo_galaxy_2d_dram_sharded.weight"
 
         qkv_cat = None
         pt_wo = None
@@ -269,7 +319,8 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.qkv_mem_cfg,
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
@@ -279,7 +330,8 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.selfout_mem_cfg,
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wo_cache_str,
         )
@@ -320,7 +372,6 @@ class TtLlamaAttention_galaxy:
 
     #     def gather_tensors(indices):
     #         tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-    #         #breakpoint()
     #         return ttnn.line_all_gather(
     #             tensors, dim=dim, num_links=1,
     #             memory_config=ttnn.MemoryConfig(
@@ -449,9 +500,9 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
-            program_config=self.FUSED_QKV_MM_PROGCFG,
+            program_config=self.FUSED_QKV_DRAM_SHARDED_PROGCFG,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
         )
         xs.deallocate(True)
@@ -571,7 +622,6 @@ class TtLlamaAttention_galaxy:
             ),
         )
 
-        # breakpoint()
         attn_output = self.tt_all_gather(
             attn_output,
             dim=2,
@@ -584,12 +634,20 @@ class TtLlamaAttention_galaxy:
             attn_output,
             [1, 1, 32, attn_output.shape[3]],
         )
-        # breakpoint()
+
+        self.SELFOUT_MEMCFG = ttnn.create_sharded_memory_config(
+            shape=(32, 2048 // 8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, memory_config=self.SELFOUT_MEMCFG)
 
         attn_output = ttnn.matmul(
             attn_output,
             self.wo,
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            program_config=self.SELFOUT_DRAM_SHARDED_PROGCFG,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
