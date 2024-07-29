@@ -94,14 +94,6 @@ Tensor hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_c
     return operation::decorate_as_composite(__func__, _hardshrink)(a, param, output_mem_config);
 }
 
-// Function: bias gelu
-// Ref: http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnxops/onnx_commicrosoft_BiasGelu.html
-Tensor _bias_gelu_unary(const Tensor& a, float bias, const MemoryConfig& output_mem_config) {
-    return ttnn::gelu(ttnn::add(a, bias), true, output_mem_config);
-}
-Tensor bias_gelu_unary(const Tensor& a, float bias, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _bias_gelu_unary)(a, bias, output_mem_config);
-}
 
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html

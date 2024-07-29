@@ -2331,7 +2331,7 @@ def eltwise_pow(
 @setup_host_and_device
 def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.bias_gelu_unary(t0, bias, output_mem_config=output_mem_config)
+    t1 = ttnn.bias_gelu(t0, bias, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

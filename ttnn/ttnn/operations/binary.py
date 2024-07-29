@@ -173,10 +173,10 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function(a, b, *args, **kwargs):
     import torch
 
-    return torch.nn.functional.gelu(torch.add(x, y))
+    return torch.nn.functional.gelu(torch.add(a, b))
 
 
 ttnn.attach_golden_function(ttnn.bias_gelu, golden_function=_golden_function)
