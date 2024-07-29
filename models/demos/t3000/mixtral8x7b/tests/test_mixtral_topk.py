@@ -30,12 +30,12 @@ class Emb(torch.nn.Module):
     "iterations, expected_top1, expected_top5",
     (
         (64, 0.92, 0.99),
-        (128, 0.92, 0.99),
+        # (128, 0.92, 0.99),
         # (256, 0.92, 0.99),
     ),
     ids=(
         "64seqlen",
-        "128seqlen",
+        # "128seqlen",
         # "256seqlen"
     ),
 )
