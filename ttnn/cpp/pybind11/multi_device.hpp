@@ -84,6 +84,12 @@ void py_module(py::module& module) {
 
             Returns:
                 Arch: The arch of the first device in the device mesh.
+        )doc")
+        .def_property_readonly("shape", &ttnn::multi_device::DeviceMesh::shape, R"doc(
+            Get the shape of the device mesh.
+
+            Returns:
+                Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
         )doc");
 
     module.def(

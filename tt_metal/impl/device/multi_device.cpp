@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh_view.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -22,14 +23,14 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
     TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
     TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for DeviceMesh");
 
-    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    if (is_galaxy) {
+    this->is_galaxy_ = tt::Cluster::instance().is_galaxy_cluster();
+    if (this->is_galaxy_) {
         // Temp solution until we add algorithmic way to determine chip connectivity
         // Map col to tunnel depth and row to tunnel count
         int cluster_tunnel_depth = tt::Cluster::instance().get_mmio_device_max_tunnel_depth(0);
         int cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count(0);
         int num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-        TT_ASSERT(num_cols <= cluster_tunnel_depth and num_rows <= cluster_tunnel_count * num_mmio_devices, "Unsupported Galaxy mesh shape");
+        TT_FATAL(num_cols <= cluster_tunnel_depth and num_rows <= cluster_tunnel_count * num_mmio_devices, "Unsupported Galaxy mesh shape");
 
         DeviceIds galaxy_device_ids;
         for (int mmio_device_id = 0; mmio_device_id < num_mmio_devices; mmio_device_id++) {
@@ -52,16 +53,12 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
         }
-        this->num_rows = num_rows;
-        this->num_cols = num_cols;
+        this->view = std::make_unique<tt::tt_metal::DeviceMeshView>(*this);
     } else {
         managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size);
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
         }
-        // TODO: support concept of rows/cols in other systems
-        this->num_rows = 0;
-        this->num_cols = 0;
     }
 
     for (const auto& [dev_id, dev]: mesh_devices) {
@@ -95,29 +92,31 @@ std::vector<Device*> DeviceMesh::get_devices() const
 }
 
 Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
+    if (not is_galaxy_) {
+        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
+    }
+
     TT_FATAL(
-        this->num_rows != 0 and this->num_cols != 0,
+        this->num_rows() != 0 and this->num_cols() != 0,
         "#10419, Current device mesh does not support indexing by row or col indices.");
-    TT_FATAL(row_idx >= 0 and row_idx < this->num_rows, "Invalid row index.");
-    TT_FATAL(col_idx >= 0 and col_idx < this->num_cols, "Invalid col index.");
-    int idx = row_idx * this->num_cols + col_idx;
+    TT_FATAL(row_idx >= 0 and row_idx < this->num_rows(), "Invalid row index.");
+    TT_FATAL(col_idx >= 0 and col_idx < this->num_cols(), "Invalid col index.");
+    int idx = row_idx * this->num_cols() + col_idx;
     return this->mesh_devices[idx].second;
 }
 
 std::vector<Device*> DeviceMesh::get_devices_on_row(int row_idx) const {
-    std::vector<Device*> devices;
-    for (int col_idx = 0; col_idx < this->num_cols; ++col_idx) {
-        devices.push_back(this->get_device(row_idx, col_idx));
+    if (not is_galaxy_) {
+        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
     }
-    return devices;
+    return this->view->get_devices_on_row(row_idx);
 }
 
 std::vector<Device*> DeviceMesh::get_devices_on_column(int col_idx) const {
-    std::vector<Device*> devices;
-    for (int row_idx = 0; row_idx < this->num_rows; ++row_idx) {
-        devices.push_back(this->get_device(row_idx, col_idx));
+    if (not is_galaxy_) {
+        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
     }
-    return devices;
+    return this->view->get_devices_on_column(col_idx);
 }
 
 const DeviceIds DeviceMesh::get_device_ids() const
@@ -144,6 +143,31 @@ CoreCoord DeviceMesh::dram_grid_size() const {
 
 tt::ARCH DeviceMesh::arch() const {
     return mesh_devices.at(0).second->arch();
+}
+
+int DeviceMesh::num_rows() const
+{
+    return this->device_grid.first;
+}
+
+int DeviceMesh::num_cols() const
+{
+    return this->device_grid.second;
+}
+
+DeviceGrid DeviceMesh::shape() const
+{
+    return this->device_grid;
+}
+
+std::optional<Coordinate> DeviceMesh::find_device(int device_id) const {
+    auto it = std::find_if(mesh_devices.begin(), mesh_devices.end(),
+                           [device_id](const auto& pair) { return pair.first == device_id; });
+    if (it != mesh_devices.end()) {
+        int index = std::distance(mesh_devices.begin(), it);
+        return Coordinate{static_cast<int>(index / num_cols()), static_cast<int>(index % num_cols())};
+    }
+    return std::nullopt;
 }
 
 void DeviceMesh::close_devices() {
