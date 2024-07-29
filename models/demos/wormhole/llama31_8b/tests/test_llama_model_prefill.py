@@ -43,7 +43,10 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.94
 
-    model_args = TtModelArgs(device)
+    # Use instruct weights instead of general weights
+    instruct = False
+
+    model_args = TtModelArgs(device, instruct=instruct)
     model_args.n_layers = 32  # Full model
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
@@ -67,7 +70,10 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompts = f.read()
 
-    encoded_prompts = tokenizer.encode(prompts, bos=True, eos=False)[:seq_len]
+    if instruct:
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    else:
+        encoded_prompts = tokenizer.encode(prompts, bos=True, eos=False)[:seq_len]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
