@@ -38,7 +38,10 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     dtype = ttnn.bfloat8_b
     pcc = 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
 
-    model_args = TtModelArgs(device)
+    # Use instruct weights instead of general weights
+    instruct = False
+
+    model_args = TtModelArgs(device, instruct=instruct)
 
     model_args.n_layers = 32  # Full model
 
@@ -57,7 +60,10 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     logger.info("Finished loading weights...")
 
     prompts = ["This is a test"] * model_args.max_batch_size
-    encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    if instruct:
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    else:
+        encoded_prompts = tokenizer.encode(prompts, bos=True, eos=False)[:seq_len]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
