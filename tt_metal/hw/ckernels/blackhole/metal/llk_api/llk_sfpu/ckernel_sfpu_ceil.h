@@ -28,7 +28,7 @@ inline void calculate_ceil()
             result = result + 1;
         }
         v_endif;
-        v_if (v < SHRT_MIN || v > SHRT_MAX){
+        v_if (v <= SHRT_MIN || v >= SHRT_MAX){
             result = v;
         }
         v_endif;
