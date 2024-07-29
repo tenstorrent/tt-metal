@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
-#include "ttnn/multi_device.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -16,9 +15,7 @@ struct ExecuteLineAllGather {
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        return ttnn::operations::ccl::line_all_gather(input_tensor, dim, num_links, memory_config);
-    }
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ccl
