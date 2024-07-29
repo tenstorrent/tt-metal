@@ -111,6 +111,7 @@ ttnn/cpp/ttnn/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # TTNN
 ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/setup.py @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
