@@ -275,6 +275,11 @@ constexpr auto lt_bw = ttnn::register_operation<
     "ttnn::lt_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::LT_BW>>();
+        
+constexpr auto le_bw = ttnn::register_operation<
+    "ttnn::le_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloat<
+        operations::unary_backward::UnaryBackwardOpType::LE_BW>>();
 
 constexpr auto ge_bw = ttnn::register_operation<
     "ttnn::ge_bw",
