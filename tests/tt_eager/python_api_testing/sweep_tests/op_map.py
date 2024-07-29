@@ -55,10 +55,6 @@ op_map = {
         "tt_op": tt_lib_ops.mean_hw,
         "pytorch_op": pytorch_ops.mean_hw,
     },
-    "stats-normalize_hw": {
-        "tt_op": tt_lib_ops.normalize_hw,
-        "pytorch_op": pytorch_ops.normalize_hw,
-    },
     "stats-var_global": {
         "tt_op": None,  # tt_lib_ops.var_global,
         "pytorch_op": pytorch_ops.var_global,
