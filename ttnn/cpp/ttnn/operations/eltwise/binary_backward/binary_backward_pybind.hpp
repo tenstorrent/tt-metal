@@ -19,6 +19,7 @@ namespace operations {
 namespace binary_backward {
 
 namespace detail {
+using ComplexTensor = complex::ComplexTensor;
 
 template <typename binary_backward_operation_t>
 void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
@@ -629,6 +630,23 @@ void bind_binary_bw_operation(py::module& module, const binary_backward_operatio
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        // complextensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               float alpha,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("alpha"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }

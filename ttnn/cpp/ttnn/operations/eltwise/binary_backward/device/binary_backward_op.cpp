@@ -28,6 +28,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace ttnn::operations::binary_backward {
+using ComplexTensor = complex::ComplexTensor;
 
 std::vector<ttnn::Tensor> _atan2_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
@@ -162,6 +163,18 @@ std::vector<Tensor> ExecuteUnaryBackwardAdd::operator()(
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     Tensor grad_b = ttnn::multiply(grad, 1.0f, std::nullopt,output_memory_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteUnaryBackwardAdd::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = grad;
+    grad_tensor.emplace_back(grad_a);
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+    ComplexTensor grad_b = ComplexTensor({ttnn::multiply(grad_r, alpha, std::nullopt, output_mem_config), ttnn::multiply(grad_i, alpha, std::nullopt, output_mem_config)});
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
