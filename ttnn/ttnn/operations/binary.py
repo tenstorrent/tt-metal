@@ -334,24 +334,22 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.floor_div, golden_function=_golden_function_floor_div)
 
 
-def _golden_function_binary_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
     return torch.remainder(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(
-    ttnn._ttnn.operations.binary.binary_remainder, golden_function=_golden_function_binary_remainder
-)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.remainder, golden_function=_golden_function_remainder)
 
 
-def _golden_function_binary_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
     return torch.fmod(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.binary_fmod, golden_function=_golden_function_binary_fmod)
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.fmod, golden_function=_golden_function_fmod)
 
 
 def torch_squared_difference(x, y, *args, **kwargs):
