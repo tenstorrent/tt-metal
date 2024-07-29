@@ -71,10 +71,6 @@ op_map = {
         "tt_op": None,  # tt_lib_ops.mean_global,
         "pytorch_op": pytorch_ops.mean_global,
     },
-    "stats-normalize_global": {
-        "tt_op": tt_lib_ops.normalize_global,
-        "pytorch_op": pytorch_ops.normalize_global,
-    },
     # Eltwise unary
     "eltwise-hardtanh": {
         "tt_op": tt_lib_ops.eltwise_hardtanh,

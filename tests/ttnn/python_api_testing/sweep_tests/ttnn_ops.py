@@ -4176,3 +4176,12 @@ def cos_bw(
     t2 = ttnn.cos_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def normalize_global(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.normalize_global(t0)
+
+    return ttnn_tensor_to_torch(t1)
+
