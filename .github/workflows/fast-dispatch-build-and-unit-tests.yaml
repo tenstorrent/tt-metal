@@ -9,6 +9,10 @@ on:
       runner-label:
         required: true
         type: string
+      timeout:
+        required: false
+        type: number
+        default: 45
   workflow_dispatch:
     inputs:
       arch:
@@ -26,6 +30,10 @@ on:
           - N150
           - N300
           - BH
+      timeout:
+        required: false
+        type: number
+        default: 45
 
 jobs:
   fd-tests:
@@ -63,7 +71,7 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

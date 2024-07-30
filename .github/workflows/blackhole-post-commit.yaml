@@ -33,6 +33,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
+      timeout: 30
   # fd-unit-tests:
   #   needs: build-artifact
   #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
@@ -48,6 +49,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
+      timeout: 60
 
 #   profiler-regression:
 #     needs: build-artifact-profiler

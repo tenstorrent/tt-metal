@@ -9,6 +9,10 @@ on:
       runner-label:
         required: true
         type: string
+      timeout:
+        required: false
+        type: number
+        default: 15
   workflow_dispatch:
     inputs:
       arch:
@@ -26,6 +30,10 @@ on:
           - N150
           - N300
           - BH
+      timeout:
+        required: false
+        type: number
+        default: 15
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
@@ -47,7 +55,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run pre/post regression tests
-        timeout-minutes: 15
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
