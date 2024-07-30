@@ -29,7 +29,7 @@ jobs:
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn examples
-            cmd: ./test/scripts/run_ttnn_examples.sh
+            cmd: ./tests/scripts/run_ttnn_examples.sh
           - name: ttnn cpp tests
             cmd: ./build/test/ttnn/unit_tests_ttnn
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
