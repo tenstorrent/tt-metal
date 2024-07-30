@@ -15,6 +15,7 @@ from serialize import serialize
 from elasticsearch import Elasticsearch, NotFoundError
 from statuses import VectorValidity, VectorStatus
 
+ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -54,7 +55,7 @@ def invalidate_vectors(test_module, vectors) -> None:
 # Output the individual test vectors.
 def export_suite_vectors(module_name, suite_name, vectors):
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
 
     index_name = module_name + "_test_vectors"
 
@@ -122,11 +123,16 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
-    parser.add_argument("--elastic", required=False, help="Elastic Connection String for vector database.")
+    parser.add_argument(
+        "--elastic",
+        required=False,
+        default="http://yyz-elk:9200",
+        help="Elastic Connection String for vector database.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
     global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
+    ELASTIC_CONNECTION_STRING = args.elastic
 
     generate_tests(args.module_name)

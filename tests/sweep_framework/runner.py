@@ -16,6 +16,7 @@ from statuses import TestStatus, VectorValidity, VectorStatus
 import architecture
 from elasticsearch import Elasticsearch, NotFoundError
 
+ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 ARCH = os.getenv("ARCH_NAME")
 
@@ -160,7 +161,7 @@ def get_suite_vectors(client, vector_index, suite):
 
 
 def run_sweeps(module_name, suite_name, vector_id):
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
@@ -247,7 +248,7 @@ def run_sweeps(module_name, suite_name, vector_id):
 def export_test_results(header_info, results):
     if len(results) == 0:
         return
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     sweep_name = header_info[0]["sweep_name"]
     results_index = sweep_name + "_test_results"
 
@@ -283,7 +284,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--elastic", required=False, help="Elastic Connection String for the vector and results database."
+        "--elastic",
+        required=False,
+        default="http://yyz-elk:9200",
+        help="Elastic Connection String for the vector and results database.",
     )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
@@ -319,7 +323,7 @@ if __name__ == "__main__":
         print("ERROR: Module name is required if vector id is specified.")
 
     global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
+    ELASTIC_CONNECTION_STRING = args.elastic
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf
