@@ -367,20 +367,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
-    uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t input_channels_padded = 0;
-    if (weight_width_sliced) {
-        if (transpose_mcast) {
-            TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_c_blocks to be equal to height of grid");
-            input_channels_padded = shard_shape[1] * num_cores_y;
-        } else {
-            TT_FATAL(conv_act_c_blocks == num_cores_x, "Expected conv_act_c_blocks to be equal to width of grid");
-            input_channels_padded = shard_shape[1] * num_cores_x;
-        }
-    } else {
-        input_channels_padded = shard_shape[1];
-    }
-    TT_FATAL(conv_act_c_blocks == p_config.num_cores_c);
+    // uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    uint32_t input_channels_padded = shard_shape[1] * total_num_cores;
+    // TT_FATAL(conv_act_c_blocks == p_config.num_cores_c);
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
     TT_FATAL(
@@ -585,9 +574,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
     }
 
-    if (conv_act_c_blocks > 1) {
-        reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
-    }
+    // if (conv_act_c_blocks > 1) {
+    //     reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
+    // }
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
@@ -600,7 +589,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / total_num_cores;
 
     // log info for debugging opts
     {
@@ -625,7 +614,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "split readers: {}", split_reader);
         log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
         log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
-        log_debug(LogOp, "conv_act_c_blocks: {}", conv_act_c_blocks);
         log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
         log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
         log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
@@ -640,7 +628,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
         log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
         log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
-        log_debug(LogOp, "conv_act_c_blocks: {}",conv_act_c_blocks);
         log_debug(LogOp, "conv_act_c_read_bytes: {}",conv_act_c_read_bytes);
         log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
         log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
@@ -706,7 +693,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)weight_size_w, //Input filter window width
         (uint32_t)(split_reader ? act_block_h_datums_split : act_block_h_datums),
         (uint32_t)(split_reader ? act_block_num_tiles_split  : act_block_num_tiles ),
-        (uint32_t)conv_act_c_blocks,
+        (uint32_t)total_num_cores,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
         (uint32_t)act_mcast_start.x,
@@ -730,7 +717,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     };
 
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t num_blocks_act_h_per_core = (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
@@ -808,7 +794,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
 
-    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
 
     CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
@@ -843,16 +828,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             auto cb_act_row_major_bfloat16 =
                 tt_metal::CreateCircularBuffer(program, all_cores, cb_act_row_major_bfloat16_config);
     log_debug(LogOp, "Act Row Major CB: {}, npages: {}, pagesize: {}", act_cb_row_major_bfloat16, act_block_num_tiles_split, act_tile_size);
-
-    // CircularBufferConfig cb_output_config =
-    //     CircularBufferConfig(num_act_cb_tiles * act_tile_size, {{out0_cb, out_df}})
-    //         .set_page_size(out0_cb, act_tile_size);
-    // if (output.is_sharded()) {
-    //     cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-    // }
-    // auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    // log_debug(LogOp, "Act Block CB Address: {}");
 
     CircularBufferConfig cb_for_reader_indices_config =
         CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
