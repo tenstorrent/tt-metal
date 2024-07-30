@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <bit>
 #include <iostream>
-
-#include "tt_metal/common/logger.hpp"
-
-using namespace std;
 
 namespace tt::test_utils::df {
 
@@ -24,35 +22,26 @@ class bfloat16 {
    public:
     static constexpr size_t SIZEOF = 2;
 
-    bfloat16() : uint16_data(0) {}
+    constexpr bfloat16() noexcept = default;
 
     // create from float: no rounding, just truncate
-    bfloat16(float float_num) {
-        uint32_t uint32_data;
+    constexpr bfloat16(float float_num) noexcept : bfloat16((std::bit_cast<uint32_t>(float_num)) >> 16) {
         static_assert(sizeof(float) == sizeof(uint32_t), "Can only support 32bit fp");
-        uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-        // just move upper 16 to lower 16 (truncate)
-        uint32_data = (uint32_data >> 16);
-        // store lower 16 as 16-bit uint
-        uint16_data = (uint16_t)uint32_data;
     }
 
     // store lower 16 as 16-bit uint
-    bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }
+    constexpr bfloat16(uint32_t uint32_data) noexcept : uint16_data(static_cast<uint16_t>(uint32_data)) {}
 
-    float to_float() const {
-        uint32_t uint32_data = ((uint32_t)uint16_data) << 16;
-        float f;
-        std::memcpy(&f, &uint32_data, sizeof(f));
-        return f;
-    }
-    uint16_t to_packed() const { return uint16_data; }
-    bool operator==(const bfloat16 rhs) const { return uint16_data == rhs.uint16_data; }
-    bool operator!=(const bfloat16 rhs) const { return uint16_data != rhs.uint16_data; }
+    constexpr float to_float() const noexcept { return std::bit_cast<float>(static_cast<uint32_t>(uint16_data) << 16); }
+
+    constexpr uint16_t to_packed() const noexcept { return uint16_data; }
+
+    constexpr bool operator==(const bfloat16& rhs) const noexcept = default;
 };
 
-inline ostream& operator<<(ostream& os, const bfloat16& val) {
+inline std::ostream& operator<<(std::ostream& os, const bfloat16& val) {
     os << val.to_packed();
     return os;
 }
+
 }  // namespace tt::test_utils::df
