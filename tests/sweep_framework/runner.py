@@ -9,6 +9,8 @@ import importlib
 import datetime
 import os
 import enlighten
+import tt_lib as ttl
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report, PROFILER_LOGS_DIR
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
@@ -66,6 +68,23 @@ def get_timeout(test_module):
     return timeout
 
 
+def assign_perf_data(results, tests_executed, tests_profiled):
+    opPerfData = get_device_data_generate_report(
+        PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
+    )
+    assert len(opPerfData) == tests_executed - tests_profiled - len(
+        True for test in results[tests_profiled:] if test["status"] == TestStatus.NOT_RUN
+    ), "SWEEPS: Device perf data length does not match expected tests run."
+
+    for result in results[tests_profiled:]:
+        if result["status"] == TestStatus.NOT_RUN:
+            result["device_perf"] = {}
+            continue
+        result["device_perf"] = opPerfData.pop(0)
+
+    assert len(opPerfData) == 0, "SWEEPS: Device perf data length does not match expected tests run."
+
+
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
     results = []
     input_queue = Queue()
@@ -77,6 +96,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
             continue
+        tests_executed += 1
         result = dict()
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -126,8 +146,10 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
         suite_pbar.update()
         results.append(result)
+
     if p is not None:
         p.join()
+    assign_perf_data(results, tests_executed, tests_profiled)
 
     suite_pbar.close()
     return results
@@ -258,6 +280,8 @@ def export_test_results(header_info, results):
     for i in range(len(results)):
         result = header_info[i]
         for elem in results[i].keys():
+            if elem == "device_perf":
+                continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
 

@@ -119,8 +119,10 @@ def run(
         memory_config=input_a_memory_config,
     )
     start_time = start_measuring_time()
+    print("here")
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
+    print("here2")
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
