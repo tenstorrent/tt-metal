@@ -59,12 +59,9 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ inputs.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ inputs.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |
