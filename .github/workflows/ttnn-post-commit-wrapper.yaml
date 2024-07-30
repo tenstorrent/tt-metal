@@ -11,24 +11,18 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  ttnn-unit-tests-e150:
+  ttnn-unit-tests:
     needs: build-artifact
-    uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
-    with:
-      arch: grayskull
-      runner-label: E150
-  ttnn-unit-tests-n150:
-    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
     with:
-      arch: wormhole_b0
-      runner-label: N150
-  ttnn-unit-tests-n300:
-    needs: build-artifact
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
-    with:
-      arch: wormhole_b0
-      runner-label: N300
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}

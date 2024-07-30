@@ -7,24 +7,19 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  sd-unit-tests-gs:
+
+  sd-unit-tests:
     needs: build-artifact
-    uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
-    with:
-      arch: grayskull
-      runner-label: E150
-  sd-unit-tests-n150:
-    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
-    secrets: inherit
     with:
-      arch: wormhole_b0
-      runner-label: N150
-  sd-unit-tests-n300:
-    needs: build-artifact
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    secrets: inherit
-    with:
-      arch: wormhole_b0
-      runner-label: N300
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
