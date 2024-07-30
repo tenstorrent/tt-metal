@@ -9,7 +9,6 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -21,9 +20,8 @@ namespace complex_unary {
 namespace detail {
 using ComplexTensor = complex_binary::ComplexTensor;
 
-//OpHandler_complex_type1 = get_function_complex_unary --> Tensor return type
 template <typename complex_unary_operation_t>
-void bind_complex_unary_type1(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
+void bind_complex_unary_tensor(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
 R"doc({0}(input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> Tensor
 
@@ -59,9 +57,8 @@ Example:
             py::arg("memory_config")});
 }
 
-//OpHandler_complex_type2 = get_function_complex_unary_type2 --> ComplexTensor return type
 template <typename complex_unary_operation_t>
-void bind_complex_unary_type2(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
+void bind_complex_unary_complextensor(py::module& module, const complex_unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
 R"doc({0}(input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> ComplexTensor
 
@@ -100,37 +97,37 @@ Example:
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_complex_unary_type1(
+    detail::bind_complex_unary_tensor(
         module,
         ttnn::real,
         R"doc(Performs complex operations for real of :attr:`input_tensor`.)doc");
 
-    detail::bind_complex_unary_type1(
+    detail::bind_complex_unary_tensor(
         module,
         ttnn::imag,
         R"doc(Performs complex operations for imag of :attr:`input_tensor`.)doc");
 
-    detail::bind_complex_unary_type1(
+    detail::bind_complex_unary_tensor(
         module,
         ttnn::angle,
         R"doc(Performs complex operations for angle of :attr:`input_tensor`.)doc");
 
-    detail::bind_complex_unary_type1(
+    detail::bind_complex_unary_tensor(
         module,
         ttnn::is_imag,
         R"doc(Returns boolean tensor if value of :attr:`input_tensor` is imag.)doc");
 
-    detail::bind_complex_unary_type1(
+    detail::bind_complex_unary_tensor(
         module,
         ttnn::is_real,
         R"doc(Returns boolean tensor if value of :attr:`input_tensor` is real.)doc");
 
-    detail::bind_complex_unary_type2(
+    detail::bind_complex_unary_complextensor(
         module,
         ttnn::conj,
         R"doc(Returns complex conjugate value of complex tensor :attr:`input_tensor`.)doc");
 
-    detail::bind_complex_unary_type2(
+    detail::bind_complex_unary_complextensor(
         module,
         ttnn::polar,
         R"doc(Perform an polar to Cartesian transformation on :attr:`input_tensor`, input_tensor.real(r), input_tensor.imag(theta) into x + i*y generating a complex tensor.)doc");
