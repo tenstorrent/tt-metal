@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: ["mchiou/10800*"]
 
 permissions:
   actions: read
