@@ -7,7 +7,24 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  sd-unit-tests:
+  sd-unit-tests-gs:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
+    with:
+      arch: grayskull
+      runner-label: E150
+  sd-unit-tests-n150:
+    needs: build-artifact
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+  sd-unit-tests-n300:
+    needs: build-artifact
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N300
