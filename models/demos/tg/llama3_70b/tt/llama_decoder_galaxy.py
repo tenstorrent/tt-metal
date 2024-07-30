@@ -225,11 +225,10 @@ class TtLlamaDecoder_galaxy:
 
         def gather_tensors(indices):
             tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-
             return ttnn.line_all_gather(
                 tensors,
-                dim,
-                num_links=1,  # TODO: Check why we cant use more
+                dim=dim,
+                num_links=1,  # TODO: Figure out why this is 1
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
 
@@ -252,7 +251,20 @@ class TtLlamaDecoder_galaxy:
                 aggregated_outputs.append(gathered_tensor)
 
         # Flatten device tensors
-        flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        if cluster_axis == 0:
+            flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        elif cluster_axis == 1:
+
+            def flatten_column_major(array):
+                flattened_list = []
+
+                for col in range(len(array[0])):
+                    for row in range(len(array)):
+                        flattened_list.append(array[row][col])
+
+                return flattened_list
+
+            flattened_tensors = flatten_column_major([ttnn.get_device_tensors(tensor) for tensor in aggregated_outputs])
 
         final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
 

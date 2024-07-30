@@ -21,8 +21,6 @@ class TtLlamaMLP_galaxy:
         layer_num,
         hidden_size: int,
         model_config,
-        row_reduction_mat=None,
-        col_reduction_mat=None,
         cache_path=None,
         read_cache=False,
     ):
@@ -39,36 +37,11 @@ class TtLlamaMLP_galaxy:
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
 
-        if row_reduction_mat is not None:
-            self.row_reduction_mat = row_reduction_mat
-        else:
-            self.row_reduction_mat = self.get_reduction_mat(int(3.5 * 1024 * 4), reduction_factor=4)
-        if col_reduction_mat is not None:
-            self.col_reduction_mat = col_reduction_mat
-        else:
-            self.col_reduction_mat = self.get_reduction_mat(int(2 * 1024 * 8), reduction_factor=8)
-
         self.get_mlp_model_config()
         self.load_weights()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-
-    def get_reduction_mat(self, hidden_size, reduction_factor):
-        reduction_mat = torch.eye(hidden_size // reduction_factor, hidden_size // reduction_factor)
-        reduction_mat = reduction_mat.repeat(reduction_factor, 1)
-
-        reduction_mat_tt = ttnn.as_tensor(
-            reduction_mat.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            cache_file_name=self.cache_path / f"reduction_matrix_{hidden_size}_{reduction_factor}.weight",
-        )
-
-        return reduction_mat_tt
 
     def get_mlp_model_config(self):
         if self.model_config["LLM_MODE"] == "decode":
@@ -233,57 +206,7 @@ class TtLlamaMLP_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    # def tt_all_reduce(self, input_tensor, cluster_axis, dim=3, memory_config=None):
-    #     # Ensure the input tensor is in the correct memory configuration
-    #     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-
-    #     # Get the full device tensors list from the input tensor
-    #     device_tensors = ttnn.get_device_tensors(input_tensor)
-
-    #     num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
-
-    #     def gather_tensors(indices):
-    #         tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-    #         return ttnn.line_all_gather(
-    #             tensors,
-    #             dim,
-    #             num_links=2,
-    #             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
-    #         )
-
-    #     aggregated_outputs = []
-
-    #     if cluster_axis == 0:
-    #         # Process row-wise when cluster_axis is 0
-    #         for row in range(num_rows):
-    #             start_idx = row * num_cols
-    #             end_idx = start_idx + num_cols
-    #             indices = range(start_idx, end_idx)
-    #             gathered_tensor = gather_tensors(indices)
-    #             aggregated_outputs.append(gathered_tensor)
-
-    #     elif cluster_axis == 1:
-    #         # Process column-wise when cluster_axis is 1
-    #         for col in range(num_cols):
-    #             indices = range(col, len(device_tensors), num_cols)
-    #             gathered_tensor = gather_tensors(indices)
-    #             aggregated_outputs.append(gathered_tensor)
-
-    #     # Flatten device tensors
-    #     flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
-
-    #     final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
-
-    #     final_output_tensor = ttnn.matmul(
-    #         final_output_tensor,
-    #         self.row_reduction_mat if cluster_axis == 0 else self.col_reduction_mat,
-    #         dtype=ttnn.bfloat16,
-    #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     )
-
-    #     return final_output_tensor
-
-    def tt_all_reduce(self, input_tensor, cluster_axis, dim=1, memory_config=None):
+    def tt_all_reduce(self, input_tensor, cluster_axis, dim=0, memory_config=None):
         # Ensure the input tensor is in the correct memory configuration
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -301,7 +224,7 @@ class TtLlamaMLP_galaxy:
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
             reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
-                gathered_tensor, dims=[dim], compute_kernel_config=self.COMPUTE_KERNEL_LOFI
+                gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
             )
 
             return reduced_tensors
@@ -325,7 +248,20 @@ class TtLlamaMLP_galaxy:
                 aggregated_outputs.append(reduced_tensors)
 
         # Flatten device tensors
-        flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        if cluster_axis == 0:
+            flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        elif cluster_axis == 1:
+
+            def flatten_column_major(array):
+                flattened_list = []
+
+                for col in range(len(array[0])):
+                    for row in range(len(array)):
+                        flattened_list.append(array[row][col])
+
+                return flattened_list
+
+            flattened_tensors = flatten_column_major([ttnn.get_device_tensors(tensor) for tensor in aggregated_outputs])
 
         final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
 

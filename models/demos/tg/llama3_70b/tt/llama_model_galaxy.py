@@ -260,68 +260,122 @@ class TtLlamaModel_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        reduction of a multi-device tensor
-        """
-        concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
+    def tt_all_gather(self, input_tensor, dim, cluster_axis, memory_config=None):
+        # Ensure the input tensor is in the correct memory configuration
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        out = torch.sum(out, dim=1, keepdim=True)
+        # Get the full device tensors list from the input tensor
+        device_tensors = ttnn.get_device_tensors(input_tensor)
 
-        shape = (
-            out.shape[2],
-            out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
-        )
+        num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
 
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+        def gather_tensors(indices):
+            tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
+            return ttnn.line_all_gather(
+                tensors,
+                dim=dim,
+                num_links=2,
+                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
-        else:
-            act_mem_config = None
 
-        act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
-        )
+        aggregated_outputs = []
 
-        return out_tt
+        if cluster_axis == 0:
+            # Process row-wise when cluster_axis is 0
+            for row in range(num_rows):
+                start_idx = row * num_cols
+                end_idx = start_idx + num_cols
+                indices = range(start_idx, end_idx)
+                gathered_tensor = gather_tensors(indices)
+                aggregated_outputs.append(gathered_tensor)
 
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=None):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
+        elif cluster_axis == 1:
+            # Process column-wise when cluster_axis is 1
+            for col in range(num_cols):
+                indices = range(col, len(device_tensors), num_cols)
+                gathered_tensor = gather_tensors(indices)
+                aggregated_outputs.append(gathered_tensor)
 
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
+        # Flatten device tensors
+        if cluster_axis == 0:
+            flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        elif cluster_axis == 1:
 
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=memory_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
+            def flatten_column_major(array):
+                flattened_list = []
 
-        return out_tt
+                for col in range(len(array[0])):
+                    for row in range(len(array)):
+                        flattened_list.append(array[row][col])
+
+                return flattened_list
+
+            flattened_tensors = flatten_column_major([ttnn.get_device_tensors(tensor) for tensor in aggregated_outputs])
+
+        final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
+
+        return final_output_tensor
+
+    def tt_all_reduce(self, input_tensor, cluster_axis, dim=0, memory_config=None):
+        # Ensure the input tensor is in the correct memory configuration
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Get the full device tensors list from the input tensor
+        device_tensors = ttnn.get_device_tensors(input_tensor)
+
+        num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
+
+        def reduce_tensors(indices):
+            tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
+            gathered_tensor = ttnn.line_all_gather(
+                tensors,
+                dim,
+                num_links=2,
+                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
+            )
+            reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
+                gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
+            )
+
+            return reduced_tensors
+
+        aggregated_outputs = []
+
+        if cluster_axis == 0:
+            # Process row-wise when cluster_axis is 0
+            for row in range(num_rows):
+                start_idx = row * num_cols
+                end_idx = start_idx + num_cols
+                indices = range(start_idx, end_idx)
+                reduced_tensors = reduce_tensors(indices)
+                aggregated_outputs.append(reduced_tensors)
+
+        elif cluster_axis == 1:
+            # Process column-wise when cluster_axis is 1
+            for col in range(num_cols):
+                indices = range(col, len(device_tensors), num_cols)
+                reduced_tensors = reduce_tensors(indices)
+                aggregated_outputs.append(reduced_tensors)
+
+        # Flatten device tensors
+        if cluster_axis == 0:
+            flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+        elif cluster_axis == 1:
+
+            def flatten_column_major(array):
+                flattened_list = []
+
+                for col in range(len(array[0])):
+                    for row in range(len(array)):
+                        flattened_list.append(array[row][col])
+
+                return flattened_list
+
+            flattened_tensors = flatten_column_major([ttnn.get_device_tensors(tensor) for tensor in aggregated_outputs])
+
+        final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
+
+        return final_output_tensor
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
