@@ -7,7 +7,36 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  fd-unit-tests:
+  fd-unit-tests-e150:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: grayskull
+      runner-label: E150
+  fd-unit-tests-n150:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+  fd-unit-tests-n300:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N300
+  fd-ttnn-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit
+  fd-model-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/models-post-commit.yaml
+    secrets: inherit
+  fd-cpp-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/cpp-post-commit.yaml
     secrets: inherit
