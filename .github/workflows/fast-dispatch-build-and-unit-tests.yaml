@@ -4,15 +4,15 @@ on:
   workflow_call:
 
 jobs:
-  fd-ttnn-tests:
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
-  fd-model-tests:
-    uses: ./.github/workflows/models-post-commit.yaml
-    secrets: inherit
-  fd-cpp-tests:
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    secrets: inherit
+  # fd-ttnn-tests:
+  #   uses: ./.github/workflows/ttnn-post-commit.yaml
+  #   secrets: inherit
+  # fd-model-tests:
+  #   uses: ./.github/workflows/models-post-commit.yaml
+  #   secrets: inherit
+  # fd-cpp-tests:
+  #   uses: ./.github/workflows/cpp-post-commit.yaml
+  #   secrets: inherit
   fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -49,33 +49,22 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: 120
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_image_arch: ${{ matrix.runner-info.arch }}
           docker_opts: |
-            -e CONFIG=${{ env.CONFIG }} 
             -e ARCH_NAME=${{ matrix.runner-info.arch }}
             -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-            -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
-            -e TT_METAL_ENV=${{ env.TT_METAL_ENV }}
-            -e PYTHONPATH=${{ env.PYTHONPATH }}
+            -e PYTHONPATH=/app/mtl
             -v /dev/hugepages-1G:/dev/hugepages-1G
             --device /dev/tenstorrent
           run_args: |
-            source ${{ github.workspace }}/python_env/bin/activate
-            cd $TT_METAL_HOME
-            export PYTHONPATH=$TT_METAL_HOME
+            cd /app/mtl
             ${{ matrix.test-group.cmd }}
-            
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

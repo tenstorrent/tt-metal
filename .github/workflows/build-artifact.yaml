@@ -19,33 +19,34 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      IMAGE_TAG: dev-${GITHUB_ACTOR}.${{ matrix.arch }}
+      TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
+      TT_METAL_DOCKER_IMAGE_TAG: ${{ github.sha }}
     environment: dev
     runs-on: build-docker
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Update submodules
-        run: |
-          git submodule update --init --recursive
-      - name: Execute in docker image
-        uses: ./.github/actions/docker-run
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          run_args: |
-            cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
-            cmake --build build --target tests
-            cmake --build build --target install
-          docker_opts: |
-            -e CONFIG=${{ env.CONFIG }} 
-            -e ARCH_NAME=${{ matrix.arch }} 
-      - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
-      - name: 'Upload Artifact'
-        uses: actions/upload-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.arch }}
-          path: ttm_${{ matrix.arch }}.tar
-          
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Determine Docker Image Tag
+        id: set-image
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=dev-${GITHUB_ACTOR}.${{ matrix.arch }}.${{ github.sha }}" >> $GITHUB_ENV
+          fi
+      - name: Build Docker image
+        run: |
+          ARCH_NAME=${{ matrix.arch}}
+          ARCH_NAME_IN_URL=${ARCH_NAME//_/.}
+          docker build -f dockerfile/tt-metalium.Dockerfile -t ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}-${ARCH_NAME} . --build-arg="ARCH_NAME=${{ matrix.arch }}" --build-arg="ARCH_NAME_IN_URL=${ARCH_NAME_IN_URL}" --build-arg="IMAGE_TAG=dev-${GITHUB_ACTOR}"
+      - name: Push Docker image to GitHub Container Registry
+        run: |
+          GITHUB_REPO_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}/${{ matrix.arch }}:${{ env.IMAGE_TAG }}
+          docker tag ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}-${ARCH_NAME} $GITHUB_REPO_DOCKER_IMAGE_TAG
+          docker push $GITHUB_REPO_DOCKER_IMAGE_TAG
