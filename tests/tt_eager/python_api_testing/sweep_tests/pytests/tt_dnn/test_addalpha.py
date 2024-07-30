@@ -84,6 +84,7 @@ shapes_w_output = [
 ]
 
 
+@pytest.mark.skip(reason="Issue: #10735, will be enabled once optional tensor support is added for ttnn.addalpha")
 @pytest.mark.parametrize(
     "input_shapes",
     shapes_w_output,

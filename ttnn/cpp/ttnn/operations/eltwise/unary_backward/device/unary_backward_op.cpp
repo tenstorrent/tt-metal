@@ -299,19 +299,18 @@ std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const st
 
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    Tensor digamma_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_memory_config), std::nullopt, output_mem_config);
+    Tensor digamma_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor digamma_result_2 = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
+        grad, ttnn::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 
     Tensor grad_result = ttnn::add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
+        grad, ttnn::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
-        grad, tt::tt_metal::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_memory_config), std::nullopt, output_mem_config);
+        grad, ttnn::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
@@ -366,7 +365,7 @@ std::vector<Tensor> _ne_bw(
 std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, tt::tt_metal::digamma(input, output_memory_config), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }

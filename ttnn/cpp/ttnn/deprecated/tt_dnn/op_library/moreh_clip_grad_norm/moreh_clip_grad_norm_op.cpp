@@ -10,6 +10,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace tt {
 
@@ -220,7 +221,7 @@ Tensor moreh_clip_grad_norm_impl(
     const auto &clip_coef = ttnn::multiply(ttnn::add(total_norm, 1e-6f), (1 / max_norm));
     // min(clip_coef, 1.0f)
     Tensor scalar = ttnn::operations::creation::create_scalar(1.0f,inputs.at(0).get_dtype(),Layout::TILE, inputs.at(0).device());
-    const auto &clip_coef_clamped = min(clip_coef, scalar);
+    const auto &clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
 
     // Inplace update inputs(inputs *= clip_coef_clamped)

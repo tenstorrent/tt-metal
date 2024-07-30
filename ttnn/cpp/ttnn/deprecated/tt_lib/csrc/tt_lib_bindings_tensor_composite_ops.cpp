@@ -61,24 +61,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
         // *** composite unary ops ***
         detail::bind_unary_op(m_tensor, "normalize_global", tt::tt_metal::normalize_global, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on N,C,H,W axes.)doc");
-        detail::bind_unary_op(m_tensor, "cosh", &tt::tt_metal::cosh, R"doc(Returns tensor with the hyperbolic cosine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
-        detail::bind_unary_op(m_tensor, "cbrt", &cbrt, R"doc(Returns tensor with the cbrt activation of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "asinh", &asinh, R"doc(Returns tensor with the inverse hyperbolic sine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
-            for +input , output = asinh(input)
-            for -input , output = -asinh(input))doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "acosh",
-        &acosh,
-        R"doc(Returns tensor with the inverse hyperbolic cosine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
-            for  input > 1, output = acosh(input)
-            for  input ==1, ouptut = 0
-            for  input < 1, output =  nan)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "digamma",
-        &digamma,
-        R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}`` for the input range 1 to inf.)doc");
     detail::bind_unary_op_with_param(
         m_tensor,
         "softshrink",
@@ -185,53 +167,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         )doc");
 
     m_tensor.def(
-        "hardtanh",
-        &hardtanh,
-        py::arg("input").noconvert(),
-        py::arg("low") = -1.0f,
-        py::arg("high") = +1.0f,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Applies the hard tanh function to the elements of the input tensor ``input``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor hardtanh is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "low", "Low value (PyTorch default)", "float", "default to -1.0f", "No"
-                "high", "High value (PyTorch default)", "float", "default to +1.0f", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "clip",
-        &clip,
-        py::arg("input").noconvert(),
-        py::arg("low"),
-        py::arg("high"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Applies the clip function to the elements of the input tensor ``input`` between limits ``low`` low and
-            the ``high`` high limits.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor hardtanh is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "low", "Low value)", "float", "", "Yes"
-                "high", "High value", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
         "lerp",
         py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
         py::arg("input").noconvert(),
@@ -298,40 +233,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "input", "Tensor celu is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "alpha", "alpha value (PyTorch default)", "float", "default to 1.0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "addalpha",
-        [](const Tensor& input_a,
-           const Tensor& input_b,
-           const float alpha,
-           const MemoryConfig& output_mem_config,
-           std::optional<Tensor> output_tensor,
-           uint8_t queue_id) {
-            return addalpha(queue_id, input_a, input_b, alpha, output_mem_config, output_tensor);
-        },
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("alpha") = 1.0f,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("queue_id").noconvert() = 0,
-        R"doc(
-            Add ``input_b``, scaled by ``alpha``, from ``input_a``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Tensor addalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "alpha", "Alpha value", "float", "default to 1.0f", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
-                "queue_id", "Command queue id", "integer", "default to 0", "No"
         )doc");
 
     m_tensor.def(
@@ -657,58 +558,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             +----------+---------------------------+-----------+------------------------------+----------+
         )doc");
 #endif
-
-    m_tensor.def(
-        "addcmul",
-        &addcmul,
-        py::arg("input").noconvert(),
-        py::arg("tensor1").noconvert(),
-        py::arg("tensor2").noconvert(),
-        py::arg("value"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Performs the element-wise multiplication of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
-            by the scalar value ``value`` and adds it to input ``input``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor addcmul is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor1", "First Tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor2", "Second tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "value", "Value to be multiplied", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "addcdiv",
-        &addcdiv,
-        py::arg("input").noconvert(),
-        py::arg("tensor1").noconvert(),
-        py::arg("tensor2").noconvert(),
-        py::arg("value"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Performs the element-wise division of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
-            by the scalar value ``value`` and adds it to input ``input``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor addcdiv is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor1", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor2", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "value", "Value to be multiplied", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
 
     m_tensor.def(
         "div",
@@ -1055,8 +904,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             R"doc("Scalar", "float", "")doc"
         );
 
-        detail::bind_unary_op(m_tensor, "atanh", atanh, R"doc(Returns a new tensor with the inverse hyperbolic tangent of the elements of the input tensor ``{0}``.)doc");
-
         // *** complex operations ***
         detail::bind_unary_op(m_tensor, "angle", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::angle), R"doc(Returns elementwise angle of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "real", py::overload_cast<const Tensor&,const MemoryConfig&>(&tt::tt_metal::real), R"doc(Returns real portion of complex tensor ``{0}``.)doc");
@@ -1087,10 +934,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 	    py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input_a (r), input_b(theta) into x + i*y generating a type-2 complex tensor.)doc");
 
-        detail::bind_binary_op<false, true, false, false>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
-        detail::bind_binary_op<false, true, false, false>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
         detail::bind_binary_op<false, true, false, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
-        detail::bind_binary_op<false, true, false, false>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
 
 	    // *** type-2 complex operations in new submodule 'type2_complex' ***
         auto m_type2_cplx = m_tensor.def_submodule("complex", "Complex type2");
