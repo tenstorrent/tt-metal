@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 
 namespace ttnn::multi_device {
 

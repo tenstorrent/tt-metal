@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/device/device_mesh_view.hpp"
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 #include <algorithm>
 #include <stdexcept>
 
 namespace tt::tt_metal {
 
-using DeviceMesh = ttnn::multi_device::DeviceMesh;
+using DeviceMesh = tt::tt_metal::DeviceMesh;
 
 DeviceMeshView::DeviceMeshView(const DeviceMesh& mesh)
     : top_left_(0, 0), bottom_right_(mesh.num_rows() - 1, mesh.num_cols() - 1) {
