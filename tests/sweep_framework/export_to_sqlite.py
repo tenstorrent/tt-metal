@@ -9,6 +9,7 @@ import pathlib
 import os
 import sys
 
+ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 
 if __name__ == "__main__":
@@ -18,14 +19,17 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--elastic", required=False, help="Elastic Connection String for the vector and results database."
+        "--elastic",
+        required=False,
+        default="http://yyz-elk:9200",
+        help="Elastic Connection String for the vector and results database.",
     )
     args = parser.parse_args(sys.argv[1:])
 
-    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
+    ELASTIC_CONNECTION_STRING = args.elastic
     DUMP_PATH = "tests/sweep_framework/sqlite_dump/"
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
-    es_client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    es_client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
 
     for file in sorted(sweeps_path.glob("*.py")):
         sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]

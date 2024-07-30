@@ -182,7 +182,7 @@ The test vectors are stored in a separate Elasticsearch index based on the modul
 
 ### Usage
 
-**NOTE: The environment variable ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
+**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
 To run the test vector generator:
 
@@ -192,7 +192,7 @@ Options:
 
 `--module-name <sweep_name>` OPTIONAL: Select the sweep file to generate parameters for. This should be only the name and not extension of the file. If not set, the generator will generate vectors for all sweep files in the sweeps folder.
 
-`--elastic <elastic_url>` OPTIONAL: Default is `http://localhost:9200`, which in almost all cases should be overridden unless running with a local instance of Elasticsearch.
+`--elastic <elastic_url>` OPTIONAL: Default is `http://yyz-elk:9200`, which in almost all cases should be overridden unless running with a local instance of Elasticsearch.
 
 ## Test Runner
 
@@ -215,7 +215,7 @@ The test runner reads in test vectors from the test vector database and executes
 
 ### Usage
 
-**NOTE: The environment variable ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
+**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
 To run the test runner:
 `python3 tests/sweep_framework/runner.py`
@@ -238,7 +238,7 @@ Options:
 
 ## Query Tool
 
-**NOTE: The environment variable ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
+**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
 This tool is used to query the database to see information on test vectors and test runs.
 
@@ -252,7 +252,7 @@ The vector and result commands will show a detailed view of the data, including 
 
 ### Usage
 
-`query.py [OPTIONS] COMMAND [ARGS]...`
+`query.py [OPTIONS] COMMAND`
 
 Options:
 
@@ -457,4 +457,6 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 
 ## Database
 
-Elasticsearch on Apache Lucene database. Network availability and global database info TBD.
+Elasticsearch instance shared with DevInfra hosted on yyz-elk.
+
+Access credentials to be shared separately.
