@@ -72,4 +72,5 @@ def test_run_addalpha(
         comparison_func,
         device,
         test_args,
+        ttnn_op=True,
     )
