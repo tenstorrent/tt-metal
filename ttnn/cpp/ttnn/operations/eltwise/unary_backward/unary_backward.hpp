@@ -246,11 +246,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
 
-constexpr auto eq_bw = ttnn::register_operation<
-    "ttnn::eq_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::EQ_BW>>();
-
 constexpr auto rpow_bw = ttnn::register_operation<
     "ttnn::rpow_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
