@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import transformers
 
@@ -63,6 +64,7 @@ def evaluate(*outputs, input_node_to_tensor_map):
     return output_tensors
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_evaluate_traced_torch_bert():
     model_name = "bert-base-uncased"
     config = transformers.BertConfig.from_pretrained(model_name)
