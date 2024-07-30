@@ -841,4 +841,8 @@ op_map = {
         "tt_op": ttnn_ops.hardtanh_bw,
         "pytorch_op": pytorch_ops.hardtanh_bw,
     },
+    "hypot-bw": {
+        "tt_op": ttnn_ops.hypot_bw,
+        "pytorch_op": pytorch_ops.hypot_bw,
+    },
 }
