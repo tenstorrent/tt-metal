@@ -821,4 +821,8 @@ op_map = {
         "tt_op": ttnn_ops.logaddexp_bw,
         "pytorch_op": pytorch_ops.logaddexp_bw,
     },
+    "fmod-bw": {
+        "tt_op": ttnn_ops.fmod_bw,
+        "pytorch_op": ttnn_pytorch_ops.fmod_bw,
+    },
 }
