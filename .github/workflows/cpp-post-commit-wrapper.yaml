@@ -13,5 +13,16 @@ jobs:
     secrets: inherit
   cpp-unit-tests:
     needs: build-artifact
-    uses: ./.github/workflows/cpp-post-commit.yaml
     secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
