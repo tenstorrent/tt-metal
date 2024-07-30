@@ -110,14 +110,11 @@ class TtMambaSSM(torch.nn.Module):
         self.D = self.D_prefill
 
         # hidden state
-
-        if self.configs["mode"] == ModelMode.DECODE:
-            prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
-            self.tt_hidden_states = load_fn(
-                f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
-            )
-        else:
-            self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
+        prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
+        self.tt_hidden_states = load_fn(
+            f"tt_hidden_state_{self.batch_size}", torch_tensor=prev_hidden_states, tt_layout=ttnn.TILE_LAYOUT
+        )
+        self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,

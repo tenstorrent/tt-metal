@@ -76,18 +76,16 @@ class TtMambaBlock(torch.nn.Module):
         )
         self.conv1d_bias = self.conv1d_bias_prefill
 
-        if self.configs["mode"] == ModelMode.DECODE:
-            self.conv_states = []
-            for i in range(4):
-                self.conv_states.append(
-                    load_fn(
-                        f"conv_state{i}",
-                        torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
-                        postfix=f"{args.batch_size}",
-                    )
+        self.conv_states = []
+        for i in range(4):
+            self.conv_states.append(
+                load_fn(
+                    f"conv_state{i}",
+                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
+                    postfix=f"{args.batch_size}",
                 )
-        elif self.configs["mode"] == ModelMode.PREFILL:
-            self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
+            )
+        self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
 
         mamba_conv_config = MambaConvConfig(
             input_length=self.configs["outer_dim"] + (args.d_conv - 1),
