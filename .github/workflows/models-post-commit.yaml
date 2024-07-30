@@ -52,6 +52,8 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
+        with:
+          arch: ${{ inputs.arch }}
       - name: ${{ inputs.runner-label }} tests
         timeout-minutes: 45
         run: |
