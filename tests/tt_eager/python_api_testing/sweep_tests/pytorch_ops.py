@@ -1922,6 +1922,19 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
+def frac_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    pyt_y = torch.frac(in_data)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)

@@ -3882,6 +3882,25 @@ def eltwise_subalpha(
     return ttnn_tensor_to_torch(t2)
 
 
+def frac_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t3 = ttnn.frac_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t3)
+
+
 def log2_bw(
     x,
     y,
