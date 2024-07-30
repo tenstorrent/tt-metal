@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -128,14 +129,14 @@ struct Reduce {
                 auto mean_tensor = tt::tt_metal::reduce(
                     input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config);
                 auto mean_square_tensor = tt::tt_metal::reduce(
-                    tt::tt_metal::pow(input_tensor, 2.0f, memory_config),
+                    ttnn::pow(input_tensor, 2.0f, memory_config),
                     tt::tt_metal::ReduceOpMath::SUM,
                     reduce_op_dim,
                     1.0 / reduced_volume,
                     memory_config);
                 output_tensor = ttnn::subtract(
                     mean_square_tensor,
-                    tt::tt_metal::pow(mean_tensor, 2.0f, memory_config),
+                    ttnn::pow(mean_tensor, 2.0f, memory_config),
                     std::nullopt,
                     memory_config);
                 if constexpr (reduce_type == ReduceType::Std) {

@@ -36,10 +36,6 @@ Tensor softshrink(
 Tensor hardshrink(
     const Tensor& a, float param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// Function: softsign
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // Function: MAC
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor
@@ -51,21 +47,8 @@ Tensor mac(
 Tensor mac(
     const Tensor& a, float b, float c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// Function Selu - scaled exponential linear
-// use transformation y = scale * alpha * (exp(X)-1) by broadcast
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-Tensor selu(
-    const Tensor& x,
-    const float scale = 1.0507009873554804934193349852946,
-    const float alpha = 1.6732632423543772848170429916717,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor celu(
     const Tensor& x, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// Function Swish = same as SILU
-// use transformation y = x * sigmoid( x ) by broadcast
-Tensor swish(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // compute polyval by Horner's rule
 Tensor polyval(
@@ -84,10 +67,6 @@ Tensor max(
     const Tensor& input_a,
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// tanhshrink = x - tanh(x)
-Tensor tanhshrink(
-    const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor logical_andi(
     const Tensor& input_a,
@@ -159,8 +138,6 @@ Tensor fmod(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor frac(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -185,12 +162,6 @@ Tensor rfloor_div(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// xlogy(x,y))=x*log(y)
-Tensor xlogy(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // logical_noti
 Tensor logical_noti(
     const Tensor& input_a,
@@ -213,13 +184,6 @@ atan2(y, x) =   x < 0 and y < 0 atan(y/x) - pi
 Tensor atan2(
     const Tensor& input_a,
     const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// subalpha(input,other,alpha)=input-alpha*other
-Tensor subalpha(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float alpha,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // addalpha(input, other, alpha) = input + (alpha * other)
@@ -257,69 +221,9 @@ Tensor scatter(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// threshold(a,t,v) = (a < t)*v + (a > t)*a
-Tensor threshold(
-    const Tensor& input_a,
-    float threshold,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 Tensor cbrt(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// where - ternary operator y = (predicate) ? value_true : value_false; elementwise
-Tensor where(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const float value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const float value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const float value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-Tensor where(
-    const Tensor& predicate,
-    const float value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
 
 // on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(
@@ -434,8 +338,6 @@ Tensor logical_xori(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 /** hyperbolic operations **/
-// sinh(x) = (exp(x) - exp(-x))/2
-Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // digamma
 Tensor digamma(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -461,16 +363,6 @@ Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
  */
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// Function variance of whole tensor.
-// Tensor variance(const Tensor& y,const Tensor& mean_y);
-Tensor var_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// Function std
-// compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
-// Ref: torch.std
-Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-// Tensor std(const Tensor& y,const Tensor& mean_y);
-
 Tensor normalize_global(
     const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
@@ -493,40 +385,6 @@ Tensor triu(
     const Tensor& input_a,
     int32_t diag = 0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// power_fp : power with floating point exponent
-Tensor power_fp(
-    uint8_t queue_id,
-    const Tensor& input_a,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-
-Tensor pow(
-    const Tensor& input_a,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-
-Tensor pow(
-    const Tensor& input_a,
-    int exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-
-Tensor pow(
-    uint8_t queue_id,
-    const Tensor& input_a,
-    float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
-
-Tensor pow(
-    uint8_t queue_id,
-    const Tensor& input_a,
-    int exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor argmax(
     const Tensor& input_a,

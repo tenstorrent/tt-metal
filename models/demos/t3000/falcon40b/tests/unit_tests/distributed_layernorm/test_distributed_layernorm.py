@@ -168,7 +168,7 @@ class TtDistributedLayernorm:
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
-            x2_local = ttl.tensor.pow(xs[i], 2)
+            x2_local = ttnn.pow(xs[i], 2)
             meanx2_local = ttl.tensor.reduce(
                 x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
             )
@@ -219,7 +219,7 @@ class TtDistributedLayernorm:
         # var = meanx2 - torch.square(mean)
         var = []
         for i in range(num_devices):
-            var.append(ttl.tensor.pow(mean[i], 2))
+            var.append(ttnn.pow(mean[i], 2))
         for i in range(num_devices):
             var[i] = ttnn.subtract(meanx2[i], var[i])
             meanx2[i].deallocate(True)
@@ -229,7 +229,7 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             denominators.append(ttnn.add(var[i], self.ln_eps))
         for i in range(num_devices):
-            denominators[i] = ttl.tensor.pow(denominators[i], 0.5)
+            denominators[i] = ttnn.pow(denominators[i], 0.5)
         for i in range(num_devices):
             denominators[i] = ttnn.reciprocal(denominators[i])
 

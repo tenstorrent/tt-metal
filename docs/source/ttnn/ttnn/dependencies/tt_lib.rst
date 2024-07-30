@@ -286,19 +286,11 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.mac
 
-.. autofunction:: tt_lib.tensor.swish
-
-.. autofunction:: tt_lib.tensor.softsign
-
 .. autofunction:: tt_lib.tensor.softshrink
 
 .. autofunction:: tt_lib.tensor.hardshrink
 
 .. autofunction:: tt_lib.tensor.cosh
-
-.. autofunction:: tt_lib.tensor.sinh
-
-.. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.remainder
 
@@ -309,8 +301,6 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.atan2
 
 .. autofunction:: tt_lib.tensor.logical_xori
-
-.. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.celu
 
@@ -328,8 +318,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.polygamma
 
-.. autofunction:: tt_lib.tensor.trunc
-
 .. autofunction:: tt_lib.tensor.frac
 
 .. autofunction:: tt_lib.tensor.round
@@ -338,15 +326,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.rfloor_div
 
-Tensor relational operations
-============================
-
-
-Tensor ternary operations
-=========================
-.. autofunction:: tt_lib.tensor.where
-
-.. autofunction:: tt_lib.tensor.threshold
 
 Tensor manipulation operations
 -=============================
@@ -568,27 +547,19 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
-.. autofunction:: tt_lib.tensor.xlogy
-
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv
 
 .. autofunction:: tt_lib.tensor.mean_hw
 
-.. autofunction:: tt_lib.tensor.var_hw
-
 .. autofunction:: tt_lib.tensor.logical_noti
-
-.. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_global
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
 .. autofunction:: tt_lib.tensor.repeat
-
-.. autofunction:: tt_lib.tensor.pow
 
 .. autofunction:: tt_lib.tensor.argmax
 

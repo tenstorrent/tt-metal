@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -56,7 +57,7 @@ std::vector<Tensor> _complex_recip_bw(const Tensor& grad, const Tensor& input, c
     input_i.deallocate();
     Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
     condition_nan.deallocate();
-    Tensor grad_result = where(
+    Tensor grad_result = ttnn::where(
         nan_flag,
         full_like(input, std::nanf(""), output_mem_config),
         complex_mul(
@@ -118,7 +119,7 @@ std::vector<Tensor> _angle_bw(
         Tensor abs_squared = ttnn::reciprocal(
             ttnn::add(ttnn::square(inp_r, output_mem_config), ttnn::square(inp_i, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config);
-        Tensor real = where(
+        Tensor real = ttnn::where(
             condition_zero,
             zeros_like(inp_r, output_mem_config),
             ttnn::multiply(grad,
@@ -126,7 +127,7 @@ std::vector<Tensor> _angle_bw(
                 std::nullopt,
                 output_mem_config),
             output_mem_config);
-        Tensor imag = where(
+        Tensor imag = ttnn::where(
             condition_zero,
             zeros_like(inp_i, output_mem_config),
             ttnn::multiply(grad, ttnn::multiply(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
@@ -158,7 +159,7 @@ std::vector<Tensor> _complex_abs_bw(const Tensor& grad, const Tensor& input, con
     Tensor result = complex_abs(input, output_mem_config);
     result = mk_complex(result, result, output_mem_config);
     Tensor grad_c = mk_complex(grad, grad, output_mem_config);
-    Tensor grad_result = where(
+    Tensor grad_result = ttnn::where(
         ttnn::eqz(result, output_mem_config),
         zeros_like(result, output_mem_config),
         ttnn::multiply(grad_c,
@@ -184,7 +185,7 @@ std::vector<Tensor> _polar_bw(
     Tensor result = polar(input_a, input_b, output_mem_config);
     Tensor abs_result = complex_abs(result, output_mem_config);
     abs_result = mk_complex(abs_result, abs_result, output_mem_config);
-    Tensor sgn_result = where(
+    Tensor sgn_result = ttnn::where(
         ttnn::eqz(abs_result, output_mem_config),
         zeros_like(result, output_mem_config),
         ttnn::multiply(result, ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config),
@@ -229,14 +230,14 @@ std::vector<Tensor> _complex_div_bw(
     other_i.deallocate();
     Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
     condition_nan.deallocate();
-    Tensor grad_a = where(
+    Tensor grad_a = ttnn::where(
         nan_flag,
         full_like(input, std::nanf(""), output_mem_config),
         complex_div(grad, conj(other, output_mem_config), output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     Tensor result = complex_div(input, other, output_mem_config);
-    Tensor grad_b = where(
+    Tensor grad_b = ttnn::where(
         nan_flag,
         full_like(input, std::nanf(""), output_mem_config),
         complex_mul(

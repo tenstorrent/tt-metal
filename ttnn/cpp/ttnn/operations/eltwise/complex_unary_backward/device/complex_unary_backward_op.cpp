@@ -14,6 +14,8 @@
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+
 
 namespace ttnn::operations::complex_unary_backward {
 using ComplexTensor = complex_binary::ComplexTensor;
