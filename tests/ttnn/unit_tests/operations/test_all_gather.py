@@ -491,6 +491,150 @@ def test_line_all_gather_on_t3000_post_commit(
     )
 
 
+def run_line_all_gather_instances(
+    all_devices,
+    num_devices,
+    num_instances,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    if len(all_devices) != 8:
+        pytest.skip("Not T3000!")
+
+    for device in all_devices:
+        device.enable_async(enable_async)
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    (is_known_failure, message) = is_unsupported_case(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
+
+    # devices = get_devices_for_t3000(all_devices, num_devices)
+    # for device in devices:
+    #    device.disable_and_clear_program_cache()
+
+    t3000_device_rows = [
+        [all_devices[4], all_devices[0], all_devices[3], all_devices[7]],
+        [all_devices[5], all_devices[1], all_devices[2], all_devices[6]],
+    ]
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    input_mesh_tensors = []
+    input_tensor_to_compare = []
+    for devices in t3000_device_rows:
+        input_tensor = torch.rand(input_shape).bfloat16()
+        input_tensor_to_compare.append(input_tensor)
+
+        input_tensors = torch.chunk(input_tensor, len(devices), dim)
+        tt_input_tensors = []
+        for i, t in enumerate(input_tensors):
+            tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_mesh_tensors.append(input_tensor_mesh)
+
+    result_mesh_tensors = []
+    for i, devices in enumerate(t3000_device_rows):
+        tt_out_tensor = ttnn.line_all_gather(input_mesh_tensors[i], dim, num_links=num_links, memory_config=mem_config)
+        result_mesh_tensors.append(tt_out_tensor)
+
+    ## Wait for completion
+    for i, devices in enumerate(t3000_device_rows):
+        for d in devices:
+            ttl.device.Synchronize(d)
+
+    for count, tt_out_tensor in enumerate(result_mesh_tensors):
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+            if input_dtype == ttl.tensor.DataType.BFLOAT16:
+                eq, output = comp_equal(tt_output_tensor, input_tensor_to_compare[count])
+            else:
+                eq, output = comp_pcc(tt_output_tensor, input_tensor_to_compare[count])
+            if not eq:
+                logger.error(f"output mismatch for tensor {i}")
+            assert eq, f"{i} FAILED: {output}"
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_instances, num_links, input_shape, dim, layout",
+    [
+        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
+        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        (4, 2, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttl.tensor.MemoryConfig(
+            buffer_type=ttl.tensor.BufferType.DRAM
+        ),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_line_all_gather_on_t3000_post_commit_instances(
+    all_devices,
+    num_devices,
+    num_instances,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    run_line_all_gather_instances(
+        all_devices,
+        num_devices,
+        num_instances,
+        input_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        enable_async,
+        num_iters,
+    )
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
