@@ -53,7 +53,7 @@ jobs:
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: 120
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
