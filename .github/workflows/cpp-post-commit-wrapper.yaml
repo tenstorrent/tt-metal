@@ -11,7 +11,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  cpp-unit-tests-e150:
+  cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
     strategy:
