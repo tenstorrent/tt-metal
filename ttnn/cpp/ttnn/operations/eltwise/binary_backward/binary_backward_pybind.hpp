@@ -572,22 +572,18 @@ Example:
 template <typename binary_backward_operation_t>
 void bind_binary_bw_operation(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor] , input_tensor_b: Union[ComplexTensor, ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
 
         {2}
 
         Supports broadcasting.
 
         Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+            * :attr:`input_tensor_a` (ComplexTensor or ttnn.Tensor)
+            * :attr:`input_tensor_b` (ComplexTensor or ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
 
         Example:
 
@@ -728,12 +724,12 @@ void py_module(py::module& module) {
     detail::bind_binary_bw_operation(
         module,
         ttnn::add_bw,
-        R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_binary_bw_operation(
         module,
         ttnn::sub_bw,
-        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_binary_backward_ops(
         module,

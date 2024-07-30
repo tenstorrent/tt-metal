@@ -111,10 +111,10 @@ void bind_unary_backward_op(
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_op_overload(
+void bind_unary_backward_op_reciprocal(
     py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
 
         {2}
 
@@ -154,6 +154,60 @@ void bind_unary_backward_op_overload(
         ttnn::pybind_overload_t{
             [](const unary_backward_operation_t& self,
                const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor,
+               const MemoryConfig& memory_config) {
+                return self(grad_tensor, input_tensor, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config")});
+}
+
+template <typename unary_backward_operation_t>
+void bind_unary_backward_op_overload_abs(
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
+
+        {2}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
+
+        Keyword args:
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const Tensor& grad_tensor,
                const ComplexTensor& input_tensor,
                const MemoryConfig& memory_config) {
                 return self(grad_tensor, input_tensor, memory_config);
@@ -1091,7 +1145,7 @@ void py_module(py::module& module) {
         ttnn::relu6_bw,
         R"doc(Performs backward operations for relu6 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward_op(
+    detail::bind_unary_backward_op_overload_abs(
         module,
         ttnn::abs_bw,
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
@@ -1211,10 +1265,10 @@ void py_module(py::module& module) {
         ttnn::expm1_bw,
         R"doc(Performs backward operations for exp2 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward_op_overload(
+    detail::bind_unary_backward_op_reciprocal(
         module,
         ttnn::reciprocal_bw,
-        R"doc(Performs backward operations for exp2 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
     detail::bind_unary_backward_op(
         module,

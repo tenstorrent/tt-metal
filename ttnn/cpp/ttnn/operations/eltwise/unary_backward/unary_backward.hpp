@@ -204,6 +204,19 @@ struct ExecuteUnaryBackwardRecip {
 
 };
 
+struct ExecuteUnaryBackwardAbs {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const MemoryConfig &memory_config);
+
+};
+
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
@@ -331,11 +344,6 @@ constexpr auto relu6_bw = ttnn::register_operation<
     "ttnn::relu6_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::RELU6_BW>>();
-
-constexpr auto abs_bw = ttnn::register_operation<
-    "ttnn::abs_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ABS_BW>>();
 
 constexpr auto silu_bw = ttnn::register_operation<
     "ttnn::silu_bw",
@@ -582,5 +590,9 @@ constexpr auto log_bw = ttnn::register_operation<
 constexpr auto reciprocal_bw = ttnn::register_operation<
     "ttnn::reciprocal_bw",
     operations::unary_backward::ExecuteUnaryBackwardRecip>();
+
+constexpr auto abs_bw = ttnn::register_operation<
+    "ttnn::abs_bw",
+    operations::unary_backward::ExecuteUnaryBackwardAbs>();
 
 }  // namespace ttnn

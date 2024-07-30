@@ -750,16 +750,6 @@ struct OpHandler<UnaryBackwardOpType::PROD_BW> {
 };
 
 template <>
-struct OpHandler<UnaryBackwardOpType::ADD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _add_bw(grad, input, alpha, output_mem_config);
-    }
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config ) {
-        return ttnn::operations::binary_backward::_add_bw_inter(grad, input_a, input_b, output_mem_config);
-    }
-};
-
-template <>
 struct OpHandler<UnaryBackwardOpType::EQ_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _eq_bw(grad, input, other, output_mem_config);
