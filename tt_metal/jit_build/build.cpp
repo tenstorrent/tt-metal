@@ -377,7 +377,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             this->lflags_ = env_.lflags_ + "-Os ";
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/idle-erisc.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/ierisc.ld ";
             break;
     }
     this->process_defines_at_compile = true;

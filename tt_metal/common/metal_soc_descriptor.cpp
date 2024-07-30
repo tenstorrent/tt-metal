@@ -372,7 +372,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // virtual coordinates because UMD APIs expect virtual coordinates.
 metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask) :
     tt_SocDescriptor(other) {
-    this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
+    this->trisc_sizes = {MEM_TRISC0_FIRMWARE_SIZE, MEM_TRISC1_FIRMWARE_SIZE, MEM_TRISC2_FIRMWARE_SIZE};  // TODO: Read trisc size from yaml
     this->generate_physical_descriptors_from_virtual(harvesting_mask);
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
