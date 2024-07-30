@@ -11,7 +11,24 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  models-unit-tests:
+  models-unit-tests-e150:
     needs: build-artifact
     uses: ./.github/workflows/models-post-commit.yaml
     secrets: inherit
+    with:
+      arch: grayskull
+      runner-label: E150
+  models-unit-tests-n150:
+    needs: build-artifact
+    uses: ./.github/workflows/models-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+  models-unit-tests-n300:
+    needs: build-artifact
+    uses: ./.github/workflows/models-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N300
