@@ -20,11 +20,18 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
     const auto shape = input_tensor.get_legacy_shape();
+    bool row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     uint32_t HW = H*W;
-    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    if (not row_major) {
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
+        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    }
+    uint32_t ROW_MAJOR_STICK_WIDTH = 16;
     if (this->dim == TransposeOpDim::WH) {
+        if (row_major) {
+            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0);
+        }
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
             const auto shard_spec = input_tensor.shard_spec().value();
@@ -40,7 +47,11 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(!this->output_mem_config.is_sharded());
     }
     if (this->dim == TransposeOpDim::HC) {
-        TT_FATAL(C % TILE_HEIGHT == 0);
+        if (row_major) {
+            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0);
+        } else {
+            TT_FATAL(C % TILE_HEIGHT == 0);
+        }
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
     } else if (this->dim == TransposeOpDim::CW) {
         TT_FATAL(C % TILE_WIDTH == 0);
@@ -110,7 +121,7 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
             TT_ASSERT(false, "Unsupported sharding");
         }
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -183,8 +194,13 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             break;
     }
 
-    // TODO: Add pad_n to run_with_autoformat when needed
-    return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, {}, 0, pad_c /*, pad_n */).at(0);
+    if (a.get_layout() == Layout::ROW_MAJOR) {
+        return operation::run(Transpose{transpose_dim, output_mem_config}, {a}).at(0);
+    } else {
+        // TODO: Add pad_n to run_with_autoformat when needed
+        return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, {}, 0, pad_c /*, pad_n */).at(0);
+    }
+
 }
 
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {
