@@ -36,7 +36,24 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/models-post-commit.yaml
     secrets: inherit
-  fd-cpp-tests:
+  cpp-unit-tests-e150:
     needs: build-artifact
     uses: ./.github/workflows/cpp-post-commit.yaml
     secrets: inherit
+    with:
+      arch: grayskull
+      runner-label: E150
+  cpp-unit-tests-n150:
+    needs: build-artifact
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+  cpp-unit-tests-n300:
+    needs: build-artifact
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N300
