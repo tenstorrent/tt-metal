@@ -180,6 +180,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
+    log_debug(LogOp, "out_stick_nytes: {}", out_stick_nbytes);
+
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
         0,  // padding_config_cb_id

@@ -308,13 +308,17 @@ def run_conv_with_split(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, ncores",
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
         # rn50 layer1
-        (128, 256, 10, 10, 3, 3, 1, 1, 0, 0),
+        (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4),
+        (256, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4),
+        (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
+        # (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
+        # (128, 256, 8, 8, 3, 3, 1, 1, 1, 1),
     ),
 )
 def test_conv_ws(
@@ -330,6 +334,7 @@ def test_conv_ws(
     stride_w,
     pad_h,
     pad_w,
+    ncores,
 ):
     batch_size = 2
     weights_dtype = ttnn.bfloat16
@@ -396,7 +401,7 @@ def test_conv_ws(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
-    ncores = 4
+    # ncores = 4
     shard_grid = get_shard_grid_from_num_cores(ncores, device)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     print(type(shard_grid))
@@ -407,14 +412,30 @@ def test_conv_ws(
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    core_range_set = ttnn.experimental.tensor.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(4, compute_grid_size, True)
-    )
-    shard_shape = [batch_size * input_height * input_width, input_channels // 4]
 
+    block_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
+            ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 3))])),
+            (64, input_channels // ncores),
+            shard_orientation,
+            False,
+        ),
+    )
+    height_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
+            ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 0))])), (64, input_channels), shard_orientation, False
+        ),
+    )
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
+    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=block_shard_mem_config)
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=in_sharded_mem_config)
-    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=height_shard_mem_config)
+
+    tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
 
     # breakpoint()
     conv_config = ttnn.Conv2dConfig(
