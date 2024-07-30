@@ -85,16 +85,16 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
             break;
         case 2:
-            range_min = MEM_TRISC0_BASE;
-            range_max = MEM_TRISC0_BASE + MEM_TRISC0_SIZE;
+            range_min = MEM_TRISC0_FIRMWARE_BASE;
+            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
             break;
         case 3:
-            range_min = MEM_TRISC1_BASE;
-            range_max = MEM_TRISC1_BASE + MEM_TRISC1_SIZE;
+            range_min = MEM_TRISC1_FIRMWARE_BASE;
+            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
             break;
         case 4:
-            range_min = MEM_TRISC2_BASE;
-            range_max = MEM_TRISC2_BASE + MEM_TRISC2_SIZE;
+            range_min = MEM_TRISC2_FIRMWARE_BASE;
+            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
