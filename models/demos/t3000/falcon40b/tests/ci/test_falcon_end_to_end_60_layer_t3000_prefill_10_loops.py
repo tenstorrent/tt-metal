@@ -59,6 +59,10 @@ from models.utility_functions import (
         ),
     ),
 )
+@pytest.mark.parametrize(
+    "async_mode",
+    (True,),
+)
 def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     model_version,
     seq_len,
@@ -70,6 +74,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    async_mode,
 ):
     num_devices = 8
     llm_mode = "prefill"
@@ -84,6 +89,8 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     model_config_str = f"{data_type}-{memcfg}"
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     devices = t3k_device_mesh.get_devices()
+    for device in devices:
+        device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
