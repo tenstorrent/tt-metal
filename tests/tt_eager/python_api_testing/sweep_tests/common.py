@@ -668,11 +668,17 @@ def shapes_and_datagen(
 
             def _gen_tt_nn_bcast_shapes(shape):
                 shape_type = random.randint(0, 2)
+                second_shape = shape.copy()
 
                 if shape_type == 0:
-                    second_shape = [1]
+                    second_shape[-2] = 1
+                    second_shape[-1] = 1
                 elif shape_type == 1:
-                    second_shape = [shape[-1]]
+                    second_shape[-2] = shape[-2]
+                    second_shape[-1] = 1
+                elif shape_type == 2:
+                    second_shape[-2] = 1
+                    second_shape[-1] = shape[-1]
                 # elif shape_type == 2:
                 #     second_shape = [shape[-2], shape[-1]]
                 # elif shape_type == 3:
