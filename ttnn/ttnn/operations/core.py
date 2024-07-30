@@ -276,12 +276,12 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
 
 class TorchTensor(torch.Tensor):
     @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
+    def __torch_function__(cls, func, types, func_args=(), func_kwargs=None):
         # this tells torch to treat TorchTensor just like torch.Tensor's.
         # Otherwise, torch will complain that it doesn't know how to handle it.
         types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
         func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
-        return super().__torch_function__(func, types, args, kwargs)
+        return super().__torch_function__(func, types, func_args, func_kwargs)
 
 
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
