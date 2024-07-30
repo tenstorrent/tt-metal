@@ -6,7 +6,7 @@ import tt_lib
 import ttnn
 from loguru import logger
 from pathlib import Path
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_grayskull
 
 
 OP_MEMCFG_KEYS = (
@@ -196,7 +196,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
-        grid_size = tt_lib.tensor.CoreCoord(tuple([12, batch]))
+        grid_size = tt_lib.tensor.CoreCoord(12, batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
@@ -292,18 +292,26 @@ def get_model_config(batch, device_grid_size, model_config_str):
 
     elif model_config_str == "BFLOAT8_B-SHARDED":
         activation_grid_dim = 8
-        if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-            grid_size = tt_lib.tensor.CoreCoord(tuple([batch, activation_grid_dim]))
-            shard_orientation = (
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR
-                if is_wormhole_b0()
-                else tt_lib.tensor.ShardOrientation.COL_MAJOR
-            )
-        elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-            grid_size = tt_lib.tensor.CoreCoord(tuple([activation_grid_dim, batch]))
-            shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+        # For GS COL_MAJOR is expected to be more optimal, so we test that case first
+        # Opposite for other arch like WH where ROW_MAJOR is more optimal
+        if is_grayskull():
+            if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
+                grid_size = tt_lib.tensor.CoreCoord(batch, activation_grid_dim)
+                shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+            elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
+                grid_size = tt_lib.tensor.CoreCoord(activation_grid_dim, batch)
+                shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+            else:
+                assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
         else:
-            assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+            if activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
+                grid_size = tt_lib.tensor.CoreCoord(activation_grid_dim, batch)
+                shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+            elif batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
+                grid_size = tt_lib.tensor.CoreCoord(batch, activation_grid_dim)
+                shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+            else:
+                assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
         transpose_mm_mcast = shard_orientation == tt_lib.tensor.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
