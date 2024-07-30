@@ -516,19 +516,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
                 .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
-    auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
-    auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
-    auto input_y = input_shape.rank() >= 2 ? input_shape[-2] : 1;
-    auto input_x = input_shape[-1];
-
-    auto output_w = output_shape.rank() >= 4 ? output_shape[-4] : 1;
-    auto output_z = output_shape.rank() >= 3 ? output_shape[-3] : 1;
-    auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
-    auto output_x = output_shape[-1];
-
-    Padding padding(
-        {{0, input_w - output_w}, {0, input_z - output_z}, {0, input_y - output_y}, {0, input_x - output_x}},
-        Padding::PadValue::Any);
+    Padding padding(input_shape.rank());
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        padding[index].back = input_shape[index] - output_shape[index];
+    }
     auto core_assignments =
         distribute_work(output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
 

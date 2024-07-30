@@ -179,9 +179,9 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     auto input_z = unpadded.rank() >= 3 ? unpadded[-3] : 1;
     auto input_y = unpadded.rank() >= 2 ? unpadded[-2] : 1;
 
-    auto padding_w = unpadded.rank() >= 4 ? padding[unpadded.get_normalized_index(-4)].back : 0;
-    auto padding_z = unpadded.rank() >= 3 ? padding[unpadded.get_normalized_index(-3)].back : 0;
-    auto padding_y = unpadded.rank() >= 2 ? padding[unpadded.get_normalized_index(-2)].back : 0;
+    auto padding_w = unpadded.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
+    auto padding_z = unpadded.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
+    auto padding_y = unpadded.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
 
     // total work is a full rep followed by a padding.
     auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
