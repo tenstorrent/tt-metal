@@ -185,9 +185,6 @@ from ttnn.core import (
 import ttnn.reflection
 import ttnn.database
 
-if importlib.util.find_spec("torch") is not None:
-    import ttnn.tracer
-
 
 begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
 end_trace_capture = ttnn._ttnn.operations.core.end_trace_capture
@@ -273,3 +270,7 @@ from ttnn.operations.embedding import (
 from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
 from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, global_avg_pool2d, avg_pool2d
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
+
+
+if importlib.util.find_spec("torch") is not None:
+    import ttnn.tracer
