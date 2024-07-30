@@ -10,9 +10,8 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/complex_binary/complex_binary.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace py = pybind11;
 
@@ -23,7 +22,6 @@ namespace binary {
 
 namespace detail {
 
-using ComplexTensor = complex_binary::ComplexTensor;
 
 template <typename binary_operation_t>
 void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {

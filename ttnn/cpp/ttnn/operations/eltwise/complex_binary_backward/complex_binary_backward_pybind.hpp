@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -18,7 +19,6 @@ namespace operations {
 namespace complex_binary_backward {
 
 namespace detail {
-using ComplexTensor = complex_binary::ComplexTensor;
 
 template <typename complex_binary_backward_operation_t>
 void bind_complex_binary_backward_w_float(py::module& module, const complex_binary_backward_operation_t& operation, const std::string& description) {
