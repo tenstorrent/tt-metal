@@ -88,9 +88,16 @@ Tensor to_layout_impl(
 
     const auto intended_shape = tensor_arg.get_shape();
 
+    auto tensor = tensor_arg;
+
     std::vector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {
         output_shape.push_back(1);
+        tensor = ttnn::reshape(
+            tensor,
+            ttnn::Shape(
+                std::vector<std::uint32_t>{1, intended_shape[0]},
+                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
     }
     for (auto index = 0; index < intended_shape.rank(); ++index) {
         output_shape.push_back(intended_shape[index]);
@@ -100,8 +107,6 @@ Tensor to_layout_impl(
     for (auto index = output_shape.size() - 2; index < output_shape.size(); ++index) {
         padded_output_shape[index] = ttnn::pad_to_multiple_of_tile_size(padded_output_shape[index]);
     }
-
-    auto tensor = tensor_arg;
 
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
@@ -131,12 +136,10 @@ Tensor to_layout_impl(
             TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
 
             if (tensor.is_sharded()) {
-                const auto memory_layout_config = tensor.memory_config();
+                const auto memory_config = tensor.memory_config();
                 output_memory_config =
-                    tt::tt_metal::MemoryConfig{memory_layout_config.memory_layout, tt::tt_metal::BufferType::L1};
+                    tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
-
-            tensor = unsqueeze_to_4D(tensor);
             std::vector<uint32_t> output_tensor_end;
             for (auto index = 0; index < tensor.get_shape().rank(); ++index) {
                 output_tensor_end.push_back(tensor.get_shape()[index] - 1);
@@ -147,14 +150,17 @@ Tensor to_layout_impl(
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
 
         } else if (layout == ttnn::TILE_LAYOUT) {
-            tensor = unsqueeze_to_4D(tensor);
-            std::vector<uint32_t> padded_4D_output_shape;
-            padded_4D_output_shape.push_back(tensor.get_shape()[-4]);
-            padded_4D_output_shape.push_back(tensor.get_shape()[-3]);
-            padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
-            padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
+            std::vector<uint32_t> padded_output_shape;
+
+            for (int index = 0; index < tensor.get_shape().rank(); ++index) {
+                if (index >= tensor.get_shape().rank() - 2) {
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
+                } else {
+                    padded_output_shape.push_back(tensor.get_shape()[index]);
+                }
+            }
             tensor = ttnn::tilize_with_val_padding(
-                tensor, padded_4D_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
+                tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
 
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
@@ -166,19 +172,21 @@ Tensor to_layout_impl(
         if (not requires_padding_change(layout, tensor.get_shape())) {
             return device ? tensor.to(layout, device) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            tensor = unsqueeze_to_4D(tensor);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
-
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
         } else if (layout == ttnn::TILE_LAYOUT) {
-            tensor = unsqueeze_to_4D(tensor);
-            std::vector<uint32_t> padded_4D_output_shape;
-            padded_4D_output_shape.push_back(tensor.get_shape()[-4]);
-            padded_4D_output_shape.push_back(tensor.get_shape()[-3]);
-            padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
-            padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
-            tensor = tensor.pad(padded_4D_output_shape, {0, 0, 0, 0}, 0);
+            std::vector<uint32_t> padded_output_shape;
+            std::vector<uint32_t> padded_input_start;
+            for (int index = 0; index < tensor.get_shape().rank(); ++index) {
+                if (index >= tensor.get_shape().rank() - 2) {
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
+                } else {
+                    padded_output_shape.push_back(tensor.get_shape()[index]);
+                }
+                padded_input_start.push_back(0);
+            }
+            tensor = tensor.pad(padded_output_shape, padded_input_start, 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
