@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -75,9 +76,9 @@ std::vector<OptionalTensor> _where_bw(
     std::vector<OptionalTensor> result;
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
-            tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
+            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
         } else {
-            input_grad = tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config);
+            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
         }
         result.emplace_back(input_grad);
     } else {
@@ -85,9 +86,9 @@ std::vector<OptionalTensor> _where_bw(
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
-            tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
+            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
         } else {
-            other_grad = tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config);
+            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
         }
         result.emplace_back(other_grad);
     } else {

@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 
 namespace ttnn::operations::complex_binary_backward {
 using ComplexTensor = complex_binary::ComplexTensor;
