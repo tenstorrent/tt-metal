@@ -1964,6 +1964,29 @@ def hardshrink_bw(x, y, _lambda, *args, **kwargs):
     return in_data.grad
 
 
+def hardtanh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    if "low" in kwargs and "high" in kwargs:
+        low = kwargs.pop("low")
+        high = kwargs.pop("high")
+        pyt_y = torch.nn.functional.hardtanh(in_data, min_val=low, max_val=high)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    else:
+        pyt_y = torch.nn.functional.hardtanh(in_data)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)

@@ -837,4 +837,8 @@ op_map = {
         "tt_op": ttnn_ops.hardshrink_bw,
         "pytorch_op": pytorch_ops.hardshrink_bw,
     },
+    "hardtanh-bw": {
+        "tt_op": ttnn_ops.hardtanh_bw,
+        "pytorch_op": pytorch_ops.hardtanh_bw,
+    },
 }
