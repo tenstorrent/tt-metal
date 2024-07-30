@@ -64,6 +64,7 @@ class TtLlamaAttention_galaxy:
 
         self.get_attn_model_config()
         self.get_slice_mat()
+        self.get_user_selection_mat()
         self.load_weights()
         self.init_kv_cache()
 
@@ -83,6 +84,19 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
+        )
+
+    def get_user_selection_mat(self):
+        user_selection_matrix = torch.eye(8, 8)
+        user_selection_matrix = torch.nn.functional.pad(user_selection_matrix, (0, 24), "constant", 0)  # (8, 32)
+        user_selection_matrix = [user_selection_matrix] * 4
+        user_selection_matrix = torch.block_diag(*user_selection_matrix)  # (32, 128)
+        self.user_selection_matrix = ttnn.from_torch(
+            user_selection_matrix,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
         )
 
     def get_attn_model_config(self):
@@ -530,28 +544,21 @@ class TtLlamaAttention_galaxy:
             attn_output,
             num_heads=self.n_local_heads,
         )
-        # breakpoint()
-        attn_output = ttnn.reshape(
-            attn_output,
-            ttnn.Shape(
-                (1, 1, self.batch_size_per_device_group, attn_output.shape[3]),
-                (1, 1, self.max_batch_size, attn_output.shape[3]),
-            ),
-        )
-        attn_output = ttnn.to_memory_config(attn_output, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Convert to row major
-        attn_output = ttnn.to_layout(attn_output, ttnn.ROW_MAJOR_LAYOUT)
-
-        # breakpoint()
         attn_output = self.tt_all_gather(
             attn_output,
             dim=2,
             cluster_axis=0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-
-        attn_output = ttnn.to_layout(attn_output, ttnn.TILE_LAYOUT)
+        # user_selection_matrix = [1, 1, 32, 128]
+        # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
+        attn_output = ttnn.matmul(
+            self.user_selection_matrix,
+            attn_output,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         attn_output = ttnn.matmul(
             attn_output,
