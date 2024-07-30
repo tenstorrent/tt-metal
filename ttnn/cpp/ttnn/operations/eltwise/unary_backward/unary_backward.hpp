@@ -206,11 +206,6 @@ constexpr auto fmod_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::FMOD_BW>>();
 
-constexpr auto sub_bw = ttnn::register_operation<
-    "ttnn::sub_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::SUB_BW>>();
-
 constexpr auto assign_bw = ttnn::register_operation<
     "ttnn::assign_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<

@@ -233,6 +233,10 @@ constexpr auto add_bw = ttnn::register_operation<
     "ttnn::add_bw",
     operations::binary_backward::ExecuteBackwardAdd>();
 
+constexpr auto sub_bw = ttnn::register_operation<
+    "ttnn::sub_bw",
+    operations::binary_backward::ExecuteUnaryBackwardSub>();
+
 constexpr auto lt_bw = ttnn::register_operation<
     "ttnn::lt_bw",
     operations::binary_backward::ExecuteBackwardComparison>();

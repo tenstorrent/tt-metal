@@ -730,6 +730,11 @@ void py_module(py::module& module) {
         ttnn::add_bw,
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_bw_operation(
+        module,
+        ttnn::sub_bw,
+        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
     detail::bind_binary_backward_ops(
         module,
         ttnn::atan2_bw,

@@ -179,6 +179,39 @@ std::vector<ComplexTensor> ExecuteUnaryBackwardAdd::operator()(
     return grad_tensor;
 }
 
+std::vector<Tensor> ExecuteUnaryBackwardSub::operator()(
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteUnaryBackwardSub::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad, output_mem_config), 1.0f, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteUnaryBackwardSub::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = grad;
+    grad_tensor.emplace_back(grad);
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::NEG},
+    UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
+    ComplexTensor grad_b = ComplexTensor({ttnn::unary_chain( grad_r, ops_chain, output_mem_config), ttnn::unary_chain( grad_i, ops_chain, output_mem_config)});
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
 std::vector<Tensor> ExecuteUnaryBackwardComparison::operator()(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
