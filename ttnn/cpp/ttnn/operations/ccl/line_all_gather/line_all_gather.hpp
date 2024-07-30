@@ -16,6 +16,14 @@ struct ExecuteLineAllGather {
         const uint32_t dim,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+
+    static ttnn::Tensor operator()(
+        const ttnn::Tensor& input_tensor,
+        const uint32_t dim,
+        const uint32_t cluster_axis,
+        const multi_device::DeviceMesh& device_mesh,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ccl

@@ -154,6 +154,37 @@ class ShardTensorToMesh(TensorToMesh):
         }
 
 
+class ShardTensor2dMesh(TensorToMesh):
+    def __init__(self, device_mesh, shard_grid, shard_dimensions):
+        super().__init__(device_mesh)
+        self.shard_grid = shard_grid  # defines shape of 2D grid of shards
+        self.shard_dimensions = shard_dimensions  # defines which dimensions to shard
+
+    def map(self, tensor):
+        import torch
+
+        Y, X = self.shard_dimensions
+        # Returns list of tensors to map to row-major ordering of chips in shard grid
+        if self.shard_dimensions[Y] is None:
+            row_tensors = [tensor.clone() for _ in range(self.shard_grid[Y])]
+        else:
+            row_tensors = torch.chunk(tensor, self.shard_grid[Y], dim=self.shard_dimensions[Y])
+
+        if self.shard_dimensions[X] is None:
+            tensor_2d_shards = [row_tensor.clone() for row_tensor in row_tensors for _ in range(self.shard_grid[X])]
+        else:
+            tensor_2d_shards = [
+                tt for t in row_tensors for tt in torch.chunk(t, self.shard_grid[X], dim=self.shard_dimensions[X])
+            ]
+        return tensor_2d_shards
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dimensions[0] if self.shard_dimensions[0] else self.shard_dimensions[1]}",
+        }
+
+
 class ReplicateTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh: DeviceMesh):
         super().__init__(device_mesh)

@@ -161,6 +161,7 @@ from ttnn.multi_device import (
     synchronize_devices,
     TensorToMesh,
     ShardTensorToMesh,
+    ShardTensor2dMesh,
     ReplicateTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,

@@ -12,6 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 from ttnn import (
     ShardTensorToMesh,
+    ShardTensor2dMesh,
     ReplicateTensorToMesh,
     ConcatMeshToTensor,
     ListMeshToTensor,
@@ -67,7 +68,7 @@ def test_galaxy_matmul_1d_fracture(device_mesh):
     assert out_pass
 
 
-class ShardTensor2dMesh(TensorToMesh):
+class CustomShardTensor2dMesh(TensorToMesh):
     def __init__(self, device_mesh, dims, cluster_shape):
         super().__init__(device_mesh)
         self.dims = dims
@@ -158,14 +159,14 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
         layout=ttnn.TILE_LAYOUT,
         memory_config=act_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
     )
     weights = ttnn.from_torch(
         weights_pt,
         dtype=weights_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
     )
 
     gt = act_pt @ weights_pt
@@ -233,7 +234,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
         memory_config=act_mem_config,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
     )
 
     compute_kernel_lofi = ttnn.WormholeComputeKernelConfig(
@@ -263,7 +264,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
         memory_config=weight_mem_config,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
     )
 
     DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -313,7 +314,7 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
     )
 
     FF3 = ttnn.from_torch(
@@ -321,7 +322,7 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
     )
 
     gt = FF1_pt * FF3_pt
@@ -439,7 +440,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
     )
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
@@ -1145,3 +1146,120 @@ def test_galaxy_layernorm(M, N, device_mesh):
     logger.info(f"PCC value: {output_pcc}")
 
     assert out_pass
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_device_submesh(device_mesh):
+    rows, cols, tile_size = 8, 4, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for index, device_tensor in enumerate(device_tensors):
+        row_idx = index // cols
+        col_idx = index % cols
+
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        row_start, row_end = row_idx * tile_size, (row_idx + 1) * tile_size
+        col_start, col_end = col_idx * tile_size, (col_idx + 1) * tile_size
+        assert torch.all(device_tensor_torch == full_tensor[0, 0, row_start:row_end, col_start:col_end])
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((1, 4), id="8x4_grid")], indirect=True)
+def test_device_line_all_gather_1x4(device_mesh):
+    rows, cols, tile_size = 1, 4, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.line_all_gather(ttnn_tensor, dim=3, num_links=1)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for index, device_tensor in enumerate(device_tensors):
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        print(device_tensor_torch)
+        assert torch.all(device_tensor_torch == full_tensor)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 1), id="8x4_grid")], indirect=True)
+def test_device_line_all_gather_8x1(device_mesh):
+    rows, cols, tile_size = 8, 1, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.line_all_gather(ttnn_tensor, dim=2, cluster_axis=0, device_mesh=device_mesh, num_links=1)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for index, device_tensor in enumerate(device_tensors):
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        assert torch.all(device_tensor_torch == full_tensor)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("cluster_axis", (0, 1))
+@pytest.mark.parametrize("dim", (2, 3))
+def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: int):
+    """
+    Test the line-all-gather operation on a 8x4 mesh.
+
+    Data Pattern for initial sharding [TILE_SIZE*DEVICE_MESH_ROWS, TILE_SIZE*DEVICE_MESH_COLS]:
+    [1, 1, 1, 1, 1, 1, 1, 1]
+    [2, 2, 2, 2, 2, 2, 2, 2]
+    [3, 3, 3, 3, 3, 3, 3, 3]
+    [...]
+    [8, 8, 8, 8, 8, 8, 8, 8]
+
+    Data-pattern per-device before line-all-gather:
+    - Each device receives a shard of the tensor with shape: [1, 1, 32, 32]
+
+    Expected data-pattern per-device after line-all-gather:
+    - Every device along the column contains the whole column tensor
+    - output: [[1],[2],[3],[4],[5],[6],[7],[8]], shape: [1, 1, TILE_SIZE * DEVICE_MESH_ROWS, 32]
+    """
+
+    (rows, cols), tile_size = device_mesh.shape, 32
+    full_tensor = torch.zeros((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    for i in range(rows):
+        full_tensor[0, 0, i * tile_size : (i + 1) * tile_size, :] = torch.full((tile_size, tile_size * cols), i + 1.0)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.line_all_gather(
+        ttnn_tensor, dim=dim, cluster_axis=cluster_axis, device_mesh=device_mesh, num_links=1
+    )
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+
+    # device iteration happens in logical row-major
+    for index, device_tensor in enumerate(device_tensors):
+        row_index = index // cols
+        col_index = index % cols
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+
+        if dim == 2:
+            if cluster_axis == 0:  # cluster along rows
+                expected = full_tensor[..., :tile_size]
+            else:  # cluster along columns
+                expected = full_tensor[..., row_index * tile_size : (row_index + 1) * tile_size, :tile_size].repeat(
+                    1, 1, cols, 1
+                )
+        elif dim == 3:
+            if cluster_axis == 0:  # cluster along rows
+                expected = full_tensor[..., :tile_size]
+                expected = torch.permute(expected, (0, 1, 3, 2))
+            else:  # cluster along columns
+                expected = full_tensor[..., row_index * tile_size : (row_index + 1) * tile_size, :]
+
+        assert torch.allclose(device_tensor_torch, expected, atol=1e-3)
