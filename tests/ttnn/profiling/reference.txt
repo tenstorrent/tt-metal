@@ -102,7 +102,7 @@ ttnn.repeat_interleave_dim_1,80,0.42,0.429,323.298,0.219
 ttnn.repeat_interleave_dim_2,80,0.152,0.154,150.628,0.076
 tt_lib.tensor.rpow,200,0.09,0.094,0.243,0.058
 tt_lib.tensor.split_last_dim_two_chunks_tiled,200,0.017,0.017,0.098,0.009
-tt_lib.tensor.std_hw,200,0.139,0.148,0.463,0.084
+ttnn.std_hw,200,0.139,0.148,0.463,0.084
 tt_lib.tensor.subalpha,200,0.12,0.135,0.35,0.077
 tt_lib.tensor.sum_dim_0,80,0.44,0.46,1051.11,0.292
 tt_lib.tensor.sum_dim_1,200,0.164,0.17,12.75,0.113
@@ -112,7 +112,7 @@ tt_lib.tensor.transpose,200,0.07,0.072,0.133,0.057
 tt_lib.tensor.typecast,200,0.021,0.021,0.08,0.009
 tt_lib.tensor.untilize,200,0.018,0.019,0.112,0.007
 tt_lib.tensor.untilize_with_unpadding,200,0.026,0.027,3.608,0.007
-tt_lib.tensor.var_hw,200,0.14,0.15,0.455,0.094
+ttnn.var_hw,200,0.14,0.15,0.455,0.094
 ttnn.abs,200,0.024,0.025,0.101,0.009
 ttnn.abs_bw,200,0.062,0.075,0.241,0.023
 ttnn.acos,200,0.023,0.024,0.104,0.009

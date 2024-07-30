@@ -2195,16 +2195,16 @@ all_unary_ops = [
         "name": "tt_lib.tensor.mean_hw",
     },
     {
-        "op": tt_lib.tensor.var_hw,
-        "name": "tt_lib.tensor.var_hw",
+        "op": ttnn.var_hw,
+        "name": "ttnn.var_hw",
     },
     {
         "op": logical_noti,
         "name": "tt_lib.tensor.logical_noti",
     },
     {
-        "op": tt_lib.tensor.std_hw,
-        "name": "tt_lib.tensor.std_hw",
+        "op": ttnn.std_hw,
+        "name": "ttnn.std_hw",
     },
     {
         "op": ttnn.normalize_hw,
