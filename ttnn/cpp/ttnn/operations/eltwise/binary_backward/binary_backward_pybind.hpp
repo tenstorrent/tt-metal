@@ -833,6 +833,12 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for less than comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.
         Returns an tensor of zeros like input tensors.)doc");
 
+    detail::bind_binary_bw_comparison(
+        module,
+        ttnn::gt_bw,
+        R"doc(Performs backward operations for greater than comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
+
 }
 
 }  // namespace binary_backward

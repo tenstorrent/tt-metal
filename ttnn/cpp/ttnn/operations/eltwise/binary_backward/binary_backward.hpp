@@ -237,4 +237,8 @@ constexpr auto lt_bw = ttnn::register_operation<
     "ttnn::lt_bw",
     operations::binary_backward::ExecuteBackwardComparison>();
 
+constexpr auto gt_bw = ttnn::register_operation<
+    "ttnn::gt_bw",
+    operations::binary_backward::ExecuteUnaryBackwardComparison>();
+
 }  // namespace ttnn

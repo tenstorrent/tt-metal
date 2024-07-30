@@ -181,7 +181,6 @@ std::vector<ComplexTensor> ExecuteUnaryBackwardAdd::operator()(
 
 std::vector<Tensor> ExecuteUnaryBackwardComparison::operator()(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    cout<<"HEREEE \n";
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
