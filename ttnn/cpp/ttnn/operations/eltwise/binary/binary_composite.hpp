@@ -102,10 +102,11 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
             return BinaryOperation<binary_op_type, in_place>::operator()(
-                queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
+                queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
     static Tensor operator()(
@@ -114,10 +115,11 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
             return BinaryOperation<binary_op_type, in_place>::operator()(
-                DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
+                DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
     static Tensor operator()(
@@ -127,7 +129,8 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
             return ttnn::gelu(queue_id, ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor), true, memory_config, optional_output_tensor);
     }
@@ -138,9 +141,10 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return operator()(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations);
+            return operator()(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 };
 
