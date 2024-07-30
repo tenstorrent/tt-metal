@@ -123,31 +123,5 @@ operation::ProgramWithCallbacks Slice::create_program(
     return slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
 }
 
-const operation::Hash Slice::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    auto input_tensor = input_tensors.at(0);
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
-    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
-    auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
-    auto num_dims = input_tensor.shape().rank();
-
-    std::string rm_width = "TILE";
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        rm_width = fmt::format("{}", input_tensor.legacy_shape()[3]);
-    }
-
-    auto str = operation::hash_operation<Slice>(
-        num_dims,
-        input_tensor.layout(),
-        input_mem_config.memory_layout,
-        input_mem_config.buffer_type,
-        output_mem_config.memory_layout,
-        output_mem_config.buffer_type,
-        dtype,
-        rm_width
-
-    );
-    return str;
-}
 
 }  // namespace ttnn::operations::reduction

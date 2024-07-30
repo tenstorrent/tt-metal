@@ -12,6 +12,62 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [3])
+@pytest.mark.parametrize("h", [230])
+@pytest.mark.parametrize("w", [224])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 26), (0, 32)), (0, 32, 0, 26, 0, 1))])
+@pytest.mark.parametrize("value", [5])
+def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [3])
+@pytest.mark.parametrize("h", [224])
+@pytest.mark.parametrize("w", [224])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
+@pytest.mark.parametrize("value", [0])
+def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache):
+    for _ in range(2):
+        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache)
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])

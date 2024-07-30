@@ -36,5 +36,5 @@ operation::ProgramWithCallbacks fold_single_core(
 operation::ProgramWithCallbacks fold_multi_core(
     const Tensor &input, const Tensor &output, uint8_t stride_h, uint8_t stride_w);
 
-Tensor fold(const Tensor &input_tensor_a, uint8_t stride_h, uint8_t stride_w);
+Tensor fold(const Tensor &input_tensor_a, uint8_t stride_h, uint8_t stride_w, bool use_transpose_as_fold = false, const std::optional<const Shape>& output_shape = std::nullopt, uint8_t pad_c = 0, uint8_t pad_h = 0, uint8_t pad_w = 0);
 }  // namespace tt::tt_metal

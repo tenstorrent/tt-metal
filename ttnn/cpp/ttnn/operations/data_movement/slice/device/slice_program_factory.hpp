@@ -27,7 +27,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     CoreRangeSet core_group_1,
     CoreRangeSet core_group_2,
     uint32_t num_sticks_per_core_group_1,
-    uint32_t num_sticks_per_core_group_2) {
+    uint32_t num_sticks_per_core_group_2,
+    uint32_t max_read_size) {
     tt_metal::Device* device = input_tensor.device();
 
     auto input_buffer = input_tensor.buffer();
@@ -60,11 +61,16 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
+    uint32_t unpadded_row_size_bytes_offset = round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
+
     vector<uint32_t> common_reader_kernel_args = {
         input_tensor.buffer()->address() + output_tensor_start[-1] * output_tensor.element_size(),
         padded_row_size_bytes,
         unpadded_row_size_bytes,
+        unpadded_row_size_bytes_offset,
         num_dims,
+        0,
+        0,
         0,
         0};
     common_reader_kernel_args.insert(
@@ -87,6 +93,14 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core = 0;
         }
 
+        // issue more reads before calling barrier
+        uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
+        if (num_sticks_per_core != 0) {
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
+            num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        }
+
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
@@ -98,13 +112,15 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
         vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
-        uint32_t addr_offset = 4;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
+        uint32_t addr_offset = 5;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
         reader_kernel_args[addr_offset++] = start_id;
-        reader_kernel_args[addr_offset] = num_sticks_per_core;
+        reader_kernel_args[addr_offset++] = num_sticks_per_core;
+        reader_kernel_args[addr_offset++] = num_sticks_per_core_read;
+        reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
         vector<uint32_t> writer_kernel_args = {
-            output_buffer->address(), unpadded_row_size_bytes, num_sticks_per_core, num_sticks_written, 0};
+            output_buffer->address(), unpadded_row_size_bytes, unpadded_row_size_bytes_offset, num_sticks_per_core, num_sticks_per_core_read, num_read_per_barrier, num_sticks_written, 0};
         num_sticks_written += num_sticks_per_core;
         ret_val[i] = {reader_kernel_args, writer_kernel_args};
     }
@@ -142,33 +158,40 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram};
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+
     uint32_t src_stick_size = padded_row_size_bytes;
     uint32_t dst_stick_size = unpadded_row_size_bytes;
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_input_pages = 2;
-
-    uint32_t cb_page_size = round_up(unpadded_row_size_bytes, TILE_WIDTH);
+    uint32_t max_read_size = 4096;
+    uint32_t cb_page_size = dst_is_dram ? round_up(unpadded_row_size_bytes, TILE_WIDTH) : round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
+    uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
+    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
+    if (num_input_pages != 0) {
+        auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
+        num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
+        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+    }
     tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_pages * cb_page_size, {{src0_cb_index, cb_data_format}})
+        tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
         total_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/slice_writer_unary_stick_layout_interleaved_start_id.cpp",
         total_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
@@ -182,7 +205,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         core_group_1,
         core_group_2,
         num_sticks_per_core_group_1,
-        num_sticks_per_core_group_2);
+        num_sticks_per_core_group_2,
+        max_read_size);
 
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -192,7 +216,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     }
 
     auto override_runtime_args_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size](
+        [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, max_read_size](
             const void* operation,
             const Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -224,7 +248,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                 core_group_1,
                 core_group_2,
                 num_sticks_per_core_group_1,
-                num_sticks_per_core_group_2);
+                num_sticks_per_core_group_2,
+                max_read_size);
 
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
