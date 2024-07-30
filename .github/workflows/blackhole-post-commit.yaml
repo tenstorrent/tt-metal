@@ -3,8 +3,11 @@ name: "Blackhole post-commit tests"
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: ["mchiou/10800*"]
+  schedule:
+    - cron: "0 20 * * *"
+  # Pause this since not enough runners to support every commit to main
+  # push:
+  #  branches: ["main"]
 
 permissions:
   actions: read
