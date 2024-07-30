@@ -331,7 +331,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
     std::map<string, string> eltwise_defines =
-        utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations);
+        utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         tt_metal::CircularBufferConfig cb_interm_config =

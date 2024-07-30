@@ -53,7 +53,8 @@ std::map<string, string> get_defines(
     BinaryOpType op_type,
     const std::optional<DataType> in_dtype = std::nullopt,
     const std::optional<DataType> out_dtype = std::nullopt,
-    const std::optional<FusedActivations> fused_activations = std::nullopt);
+    const std::optional<FusedActivations> fused_activations = std::nullopt,
+    const std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
 }  // namespace utils
 
@@ -62,6 +63,7 @@ struct BinaryDeviceOperation {
         BinaryOpType binary_op_type;
         bool in_place;
         const std::optional<FusedActivations> activations;
+        const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
         const MemoryConfig memory_config;
         const DataType dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
