@@ -2189,6 +2189,7 @@ eltwise_tanh = make_unary_op_optional_output(ttnn.tanh)
 eltwise_softsign = make_ttnn_unary_op(ttnn.softsign)
 eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
+
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
 eltwise_cbrt = make_ttnn_unary_op(ttnn.cbrt)
 eltwise_rad2deg = make_unary_op_composite_ttnn(ttnn.rad2deg)
