@@ -33,13 +33,22 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
-  fd-unit-tests:
+  # fd-unit-tests:
+  #   needs: build-artifact
+  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+  #   secrets: inherit
+  #   with:
+  #     arch: blackhole
+  #     runner-label: BH
+  # FD C++ Unit Tests
+  cpp-unit-tests:
     needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: blackhole
       runner-label: BH
+
 #   profiler-regression:
 #     needs: build-artifact-profiler
 #     uses: ./.github/workflows/run-profiler-regression.yaml
