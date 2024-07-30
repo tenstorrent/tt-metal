@@ -845,4 +845,8 @@ op_map = {
         "tt_op": ttnn_ops.hypot_bw,
         "pytorch_op": pytorch_ops.hypot_bw,
     },
+    "i0-bw": {
+        "tt_op": ttnn_ops.i0_bw,
+        "pytorch_op": pytorch_ops.i0_bw,
+    },
 }
