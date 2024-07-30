@@ -165,6 +165,7 @@ void cb_acquire_pages(uint32_t n) {
     // Required for trace which steals downstream credits and may make the value negative
     uint32_t heartbeat = 0;
     while (wrap_gt(n, *sem_addr)) {
+        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     DEBUG_STATUS("DAPD");

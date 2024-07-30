@@ -1477,8 +1477,10 @@ void noc_async_write_multicast_loopback_src(
 FORCE_INLINE
 void noc_async_read_barrier() {
     DEBUG_STATUS("NRBW");
-    while (!ncrisc_noc_reads_flushed(noc_index))
-        ;
+    // BH cache is write-through so reader must invalidate if reading any address that was previously read
+    while (!ncrisc_noc_reads_flushed(noc_index)) {
+        invalidate_l1_cache();
+    }
     DEBUG_STATUS("NRBD");
 }
 
@@ -1543,8 +1545,9 @@ void noc_async_atomic_barrier() {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     DEBUG_STATUS("NSW");
-    while ((*sem_addr) != val)
-        ;
+    while ((*sem_addr) != val) {
+        invalidate_l1_cache();
+    }
     DEBUG_STATUS("NSD");
 }
 
@@ -1564,8 +1567,9 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     DEBUG_STATUS("NSMW");
-    while ((*sem_addr) < val)
-        ;
+    while ((*sem_addr) < val) {
+        invalidate_l1_cache();
+    }
     DEBUG_STATUS("NSMD");
 }
 
@@ -1927,8 +1931,9 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid) {
     DEBUG_STATUS("NBTW");
     #ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid))
-        ;
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+        invalidate_l1_cache();
+    }
     #endif
     DEBUG_STATUS("NBTD");
 }
