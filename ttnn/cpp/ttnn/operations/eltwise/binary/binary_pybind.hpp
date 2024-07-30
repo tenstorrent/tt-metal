@@ -290,16 +290,13 @@ template <typename binary_operation_t>
 void bind_div(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Args:
                 * :attr:`input_tensor_a`
                 * :attr:`input_tensor_b` (ttnn.Tensor or Number)
                 * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true``.
                 * :attr:`round_mode`
-
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-
             Example:
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
                 >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
@@ -343,44 +340,6 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
             py::kw_only(),
             py::arg("accurate_mode") = false,
             py::arg("round_mode") = "None",
-            py::arg("memory_config") = std::nullopt});
-}
-
-template <typename binary_operation_t>
-void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description) {
-    auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, coeffs: Vector of floats, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`coeffs` (Vector of floats)
-
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-
-            Example:
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> coeffs = (1, 2, 3, 4)
-                >>> output = {1}(tensor1, coeffs)
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const std::vector<float>& coeffs,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, coeffs, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("coeffs"),
-            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -616,24 +575,6 @@ void py_module(py::module& module) {
         ttnn::floor_div,
         R"doc(Compute floor division :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
-
-    detail::bind_binary_composite(
-        module,
-        ttnn::scatter,
-        R"doc(Compute scatter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
-
-    detail::bind_binary_composite(
-        module,
-        ttnn::outer,
-        R"doc(Compute outer :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
-
-    detail::bind_polyval(
-        module,
-        ttnn::polyval,
-        R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{coeffs}}_i)doc");
 
 }
 

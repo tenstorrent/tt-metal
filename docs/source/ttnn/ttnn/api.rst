@@ -314,12 +314,10 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
+   ttnn/polyval
    ttnn/nextafter
    ttnn/maximum
    ttnn/minimum
-   ttnn/outer
-   ttnn/polyval
-   ttnn/scatter
    ttnn/atan2_bw
    ttnn/embedding_bw
    ttnn/addalpha_bw

@@ -146,17 +146,7 @@ struct ExecuteBiasGelu {
 
             return operator()(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
-};
 
-template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsPolyval
-{
-    static Tensor operator()(
-        const Tensor& input_tensor_a,
-        const std::vector<float>& coeffs,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
-    }
 };
 
 }  // namespace binary
@@ -219,14 +209,5 @@ constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU, false>>();
-constexpr auto scatter = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::scatter",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
-constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::outer",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>>();
-constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::polyval",
-    operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
 
 }  // namespace ttnn

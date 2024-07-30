@@ -57,13 +57,13 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     tt::tt_metal::Shape input_shape = formatted_input_tensor.get_legacy_shape();
-    std::array<uint32_t, 4> required = {
+    tt::tt_metal::Shape required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::Shape({required});
+    auto ttnn_shape = ttnn::Shape(tt::tt_metal::Shape{required});
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
