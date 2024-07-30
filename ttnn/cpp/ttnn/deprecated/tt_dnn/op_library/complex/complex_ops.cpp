@@ -152,7 +152,7 @@ Tensor angle(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
-    return ttnn::neg( atan2(imag, real, output_mem_config), output_mem_config );
+    return ttnn::neg( ttnn::atan2(imag, real, output_mem_config), output_mem_config );
 }
 
 #undef CHECK_FOR_COMPLEX
