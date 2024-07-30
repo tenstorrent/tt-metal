@@ -408,6 +408,59 @@ void bind_unary_operation_with_dim_parameter(
             py::arg("memory_config") = std::nullopt});
 }
 
+template <typename unary_operation_t>
+void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, {4}: string, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {7}
+
+        Args:
+            * :attr:`input_tensor`
+            * :attr:`{2}` (float): {3}
+
+        Keyword args:
+            * :attr:`{4}` (string): {5} , Default value = {6}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Example:
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2}, {4} = {6})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               string parameter_b,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const uint8_t& queue_id) {
+                return self(queue_id, input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()),
+            py::kw_only(),
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
 
 template <typename unary_operation_t>
 void bind_softplus(py::module& module, const unary_operation_t& operation) {
@@ -459,6 +512,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0});
 }
+
 template <typename unary_operation_t>
 void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
@@ -1222,7 +1276,6 @@ void py_module(py::module& module) {
     // Unaries with float parameter
     detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::rdiv, "value", "denominator value which is actually calculated as numerator float value >= 0 ", "Returns tensor  with scalar value divided by each of respective elements of the input tensor.");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "slope", "The slope parameter for the Leaky ReLU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0");
@@ -1366,6 +1419,18 @@ void py_module(py::module& module) {
         ttnn::rpow,
         "exponent", "exponent value",
         R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
+
+    detail::bind_unary_rdiv(
+    module,
+    ttnn::rdiv,
+    "value", "denominator value which is actually calculated as numerator float value >= 0",
+    "round_mode", "rounding_mode value", "None",
+    R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode. Support provided only for Wormhole_B0.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.)doc");
+
 }
 
 }  // namespace unary

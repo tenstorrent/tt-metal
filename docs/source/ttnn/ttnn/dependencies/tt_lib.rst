@@ -256,12 +256,7 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.rfloor_div
-
 
 Tensor manipulation operations
 -=============================

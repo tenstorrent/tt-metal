@@ -856,7 +856,7 @@ def eltwise_rfloor_div(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.rfloor_div(value, t0, output_mem_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, round_mode="floor", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -929,7 +929,7 @@ def eltwise_unary_rdiv_trunc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.unary_rdiv_trunc(value, t0, output_mem_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
