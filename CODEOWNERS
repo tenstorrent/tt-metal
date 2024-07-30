@@ -131,6 +131,7 @@ models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
+models/demos/wormhole/llama31_8b @yieldthought @mtairum @uaydonat
 models/demos/t3000/falcon40b @uaydonat @djordje-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
