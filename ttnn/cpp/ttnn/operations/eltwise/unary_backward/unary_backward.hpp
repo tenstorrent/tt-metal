@@ -8,10 +8,12 @@
 #include "device/unary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
 namespace operations::unary_backward {
+using ComplexTensor = complex::ComplexTensor;
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {
@@ -189,6 +191,19 @@ struct ExecuteUnaryBackwardProdBW {
     }
 };
 
+struct ExecuteUnaryBackwardRecip {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const MemoryConfig &memory_config);
+
+};
+
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
@@ -356,11 +371,6 @@ constexpr auto neg_bw = ttnn::register_operation<
     "ttnn::neg_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::NEG_BW>>();
-
-constexpr auto reciprocal_bw = ttnn::register_operation<
-    "ttnn::reciprocal_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::RECIPROCAL_BW>>();
 
 constexpr auto ceil_bw = ttnn::register_operation<
     "ttnn::ceil_bw",
@@ -567,5 +577,10 @@ constexpr auto round_bw = ttnn::register_operation<
 constexpr auto log_bw = ttnn::register_operation<
     "ttnn::log_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
+
+// overload
+constexpr auto reciprocal_bw = ttnn::register_operation<
+    "ttnn::reciprocal_bw",
+    operations::unary_backward::ExecuteUnaryBackwardRecip>();
 
 }  // namespace ttnn
