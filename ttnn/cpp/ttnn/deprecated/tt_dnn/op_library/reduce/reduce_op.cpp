@@ -13,7 +13,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 

@@ -125,7 +125,7 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
             [](const unary_operation_t& self,
                const ComplexTensor& input_tensor,
                const ttnn::MemoryConfig& memory_config) -> Tensor {
-                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType1<complex_unary::ComplexUnaryOpType::ABS>;
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryTensor<complex_unary::ComplexUnaryOpType::ABS>;
                 return ComplexUnaryOp::operator()(input_tensor, memory_config);
             },
             py::arg("input_tensor"),
@@ -184,7 +184,7 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
             [](const unary_operation_t& self,
                const ComplexTensor& input_tensor,
                const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
-                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType2<complex_unary::ComplexUnaryOpType::RECIPROCAL>;
+                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryComplexTensor<complex_unary::ComplexUnaryOpType::RECIPROCAL>;
                 return ComplexUnaryOp::operator()(input_tensor, memory_config);
             },
             py::arg("input_tensor"),

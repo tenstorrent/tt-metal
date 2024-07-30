@@ -672,7 +672,6 @@ void TensorModule(py::module& m_tensor) {
         )doc");
 
     detail::TensorModuleCompositeOPs(m_tensor);
-    detail::TensorModuleBackwardOPs(m_tensor);
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
     detail::TensorModuleCustomAndBMMOPs(m_tensor);
