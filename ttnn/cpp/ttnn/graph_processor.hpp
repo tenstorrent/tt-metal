@@ -3,17 +3,18 @@
 #include "tt_metal/graph_tracking.hpp"
 
 #include <mutex>
+#include <stack>
 #include <unordered_map>
 
 namespace ttnn {
     class GraphProcessor : public tt::tt_metal::IGraphProcessor{
 
     public:
-        GraphProcessor() = default;
+        GraphProcessor();
 
-        virtual void track_allocate(Buffer* buffer, bool bottom_up);
+        virtual void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up);
 
-        virtual void track_deallocate(Buffer* buffer);
+        virtual void track_deallocate(tt::tt_metal::Buffer* buffer);
 
         virtual void track_allocate_cb(const CoreRange &core_range, uint64_t addr, uint64_t size);
 
@@ -23,23 +24,24 @@ namespace ttnn {
 
         virtual void track_end_op(const std::any& output_tensors);
 
-        virtual ~GraphProcessor() = default;
-
-    private:
-        std::mutex mutex;
-        int counter = 0;
-        int current_op_counter = -1;
-        std::unordered_map<uint64_t, int> id_to_counter;
-        std::unordered_map<uint64_t, int> counter_to_id;
+        virtual ~GraphProcessor();
 
         struct Vertex {
-            int idx = 0;
+            int counter = 0;
             std::string name;
-            uint32_t param = 0;
+            uint64_t param = 0;
             std::vector<int> connections;
         };
 
+    private:
+        std::mutex mutex;
+        std::stack<int> current_op_id;
+        std::unordered_map<uint64_t, int> id_to_counter;
+
         std::vector<Vertex> graph;
+
+        int add_tensor(const Tensor& t, string_view name);
+        int add_buffer(tt::tt_metal::Buffer* buffer);
 
     };
 
