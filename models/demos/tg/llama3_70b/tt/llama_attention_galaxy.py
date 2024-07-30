@@ -309,86 +309,86 @@ class TtLlamaAttention_galaxy:
         attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, attn_masks)
         return self.attn_selfout(attn_outputs)
 
-    # def tt_all_gather(self, input_tensor, dim, cluster_axis, memory_config=None):
-    #     # Ensure the input tensor is in the correct memory configuration
-    #     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    def tt_all_gather(self, input_tensor, dim, cluster_axis, memory_config=None):
+        # Ensure the input tensor is in the correct memory configuration
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-    #     # Get the full device tensors list from the input tensor
-    #     device_tensors = ttnn.get_device_tensors(input_tensor)
+        # Get the full device tensors list from the input tensor
+        device_tensors = ttnn.get_device_tensors(input_tensor)
 
-    #     num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
+        num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
 
-    #     def gather_tensors(indices):
-    #         tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-    #         #breakpoint()
-    #         return ttnn.line_all_gather(
-    #             tensors, dim=dim, num_links=1,
-    #             memory_config=ttnn.MemoryConfig(
-    #                 buffer_type=ttnn.experimental.tensor.BufferType.DRAM
-    #             )
-    #         )
-
-    #     aggregated_outputs = []
-
-    #     if cluster_axis == 0:
-    #         # Process row-wise when cluster_axis is 0
-    #         for row in range(num_rows):
-    #             start_idx = row * num_cols
-    #             end_idx = start_idx + num_cols
-    #             indices = range(start_idx, end_idx)
-    #             gathered_tensor = gather_tensors(indices)
-    #             #breakpoint()
-    #             aggregated_outputs.append(gathered_tensor)
-
-    #     elif cluster_axis == 1:
-    #         # Process column-wise when cluster_axis is 1
-    #         for col in range(num_cols):
-    #             indices = range(col, len(device_tensors), num_cols)
-    #             gathered_tensor = gather_tensors(indices)
-    #             aggregated_outputs.append(gathered_tensor)
-
-    #     # Flatten device tensors
-    #     flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
-
-    #     final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
-
-    #     return final_output_tensor
-
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-
-        shape = (out.shape[2], out.shape[3] // 32)
-
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+        def gather_tensors(indices):
+            tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
+            # breakpoint()
+            return ttnn.line_all_gather(
+                tensors,
+                dim=dim,
+                num_links=1,
+                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
-        else:
-            act_mem_config = None
 
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
+        aggregated_outputs = []
 
-        return out_tt
+        if cluster_axis == 0:
+            # Process row-wise when cluster_axis is 0
+            for row in range(num_rows):
+                start_idx = row * num_cols
+                end_idx = start_idx + num_cols
+                indices = range(start_idx, end_idx)
+                gathered_tensor = gather_tensors(indices)
+                # breakpoint()
+                aggregated_outputs.append(gathered_tensor)
+
+        elif cluster_axis == 1:
+            # Process column-wise when cluster_axis is 1
+            for col in range(num_cols):
+                indices = range(col, len(device_tensors), num_cols)
+                gathered_tensor = gather_tensors(indices)
+                aggregated_outputs.append(gathered_tensor)
+
+        # Flatten device tensors
+        flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+
+        final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
+
+        return final_output_tensor
+
+    # def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
+    #     """
+    #     gather of a multi-device tensor
+    #     """
+    #     concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
+    #     shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
+
+    #     out = ttnn.to_torch(
+    #         tensors,
+    #         mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
+    #     )
+
+    #     shape = (out.shape[2], out.shape[3] // 32)
+
+    #     if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
+    #         act_mem_config = ttnn.create_sharded_memory_config(
+    #             shape=shape,
+    #             core_grid=ttnn.CoreGrid(y=4, x=8),
+    #             strategy=ttnn.ShardStrategy.WIDTH,
+    #             orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    #             use_height_and_width_as_shard_shape=True,
+    #         )
+    #     else:
+    #         act_mem_config = None
+
+    #     out_tt = ttnn.from_torch(
+    #         out,
+    #         dtype=ttnn.bfloat16,
+    #         layout=ttnn.TILE_LAYOUT,
+    #         memory_config=act_mem_config,
+    #         device=self.device_mesh,
+    #         mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
+    #     )
+
+    #     return out_tt
 
     def tt_all_reduce(self, input_tensor, cluster_axis, dim=3, memory_config=None):
         # Ensure the input tensor is in the correct memory configuration
@@ -557,12 +557,13 @@ class TtLlamaAttention_galaxy:
         attn_output,
     ):
         # ATTENTION SELFOUT
+        # breakpoint()
+        # (1, 8, 8(32), 128) - > (1, 1, 8(32), 1024) ->(1, 1, 32, 1024)
         attn_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )
         # breakpoint()
-
         attn_output = ttnn.reshape(
             attn_output,
             ttnn.Shape(
@@ -570,6 +571,10 @@ class TtLlamaAttention_galaxy:
                 (1, 1, self.max_batch_size, attn_output.shape[3]),
             ),
         )
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Convert to row major
+        attn_output = ttnn.to_layout(attn_output, ttnn.ROW_MAJOR_LAYOUT)
 
         # breakpoint()
         attn_output = self.tt_all_gather(
@@ -578,12 +583,18 @@ class TtLlamaAttention_galaxy:
             cluster_axis=0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-        # breakpoint()
+        # output > (1, 1, 32, 1024) rowmajor
 
-        attn_output = ttnn.reshape(
-            attn_output,
-            [1, 1, 32, attn_output.shape[3]],
-        )
+        attn_output = ttnn.to_layout(attn_output, ttnn.TILE_LAYOUT)
+        # breakpoint()
+        # (1, 1, 128, 1024) ->T -> (1, 1, 1024, 128) @ (1, 1, 128, 32) ->
+        # 0-7, 32-39, 64-71
+        #
+        #
+        # attn_output = ttnn.reshape(
+        #     attn_output,
+        #     [1, 1, 32, attn_output.shape[3]],
+        # )
         # breakpoint()
 
         attn_output = ttnn.matmul(

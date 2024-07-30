@@ -233,7 +233,57 @@ class TtLlamaMLP_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, input_tensor, cluster_axis, dim=3, memory_config=None):
+    # def tt_all_reduce(self, input_tensor, cluster_axis, dim=3, memory_config=None):
+    #     # Ensure the input tensor is in the correct memory configuration
+    #     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    #     # Get the full device tensors list from the input tensor
+    #     device_tensors = ttnn.get_device_tensors(input_tensor)
+
+    #     num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
+
+    #     def gather_tensors(indices):
+    #         tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
+    #         return ttnn.line_all_gather(
+    #             tensors,
+    #             dim,
+    #             num_links=2,
+    #             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
+    #         )
+
+    #     aggregated_outputs = []
+
+    #     if cluster_axis == 0:
+    #         # Process row-wise when cluster_axis is 0
+    #         for row in range(num_rows):
+    #             start_idx = row * num_cols
+    #             end_idx = start_idx + num_cols
+    #             indices = range(start_idx, end_idx)
+    #             gathered_tensor = gather_tensors(indices)
+    #             aggregated_outputs.append(gathered_tensor)
+
+    #     elif cluster_axis == 1:
+    #         # Process column-wise when cluster_axis is 1
+    #         for col in range(num_cols):
+    #             indices = range(col, len(device_tensors), num_cols)
+    #             gathered_tensor = gather_tensors(indices)
+    #             aggregated_outputs.append(gathered_tensor)
+
+    #     # Flatten device tensors
+    #     flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
+
+    #     final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
+
+    #     final_output_tensor = ttnn.matmul(
+    #         final_output_tensor,
+    #         self.row_reduction_mat if cluster_axis == 0 else self.col_reduction_mat,
+    #         dtype=ttnn.bfloat16,
+    #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    #     )
+
+    #     return final_output_tensor
+
+    def tt_all_reduce(self, input_tensor, cluster_axis, dim=1, memory_config=None):
         # Ensure the input tensor is in the correct memory configuration
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -242,14 +292,19 @@ class TtLlamaMLP_galaxy:
 
         num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
 
-        def gather_tensors(indices):
+        def reduce_tensors(indices):
             tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-            return ttnn.line_all_gather(
+            gathered_tensor = ttnn.line_all_gather(
                 tensors,
                 dim,
                 num_links=2,
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
+            reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
+                gathered_tensor, dims=[dim], compute_kernel_config=self.COMPUTE_KERNEL_LOFI
+            )
+
+            return reduced_tensors
 
         aggregated_outputs = []
 
@@ -259,27 +314,20 @@ class TtLlamaMLP_galaxy:
                 start_idx = row * num_cols
                 end_idx = start_idx + num_cols
                 indices = range(start_idx, end_idx)
-                gathered_tensor = gather_tensors(indices)
-                aggregated_outputs.append(gathered_tensor)
+                reduced_tensors = reduce_tensors(indices)
+                aggregated_outputs.append(reduced_tensors)
 
         elif cluster_axis == 1:
             # Process column-wise when cluster_axis is 1
             for col in range(num_cols):
                 indices = range(col, len(device_tensors), num_cols)
-                gathered_tensor = gather_tensors(indices)
-                aggregated_outputs.append(gathered_tensor)
+                reduced_tensors = reduce_tensors(indices)
+                aggregated_outputs.append(reduced_tensors)
 
         # Flatten device tensors
         flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
 
         final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
-
-        final_output_tensor = ttnn.matmul(
-            final_output_tensor,
-            self.row_reduction_mat if cluster_axis == 0 else self.col_reduction_mat,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
         return final_output_tensor
 
