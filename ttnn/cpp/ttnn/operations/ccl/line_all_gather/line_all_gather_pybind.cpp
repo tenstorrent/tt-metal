@@ -32,6 +32,23 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
             py::arg("dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt},
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const uint32_t dim,
+               const uint32_t cluster_axis,
+               const multi_device::DeviceMesh& device_mesh,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(input_tensor, dim, cluster_axis, device_mesh, num_links, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("cluster_axis"),
+            py::arg("device_mesh"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -46,10 +63,18 @@ void py_bind_line_all_gather(pybind11::module& module) {
         R"doc(line_all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
-
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
-            * :attr:`dim` (int)
+            * :attr:`input_tensor` (ttnn.Tensor):
+                multi-device tensor
+            * :attr:`dim` (int):
+                Dimension to perform the all-gather operation on.
+                After the all-gather operation, the size of the :attr:`dim`
+                dimension will larger by number of devices in the line.
+            * :attr:`cluster_axis` (int):
+                Provided a MeshTensor, the axis corresponding to DeviceMesh
+                to perform the line-all-gather operation on.
+            * :attr:`device_mesh` (DeviceMesh):
+                Device mesh to perform the line-all-gather operation on.
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
