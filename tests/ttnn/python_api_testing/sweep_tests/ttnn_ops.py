@@ -3920,6 +3920,28 @@ def log2_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+def gelu_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    fast_and_approx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    approximate = "tanh" if fast_and_approx else "none"
+
+    t3 = ttnn.gelu_bw(t0, t1, approximate=approximate, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t3)
+
+
 def log1p_bw(
     x,
     y,
@@ -3998,3 +4020,4 @@ def logaddexp2_bw(
     t3 = ttnn.logaddexp2_bw(t0, t1, t2, memory_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
+

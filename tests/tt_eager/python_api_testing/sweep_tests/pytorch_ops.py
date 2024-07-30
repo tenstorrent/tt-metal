@@ -1935,6 +1935,22 @@ def frac_bw(x, y, *args, **kwargs):
     return in_data.grad
 
 
+def gelu_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    fast_and_approx = kwargs.pop("fast_and_approx")
+    approximate = "tanh" if fast_and_approx else "none"
+
+    pyt_y = torch.nn.functional.gelu(in_data, approximate=approximate)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)

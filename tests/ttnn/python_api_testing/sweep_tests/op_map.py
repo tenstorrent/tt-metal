@@ -829,4 +829,8 @@ op_map = {
         "tt_op": ttnn_ops.frac_bw,
         "pytorch_op": pytorch_ops.frac_bw,
     },
+    "gelu-bw": {
+        "tt_op": ttnn_ops.gelu_bw,
+        "pytorch_op": pytorch_ops.gelu_bw,
+    },
 }
