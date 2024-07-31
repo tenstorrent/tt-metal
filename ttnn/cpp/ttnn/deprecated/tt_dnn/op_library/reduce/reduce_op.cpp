@@ -10,6 +10,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/run_operation.hpp"
 
+#include "ttnn/operations/core/core.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
