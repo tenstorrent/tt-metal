@@ -22,7 +22,6 @@ from models.utility_functions import (
     profiler,
     is_e75,
     skip_for_wormhole_b0,
-    is_x2_harvested,
 )
 
 
@@ -289,8 +288,6 @@ def test_bert_batch_dram(
             pytest.skip("Only batch_8-BFLOAT8_B-SHARDED supported for WH B0")
         elif batch == 8 and device.core_grid.y == 7:
             pytest.skip("This test is only supported for 8x8 grids")
-        elif not is_x2_harvested(device):
-            pytest.skip("This test is only supported on WH X1")
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
