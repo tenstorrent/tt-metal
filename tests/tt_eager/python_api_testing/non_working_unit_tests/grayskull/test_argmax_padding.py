@@ -31,7 +31,7 @@ class TestArgmax:
             .to(tt_lib.tensor.Layout.TILE)
             .to(device)
         )
-        tt_output_tensor_on_device = tt_lib.tensor.argmax(input_tensor, dim=dim, all=all)
+        tt_output_tensor_on_device = ttnn.experimental.argmax(input_tensor, dim=dim, all=all)
         tt_out_tensor = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
         if all:
             golden_tensor = torch.argmax(input_data)
