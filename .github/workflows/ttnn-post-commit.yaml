@@ -19,13 +19,9 @@ jobs:
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
         test-group:
-          - name: ttnn group 1
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 2
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 3 --group 2 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 4
+          - name: ttnn unit tests
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv
+          - name: ttnn unit tests with fast runtime mode off
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn examples
