@@ -403,12 +403,6 @@ void py_module(py::module& module) {
         "alpha", "Alpha value", 1.0f,
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , attr:`input_tensor_a`, attr:`alpha` with given attr:`grad_tensor`.)doc");
 
-    detail::bind_binary_backward_float(
-        module,
-        ttnn::lerp_bw,
-        "Weight", "Float or Tensor weight value",
-        R"doc(Performs backward operations for lerp on :attr:`input_tensor_a` , attr:`input_tensor_b`, attr:`weight` with given attr:`grad_tensor`.)doc");
-
     detail::bind_binary_backward_ops(
         module,
         ttnn::xlogy_bw,

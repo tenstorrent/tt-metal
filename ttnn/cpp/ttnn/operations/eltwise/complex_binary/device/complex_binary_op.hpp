@@ -23,7 +23,6 @@ enum class ComplexBinaryOpType {
 // OpHandler_complex_binary_type1 = get_function_complex_binary
 ComplexTensor _add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config);
 ComplexTensor _sub(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config);
-ComplexTensor _mul(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config);
 ComplexTensor _div(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config);
 
 template <ComplexBinaryOpType OpType>
@@ -40,13 +39,6 @@ template <>
 struct OpHandler<ComplexBinaryOpType::SUB> {
     static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
         return _sub(input_a, input_b, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexBinaryOpType::MUL> {
-    static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
-        return _mul(input_a, input_b, output_mem_config);
     }
 };
 
