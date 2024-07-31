@@ -17,7 +17,7 @@
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;
 
-namespace tt::tt_metal::sliding_window {
+namespace ttnn::operations::sliding_window {
 
 // Calculate Convolution on padded input buffer.
 owned_buffer::Buffer<bfloat16> ref_conv_op(

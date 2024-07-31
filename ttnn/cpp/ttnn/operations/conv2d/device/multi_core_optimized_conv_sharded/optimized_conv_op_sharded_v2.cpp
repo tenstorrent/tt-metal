@@ -1714,7 +1714,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
-    ParallelConfig parallel_config;
+    ttnn::operations::sliding_window::ParallelConfig parallel_config;
     parallel_config.grid = a.shard_spec().value().grid;
     parallel_config.shard_scheme = a.memory_config().memory_layout;
     parallel_config.shard_orientation = a.shard_spec().value().orientation;
@@ -1725,7 +1725,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     uint32_t stride_w = (uint32_t)conv_params[3];
     uint32_t pad_h = (uint32_t)conv_params[4];
     uint32_t pad_w = (uint32_t)conv_params[5];
-    SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
+    ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
         input_tensor_shape[0],
         input_tensor_shape[1],
         input_tensor_shape[2],

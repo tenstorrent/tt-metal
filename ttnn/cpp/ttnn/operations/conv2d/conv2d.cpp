@@ -13,6 +13,8 @@
 using namespace tt;
 namespace ttnn {
 namespace operations {
+using sliding_window::SlidingWindow;
+using sliding_window::ParallelConfig;
 
 namespace conv2d {
 
@@ -686,7 +688,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             opt_conv_op_parallel_config.num_cores_nhw,
             input_tensor_post_tm.memory_config().shard_spec.value().grid,
             true);
-        auto halo_output = ttnn::operations::halo::halo_op(
+        auto halo_output = ttnn::halo(
             input_tensor_post_tm,
             sliding_window_config,
             0,
