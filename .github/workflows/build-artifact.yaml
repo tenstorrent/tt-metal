@@ -54,8 +54,8 @@ jobs:
       - name: Build tt-metal and libs
         run: |
           nice -n 19 cmake -B build -G Ninja
-          nice -n 19 cmake --build build -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.enable_tracy }} --target tests
-          nice -n 19 cmake --build build -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.enable_tracy }} --target install
+          nice -n 19 cmake --build build -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} --target tests
+          nice -n 19 cmake --build build -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} --target install
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
