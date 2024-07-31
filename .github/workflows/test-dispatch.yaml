@@ -21,7 +21,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Enable tracy"
+        description: "Build with tracy enabled"
       runner-label:
         required: true
         type: string
