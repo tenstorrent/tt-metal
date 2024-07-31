@@ -809,4 +809,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_subalpha,
         "pytorch_op": pytorch_ops.subalpha,
     },
+    "log-sigmoid-bw": {
+        "tt_op": ttnn_ops.log_sigmoid_bw,
+        "pytorch_op": pytorch_ops.log_sigmoid_bw,
+    },    
 }

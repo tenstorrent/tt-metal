@@ -2102,3 +2102,15 @@ def log1p_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def log_sigmoid_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.nn.functional.logsigmoid(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
