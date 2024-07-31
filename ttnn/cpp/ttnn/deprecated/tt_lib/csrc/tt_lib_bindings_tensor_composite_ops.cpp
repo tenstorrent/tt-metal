@@ -8,10 +8,10 @@
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+
 
 namespace tt::tt_metal::detail {
-using ComplexTensor = ttnn::operations::complex_binary::ComplexTensor;
+
 
 void TensorModuleCompositeOPs(py::module& m_tensor) {
 
@@ -936,22 +936,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
         detail::bind_binary_op<false, true, false, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
 
-	    // *** type-2 complex operations in new submodule 'type2_complex' ***
-        auto m_type2_cplx = m_tensor.def_submodule("complex", "Complex type2");
-        py::class_<ComplexTensor> pycplx_cls(m_type2_cplx, "ComplexTensor");
-
-        pycplx_cls.def_property_readonly("real",&ComplexTensor::real);
-        pycplx_cls.def_property_readonly("imag",&ComplexTensor::imag);
-        pycplx_cls.def("deallocate",&ComplexTensor::deallocate);
-
-        m_tensor.def("complex_tensor",
-		     [](Tensor& r, Tensor& i) -> ComplexTensor {
-		       return ComplexTensor({r,i});
-		     },
-            py::arg("real"),
-            py::arg("imag"),
-	        R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
-        );
 
     // loss functions
     m_tensor.def(

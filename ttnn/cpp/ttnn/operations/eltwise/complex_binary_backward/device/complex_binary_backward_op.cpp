@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "complex_binary_backward_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
 
+
 namespace ttnn::operations::complex_binary_backward {
-using ComplexTensor = complex_binary::ComplexTensor;
 
 // complex add
 // self: grad, other: grad * alpha
