@@ -11,7 +11,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.demos.wormhole.mamba.tt.preprocessing import split_sequence_length
+from models.demos.wormhole.mamba.tt.preprocessing import (
+    split_sequence_length,
+    select_chunk_size,
+    split_input_into_prefill_and_decode_segments,
+)
 
 
 @pytest.mark.parametrize(
@@ -52,3 +56,39 @@ def test_splitting_sequence_length(
 
     does_pass, output_allclose = comp_allclose(expected, actual)
     assert does_pass, "Allclose check failed: {output_allclose}"
+
+
+@pytest.mark.parametrize(
+    "sequence_length, max_chunk_size, expected_chunk_size",
+    (
+        (32, 128, 0),
+        (33, 32, 32),
+        (128, 128, 96),
+        (1024, 128, 128),
+    ),
+)
+def test_select_chunk_size(sequence_length, max_chunk_size, expected_chunk_size):
+    assert select_chunk_size(sequence_length, max_chunk_size) == expected_chunk_size
+
+
+@pytest.mark.parametrize(
+    "B, L, chunk_size, expected_prefill_len, expected_decode_len",
+    (
+        (32, 32, 32, 0, 32),
+        (32, 33, 32, 32, 1),
+        (32, 64, 32, 32, 32),
+        (32, 65, 32, 64, 1),
+        (32, 250, 128, 128, 122),
+        (32, 400, 128, 384, 16),
+    ),
+)
+def test_splitting_input_into_prefill_and_decode(
+    B: int, L: int, chunk_size: int, expected_prefill_len: int, expected_decode_len: int
+):
+    x = torch.zeros((B, L))
+    prefill_tokens, decode_tokens = split_input_into_prefill_and_decode_segments(x, chunk_size)
+    if expected_prefill_len == 0:
+        assert prefill_tokens is None, "Expected no prefill chunks"
+    else:
+        assert prefill_tokens is not None and list(prefill_tokens.shape) == [B, expected_prefill_len]
+    assert list(decode_tokens.shape) == [B, expected_decode_len]

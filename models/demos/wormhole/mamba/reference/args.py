@@ -20,10 +20,10 @@ import math
 
 from dataclasses import dataclass
 from typing import Union
-from enum import Enum
+from enum import IntEnum
 
 
-class ModelMode(Enum):
+class ModelMode(IntEnum):
     DECODE = 0
     PREFILL = 1
 
