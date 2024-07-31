@@ -24,8 +24,12 @@ on:
         default: '["grayskull", "wormhole_b0"]'
       build-type:
         required: false
-        type: string
-        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
       tracy:
         required: false
         type: boolean
