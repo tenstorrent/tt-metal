@@ -126,6 +126,7 @@ ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/moreh* @razorback3 @dongjin-na
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
+tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**
