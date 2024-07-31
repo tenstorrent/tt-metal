@@ -300,11 +300,7 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
-.. autofunction:: tt_lib.tensor.polygamma
-
 .. autofunction:: tt_lib.tensor.frac
-
-.. autofunction:: tt_lib.tensor.round
 
 .. autofunction:: tt_lib.tensor.floor_div
 
@@ -351,10 +347,6 @@ Tensor creation operations
 .. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
 
 .. autofunction:: tt_lib.tensor.empty
-
-.. autofunction:: tt_lib.tensor.tril
-
-.. autofunction:: tt_lib.tensor.triu
 
 Broadcast and Reduce
 ====================
@@ -536,11 +528,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
 .. autofunction:: tt_lib.tensor.repeat
-
-.. autofunction:: tt_lib.tensor.argmax
-
-.. autofunction:: tt_lib.tensor.argmin
-
 
 Loss Functions
 ==============

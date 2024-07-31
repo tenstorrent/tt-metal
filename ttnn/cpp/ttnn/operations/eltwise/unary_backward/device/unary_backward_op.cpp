@@ -1257,7 +1257,7 @@ std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const s
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(grad, polygamma(input, 1, output_memory_config), std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
@@ -1286,7 +1286,7 @@ std::vector<Tensor> _polygamma_bw(
     if (n == 2 || n == 4 || n == 6 || n == 8 || n == 10) {
         pos_neg = -1.0f;
     }
-    Tensor grad_a = ttnn::multiply(grad, polygamma(input, (n + 1), output_memory_config), std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
             ttnn::le(input, 0.0, std::nullopt, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),

@@ -119,54 +119,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         R"doc("Scalar", "float", "")doc");
 
     m_tensor.def(
-        "argmax",
-        &argmax,
-        py::arg("input").noconvert(),
-        py::arg("dim"),
-        py::arg("all") = false,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If ``all`` is set to ``true`` irrespective of given dimension it will return the indices of maximum value of all elements in given ``input``
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor argmax is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "dim", "Dimension to perform argmax", "int", "", "Yes"
-                "all", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "argmin",
-        &argmin,
-        py::arg("input").noconvert(),
-        py::arg("dim"),
-        py::arg("all") = false,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns the indices of the minimum value of elements in the ``input`` tensor
-            If ``all`` is set to ``true`` irrespective of given dimension it will return the indices of minimum value of all elements in given ``input``
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor argmin is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "dim", "Dimension to perform argmin", "int", "", "Yes"
-                "all", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
         "lerp",
         py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
         py::arg("input").noconvert(),
@@ -310,48 +262,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "Reference Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "triu",
-        &triu,
-        py::arg("input"),
-        py::arg("diag") = 0,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns a new tensor with upper triangular elements of input with rest being zero.
-
-            Input tensor will have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "tensor input to be upper triangular processed", "Tensor", "", "Yes"
-                "diag", "diagonal to be chosen (default to 0)", "int32_t", "-dim to +dim (default to 0)", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "tril",
-        &tril,
-        py::arg("input"),
-        py::arg("diag") = 0,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns a new tensor with lower triangular elements of input with rest being zero.
-
-            Input tensor will have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "tensor input to be lower triangular processed", "Tensor", "", "Yes"
-                "diag", "diagonal to be chosen", "int32_t", "-dim to +dim (default to 0)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -743,22 +653,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("round",&round,
-            py::arg("input").noconvert(),py::arg("decimals"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
-            Performs the element-wise round operation on ``input`` , to the given number of ``decimals`` places. Support provided only for Wormhole_B0 and ``decimals = 0``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "decimals", "Number of decimal places to round to", "int", "default to 0", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         m_tensor.def("floor_div",py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&floor_div),
             py::arg("input_a").noconvert(),py::arg("input_b").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Performs the element-wise floor division of ``input_a`` by ``input_b``. Support provided only for Wormhole_B0.
@@ -888,13 +782,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             py::arg("eps"),
             R"doc(Returns a tensor that is a logit  of input tensor with shape ``[W, Z, Y, X]`` along clamp ``{1}``.)doc",
             R"doc("dimension to logit along", "int", "0, 1, 2, or 3")doc"
-        );
-
-        detail::bind_unary_op_with_param(
-            m_tensor, "polygamma", &polygamma,
-            py::arg("n"),
-            R"doc(Returns a tensor that is a polygamma of input tensor where the range supports from 1 to 10 with shape ``[W, Z, Y, X]`` along n ``{1}``.)doc",
-            R"doc("the order of the polygamma along", "int", "1 to 10")doc"
         );
 
         detail::bind_unary_op_with_param(
