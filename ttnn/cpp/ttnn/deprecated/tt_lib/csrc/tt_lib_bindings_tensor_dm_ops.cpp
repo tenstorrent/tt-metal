@@ -7,7 +7,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
@@ -389,23 +388,6 @@ namespace tt::tt_metal::detail{
             | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
             |          | TT accelerator device      |                            |                                 |          |
             +----------+----------------------------+----------------------------+---------------------------------+----------+
-        )doc");
-
-        m_tensor.def("transpose", &transpose,
-        py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
-
-        Input tensor must have BFLOAT16 data type. Second and third input specify the dimensions of tensor to be transposed.
-
-        Output tensor will have BFLOAT16 data type.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "dim0", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
-            "dim1", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         // Sharding ops
