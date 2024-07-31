@@ -20,13 +20,15 @@ jobs:
         ]
         test-group:
           - name: ttnn group 1
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 4 --group 1
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 5 --group 1
           - name: ttnn group 2
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 4 --group 2
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 5 --group 2
           - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 4 --group 3
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 5 --group 3
           - name: ttnn group 4
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 4 --group 4
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 5 --group 4
+          - name: ttnn group 5
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 5 --group 5
           - name: ttnn fast runtime off
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
