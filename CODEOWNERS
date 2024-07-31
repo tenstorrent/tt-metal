@@ -59,6 +59,7 @@ tests/scripts/tgg/ @ttmchiou
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT
 tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller @aliuTT
+tt_metal/impl/device/ @abhullar-tt @davorchap @pgkeller @aliuTT @cfjchu
 
 # metal - dispatch
 tt_metal/impl/dispatch/ @pgkeller @tt-asaigal @aliuTT
