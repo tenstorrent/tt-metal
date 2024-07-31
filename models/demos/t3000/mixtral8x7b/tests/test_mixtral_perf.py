@@ -131,9 +131,9 @@ def test_mixtral_model_perf(
 @pytest.mark.parametrize(
     "prefill_seqlen, target_compile_t, target_inference_t, target_prefill_ts, target_decode_ts, decode_tsu",
     (
-        (128, 80, 0.23, 750, 425, 14),
-        (1024, 80, 0.61, 2100, 400, 12.5),
-        (1024 * 2, 80, 1.13, 2000, 360, 11.3),
+        (128, 80, 0.23, 1000, 1056, 33),  # TODO Update target prefill_ts
+        (1024, 80, 0.61, 2500, 1056, 33),  # TODO Update target prefill_ts
+        (1024 * 2, 80, 1.13, 5000, 1056, 33),  # TODO Update target prefill_ts
         # (1024*4, 80, 60, 900, 450, 14),
         # (1024*8, 150, 80, 900, 450, 14),
         # (1024*16, 150, 100, 900, 450, 14),
