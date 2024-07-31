@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import random
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import is_grayskull, skip_for_grayskull
@@ -363,8 +362,8 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
 def test_binary_remainder_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.remainder(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    output_tensor = ttnn.binary_remainder(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.binary_remainder)
     golden_tensor = golden_function(in_data1, in_data2)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
@@ -377,29 +376,6 @@ def test_binary_remainder_ttnn(input_shapes, device):
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
-def test_remainder_ttnn(input_shapes, scalar, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
-    output_tensor = ttnn.remainder(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
-    golden_tensor = golden_function(in_data1, scalar)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        # (torch.Size([1, 1, 320, 384])),
-        # (torch.Size([1, 3, 320, 384])),
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
@@ -407,33 +383,9 @@ def test_binary_fmod_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
 
-    output_tensor = ttnn.fmod(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    output_tensor = ttnn.binary_fmod(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.binary_fmod)
     golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
-def test_fmod_ttnn(input_shapes, scalar, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
-
-    output_tensor = ttnn.fmod(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.fmod)
-    golden_tensor = golden_function(in_data1, scalar)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

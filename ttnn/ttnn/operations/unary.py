@@ -312,6 +312,15 @@ def _golden_function_rdiv(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.rdiv, golden_function=_golden_function_rdiv)
 
 
+def _golden_function_remainder(input_tensor_a, value, *args, **kwargs):
+    import torch
+
+    return torch.remainder(value, input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.remainder, golden_function=_golden_function_remainder)
+
+
 def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwargs):
     import torch
 
