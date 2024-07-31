@@ -12,7 +12,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace tt {

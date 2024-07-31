@@ -12,7 +12,6 @@
 namespace ttnn {
 
 namespace operations::complex_unary {
-using ComplexTensor = complex_binary::ComplexTensor;
 
 template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryTensor {

@@ -12,7 +12,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace py = pybind11;
 
@@ -23,7 +23,6 @@ namespace unary {
 namespace detail {
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
-using ComplexTensor = complex_binary::ComplexTensor;
 
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {

@@ -437,7 +437,7 @@ def test_level1_polar(bs, memcfg, dtype, device, function_level_defaults):
     # we set imag = angle theta
     x = Complex(None, re=torch.ones(input_shape), im=torch.rand(input_shape))
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )

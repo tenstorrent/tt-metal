@@ -8,6 +8,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn::operations::complex_binary {
 
@@ -17,34 +18,6 @@ enum class ComplexBinaryOpType {
     SUB,
     MUL,
     DIV,
-};
-
-class ComplexTensor {
-    private:
-        std::array<Tensor,2> m_real_imag;
-
-    public:
-
-        ComplexTensor(std::array<Tensor,2> val): m_real_imag(val) {
-            TT_ASSERT( m_real_imag[0].get_legacy_shape() == m_real_imag[1].get_legacy_shape() , "Tensor shapes of real and imag should be identical");
-        }
-
-        const Tensor& operator[](uint32_t index) const {
-            return m_real_imag[index];
-        }
-
-        const Tensor& real() const {
-            return m_real_imag[0];
-        }
-
-        const Tensor& imag() const {
-            return m_real_imag[1];
-        }
-
-        void deallocate() {
-            m_real_imag[0].deallocate();
-            m_real_imag[1].deallocate();
-        }
 };
 
 // OpHandler_complex_binary_type1 = get_function_complex_binary

@@ -9,9 +9,6 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
-#include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward.hpp"
-#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/types.hpp"
 
