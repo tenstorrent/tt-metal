@@ -381,9 +381,10 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, multicast>(0, get_noc_addr_helper(dst_noc, dst_addr));
+
     while (length != 0) {
         uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
-        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
         // "Reserve" pages for the next write from this block
         block_noc_writes_to_clear[rd_block_idx]++;
         // Get a page if needed
@@ -394,15 +395,18 @@ void process_write_linear(uint32_t num_mcast_dests) {
                 // No more writes from this block. Decrement the number of writes
                 // since they were all accounted for.
                 block_noc_writes_to_clear[rd_block_idx] -= (orphan_size == 0);
+
                 // Check for dispatch_cb wrap
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     if (orphan_size != 0) {
                         if constexpr (multicast) {
-                            noc_async_write_multicast<dispatch_cb_page_size>(
-                                data_ptr, dst, orphan_size, num_mcast_dests);
+                            cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+                                data_ptr, dst_addr, orphan_size, num_mcast_dests);
                         } else {
-                            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
+                            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst_addr, orphan_size);
                         }
+                        noc_nonposted_writes_num_issued[noc_index]++;
+                        noc_nonposted_writes_acked[noc_index] += num_mcast_dests;
                         length -= orphan_size;
                         xfer_size -= orphan_size;
                         dst_addr += orphan_size;
@@ -411,7 +415,6 @@ void process_write_linear(uint32_t num_mcast_dests) {
                     }
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
-                    dst = get_noc_addr_helper(dst_noc, dst_addr);
                 }
                 move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
                 // Next write will be from next block. "Reserve" pages for it.
@@ -432,14 +435,17 @@ void process_write_linear(uint32_t num_mcast_dests) {
         }
 
         if constexpr (multicast) {
-            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, xfer_size, num_mcast_dests);
+            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         } else {
-            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
+            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst_addr, xfer_size);
         }
+        noc_nonposted_writes_num_issued[noc_index]++;
+        noc_nonposted_writes_acked[noc_index] += num_mcast_dests;
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
     }
+
     cmd_ptr = data_ptr;
 }
 
@@ -447,7 +453,7 @@ void process_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     if (num_mcast_dests == 0) {
-        process_write_linear<false>(0);
+        process_write_linear<false>(1);
     } else {
         process_write_linear<true>(num_mcast_dests);
     }
@@ -623,9 +629,9 @@ void process_write_packed(uint32_t flags) {
             // This is done here so the common case doesn't have to restore the pointers
             if (orphan_size != 0) {
                 uint32_t remainder_xfer_size = xfer_size - orphan_size;
+                // Creating full NOC addr not needed as we are not programming the noc coords
                 uint32_t remainder_dst_addr = dst_addr + orphan_size;
-                uint64_t remainder_dst = get_noc_addr_helper(dst_noc, remainder_dst_addr);
-                cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, remainder_dst, remainder_xfer_size, num_dests);
+                cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, remainder_dst_addr, remainder_xfer_size, num_dests);
                 // Reset values expected below
                 cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size);
                 writes++;
@@ -703,9 +709,8 @@ void process_write_packed_large() {
 
         sub_cmd_ptr++;
 
-        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
         // Note: expect to only have 1 or a few pages, so this doesn't optimize writing length
-        cq_noc_async_write_with_state<CQ_NOC_sNdl, CQ_NOC_WAIT, CQ_NOC_send>(0, dst);
+        cq_noc_async_write_with_state<CQ_NOC_sNdl, CQ_NOC_WAIT, CQ_NOC_send>(0, get_noc_addr_helper(dst_noc, dst_addr));
 
         while (length != 0) {
             uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
@@ -725,7 +730,7 @@ void process_write_packed_large() {
                     if (rd_block_idx == dispatch_cb_blocks - 1) {
                         ASSERT(cb_fence == dispatch_cb_end);
                         if (orphan_size != 0) {
-                            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst, orphan_size, num_dests);
+                            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst_addr, orphan_size, num_dests);
                             length -= orphan_size;
                             xfer_size -= orphan_size;
                             dst_addr += orphan_size;
@@ -734,7 +739,6 @@ void process_write_packed_large() {
                         }
                         cb_fence = dispatch_cb_base;
                         data_ptr = dispatch_cb_base;
-                        dst = get_noc_addr_helper(dst_noc, dst_addr);
                     }
 
                     block_noc_writes_to_clear[rd_block_idx] += writes;
@@ -752,12 +756,11 @@ void process_write_packed_large() {
                 cb_fence += n_pages * dispatch_cb_page_size;
             }
 
-            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst, xfer_size, num_dests);
+            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst_addr, xfer_size, num_dests);
 
             length -= xfer_size;
             data_ptr += xfer_size;
             dst_addr += xfer_size;
-            dst = get_noc_addr_helper(dst_noc, dst_addr);
         }
 
         // Release pages for prefetcher
