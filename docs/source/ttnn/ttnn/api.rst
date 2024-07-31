@@ -75,6 +75,7 @@ Pointwise Unary
 
    ttnn/abs
    ttnn/acos
+   ttnn/logical_not_
    ttnn/acosh
    ttnn/asin
    ttnn/asinh

@@ -114,11 +114,6 @@ Tensor frac(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor round(
-    const Tensor& input,
-    int64_t decimals = 0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor floor_div(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -255,10 +250,6 @@ Tensor eps(
 Tensor logit(
     const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// polygamma
-Tensor polygamma(
-    const Tensor& input_a, uint32_t k, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor logical_xori(
     const Tensor& input_a,
     float immediate,
@@ -284,30 +275,6 @@ Tensor logical_ori(
 
 // on-device tensor creation with shape and filled with value
 Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config);
-
-// tril : select lower triangular region of input matrix
-Tensor tril(
-    const Tensor& input_a,
-    int32_t diag = 0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// triu : select upper triangular region of input matrix
-Tensor triu(
-    const Tensor& input_a,
-    int32_t diag = 0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor argmax(
-    const Tensor& input_a,
-    int64_t dim = 0,
-    bool all = false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor argmin(
-    const Tensor& input_a,
-    int64_t dim = 0,
-    bool all = false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

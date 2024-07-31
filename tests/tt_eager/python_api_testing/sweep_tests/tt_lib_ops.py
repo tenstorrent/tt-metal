@@ -660,7 +660,7 @@ def eltwise_logit(x, *args, eps, device, dtype, layout, input_mem_config, output
 @setup_host_and_device
 def eltwise_polygamma(x, *args, k, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.polygamma(t0, k, output_mem_config=output_mem_config)
+    t1 = ttnn.polygamma(t0, k=k, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -790,7 +790,7 @@ def eltwise_round(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.round(t0, decimals, output_mem_config=output_mem_config)
+    t1 = ttnn.round(t0, decimals=decimals, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1170,7 +1170,7 @@ def eltwise_unary_lt(
 def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     diag = kwargs.get("diag", 0)
-    t1 = ttl.tensor.triu(tx, diag, output_mem_config)
+    t1 = ttnn.triu(tx, diagonal=diag, memory_config=output_mem_config)
     return tt2torch_tensor(t1)
 
 
@@ -1178,7 +1178,7 @@ def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
 def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     diag = kwargs.get("diag", 0)
-    t1 = ttl.tensor.tril(tx, diag, output_mem_config)
+    t1 = ttnn.tril(tx, diagonal=diag, memory_config=output_mem_config)
     return tt2torch_tensor(t1)
 
 
