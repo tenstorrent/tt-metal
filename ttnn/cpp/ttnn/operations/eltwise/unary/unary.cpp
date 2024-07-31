@@ -96,6 +96,8 @@ template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TANH>;
 
+template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
+
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::operator()(
     uint8_t queue_id,
@@ -309,13 +311,13 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::operator()(
         optional_output_tensor);
 }
 
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT, int32_t>;
 
 
 template <UnaryOpType unary_op_type, typename T>
