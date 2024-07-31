@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-ones:
+  - eltwise-ones:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -26,7 +26,7 @@ test-list:
       output-file: eltwise_ones_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
-  - ttnn-eltwise-ones:
+  - eltwise-ones:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]

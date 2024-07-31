@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-acosh:
+  - eltwise-acosh:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -25,7 +25,7 @@ test-list:
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_acosh_sweep.csv
-  - ttnn-acosh:
+  - eltwise-acosh:
       shape:
         start-shape: [1, 1, 1, 2]
         end-shape: [6, 12, 256, 256]
