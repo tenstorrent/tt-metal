@@ -20,17 +20,17 @@ jobs:
         ]
         test-group:
           - name: ttnn group 1
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 1
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 2
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 3
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 3 -m "not disable_fast_runtime_mode"
           - name: ttnn group 4
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 4
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 4 -m "not disable_fast_runtime_mode"
           - name: ttnn group 5
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 5
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"
           - name: ttnn group 6
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 6
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
