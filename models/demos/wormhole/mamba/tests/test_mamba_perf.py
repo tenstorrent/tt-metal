@@ -12,7 +12,6 @@ from models.demos.wormhole.mamba.demo.demo import (
     get_tokenizer,
     get_cpu_reference_model,
     get_tt_metal_model,
-    display_tokens,
 )
 
 from models.perf.perf_utils import prep_perf_report
@@ -27,6 +26,17 @@ from models.utility_functions import (
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.tt.preprocessing import split_sequence_length
+
+
+def display_tokens(tokens):
+    print("\n" * 1000)
+    for text in tokens:
+        eos = text.find("<|endoftext|>")
+        if eos != -1:
+            text = text[:eos] + "<|endoftext|>"
+        print(f"{text}\n")
+        print("-" * 150)  # Print a separator line for readability
+        print(f"\n")
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -133,7 +143,7 @@ def test_mamba_e2e_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, warmup, expected_device_fw_duration_ms",
-    ((32, True, 1.71),),
+    ((32, True, 1.66),),
 )
 def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_seeds):
     subdir = "ttnn_mamba"
