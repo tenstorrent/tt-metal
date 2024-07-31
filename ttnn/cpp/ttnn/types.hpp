@@ -14,6 +14,10 @@ namespace ttnn {
 namespace types {
 
 using Device = tt::tt_metal::Device;
+using DeviceGrid = tt::tt_metal::DeviceGrid;
+using DeviceIds = tt::tt_metal::DeviceIds;
+using DeviceMesh = tt::tt_metal::DeviceMesh;
+using DeviceMeshView = tt::tt_metal::DeviceMeshView;
 
 constexpr auto TILE_SIZE = 32;
 

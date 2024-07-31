@@ -12,14 +12,10 @@
 
 #include "tt_metal/impl/device/device.hpp"
 
-// Forward declaration of DeviceMesh
-namespace ttnn {
-namespace multi_device {
-class DeviceMesh;
-} // namespace multi_device
-} // namespace ttnn
-
 namespace tt::tt_metal {
+
+// Forward declaration of DeviceMesh
+class DeviceMesh;
 
 struct Coordinate {
     int row;
@@ -51,9 +47,9 @@ public:
     using DeviceViews = std::vector<std::vector<device_pointer>>;
     using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
 
-    DeviceMeshView(const ttnn::multi_device::DeviceMesh& mesh);
-    DeviceMeshView(const ttnn::multi_device::DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right);
-    DeviceMeshView(const ttnn::multi_device::DeviceMesh& global_mesh, const std::vector<device_pointer>& devices);
+    DeviceMeshView(const DeviceMesh& mesh);
+    DeviceMeshView(const DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right);
+    DeviceMeshView(const DeviceMesh& global_mesh, const std::vector<device_pointer>& devices);
     DeviceMeshView(std::vector<device_pointer> devices, CoordinateMapper mapper);
 
     [[nodiscard]] device_pointer get_device(int row, int col);

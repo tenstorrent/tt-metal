@@ -131,11 +131,11 @@ Tensor line_all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
-    const multi_device::DeviceMesh& device_mesh,
+    const DeviceMesh& device_mesh,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config) {
 
-    const auto view = tt::tt_metal::DeviceMeshView(device_mesh);
+    const auto view = DeviceMeshView(device_mesh);
     const auto device_views = (cluster_axis == 0) ? view.get_column_views() : view.get_row_views();
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
@@ -147,7 +147,7 @@ Tensor line_all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
             const auto& input_tensor = input_tensors[0];
-            const tt::tt_metal::DeviceMeshView::DeviceView* selected_view = nullptr;
+            const DeviceMeshView::DeviceView* selected_view = nullptr;
 
             uint32_t device_index = 0;
             for (const auto& view : device_views) {
