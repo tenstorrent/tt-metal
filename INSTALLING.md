@@ -120,9 +120,15 @@ We use CMake for our build flows.
 source python_env/bin/activate
 ```
 
-Note about Python environments: You do not have to use `create_venv.sh`. If you
-are less familiar with Python and its various environment tools, just use
-`create_venv.sh` as shown above and the pre-built environment.
+> [!NOTE]
+>
+> Note about Python environments: You do not have to use `create_venv.sh`. If you
+> are less familiar with Python and its various environment tools, just use
+> `create_venv.sh` as shown above and the pre-built environment.
+>
+> If you do choose to manage your own environment, please note that you must
+> use Pip 20.1.1 or lower to install this project. This is the highest version
+> of Pip that supports editable installs in the way that we use it.
 
 ### Option 2: From wheel
 
