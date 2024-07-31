@@ -53,7 +53,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
         .set(ADDR_MOD_5);
 
 
-    if (is_in0_16x32||is_in0_32x16) {
+    if ((is_in0_16x32&&(!is_in1_32x16))||is_in0_32x16) {
         if (transpose) {
             addr_mod_t{
                 .srca = {.incr = 32, .clr = 0, .cr = 0},
@@ -245,29 +245,15 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     const bool is_in0_16x32 = (in0_tile_r_dim <=FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
-    const bool is_in0_16x16 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
-    const bool is_in1_16x16 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
     const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
 
-    const std::uint32_t replay_buf_len = (is_in0_16x16 || is_in1_16x16) ? (partial_face ? 2 : 4) :
+    const std::uint32_t replay_buf_len = (is_in0_16x32 && is_in1_32x16) ? 4 :
                                          ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
 
-    load_replay_buf(replay_buf_offset, replay_buf_len, false, 
+    load_replay_buf(replay_buf_offset, replay_buf_len, false,
         // Lambda function to load reply buffer
-        [high_fidelity, reuse_a, partial_face, is_in1_16x16, is_in0_16x16, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim] {
-            if (is_in1_16x16) {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca=srca, srcb+=24, dest+=24 //FIXME: dest not correct
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // // srca=srca, srcb+=8, dest+=8
-            } else if (is_in0_16x16) {
-                if (partial_face) {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest=+16, bias = 1
-                } else {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8
-                }    
-            } else if (is_in1_32x16) {
+        [high_fidelity, reuse_a, partial_face, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim] {
+             if (is_in1_32x16) {
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8
@@ -279,7 +265,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
             } else if (is_in0_16x32 || is_in0_32x16) {
                 if (partial_face) {
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest=+16
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B0A1 // srca+=16,  srcb+=16,  dest=0 (addr_mod_4), bias=0 
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B0A1 // srca+=16,  srcb+=16,  dest=0 (addr_mod_4), bias=0
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A2 // srca+=16,  srcb=0,  dest=+16
                 } else {
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
@@ -290,7 +276,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
-                }    
+                }
             } else {
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
@@ -314,7 +300,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
                 }
             }
-                
+
             if constexpr(high_fidelity) {
                 // TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
@@ -323,7 +309,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
                     TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5), clear src A
                 } else {
                     TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_5, 0); // B3A3 or B2A1 // reset srca/srcb/dest, increment phase (addr_mod_5), clear src A
-                }    
+                }
             }
         }
     );
@@ -337,7 +323,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
         } else {
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
-        }    
+        }
     }
     tmp.program(instrn_buffer);
 }
@@ -346,7 +332,7 @@ template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout=DstTileFaceLayout
 inline void _llk_math_matmul_init_(const std::uint32_t in0_tile_r_dim = TILE_R_DIM, const std::uint32_t in0_tile_c_dim = TILE_C_DIM, const std::uint32_t in1_tile_r_dim = TILE_R_DIM, const std::uint32_t in1_tile_c_dim = TILE_C_DIM, const bool partial_face = false, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
 
     matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-    
+
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     math::reset_counters(p_setrwc::SET_ABD_F);

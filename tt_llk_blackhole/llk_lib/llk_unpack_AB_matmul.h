@@ -20,7 +20,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
     // in1/inB - loaded to SrcA
 
     const bool reuse_a = ct_dim >= rt_dim;
-    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 16 : ((!reuse_a && unpB_partial_face) ? 16 : 12);
+    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len/2;
 
     if (reuse_a) {
@@ -34,7 +34,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                 // Lambda function to set up replay buffer
                 [unpA_partial_face] {
                     if (unpA_partial_face) {
-                        TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                        TTI_UNPACR_NOP(SrcA, 0, 0, 0/*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -42,6 +42,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     }
                     if constexpr (kernel_broadcast_b==1) {
+                        TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
@@ -51,9 +52,11 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                         TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC0_REG3_Base_address_ADDR32);
                     }
+                    // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                     TTI_NOP;
+
                     if (unpA_partial_face) {
-                        TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                        TTI_UNPACR_NOP(SrcA, 0, 0, 0/*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -64,12 +67,14 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
+                        TTI_NOP;
                     } else {
                         TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
                         TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
                         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                         TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
                     }
+                    // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                     TTI_NOP;
                 }
             );
@@ -85,6 +90,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                 // Lambda function to set up replay buffer
                 [unpB_partial_face] {
                     if (unpB_partial_face) {
+                        TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -92,6 +98,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     }
                     if constexpr (kernel_broadcast_a==1) {
+                        TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
@@ -101,8 +108,11 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                         TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC1_REG3_Base_address_ADDR32);
                     }
+                    // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                     TTI_NOP;
+
                     if (unpB_partial_face) {
+                        TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -113,12 +123,14 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                         TTI_NOP;
                         TTI_NOP;
                         TTI_NOP;
+                        TTI_NOP;
                     } else {
                         TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
                         TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
                         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                         TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
                     }
+                    // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                     TTI_NOP;
                 }
             );
@@ -259,6 +271,7 @@ inline void _llk_unpack_AB_matmul_(
                 TTI_NOP;
             #else
                 if (unpB_partial_face) {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     // Do face by face unpacking
                     TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -273,7 +286,7 @@ inline void _llk_unpack_AB_matmul_(
             #else
                 if (unpA_partial_face) {
                     // Do face by face unpacking
-                    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
