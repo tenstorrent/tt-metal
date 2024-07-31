@@ -250,7 +250,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     const std::uint32_t replay_buf_len = (is_in0_16x32 && is_in1_32x16) ? 4 :
                                          ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
 
-    load_replay_buf(replay_buf_offset, replay_buf_len, false,
+    load_replay_buf(ckernel::math::replay_buf_offset, replay_buf_len, false,
         // Lambda function to load reply buffer
         [high_fidelity, reuse_a, partial_face, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim] {
              if (is_in1_32x16) {
@@ -316,7 +316,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 
     // TODO: can we commonize this?
     constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
-    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, replay_buf_len, 0, 0));
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0));
 
     if constexpr(high_fidelity) {
         if (reuse_a) {
