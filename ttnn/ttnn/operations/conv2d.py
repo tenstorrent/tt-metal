@@ -394,7 +394,7 @@ def get_grid_size_and_num_cores_nhw_from_core_grid(core_grid, height_sharded):
 
 # internal helper function. not exposed to user.
 def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_config, tile_size):
-    logger.info(
+    logger.debug(
         f"py create_sharded_memory_config_from_parallel_config: {tensor_shape}, {parallel_config.num_cores_nhw} {parallel_config.grid_size}, {tile_size}"
     )
     # tensor_shape is [N, H, W, C]
