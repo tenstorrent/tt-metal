@@ -312,7 +312,7 @@ Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::op
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
-    Tensor index_pad = ttnn::pad(0, ttnn::full_like(input_a, 1.0f), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor index_pad = ttnn::pad(0, ttnn::ones_like(input_a), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     Tensor temp_a = ttnn::pad(0, input_a, input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     return ttnn::where(index_pad, temp_a, input_b);
 }
