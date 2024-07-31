@@ -9,6 +9,9 @@ on:
         options:
           - grayskull
           - wormhole_b0
+      runner-label:
+        required: true
+        type: string
       build-type:
         required: false
         type: choice
@@ -22,9 +25,6 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      runner-label:
-        required: true
-        type: string
       command:
         required: true
         type: string
