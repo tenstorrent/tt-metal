@@ -181,6 +181,82 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
 }
 
 template <typename binary_backward_operation_t>
+void bind_binary_backward_float_string_default(
+    py::module& module,
+    const binary_backward_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    string parameter_b_value,
+    const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, ( input_tensor: ttnn.Tensor, {2}: float ) or  ( input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor ), {4}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {7}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor_a` or :attr:`input_tensor`
+            * :attr:`input_tensor_b` or :attr:`{2}` (float): {3}
+
+        Keyword args:
+            * :attr:`{4}` (string): {5} , Default value = {6}
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input, {2}, {4} = {6})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               string parameter_b,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, parameter_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               string parameter_b,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()),
+            py::kw_only(),
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename binary_backward_operation_t>
 void bind_binary_backward_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
@@ -453,7 +529,16 @@ void py_module(py::module& module) {
         module,
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
-
+    detail::bind_binary_backward_float_string_default(
+        module,
+        ttnn::bias_gelu_bw,
+        "bias",
+        "Bias value",
+        "approximate",
+        "Approximation type",
+        "none",
+        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
 }
 
 }  // namespace binary_backward

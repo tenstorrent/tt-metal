@@ -168,14 +168,6 @@ std::vector<Tensor> _rdiv_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
-    Tensor input = ttnn::add(input_tensor, bias);
-    grad_tensor = _gelu_bw(grad, input, approximate = approximate);
-    return grad_tensor;
-}
-
 // unary_pow:
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
