@@ -25,6 +25,8 @@ enum class BinaryCompositeOpType {
     MAXIMUM,
     ATAN2,
     LOGICAL_XOR,
+    BINARY_REMAINDER,
+    BINARY_FMOD,
     DIV,
     DIV_NO_NAN,
     FLOOR_DIV,
@@ -43,6 +45,8 @@ Tensor _maximum(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&
 Tensor _atan2(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_xor(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _nextafter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _binary_remainder(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _binary_fmod(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _addalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _subalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _isclose(const Tensor&, const Tensor&, float, float, const bool, const std::optional<MemoryConfig>&);
@@ -131,6 +135,20 @@ template <>
 struct OpHandler<BinaryCompositeOpType::LOGICAL_OR_> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
         return _logical_or_(t1, t2, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<BinaryCompositeOpType::BINARY_REMAINDER> {
+    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
+        return _binary_remainder(t1, t2, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<BinaryCompositeOpType::BINARY_FMOD> {
+    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
+        return _binary_fmod(t1, t2, mem_cfg);
     }
 };
 
