@@ -134,20 +134,20 @@ run_t3000_grok_tests() {
 }
 
 run_t3000_tests() {
-#   # Run ttmetal tests
-#   run_t3000_ttmetal_tests
+  # Run ttmetal tests
+  run_t3000_ttmetal_tests
 
-#   # Run ttnn tests
-#   run_t3000_ttnn_tests
+  # Run ttnn tests
+  run_t3000_ttnn_tests
 
-#   # Run falcon7b tests
-#   run_t3000_falcon7b_tests
+  # Run falcon7b tests
+  run_t3000_falcon7b_tests
 
-#   # Run falcon40b tests
-#   run_t3000_falcon40b_tests
+  # Run falcon40b tests
+  run_t3000_falcon40b_tests
 
-#   # Run mixtral tests
-#   run_t3000_mixtral_tests
+  # Run mixtral tests
+  run_t3000_mixtral_tests
 
   # Run grok tests
   run_t3000_grok_tests
