@@ -34,10 +34,8 @@ jobs:
           - name: ttnn fast runtime off
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
-          - name: ttnn examples
-            cmd: ./tests/scripts/run_ttnn_examples.sh
-          - name: ttnn cpp tests
-            cmd: ./build/test/ttnn/unit_tests_ttnn
+          - name: ttnn examples and cpp tests
+            cmd: ./build/test/ttnn/unit_tests_ttnn && ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
