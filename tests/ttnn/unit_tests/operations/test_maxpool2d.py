@@ -197,7 +197,7 @@ def test_run_max_pool(
     # torch.save(golden_pytorch, "golden_pytorch.pt")
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
 
-    print(f"Passing: {passing}, PCC: {pcc}")
+    logger.debug(f"Passing: {passing}, PCC: {pcc}")
 
     ## do more rigorous comparision for each element
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)

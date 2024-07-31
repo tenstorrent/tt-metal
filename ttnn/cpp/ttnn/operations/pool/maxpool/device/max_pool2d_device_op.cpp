@@ -14,15 +14,7 @@ MaxPoolNew::program_factory_t MaxPoolNew::select_program_factory(const operation
     return MultiCore{};
 }
 
-void MaxPoolNew::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
-}
-
-void MaxPoolNew::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
-}
-
-void MaxPoolNew::validate(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config) {
+void validate_maxpool(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
@@ -40,11 +32,20 @@ void MaxPoolNew::validate(const Tensor& input, const tt::tt_metal::SlidingWindow
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
 }
 
-MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return compute_output_shapes(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.output_dtype_, op_attr.memory_config_);
+void MaxPoolNew::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, DataType output_dtype, const MemoryConfig& out_mem_config) {
+void MaxPoolNew::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+}
+
+MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    auto& input = tensors.input_tensor_;
+    auto& sliding_window_config = op_attr.sliding_window_config_;
+    auto& out_mem_config = op_attr.memory_config_;
+    auto& output_dtype = op_attr.output_dtype_;
+
     // NOTE: Only for RM
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
@@ -74,11 +75,12 @@ MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const Tensor&
 }
 
 MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return create_output_tensors(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.output_dtype_, op_attr.memory_config_);
-}
+    auto& input = tensors.input_tensor_;
+    auto& sliding_window_config = op_attr.sliding_window_config_;
+    auto& out_mem_config = op_attr.memory_config_;
+    auto& output_dtype = op_attr.output_dtype_;
 
-MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const Tensor &input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, DataType output_dtype, const MemoryConfig& out_mem_config) {
-    Shape output_shape = compute_output_shapes(input, sliding_window_config, output_dtype, out_mem_config);
+    Shape output_shape = compute_output_shapes(op_attr, tensors);
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
         mem_config.shard_spec->shape[1] = output_shape[3];
@@ -102,7 +104,6 @@ tt::stl::hash::hash_t MaxPoolNew::compute_program_hash(const operation_attribute
     auto dtype = tensors.input_tensor_.dtype();
     return operation::hash_operation<MaxPoolNew>(op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
 }
-
 
 operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
