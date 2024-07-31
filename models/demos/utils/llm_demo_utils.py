@@ -15,12 +15,13 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
     - The measurements dictionary should contain the following keys: "compile_prefill", "compile_decode", "prefill_t/s", "prefill_time_to_token", "decode_t/s", "decode_t/s/u"
     - The profiler object should contain the start and end times for the steps "compile_prefill", "compile_decode", "inference_prefill", "inference_decode"
 
-    Optional (should be provided if measuring perf, not required for token verification):
+    Optional (should be provided if measuring perf, not required for token generation):
+    - The measurements dictionary should contain the following keys: "prefill_decode_t/s/u"
     - The targets dictionary should contain the following keys: "prefill_t/s", "decode_t/s", "decode_t/s/u"
     - The N_warmup_iter dictionary should contain the following keys: "inference_prefill", "inference_decode"
 
     Optional (should be provided if doing token verification, not required for perf):
-    - The measurements and targets dictionaries should contain the key "token_verification"
+    - The measurements dictionary should contain the key "token_verification"
     """
 
     assert all(
@@ -81,7 +82,17 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
         target=targets["decode_t/s/u"] if "decode_t/s/u" in targets else None,
     )
 
-    # Add optional token verification datapoint
+    # Add optional measurement data
+    if "prefill_decode_t/s/u" in measurements:
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_prefill_decode",
+            "tokens/s/user",
+            measurements["prefill_decode_t/s/u"],
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
     if "token_verification" in measurements:
         benchmark_data.add_measurement(
             profiler,
@@ -89,7 +100,6 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
             "inference_decode",
             "token_verification",
             measurements["token_verification"],
-            target=targets["token_verification"] if "token_verification" in targets else None,
         )
 
     return benchmark_data
@@ -111,6 +121,7 @@ def verify_perf(measurements: dict, expected_perf_metrics: dict):
         "compile_prefill": False,
         "compile_decode": False,
         "prefill_time_to_token": False,
+        "prefill_decode_t/s/u": False,
         "prefill_t/s": True,
         "decode_t/s": True,
         "decode_t/s/u": True,
