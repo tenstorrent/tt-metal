@@ -95,8 +95,8 @@ template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TANH>;
-
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
+template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::operator()(
