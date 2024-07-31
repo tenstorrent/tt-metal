@@ -92,7 +92,6 @@ struct ExecuteBinaryCompositeOpsDiv
     }
 };
 
-
 template <BinaryOpType binary_op_type, bool in_place>
 struct ExecuteBiasGelu {
     static Tensor operator()(
@@ -159,6 +158,32 @@ struct ExecuteBinaryCompositeOpsPolyval
     }
 };
 
+struct ExecuteBinaryFmod
+{
+    static Tensor operator()(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor operator()(
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteBinaryRemainder
+{
+    static Tensor operator()(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor operator()(
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -192,12 +217,12 @@ constexpr auto subalpha = ttnn::register_operation_with_auto_launch_op<
 constexpr auto isclose = ttnn::register_operation_with_auto_launch_op<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
-constexpr auto binary_remainder = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::binary_remainder",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::BINARY_REMAINDER>>();
-constexpr auto binary_fmod = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::binary_fmod",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::BINARY_FMOD>>();
+constexpr auto remainder = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::remainder",
+    operations::binary::ExecuteBinaryRemainder>();
+constexpr auto fmod = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::fmod",
+    operations::binary::ExecuteBinaryFmod>();
 constexpr auto div = ttnn::register_operation_with_auto_launch_op<
     "ttnn::div",
     operations::binary::ExecuteBinaryCompositeOpsDiv<operations::binary::BinaryCompositeOpType::DIV>>();
