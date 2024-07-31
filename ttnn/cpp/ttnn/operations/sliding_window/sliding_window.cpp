@@ -4,8 +4,49 @@
 
 #include "sliding_window.hpp"
 
+namespace ttnn::operations::sliding_window{
 
-namespace tt::tt_metal::sliding_window {
+    std::size_t SlidingWindowConfig::get_hash() const {
+        return std::hash<std::string>{}(std::to_string(batch_size_)
+                                        + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
+                                        + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
+                                        + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
+                                        + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
+                                        + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
+                                        + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str());
+    }
+
+    /**
+     * Return the input shape (excluding depth)
+     */
+    Shape SlidingWindowConfig::get_input_shape() const {
+        return Shape({batch_size_, std::get<0>(input_hw_), std::get<1>(input_hw_)});
+    }
+
+    /**
+     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
+     */
+    Shape SlidingWindowConfig::get_output_shape() const {
+        uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - dilation_hw_.first * window_hw_.first) / stride_hw_.first + 1;
+        uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - dilation_hw_.second * window_hw_.second) / stride_hw_.second + 1;
+        // uint32_t output_h = (std::get<0>(input_hw_) + 2 * std::get<0>(pad_hw_) - std::get<0>(dilation_hw_) * std::get<0>(window_hw_)) / std::get<0>(stride_hw_) + 1;
+        // uint32_t output_w = (std::get<1>(input_hw_) + 2 * std::get<1>(pad_hw_) - std::get<1>(dilation_hw_) * std::get<1>(window_hw_)) / std::get<1>(stride_hw_) + 1;
+        log_debug(LogOp, "output_size: {} {} {}", batch_size_, output_h, output_w);
+        return Shape({batch_size_, output_h, output_w, 0});
+    }
+
+    /**
+     * Calculate output tensor shard height
+     */
+    uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
+        TT_ASSERT(has_parallel_config_, "Parallel config is not set in SlidingWindowConfig");
+        Shape output_shape = get_output_shape();
+        uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
+        uint32_t output_nhw_padded = round_up(output_nhw, num_cores_nhw_ * (snap_to_tile ? constants::TILE_HEIGHT : 1));
+        log_debug(LogOp, "output_nhw: {} output_nhw_padded: {} num_cores_nhw: {}", output_nhw, output_nhw_padded, num_cores_nhw_);
+        return (output_nhw_padded / num_cores_nhw_);
+    }
+
 
     std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
@@ -424,4 +465,4 @@ namespace tt::tt_metal::sliding_window {
         return config_tensor.to(device, memory_config);
     }
 
-} // namespace sliding_window
+} // namespace ttnn::operations::sliding_window

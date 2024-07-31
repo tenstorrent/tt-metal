@@ -40,6 +40,9 @@ CoreCoord get_ncores_hw(uint32_t h, uint32_t w, uint32_t avail_cores_h, uint32_t
     return cores_shape;
 }
 
+using ttnn::operations::sliding_window::SlidingWindow;
+using ttnn::operations::sliding_window::ParallelConfig;
+
 std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomposition_h(
     uint32_t out_h, uint32_t ncores_h, uint32_t ncores_w) {
     uint32_t out_h_per_core = out_h / (ncores_h * ncores_w);

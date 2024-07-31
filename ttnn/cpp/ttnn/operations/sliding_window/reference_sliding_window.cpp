@@ -12,7 +12,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 
-namespace tt::tt_metal::sliding_window {
+namespace ttnn::operations::sliding_window {
 
 owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,

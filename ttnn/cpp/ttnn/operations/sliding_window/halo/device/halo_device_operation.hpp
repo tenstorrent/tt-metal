@@ -12,10 +12,10 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 
-namespace ttnn::operations {
+namespace ttnn::operations::sliding_window {
 namespace halo {
 
-struct Halo {
+struct HaloDeviceOperation {
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     SlidingWindowConfig config_;
     ParallelConfig parallel_config_;

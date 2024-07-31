@@ -11,7 +11,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "utils.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn::operations::sliding_window {
 
     struct ParallelConfig {
         CoreRangeSet grid = {{}};
@@ -60,9 +60,8 @@ namespace tt::tt_metal {
 
         SlidingWindowConfig(): core_range_set_({{{0,0}, {0,0}}}) {}
 
-        /**
-         * Unique hash val for the sliding window configuration.
-         */
+
+
         std::string to_string() const {
             return std::to_string(batch_size_)
                     + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
@@ -73,16 +72,15 @@ namespace tt::tt_metal {
                     + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str();
         }
 
-        std::size_t get_hash() const {
-            return std::hash<std::string>()(to_string());
-        }
+        /**
+         * Unique hash val for the sliding window configuration.
+         */
+        std::size_t get_hash() const;
 
         /**
          * Return the input shape (excluding depth)
          */
-        Shape get_input_shape() const {
-            return Shape({batch_size_, std::get<0>(input_hw_), std::get<1>(input_hw_)});
-        }
+        Shape get_input_shape() const;
 
         /**
          * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
@@ -97,14 +95,7 @@ namespace tt::tt_metal {
         /**
          * Calculate output tensor shard height
          */
-        uint32_t get_output_shard_y(bool snap_to_tile = false) const {
-            TT_ASSERT(has_parallel_config_, "Parallel config is not set in SlidingWindowConfig");
-            Shape output_shape = get_output_shape();
-            uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
-            uint32_t output_nhw_padded = round_up(output_nhw, num_cores_nhw_ * (snap_to_tile ? constants::TILE_HEIGHT : 1));
-            log_debug(LogOp, "output_nhw: {} output_nhw_padded: {} num_cores_nhw: {}", output_nhw, output_nhw_padded, num_cores_nhw_);
-            return (output_nhw_padded / num_cores_nhw_);
-        }
+        uint32_t get_output_shard_y(bool snap_to_tile = false) const;
     }; // struct SlidingWindowConfig
 
     namespace sliding_window {
@@ -126,15 +117,15 @@ namespace tt::tt_metal {
 // hash and formatter template specializations for config structs
 
 template <>
-struct std::hash<tt::tt_metal::SlidingWindowConfig> {
-    size_t operator()(const tt::tt_metal::SlidingWindowConfig& config) const {
+struct std::hash<ttnn::operations::sliding_window::SlidingWindowConfig> {
+    size_t operator()(const ttnn::operations::sliding_window::SlidingWindowConfig& config) const {
         return std::hash<int>()(config.get_hash());
     }
 };
 
 template <>
-struct std::hash<tt::tt_metal::ParallelConfig> {
-    size_t operator()(const tt::tt_metal::ParallelConfig& config) const {
+struct std::hash<ttnn::operations::sliding_window::ParallelConfig> {
+    size_t operator()(const ttnn::operations::sliding_window::ParallelConfig& config) const {
         return std::hash<int>()(config.get_hash());
     }
 };
@@ -159,8 +150,8 @@ template <> struct fmt::formatter<tt::tt_metal::SlidingWindowConfig>: formatter<
     }
 };
 
-template <> struct fmt::formatter<tt::tt_metal::ParallelConfig>: formatter<string_view> {
-    auto format(const tt::tt_metal::ParallelConfig& t, fmt::format_context& ctx) {
+template <> struct fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>: formatter<string_view> {
+    auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx) {
         std::string str = fmt::format("ParallelConfig(grid={}, shard_scheme={}, shard_orientation={})", t.grid.str(), int(t.shard_scheme), int(t.shard_orientation));
         return fmt::format_to(ctx.out(), "{}", str);
     }
