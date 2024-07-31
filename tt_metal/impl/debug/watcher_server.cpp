@@ -16,12 +16,11 @@
 
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "hostdevcommon/debug_ring_buffer_common.h"
 #include "llrt/llrt.hpp"
 #include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "debug/ring_buffer.h"
 
 namespace tt {
 namespace watcher {
@@ -208,23 +207,25 @@ static void log_waypoint(CoreCoord core, const launch_msg_t *launch_msg, const d
 }
 
 static string get_ring_buffer(Device *device, CoreCoord phys_core) {
-    uint64_t buf_addr = RING_BUFFER_ADDR;
+    uint64_t buf_addr = GET_MAILBOX_ADDRESS_HOST(debug_ring_buf);
     if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
         // Eth pcores have a different address, but only active ones.
         CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
         if (device->is_active_ethernet_core(logical_core)) {
-            buf_addr = eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR;
+            buf_addr = GET_ETH_MAILBOX_ADDRESS_HOST(debug_ring_buf);
+        } else {
+            buf_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(debug_ring_buf);
         }
     }
-    auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, buf_addr, RING_BUFFER_SIZE);
-    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(from_dev[0]));
+    auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, buf_addr, sizeof(debug_ring_buf_msg_t));
+    debug_ring_buf_msg_t *ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t *>(&(from_dev[0]));
     if (ring_buf_data->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX)
         return "";
 
     // Latest written idx is one less than the index read out of L1.
     string out = "\n\tdebug_ring_buffer=\n\t[";
     int curr_idx = ring_buf_data->current_ptr;
-    for (int count = 1; count <= RING_BUFFER_ELEMENTS; count++) {
+    for (int count = 1; count <= DEBUG_RING_BUFFER_ELEMENTS; count++) {
         out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
         if (count % 8 == 0) {
             out += "\n\t ";
@@ -233,7 +234,7 @@ static string get_ring_buffer(Device *device, CoreCoord phys_core) {
             if (ring_buf_data->wrapped == 0)
                 break;  // No wrapping, so no extra data available
             else
-                curr_idx = RING_BUFFER_ELEMENTS - 1;  // Loop
+                curr_idx = DEBUG_RING_BUFFER_ELEMENTS - 1;  // Loop
         } else {
             curr_idx--;
         }
@@ -885,8 +886,8 @@ void watcher_init(Device *device) {
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
-    std::vector<uint32_t> debug_ring_buf_init_val(RING_BUFFER_SIZE / sizeof(uint32_t), 0);
-    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(debug_ring_buf_init_val[0]));
+    std::vector<uint32_t> debug_ring_buf_init_val(sizeof(debug_ring_buf_msg_t) / sizeof(uint32_t), 0);
+    debug_ring_buf_msg_t *ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t *>(&(debug_ring_buf_init_val[0]));
     ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     ring_buf_data->wrapped = 0;
 
@@ -1010,7 +1011,7 @@ void watcher_init(Device *device) {
                     debug_insert_delays_init_val_zero,
                     GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
             }
-            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, RING_BUFFER_ADDR);
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, GET_MAILBOX_ADDRESS_HOST(debug_ring_buf));
         }
     }
 
@@ -1076,7 +1077,7 @@ void watcher_init(Device *device) {
             device->id(),
             physical_core,
             debug_ring_buf_init_val,
-            is_active_eth_core ? eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR : RING_BUFFER_ADDR);
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(debug_ring_buf) : GET_IERISC_MAILBOX_ADDRESS_HOST(debug_ring_buf));
     }
 
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());

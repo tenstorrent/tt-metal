@@ -59,9 +59,6 @@ protected:
         // Parent class tears down devices
         CommonFixture::TearDown();
 
-        // Remove the watcher output file after the test is finished.
-        std::remove(log_file_name.c_str());
-
         // Reset watcher settings to their previous values
         tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
         tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
