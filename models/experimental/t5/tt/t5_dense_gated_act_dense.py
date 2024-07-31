@@ -38,9 +38,9 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         self.wi_1_weights = torch2tt_tensor(state_dict[f"{base_address}.wi_1.weight"], device)
         self.wo_weights = torch2tt_tensor(state_dict[f"{base_address}.wo.weight"], device)
 
-        self.wi_0_weights = tt_lib.tensor.transpose(self.wi_0_weights, -2, -1)
-        self.wi_1_weights = tt_lib.tensor.transpose(self.wi_1_weights, -2, -1)
-        self.wo_weights = tt_lib.tensor.transpose(self.wo_weights, -2, -1)
+        self.wi_0_weights = ttnn.transpose(self.wi_0_weights, -2, -1)
+        self.wi_1_weights = ttnn.transpose(self.wi_1_weights, -2, -1)
+        self.wo_weights = ttnn.transpose(self.wo_weights, -2, -1)
 
         # self.dropout = nn.Dropout(config["dropout_rate"])
         self.act = gelu_new
