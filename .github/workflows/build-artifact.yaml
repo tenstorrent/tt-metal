@@ -7,11 +7,6 @@ on:
         required: false
         type: string
         default: '["grayskull", "wormhole_b0"]'
-      profiler-build:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable tracy and profiler build with _profiler attached to end of artifact"
       build-type:
         required: false
         type: string
@@ -27,11 +22,6 @@ on:
         required: false
         type: string
         default: '["grayskull", "wormhole_b0"]'
-      profiler-build:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable tracy and profiler build with _profiler attached to end of artifact"
       build-type:
         required: false
         type: string
