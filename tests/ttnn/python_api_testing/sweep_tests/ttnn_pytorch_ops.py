@@ -239,15 +239,3 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
     )
 
     return torch_output.start_logits
-
-
-def fmod_bw(x, y, scalar, *args, **kwarg):
-    grad_data = x
-    in_data = y
-    in_data.requires_grad = True
-
-    in_data.retain_grad()
-    golden_function = ttnn.get_golden_function(ttnn.fmod_bw)
-    torch_output = golden_function(grad_data, in_data, scalar)
-
-    return torch_output[0]

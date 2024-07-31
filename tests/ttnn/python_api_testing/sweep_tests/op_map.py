@@ -823,7 +823,7 @@ op_map = {
     },
     "fmod-bw": {
         "tt_op": ttnn_ops.fmod_bw,
-        "pytorch_op": ttnn_pytorch_ops.fmod_bw,
+        "pytorch_op": pytorch_ops.fmod_bw,
     },
     "frac-bw": {
         "tt_op": ttnn_ops.frac_bw,
