@@ -16,7 +16,8 @@ std::vector<std::string> expected = {
     "[0x00270028,0x00260027,0x00250026,0x00240025,0x00230024,0x00220023,0x00210022,0x00200021,",
     " 0x001f0020,0x001e001f,0x001d001e,0x001c001d,0x001b001c,0x001a001b,0x0019001a,0x00180019,",
     " 0x00170018,0x00160017,0x00150016,0x00140015,0x00130014,0x00120013,0x00110012,0x00100011,",
-    " 0x000f0010,0x000e000f,0x000d000e,0x000c000d,0x000b000c,0x000a000b,0x0009000a]"
+    " 0x000f0010,0x000e000f,0x000d000e,0x000c000d,0x000b000c,0x000a000b,0x0009000a,0x00080009,",
+    "]"
 };
 
 static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
@@ -129,6 +130,8 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
     // Run the program
     fixture->RunProgram(device, program, true);
+
+    log_info("Checking file: {}", fixture->log_file_name);
 
     // Check log
     EXPECT_TRUE(

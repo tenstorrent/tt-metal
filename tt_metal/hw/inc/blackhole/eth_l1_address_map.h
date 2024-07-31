@@ -23,7 +23,6 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
-  static constexpr std::int32_t TOOLS_MAX_L1_SIZE = 3 * 1024;
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4;
 
   // Base addresses
@@ -56,15 +55,12 @@ struct address_map {
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
-  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = ERISC_MEM_MAILBOX_BASE + 256 + 16;
-  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR + RING_BUFFER_SIZE;
+  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_MEM_MAILBOX_BASE + 288 + 16;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER + 256;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
 
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 
-  static_assert(ERISC_L1_KERNEL_CONFIG_BASE - ERISC_RING_BUFFER_ADDR <= TOOLS_MAX_L1_SIZE);
-  static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
   static_assert((PRINT_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
