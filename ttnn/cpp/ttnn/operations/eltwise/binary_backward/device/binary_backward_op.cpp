@@ -18,7 +18,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 namespace ttnn::operations::binary_backward {
