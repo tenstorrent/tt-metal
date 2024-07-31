@@ -2,7 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
+#include <optional>
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operations/conv2d/conv2d.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+
 #include "max_pool2d_device_op.hpp"
+// #include "max_pool2d_multi_core_program_factory.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 
 /**
@@ -314,11 +326,11 @@ MaxPoolNew::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo
     }};
 }
 
-MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::max_pool_2d_multi_core_sharded_with_halo_v2_new(
-        const Tensor& input,
-        Tensor& output,
-        const SlidingWindowConfig& sliding_window_config,
-        const MemoryConfig& out_mem_config) {
+MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const auto& input = tensor_args.input_tensor_;
+    auto& sliding_window_config = op_attr.sliding_window_config_;
+    auto& out_mem_config = op_attr.memory_config_;
+
     tt::tt_metal::Program program{};
 
     ParallelConfig parallel_config = ParallelConfig{
@@ -362,7 +374,7 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::max_pool_2d_multi
         program,
         input,
         reader_indices_on_device,
-        output,
+        output_tensor,
         in_n,
         in_h,
         in_w,
@@ -378,15 +390,6 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::max_pool_2d_multi
         dilation_w,
         out_mem_config,
         1);
-}
-
-MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
-    const auto& input = tensor_args.input_tensor_;
-    return max_pool_2d_multi_core_sharded_with_halo_v2_new(
-                    input,
-                    output_tensor,
-                    op_attr.sliding_window_config_,
-                    op_attr.memory_config_);
 }
 
 void MaxPoolNew::MultiCore::override_runtime_arguments(cached_program_t& cached_program,

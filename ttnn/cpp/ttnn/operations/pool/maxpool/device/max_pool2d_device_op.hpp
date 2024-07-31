@@ -56,10 +56,6 @@ struct MaxPoolNew {
                                                const operation_attributes_t& operation_attributes,
                                                const tensor_args_t& tensor_args,
                                                tensor_return_value_t& output_tensor);
-        static cached_program_t max_pool_2d_multi_core_sharded_with_halo_v2_new(const Tensor &input,
-                                                                                Tensor& output,
-                                                                                const SlidingWindowConfig& sliding_window_config,
-                                                                                const MemoryConfig& out_mem_config);
     };
 
     using program_factory_t = std::variant<MultiCore>;
@@ -70,11 +66,6 @@ struct MaxPoolNew {
     static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // call old funcs from the above
-    static void validate(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config);
-    static shape_return_value_t compute_output_shapes(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, DataType output_dtype, const MemoryConfig& out_mem_config);
-    static tensor_return_value_t create_output_tensors(const Tensor &input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, DataType output_dtype, const MemoryConfig& out_mem_config);
     static operation::OpPerformanceModel create_op_performance_model(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
 };
