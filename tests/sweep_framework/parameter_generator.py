@@ -14,9 +14,7 @@ from permutations import *
 from serialize import serialize
 from elasticsearch import Elasticsearch, NotFoundError
 from statuses import VectorValidity, VectorStatus
-
-ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+from elastic_config import *
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -57,7 +55,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
 
-    index_name = module_name + "_test_vectors"
+    index_name = VECTOR_INDEX_PREFIX + module_name
 
     try:
         response = client.search(
@@ -126,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default="http://yyz-elk:9200",
+        default=ELASTIC_DEFAULT_URL,
         help="Elastic Connection String for vector database.",
     )
 

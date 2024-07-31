@@ -8,9 +8,7 @@ import argparse
 import pathlib
 import os
 import sys
-
-ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+from elastic_config import *
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -21,7 +19,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default="http://yyz-elk:9200",
+        default=ELASTIC_DEFAULT_URL,
         help="Elastic Connection String for the vector and results database.",
     )
     args = parser.parse_args(sys.argv[1:])
@@ -34,8 +32,8 @@ if __name__ == "__main__":
     for file in sorted(sweeps_path.glob("*.py")):
         sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
         sqlite_client = sqlite3.connect(DUMP_PATH + sweep_name + ".sqlite")
-        vector_index = sweep_name + "_test_vectors"
-        result_index = sweep_name + "_test_results"
+        vector_index = VECTOR_INDEX_PREFIX + sweep_name
+        result_index = RESULT_INDEX_PREFIX + sweep_name
 
         response = es_client.search(index=vector_index, size=10000)
         test_ids = [hit["_id"] for hit in response["hits"]["hits"]]

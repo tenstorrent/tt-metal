@@ -15,9 +15,8 @@ import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
 import architecture
 from elasticsearch import Elasticsearch, NotFoundError
+from elastic_config import *
 
-ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 ARCH = os.getenv("ARCH_NAME")
 
 
@@ -170,7 +169,7 @@ def run_sweeps(module_name, suite_name, vector_id):
         for file in sorted(sweeps_path.glob("*.py")):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
             test_module = importlib.import_module("sweeps." + sweep_name)
-            vector_index = sweep_name + "_test_vectors"
+            vector_index = VECTOR_INDEX_PREFIX + sweep_name
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
                 response = client.search(
@@ -204,7 +203,7 @@ def run_sweeps(module_name, suite_name, vector_id):
         except ModuleNotFoundError as e:
             print(f"SWEEPS: No module found with name {module_name}")
             exit(1)
-        vector_index = module_name + "_test_vectors"
+        vector_index = VECTOR_INDEX_PREFIX + sweep_name
 
         if vector_id:
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
@@ -250,7 +249,7 @@ def export_test_results(header_info, results):
         return
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     sweep_name = header_info[0]["sweep_name"]
-    results_index = sweep_name + "_test_results"
+    results_index = RESULT_INDEX_PREFIX + sweep_name
 
     curr_git_hash = git_hash()
     for result in results:
@@ -286,7 +285,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default="http://yyz-elk:9200",
+        default=ELASTIC_DEFAULT_URL,
         help="Elastic Connection String for the vector and results database.",
     )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
