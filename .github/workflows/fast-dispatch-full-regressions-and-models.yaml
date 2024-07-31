@@ -127,8 +127,8 @@ jobs:
           max_attempts: 5
           retry_wait_seconds: 10
           command: |
-            sudo systemctl restart mnt-MLPerf.mount
-            sudo /etc/rc.local
+            timeout 120 sudo systemctl restart mnt-MLPerf.mount
+            timeout 45 sudo /etc/rc.local
             ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dyanmic env vars for build
         run: |
