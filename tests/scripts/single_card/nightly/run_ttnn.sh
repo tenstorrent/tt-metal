@@ -10,7 +10,7 @@ fail=0
 
 echo "Running ttnn nightly tests"
 
-env pytest -n auto tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" ; fail+=$?
+env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
   exit 1
