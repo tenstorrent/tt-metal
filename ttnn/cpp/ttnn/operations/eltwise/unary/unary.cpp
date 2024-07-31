@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "unary.hpp"
 
 #include "device/unary_op.hpp"
@@ -291,14 +295,6 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::operator()(
         optional_output_tensor);
 }
 
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT>;
-
 template <UnaryOpType unary_op_type, typename T>
 Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::operator()(
     const Tensor& input_tensor,
@@ -312,6 +308,14 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::operator()(
         memory_config,
         optional_output_tensor);
 }
+
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT>;
 
 
 template <UnaryOpType unary_op_type, typename T>

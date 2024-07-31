@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/eltwise/unary/common/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 
 namespace ttnn::operations::unary {
