@@ -29,8 +29,8 @@ class TtMLP(torch.nn.Module):
             tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin"
         )
 
-        self.tt_weight_c_fc = tt_lib.tensor.transpose(self.tt_weight_c_fc, -2, -1)
-        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj, -2, -1)
+        self.tt_weight_c_fc = ttnn.transpose(self.tt_weight_c_fc, -2, -1)
+        self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)
 
         self.c_fc = Linear(config.n_embd, 4 * config.n_embd, self.tt_weight_c_fc, self.tt_bias_c_fc)
         self.c_proj = Linear(4 * config.n_embd, config.n_embd, self.tt_weight_c_proj, self.tt_bias_c_proj)

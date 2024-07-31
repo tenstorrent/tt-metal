@@ -15,8 +15,8 @@ from models.utility_functions import comp_pcc, comp_allclose
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
     # Weights pre-transposed on host​. No on-the fly transpose of W.
-    ff1_weighta = ttl.tensor.transpose(ff1_weighta, -2, -1)
-    ff2_weighta = ttl.tensor.transpose(ff2_weighta, -2, -1)
+    ff1_weighta = ttnn.transpose(ff1_weighta, -2, -1)
+    ff2_weighta = ttnn.transpose(ff2_weighta, -2, -1)
 
     # activation = [1, 9, 384, 1024]
     # ff1_weighta = [1, 1, 1024, 4096]

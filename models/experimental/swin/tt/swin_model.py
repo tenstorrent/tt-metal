@@ -146,7 +146,7 @@ class TtSwinModel(nn.Module):
 
         pooled_output = None
         if self.pooler is not None:
-            sequence_output_transpose = tt_lib.tensor.transpose(sequence_output, -2, -1)
+            sequence_output_transpose = ttnn.transpose(sequence_output, -2, -1)
             sequence_output_transpose = tt_to_torch_tensor(sequence_output_transpose).squeeze(0)
             pooled_output = self.pooler(sequence_output_transpose)
             pooled_output = torch.flatten(pooled_output, 1)

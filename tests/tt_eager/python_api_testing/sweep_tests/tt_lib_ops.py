@@ -2074,6 +2074,27 @@ def make_ttnn_unary_op(ttl_tensor_unop):
     return unary_op
 
 
+@setup_host_and_device
+def transpose(
+    x,
+    *args,
+    dim0,
+    dim1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    memory_config=ttnn.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, dim0, dim1, memory_config=memory_config)
+    output_tensor = ttnn.from_device(t1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+    return output_tensor
+
+
 def make_unary_op_optional_output(ttl_tensor_unop):
     @setup_host_and_device
     def unary_op_optional_output(
@@ -2214,12 +2235,6 @@ eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 # eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
-transpose_wh = make_unary_op(partial(ttl.tensor.transpose, dim0=-2, dim1=-1))
-transpose_hc = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-2))
-transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
-transpose_nh = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-2))
-transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
-transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
 eltwise_floor = make_unary_op_optional_output(ttnn.floor)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
 eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)

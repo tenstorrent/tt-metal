@@ -56,7 +56,7 @@ class TtBertEncoder(torch.nn.Module):
         )
 
         # Weights pre-transposed on host​. No on-the fly transpose of W.
-        self.attention_output_weight = ttl.tensor.transpose(self.attention_output_weight)
+        self.attention_output_weight = ttnn.transpose(self.attention_output_weight)
 
         # MHA layernorm part
         gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]

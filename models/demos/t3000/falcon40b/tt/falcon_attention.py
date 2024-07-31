@@ -369,11 +369,11 @@ class TtFalconAttention:
             ttnn.experimental.tensor.typecast(value_layer, self.model_config["KV_CACHE_DTYPE"]),
             user_id,
         )
-        key_layer_transposed = ttnn.experimental.tensor.transpose(
+        key_layer_transposed = ttnn.transpose(
             key_layer,
             -2,
             -1,
-            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
         )
         key_layer.deallocate(True)
 
@@ -610,11 +610,11 @@ class TtFalconAttention:
         ### PRE-SOFTMAX MM ###
         ######################
         # TODO: Sharded transpose could be in place???
-        key_layer_transposed = ttnn.experimental.tensor.transpose(
+        key_layer_transposed = ttnn.transpose(
             key_layer,
             -2,
             -1,
-            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
         )
         key_layer.deallocate(True)
 

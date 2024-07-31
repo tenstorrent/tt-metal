@@ -20,7 +20,7 @@ class TtBloomForQuestionAnswering:
         self.qa_outputs_bias = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.bias"], device)
 
         # Transpose the weights
-        self.qa_outputs_weight = tt_lib.tensor.transpose(self.qa_outputs_weight, -2, -1)
+        self.qa_outputs_weight = ttnn.transpose(self.qa_outputs_weight, -2, -1)
 
     def forward(
         self,

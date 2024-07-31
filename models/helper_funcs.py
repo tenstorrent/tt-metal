@@ -31,7 +31,7 @@ def Linear(
 
     weight = weight
     bias = bias
-    weight_T = tensor.transpose(weight, -2, -1)
+    weight_T = ttnn.transpose(weight, -2, -1)
 
     def linear_(activation):
         assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"

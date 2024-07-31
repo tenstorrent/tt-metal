@@ -315,8 +315,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
 
-.. autofunction:: tt_lib.tensor.transpose
-
 .. autofunction:: tt_lib.tensor.untilize
 
 .. autofunction:: tt_lib.tensor.untilize_with_unpadding

@@ -1243,7 +1243,7 @@ def reshape(x):
 
 
 def transpose(x):
-    tt_lib.tensor.transpose(x, dim0=2, dim1=3)
+    ttnn.transpose(x, dim0=2, dim1=3)
 
 
 def permute(x):
@@ -1954,7 +1954,7 @@ all_unary_ops = [
     },
     {
         "op": transpose,
-        "name": "tt_lib.tensor.transpose",
+        "name": "ttnn.transpose",
     },
     {
         "op": permute,

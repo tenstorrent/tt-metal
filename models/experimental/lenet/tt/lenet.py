@@ -133,7 +133,7 @@ class TtLeNet5(nn.Module):
         )  # HOST (fallback)
 
         # fc
-        weight_T = tt_lib.tensor.transpose(self.fc_weights, -2, -1)
+        weight_T = ttnn.transpose(self.fc_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
@@ -145,7 +145,7 @@ class TtLeNet5(nn.Module):
         out = self.relu2(out)
 
         # fc1
-        weight_T = tt_lib.tensor.transpose(self.fc1_weights, -2, -1)
+        weight_T = ttnn.transpose(self.fc1_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
@@ -158,7 +158,7 @@ class TtLeNet5(nn.Module):
         out = self.relu2(out)
 
         # fc2
-        weight_T = tt_lib.tensor.transpose(self.fc2_weights, -2, -1)
+        weight_T = ttnn.transpose(self.fc2_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,

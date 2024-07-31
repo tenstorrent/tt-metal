@@ -58,7 +58,7 @@ class TtRobertaForQuestionAnswering(nn.Module):
         self.qa_outputs_bias = torch2tt_tensor(state_dict[f"qa_outputs.bias"], self.device)
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
+        weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,

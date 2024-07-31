@@ -165,7 +165,7 @@ class TtEfficientNet(torch.nn.Module):
         else:
             self.classifier_bias = None
 
-        self.classifier_weight = tt_lib.tensor.transpose(self.classifier_weight, -2, -1)
+        self.classifier_weight = ttnn.transpose(self.classifier_weight, -2, -1)
 
     def forward(self, x):
         x = self.features(x)
