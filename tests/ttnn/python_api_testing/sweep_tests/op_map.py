@@ -805,4 +805,8 @@ op_map = {
         "tt_op": ttnn_ops.log1p_bw,
         "pytorch_op": pytorch_ops.log1p_bw,
     },
+    "eltwise-subalpha": {
+        "tt_op": ttnn_ops.eltwise_subalpha,
+        "pytorch_op": pytorch_ops.subalpha,
+    },
 }
