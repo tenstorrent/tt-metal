@@ -57,15 +57,13 @@ tests/scripts/tg/ @ttmchiou
 tests/scripts/tgg/ @ttmchiou
 
 # metal - base
-tt_metal/ @abhullar-tt @pgkeller @aliuTT
-tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller @aliuTT
-tt_metal/impl/device/ @abhullar-tt @davorchap @pgkeller @aliuTT @cfjchu
+tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
+tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
+tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
 
 # metal - dispatch
-tt_metal/impl/dispatch/ @pgkeller @tt-asaigal @aliuTT
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/dispatch/kernels/eth_* @ubcheema @aliuTT
-docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
 
