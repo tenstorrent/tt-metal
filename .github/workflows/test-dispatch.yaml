@@ -9,6 +9,19 @@ on:
         options:
           - grayskull
           - wormhole_b0
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable tracy"
       runner-label:
         required: true
         type: string
@@ -26,6 +39,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '[ "${{ inputs.arch }}" ]'
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.tracy }}
     secrets: inherit
   test-dispatch:
     needs: build-artifact
