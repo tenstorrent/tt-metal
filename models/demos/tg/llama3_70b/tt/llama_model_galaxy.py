@@ -274,7 +274,7 @@ class TtLlamaModel_galaxy:
             return ttnn.line_all_gather(
                 tensors,
                 dim=dim,
-                num_links=2,
+                num_links=1,
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
             )
 
