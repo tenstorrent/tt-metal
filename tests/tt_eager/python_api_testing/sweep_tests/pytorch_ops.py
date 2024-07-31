@@ -2066,3 +2066,39 @@ def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
 def interleaved_to_sharded_partial_coregrid(x, num_slices, x_core, ycore, *args, **kwargs):
     res = torch.ones(x.shape).bfloat16().float()
     return res
+
+
+def log10_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log10(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log2_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log2(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log1p_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log1p(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
