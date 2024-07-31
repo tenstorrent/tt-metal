@@ -5,6 +5,7 @@
 
 
 #include <cxxabi.h>
+#include <typeindex>
 
 const string demangle(const char* name) {
 
@@ -53,6 +54,20 @@ namespace ttnn {
             .connections = {}
         });
         current_op_id.push(0);
+        begin_op_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] = [ptr = this]  (const std::any& val) mutable {ptr->begin_op_process_ref_vector(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_vector_optional(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_vector_optional_const(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_tensor(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<const Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_const_tensor(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<std::optional<Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_optional_tensor(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<std::optional<Tensor> const>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_optional_tensor_const(val);};
+        begin_op_any_map[typeid(std::reference_wrapper<std::optional<const Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_optional_const_tensor(val);};
+
+        end_op_any_map[typeid(std::vector<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector(val);};
+        end_op_any_map[typeid(std::vector<std::optional<Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional(val);};
+        end_op_any_map[typeid(std::vector<std::optional<const Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional_const(val);};
+        end_op_any_map[typeid(Tensor)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_tensor(val);};
+
     }
     void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
         const std::lock_guard<std::mutex> lock(mutex);
@@ -66,7 +81,7 @@ namespace ttnn {
                 .counter = counter,
                 .name = "buffer_allocate",
                 .param = buffer->size(),
-                .connections = {current_op_id.top(), buf_id}
+                .connections = {buf_id}
             });
             graph[current_op_id.top()].connections.push_back(counter);
         }
@@ -82,7 +97,7 @@ namespace ttnn {
                 .counter = counter,
                 .name = "buffer_deallocate",
                 .param = buffer->size(),
-                .connections = {current_op_id.top(), id_to_counter[alloc_id]}
+                .connections = {id_to_counter[alloc_id]}
             });
             graph[current_op_id.top()].connections.push_back(counter);
         }
@@ -97,7 +112,7 @@ namespace ttnn {
                 .counter = counter,
                 .name = "circular_buffer_allocate",
                 .param = size,
-                .connections = {current_op_id.top()}
+                .connections = {}
             });
             graph[current_op_id.top()].connections.push_back(counter);
         }
@@ -120,6 +135,7 @@ namespace ttnn {
 
     void GraphProcessor::track_begin_op(std::string_view function_name, std::span<std::any> input_parameters) {
         const std::lock_guard<std::mutex> lock(mutex);
+        tt::log_info("Begin op: {}", function_name);
         auto counter = graph.size();
         {
             graph.push_back(Vertex{
@@ -128,53 +144,24 @@ namespace ttnn {
                 .param = input_parameters.size(),
                 .connections = {/*current_op_id.top()*/}
             });
+            if ( last_finished_op_id != -1 ) {
+                graph[last_finished_op_id].connections.push_back(counter);
+                last_finished_op_id = -1;
+            }
             graph[current_op_id.top()].connections.push_back(counter);
             current_op_id.push(counter);
+
         }
 
         for (int i = 0; auto& any : input_parameters) {
-            //tt::log_info("any type name param[{}]: {}", i, demangle(any.type().name()));
-            if (any.type() == typeid(std::vector<Tensor>)) {
-                const auto& tensor_vec = std::any_cast<std::vector<Tensor>>(any);
-                for (int j = 0; auto& it : tensor_vec) {
-                    add_tensor(it, std::format("input[{}]/tensor[{}]", i, j));
-                    j++;
-                }
+            std::type_index any_type = any.type();
+            auto it = begin_op_any_map.find(any_type);
+
+            if (it != begin_op_any_map.end()) {
+                it->second(any);
+            } else {
+                tt::log_info("input any type name ignored: {}", demangle(any.type().name()));
             }
-
-            if (any.type() == typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)) {
-                const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(any).get();
-                for (int j = 0; auto& it : tensor_vec) {
-                    if (it.has_value()) {
-                        add_tensor(it.value(), std::format("input[{}]/optional_tensor[{}]", i, j));
-                    }
-                    j++;
-                }
-            }
-
-            if (any.type() == typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)) {
-                const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(any).get();
-                for (int j = 0; auto& it : tensor_vec) {
-                    if (it.has_value()) {
-                        add_tensor(it.value(), std::format("input[{}]/optional_const_tensor[{}]", i, j));
-                    }
-                    j++;
-                }
-            }
-
-            if (any.type() == typeid(std::reference_wrapper<Tensor>)) {
-                const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(any).get();
-                add_tensor(tensor, std::format("input[{}]/tensor", i));
-            }
-
-            if (any.type() == typeid(std::reference_wrapper<std::optional<Tensor>>)) {
-                const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(any).get();
-                if (tensor.has_value()) {
-                    add_tensor(tensor.value(), std::format("input[{}]/tensor", i));
-                }
-
-            }
-
             i++;
         }
 
@@ -182,85 +169,64 @@ namespace ttnn {
 
     void GraphProcessor::track_end_op(const std::any& output_tensors) {
         const std::lock_guard<std::mutex> lock(mutex);
-        tt::log_info("any type name: {}", demangle(output_tensors.type().name()));
-        if (output_tensors.type() == typeid(std::vector<Tensor>)) {
-            tt::log_info("Casting types: {} == {}", output_tensors.type().name(), typeid(std::vector<Tensor>).name());
-            const auto& tensor_vec = std::any_cast<std::vector<Tensor>>(output_tensors);
-            for (int j = 0; auto& it : tensor_vec) {
-                add_tensor(it, std::format("output/tensor[{}]", j));
-                j++;
-            }
-        }
-
-        if (output_tensors.type() == typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)) {
-            const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(output_tensors).get();
-            for (int j = 0; auto& it : tensor_vec) {
-                if (it.has_value()) {
-                    add_tensor(it.value(), std::format("output/optional_tensor[{}]", j));
-                }
-                j++;
-            }
-        }
-
-        if (output_tensors.type() == typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)) {
-            const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(output_tensors).get();
-            for (int j = 0; auto& it : tensor_vec) {
-                if (it.has_value()) {
-                    add_tensor(it.value(), std::format("output/optional_const_tensor[{}]", j));
-                }
-                j++;
-            }
-        }
-
-        if (output_tensors.type() == typeid(std::reference_wrapper<Tensor>)) {
-            const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(output_tensors).get();
-            add_tensor(tensor, std::format("output/tensor"));
-        }
-
-        if (output_tensors.type() == typeid(std::reference_wrapper<std::optional<Tensor>>)) {
-            const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(output_tensors).get();
-            if (tensor.has_value()) {
-                add_tensor(tensor.value(), std::format("output/tensor"));
-            }
-        }
         auto counter = graph.size();
         {
             graph.push_back(Vertex{
                 .counter = counter,
                 .name = std::format("end op"),
                 .param = 0,
-                .connections = {current_op_id.top()}
+                .connections = {}
             });
             graph[current_op_id.top()].connections.push_back(counter);
+        }
+        last_finished_op_id = counter;
+
+        std::type_index any_type = output_tensors.type();
+        auto it = end_op_any_map.find(any_type);
+
+        if (it != end_op_any_map.end()) {
+            it->second(output_tensors);
+        } else {
+            tt::log_info("output any type name ignored: {}", demangle(output_tensors.type().name()));
         }
         current_op_id.pop();
     }
 
-    int GraphProcessor::add_tensor(const Tensor& t, string_view name) {
+    int GraphProcessor::add_tensor(const Tensor& t) {
         auto alloc_id = reinterpret_cast<std::uintptr_t>(t.tensor_attributes.get());
+        tt::log_info("Tensor ID: {}, used: {}", alloc_id, tensors_used);
         auto tensor_counter = id_to_counter.count(alloc_id) > 0 ? id_to_counter[alloc_id] : graph.size();
         if (id_to_counter.count(alloc_id) == 0) {
             graph.push_back(Vertex{
                 .counter = tensor_counter,
-                .name = std::string(name),
+                .name = std::format("tensor[{}]", tensors_used),
                 .param = 0,
-                .connections = {current_op_id.top()}
+                .connections = {}
             });
-            graph[current_op_id.top()].connections.push_back(tensor_counter);
+            tensors_used++;
             id_to_counter[alloc_id] = tensor_counter;
         }
-        auto buffer = t.buffer();
+        auto buffer = std::visit(
+        [&t](auto&& storage) -> tt::tt_metal::Buffer* {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return t.buffer();
+            } else {
+                return nullptr;
+            }
+        },
+        t.get_storage());
+
         if (buffer) {
             auto buffer_idx = add_buffer(buffer);
-            graph[tensor_counter].connections.push_back(buffer_idx);
             graph[buffer_idx].connections.push_back(tensor_counter);
         }
-        return id_to_counter[alloc_id];
+        return tensor_counter;
     }
 
     int GraphProcessor::add_buffer(tt::tt_metal::Buffer* buffer) {
         auto buffer_alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
-        auto counter = graph.size();
+        auto counter = id_to_counter.count(buffer_alloc_id) > 0 ? id_to_counter[buffer_alloc_id] : graph.size();
         if (id_to_counter.count(buffer_alloc_id) == 0) {
             graph.push_back(Vertex{
                 .counter = counter,
@@ -275,9 +241,109 @@ namespace ttnn {
         return id_to_counter[buffer_alloc_id];
     }
 
-GraphProcessor::~GraphProcessor() {
-    auto json_object = tt::stl::json::to_json(graph);
-    std::ofstream output_file_stream("test_graph.json");
-    output_file_stream << json_object << std::endl;
-}
+
+    void GraphProcessor::begin_op_process_ref_vector(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<Tensor>>>(any_val).get();
+        for (int j = 0; auto& it : tensor_vec) {
+            int tensor_id = add_tensor(it);
+            graph[tensor_id].connections.push_back(current_op_id.top());
+            j++;
+        }
+    }
+    void GraphProcessor::begin_op_process_ref_vector_optional(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(any_val).get();
+        for (int j = 0; auto& it : tensor_vec) {
+            if (it.has_value()) {
+                int tensor_id = add_tensor(it.value());
+                graph[tensor_id].connections.push_back(current_op_id.top());
+            }
+            j++;
+        }
+    }
+    void GraphProcessor::begin_op_process_ref_vector_optional_const(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(any_val).get();
+        for (int j = 0; auto& it : tensor_vec) {
+            if (it.has_value()) {
+                int tensor_id = add_tensor(it.value());
+                graph[tensor_id].connections.push_back(current_op_id.top());
+            }
+            j++;
+        }
+    }
+    void GraphProcessor::begin_op_process_ref_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(any_val).get();
+        int tensor_id = add_tensor(tensor);
+        graph[tensor_id].connections.push_back(current_op_id.top());
+    }
+    void GraphProcessor::begin_op_process_ref_const_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::reference_wrapper<const Tensor>>(any_val).get();
+        int tensor_id = add_tensor(tensor);
+        graph[tensor_id].connections.push_back(current_op_id.top());
+    }
+    void GraphProcessor::begin_op_process_ref_optional_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(any_val).get();
+        if (tensor.has_value()) {
+            int tensor_id = add_tensor(tensor.value());
+            graph[tensor_id].connections.push_back(current_op_id.top());
+        }
+    }
+    void GraphProcessor::begin_op_process_ref_optional_tensor_const(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor> const>>(any_val).get();
+        if (tensor.has_value()) {
+            int tensor_id = add_tensor(tensor.value());
+            graph[tensor_id].connections.push_back(current_op_id.top());
+        }
+    }
+    void GraphProcessor::begin_op_process_ref_optional_const_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<const Tensor>>>(any_val).get();
+        if (tensor.has_value()) {
+            int tensor_id = add_tensor(tensor.value());
+            graph[tensor_id].connections.push_back(current_op_id.top());
+        }
+    }
+    void GraphProcessor::end_op_process_vector(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::vector<Tensor>>(any_val);
+        for (int j = 0; auto& it : tensor_vec) {
+            int tensor_id = add_tensor(it);
+            graph[last_finished_op_id].connections.push_back(tensor_id);
+            j++;
+        }
+    }
+    void GraphProcessor::end_op_process_vector_optional(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::vector<std::optional<Tensor>>>(any_val);
+        for (int j = 0; auto& it : tensor_vec) {
+            if (it.has_value()) {
+                int tensor_id = add_tensor(it.value());
+                graph[last_finished_op_id].connections.push_back(tensor_id);
+                j++;
+            }
+        }
+    }
+    void GraphProcessor::end_op_process_vector_optional_const(const std::any& any_val) {
+        const auto& tensor_vec = std::any_cast<std::vector<std::optional<const Tensor>>>(any_val);
+        for (int j = 0; auto& it : tensor_vec) {
+            if (it.has_value()) {
+                int tensor_id = add_tensor(it.value());
+                graph[last_finished_op_id].connections.push_back(tensor_id);
+            }
+        }
+    }
+    void GraphProcessor::end_op_process_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<Tensor>(any_val);
+        int tensor_id = add_tensor(tensor);
+        graph[last_finished_op_id].connections.push_back(tensor_id);
+    }
+    void GraphProcessor::end_op_process_optional_tensor(const std::any& any_val) {
+        const auto& tensor = std::any_cast<std::optional<Tensor>>(any_val);
+        if (tensor.has_value()) {
+            int tensor_id = add_tensor(tensor.value());
+            graph[last_finished_op_id].connections.push_back(tensor_id);
+        }
+    }
+
+    GraphProcessor::~GraphProcessor() {
+        auto json_object = tt::stl::json::to_json(graph);
+        std::ofstream output_file_stream("test_graph.json");
+        output_file_stream << json_object << std::endl;
+    }
 }
