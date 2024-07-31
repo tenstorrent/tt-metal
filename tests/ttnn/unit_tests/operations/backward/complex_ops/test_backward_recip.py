@@ -41,13 +41,13 @@ def test_level2_recip_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
     in_data = random_complex_tensor(input_shape, (-90, 90), (-70, 70))
     in_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
-    grad_tensor = ttl.tensor.complex_tensor(
+    grad_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -93,13 +93,13 @@ def test_level2_recip_bw_inp_zero(bs, hw, memcfg, dtype, device, function_level_
     in_data = random_complex_tensor(input_shape, (0, 0), (0, 0))
     in_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
-    grad_tensor = ttl.tensor.complex_tensor(
+    grad_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )

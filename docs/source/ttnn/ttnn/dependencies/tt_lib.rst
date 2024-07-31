@@ -276,97 +276,36 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div_no_nan
 
-.. autofunction:: tt_lib.tensor.log1p
-
-.. autofunction:: tt_lib.tensor.clip
-
-.. autofunction:: tt_lib.tensor.hardtanh
-
-.. autofunction:: tt_lib.tensor.cbrt
-
-.. autofunction:: tt_lib.tensor.hypot
-
-.. autofunction:: tt_lib.tensor.mish
-
 .. autofunction:: tt_lib.tensor.polyval
 
 .. autofunction:: tt_lib.tensor.mac
-
-.. autofunction:: tt_lib.tensor.hardsigmoid
-
-.. autofunction:: tt_lib.tensor.swish
-
-.. autofunction:: tt_lib.tensor.hardswish
-
-.. autofunction:: tt_lib.tensor.softsign
 
 .. autofunction:: tt_lib.tensor.softshrink
 
 .. autofunction:: tt_lib.tensor.hardshrink
 
-.. autofunction:: tt_lib.tensor.cosh
-
-.. autofunction:: tt_lib.tensor.sinh
-
-.. autofunction:: tt_lib.tensor.tanhshrink
-
 .. autofunction:: tt_lib.tensor.remainder
 
 .. autofunction:: tt_lib.tensor.fmod
 
-.. autofunction:: tt_lib.tensor.atanh
-
-.. autofunction:: tt_lib.tensor.atan2
-
-.. autofunction:: tt_lib.tensor.logical_xor
-
 .. autofunction:: tt_lib.tensor.logical_xori
-
-.. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.celu
 
-.. autofunction:: tt_lib.tensor.addalpha
-
-.. autofunction:: tt_lib.tensor.bias_gelu_unary
-
 .. autofunction:: tt_lib.tensor.logit
-
-.. autofunction:: tt_lib.tensor.lgamma
 
 .. autofunction:: tt_lib.tensor.logical_andi
 
-.. autofunction:: tt_lib.tensor.multigammaln
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.isclose
-
-.. autofunction:: tt_lib.tensor.digamma
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
-.. autofunction:: tt_lib.tensor.polygamma
-
-.. autofunction:: tt_lib.tensor.trunc
-
 .. autofunction:: tt_lib.tensor.frac
-
-.. autofunction:: tt_lib.tensor.round
 
 .. autofunction:: tt_lib.tensor.floor_div
 
 .. autofunction:: tt_lib.tensor.rfloor_div
 
-Tensor relational operations
-============================
-
-
-Tensor ternary operations
-=========================
-.. autofunction:: tt_lib.tensor.where
-
-.. autofunction:: tt_lib.tensor.threshold
 
 Tensor manipulation operations
 -=============================
@@ -408,10 +347,6 @@ Tensor creation operations
 .. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
 
 .. autofunction:: tt_lib.tensor.empty
-
-.. autofunction:: tt_lib.tensor.tril
-
-.. autofunction:: tt_lib.tensor.triu
 
 Broadcast and Reduce
 ====================
@@ -576,10 +511,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.asinh
-
-.. autofunction:: tt_lib.tensor.acosh
-
 .. autofunction:: tt_lib.tensor.lerp
 
 .. autofunction:: tt_lib.tensor.fill_rm
@@ -588,38 +519,15 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
-.. autofunction:: tt_lib.tensor.xlogy
-
-.. autofunction:: tt_lib.tensor.addcmul
-
-.. autofunction:: tt_lib.tensor.addcdiv
-
 .. autofunction:: tt_lib.tensor.mean_hw
-
-.. autofunction:: tt_lib.tensor.var_hw
 
 .. autofunction:: tt_lib.tensor.logical_noti
 
-.. autofunction:: tt_lib.tensor.std_hw
-
-.. autofunction:: tt_lib.tensor.normalize_hw
-
 .. autofunction:: tt_lib.tensor.normalize_global
-
-.. autofunction:: tt_lib.tensor.nextafter
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
 .. autofunction:: tt_lib.tensor.repeat
-
-.. autofunction:: tt_lib.tensor.repeat_interleave
-
-.. autofunction:: tt_lib.tensor.pow
-
-.. autofunction:: tt_lib.tensor.argmax
-
-.. autofunction:: tt_lib.tensor.argmin
-
 
 Loss Functions
 ==============

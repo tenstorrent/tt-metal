@@ -20,15 +20,6 @@ namespace transformers {
 
 
 void py_module(py::module& m_transformers) {
-    m_transformers.def("split_query_key_value_and_split_heads", &split_query_key_value_and_split_heads,
-        py::arg().noconvert(),
-        py::arg("compute_with_storage_grid_size"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("num_heads").noconvert() = 16,
-        R"doc(
-        Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
-    )doc");
-
     m_transformers.def("attn_matmul", &attn_matmul,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("compute_with_storage_grid_size").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
         Performs a special pre-softmax matmul with [q_len, q_heads, batch, head_dim] and [batch, kv_heads, head_dim, kv_len]. q_len and kv_heads must be 1 and an intermediate value of [q_heads, batch, batch, kv_len] is produced (only on device cores). Batch dim from Z and Y is combined by taking the 1st, 2nd, ..., and 32nd row of Y from the batches in Z. Final output tensor is [1, q_heads, batch, kv_len]. In PyTorch, this is equivalent to: torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
@@ -53,19 +44,6 @@ void py_module(py::module& m_transformers) {
         Performs a custom reduction along dim 3 which is used in the SSM block of the Mamba architecture. Performs the following PyTorch equivalent (where latent_size = 32):
             x = torch.sum(x.reshape(1, 1, shape[2], shape[3] // latent_size, latent_size), dim=-1).reshape(1, 1, shape[2], shape[3] // latent_size)
     )doc");
-    m_transformers.def(
-        "ssm_prefix_scan",
-        &ssm_prefix_scan,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-        R"doc(
-        Performs a prefix scan to produce the SSM hidden states across an entire sequence. All input and output tensors are expected to be shape [1, 1, L, 2EN] where E = 2560 and N = 32. L can be any multiple of 32.)doc");
-
-
     py::class_<SDPADefaultProgramConfig>(m_transformers, "SDPADefaultProgramConfig")
         .def(py::init<>());
 

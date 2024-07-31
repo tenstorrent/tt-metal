@@ -75,7 +75,7 @@ class TtDistributedLayernormDLNP1:
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
-            x2_local = ttl.tensor.pow(xs[i], 2)
+            x2_local = ttnn.pow(xs[i], 2)
             meanx2_local = ttl.tensor.reduce(
                 x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
             )

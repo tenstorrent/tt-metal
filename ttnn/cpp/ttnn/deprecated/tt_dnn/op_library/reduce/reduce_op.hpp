@@ -9,20 +9,11 @@
 
 #include "ttnn/operation.hpp"
 
+#include "common.hpp"
+
 namespace tt {
 
 namespace tt_metal {
-enum class ReduceOpMath {
-    SUM, MAX, MIN
-};
-
-enum class ReduceOpDim {
-    H, W, HW
-};
-
-enum class ReduceOpParallelizationStrategy {
-    MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW
-};
 
 // TODO: Accept parallelization
 operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, float scaler = 1.0f);

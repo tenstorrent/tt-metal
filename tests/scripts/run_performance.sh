@@ -34,10 +34,10 @@ run_perf_models_llm_javelin() {
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker --timeout=360
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker --timeout=360
     fi
 
-    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -74,13 +74,11 @@ run_device_perf_models() {
 
         env pytest models/demos/bert/tests -m $test_marker
 
-        env pytest models/demos/wormhole/mistral7b/tests -m $test_marker
-
         env pytest models/demos/resnet/tests -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest models/demos/wormhole/mamba/tests -m $test_marker
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mamba/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
         #env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests -m $test_marker

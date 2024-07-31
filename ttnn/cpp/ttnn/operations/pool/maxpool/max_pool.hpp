@@ -183,7 +183,7 @@ namespace maxpool {
 
 
 // maxpool macro-op
-inline Tensor maxpool2d(const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device& device) {
+inline Tensor maxpool2d(const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device * device) {
     MemoryConfig memory_config = input_tensor.memory_config();
     const auto shard_grid = memory_config.shard_spec.value().grid;
     const auto shard_scheme = memory_config.memory_layout;

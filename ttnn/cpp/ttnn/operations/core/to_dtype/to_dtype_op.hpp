@@ -156,31 +156,32 @@ inline Tensor create_tensor_from_buffer(
 inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_layout, const DataType& dtype) {
     auto input_dtype = input_tensor.get_dtype();
 
-    switch (input_dtype) {
-        case DataType::UINT16: {
-            auto buffer = host_buffer::get_as<uint16_t>(input_tensor);
-            return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+    auto convert_dtype = [&input_layout, &input_dtype, &dtype](const Tensor& input_tensor) {
+        switch (input_dtype) {
+            case DataType::UINT16: {
+                auto buffer = host_buffer::get_as<uint16_t>(input_tensor);
+                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+            }
+            case DataType::INT32: {
+                auto buffer = host_buffer::get_as<int32_t>(input_tensor);
+                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+            }
+            case DataType::UINT32: {
+                auto buffer = host_buffer::get_as<uint32_t>(input_tensor);
+                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+            }
+            case DataType::FLOAT32: {
+                auto buffer = host_buffer::get_as<float>(input_tensor);
+                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+            }
+            case DataType::BFLOAT16: {
+                auto buffer = host_buffer::get_as<::bfloat16>(input_tensor);
+                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+            }
+            default: TT_THROW(fmt::format("Unsupported DataType: {}", input_dtype)); break;
         }
-        case DataType::INT32: {
-            auto buffer = host_buffer::get_as<int32_t>(input_tensor);
-            return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
-        }
-        case DataType::UINT32: {
-            auto buffer = host_buffer::get_as<uint32_t>(input_tensor);
-            return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
-        }
-        case DataType::FLOAT32: {
-            auto buffer = host_buffer::get_as<float>(input_tensor);
-            return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
-        }
-        case DataType::BFLOAT16: {
-            auto buffer = host_buffer::get_as<::bfloat16>(input_tensor);
-            return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
-        }
-        default: TT_THROW(fmt::format("Unsupported DataType: {}", input_dtype)); break;
-    }
-
-    return input_tensor;
+    };
+    return is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -196,7 +197,7 @@ struct ToDtype {
         }
 
         auto row_major_input_tensor = input_tensor.to(ttnn::ROW_MAJOR_LAYOUT);
-        auto intermediate_tensor = detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
+        auto intermediate_tensor = is_multi_device_tensor(row_major_input_tensor) ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype) : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);
     };
 };

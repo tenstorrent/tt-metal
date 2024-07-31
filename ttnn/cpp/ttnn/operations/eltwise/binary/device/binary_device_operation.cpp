@@ -20,7 +20,8 @@ std::map<string, string> get_defines(
     BinaryOpType op_type,
     const std::optional<DataType> input_dtype,
     const std::optional<DataType> output_dtype,
-    const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+    const std::optional<std::vector<UnaryWithParam>> fused_activations,
+    const std::optional<UnaryWithParam> input_tensor_a_activation) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -150,6 +151,10 @@ std::map<string, string> get_defines(
         } else {
             defines.merge(ttnn::operations::unary::utils::get_block_defines(fused_activations.value(), "0", idst));
         }
+    }
+
+    if (input_tensor_a_activation.has_value() ) {
+        defines.merge(ttnn::operations::unary::utils::get_defines(input_tensor_a_activation.value().op_type, std::nullopt, "PRE_IN0_0"));
     }
 
     return defines;
@@ -317,7 +322,7 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
             i + input_shape_b.rank() < input_shape_b.rank() ? input_shape_b.with_tile_padding()[i] : 1;
         output_shape_with_tile_padding[i + rank] = std::max(dim_a_with_tile_padding, dim_b_with_tile_padding);
     }
-    return ttnn::Shape::from_vector(output_shape, output_shape_with_tile_padding);
+    return ttnn::Shape(output_shape, output_shape_with_tile_padding);
 }
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(

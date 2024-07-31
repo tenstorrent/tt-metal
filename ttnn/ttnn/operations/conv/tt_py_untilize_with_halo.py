@@ -17,6 +17,7 @@ from ttnn.operations.conv.sliding_window_op_utils import (
     calculate_shard_grid,
 )
 import tt_lib as ttl
+import ttnn
 import torch
 import struct
 
@@ -30,9 +31,11 @@ class TTPyUntilizeWithHalo(TTPyOp):
         pad_val=0x0,
         is_out_tiled=True,
         transpose_mcast=True,
+        mesh_mapper=None,
     ):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
+        self.mesh_mapper = mesh_mapper
         self.transpose_mcast = transpose_mcast
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
         self.set_op_configs(
@@ -171,8 +174,9 @@ class TTPyUntilizeWithHalo(TTPyOp):
                         torch_tensor = torch_tensor.repeat(1, num_cores_w)
 
                 torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
-
-                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16)
+                tt_tensor = ttnn.from_torch(
+                    torch_tensor, dtype=ttnn.DataType.UINT16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mesh_mapper
+                )
                 tt_tensor = tt_tensor.to(device, get_memory_config(shard_shape)) if device is not None else tt_tensor
                 return tt_tensor
 
@@ -184,7 +188,12 @@ class TTPyUntilizeWithHalo(TTPyOp):
                         core_coord = ttl.tensor.CoreCoord(0, core_id)
                 else:
                     core_coord = ttl.tensor.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
-                worker_core = device.worker_core_from_logical_core(core_coord)
+
+                # HACK: Using first device which may have different harvesting than other chips. Logic should be pushed into op
+                if isinstance(device, ttnn.Device):
+                    worker_core = device.worker_core_from_logical_core(core_coord)
+                else:
+                    worker_core = device.get_device(0).worker_core_from_logical_core(core_coord)
                 return (worker_core.x, worker_core.y)
 
             remote_read = act_reshard_num_cores_nhw > 0

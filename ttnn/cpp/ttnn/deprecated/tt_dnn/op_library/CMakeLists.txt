@@ -129,17 +129,14 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reshape/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/composite/composite_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/backward/backward_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/optimizer_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/complex/complex_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loss/loss_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/transformer_tms.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_split_query_key_value_and_split_heads/multi_core_split_query_key_value_and_split_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_prefix_scan/multi_core_ssm_prefix_scan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_tiled.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_last_dim_two_chunks_tiled.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/concat/multi_core/concat_op_multi_core.cpp

@@ -4,8 +4,8 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttnn {
@@ -35,7 +35,6 @@ bool is_input_batched(const ttnn::Shape& shape) {
 
 }  // namespace detail
 
-
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
     if (!activation.has_value()) {
         return std::nullopt;
@@ -48,8 +47,12 @@ ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct tt::operations::primary::Matmul& parameters) {
-    const auto& input_tensor_a_adjusted = parameters.transpose_a ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config()) : input_tensor_a;
-    const auto& input_tensor_b_adjusted = parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config()) : input_tensor_b;
+    const auto& input_tensor_a_adjusted = parameters.transpose_a
+                                              ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
+                                              : input_tensor_a;
+    const auto& input_tensor_b_adjusted = parameters.transpose_b
+                                              ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
+                                              : input_tensor_b;
 
     const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
     const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
@@ -71,14 +74,10 @@ ttnn::Tensor matmul(
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_adjusted,
-        input_tensor_b_adjusted,
-        post_process_bias ? std::nullopt : bias,
-        parameters);
+        input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
 
     if (post_process_bias) {
-        output_tensor = ttnn::add(
-            output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
+        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {

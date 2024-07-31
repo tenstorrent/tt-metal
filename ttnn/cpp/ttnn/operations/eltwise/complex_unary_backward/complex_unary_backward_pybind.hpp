@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -19,9 +19,7 @@ namespace operations {
 namespace complex_unary_backward {
 
 namespace detail {
-using ComplexTensor = complex_binary::ComplexTensor;
 
-//OpHandler_complex : get_function_complex
 template <typename complex_unary_backward_operation_t>
 void bind_complex_unary_backward(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
@@ -63,7 +61,6 @@ Example:
             py::arg("memory_config")});
 }
 
-//OpHandler_tensor_complex : get_function_tensor_complex
 template <typename complex_unary_backward_operation_t>
 void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(

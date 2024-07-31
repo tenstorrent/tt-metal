@@ -9,7 +9,7 @@ import ttnn
 import pytest
 import torch
 from tqdm import tqdm
-
+import os
 from transformers import AutoTokenizer
 
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
@@ -31,13 +31,14 @@ def get_tt_metal_model(
     batch_size: int = 32,
     mode: ModelMode = ModelMode.DECODE,
     seq_len: int = 1,
+    num_layers: int = 64,
 ):
-    from models.demos.wormhole.mamba.tt.full_model import MambaTT
+    from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
     from models.demos.wormhole.mamba.tt import model_config
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
     config = model_config.create_model_config(batch_size, reference_model.args.d_model, mode=mode, seq_len=seq_len)
-    model = MambaTT(reference_model, device, config, tt_cache_path=cache_dir)
+    model = MambaTT(reference_model, device, config, tt_cache_path=cache_dir, num_layers=num_layers)
 
     return model
 
@@ -140,6 +141,8 @@ def run_mamba_prefill_decode_demo(
     generated_sequence_length: int = 50,
     cache_dir: Optional[str] = None,
     display: bool = True,
+    iterations: int = 2,
+    prefill_chunk_size: int = 32,
 ):
     if len(prompts) == 1:
         prompts = prompts * batch_size  # Duplicate the prompt to fill the batch
@@ -147,67 +150,111 @@ def run_mamba_prefill_decode_demo(
     assert batch_size == len(prompts), "32 prompts are required"
 
     tokenizer = get_tokenizer()
-    sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
-    prefill_length = sequences.shape[1] - 1
+    tokenized_prompts: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
+    prefill_length = tokenized_prompts.shape[1] - 1
     logger.info(f"Prefilling the prompt(s) with {prefill_length} tokens...")
 
     logger.info(f"Running Mamba demo (weights='{model_version}') with batch={batch_size}")
     logger.info(f"Using tensor cache at '{cache_dir}'")
 
-    prefill_chunk_size = 32
     model = get_tt_metal_model(
-        model_version, device, cache_dir, batch_size=1, mode=ModelMode.PREFILL, seq_len=prefill_chunk_size
+        model_version,
+        device,
+        cache_dir,
+        batch_size=1,
+        mode=ModelMode.PREFILL,
+        seq_len=prefill_chunk_size,
+        num_layers=64,
     )
     model.eval()
 
-    # Prefill
-    model.to_prefill()
+    for iteration in range(iterations):
+        logger.info(f"Prefill-Decode Iteration {iteration + 1}/{iterations}")
 
-    num_users = sequences.shape[0]
+        sequences = tokenized_prompts.clone()
+        # Prefill
+        prefill_model_config = model_config.create_model_config(
+            1, model.args.d_model, mode=ModelMode.PREFILL, seq_len=prefill_chunk_size
+        )
+        model.to_prefill(prefill_model_config)
 
-    prefill_tokens = sequences[:, :-1]  # Omit the last token in the sequence (B, L - 1)
+        num_users = sequences.shape[0]
 
-    prefill_tokens = ttnn.from_torch(
-        prefill_tokens.view(1, 1, prefill_tokens.shape[0], prefill_tokens.shape[1]),
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.uint32,
-    )
-    for user_idx in tqdm(range(num_users), desc="Prefilling the prompt(s)..."):
-        with torch.no_grad():
-            for chunk in split_sequence_length(prefill_tokens, batch=user_idx, chunk_size=prefill_chunk_size):
-                chunk = ttnn.reshape(chunk, [1, chunk.shape[3]])  # Mamba expects (1, L) in prefill mode
-                model._forward(chunk)
-        model.configs["current_user"] += 1
+        prefill_tokens = sequences[:, :-1]  # Omit the last token in the sequence (B, L - 1)
 
-    # Decode
-    decode_model_config = model_config.create_model_config(
-        batch_size, model.args.d_model, mode=ModelMode.DECODE, seq_len=1
-    )
-    model.to_decode(decode_model_config)
-
-    total_length = prefill_length + generated_sequence_length
-    logger.info("Starting decoding...")
-    for token_idx in range(prefill_length, total_length):
-        with torch.no_grad():
-            start = time.time()
-            logits = model(sequences[:, token_idx].unsqueeze(1))
-            end = time.time()
-
-        logits = apply_repetition_penalty_(logits.squeeze(1), sequences, penalty=1.2)  # Adjust penalty as needed
-        probs = torch.nn.functional.softmax(logits, dim=-1)
-        next_token = torch.argmax(probs, dim=-1)
-
-        sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=1)
-        decoded = tokenizer.batch_decode(sequences, skip_special_tokens=False)
-
-        throughput = batch_size / (end - start)
-
+        prefill_tokens = ttnn.from_torch(
+            prefill_tokens.view(1, 1, prefill_tokens.shape[0], prefill_tokens.shape[1]),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.uint32,
+        )
+        total_prefill_time = 0
+        for user_idx in tqdm(range(num_users), desc="Prefilling the prompt(s)..."):
+            prefill_start = time.time()
+            with torch.no_grad():
+                for chunk in split_sequence_length(prefill_tokens, batch=user_idx, chunk_size=prefill_chunk_size):
+                    chunk = ttnn.reshape(chunk, [1, chunk.shape[3]])  # Mamba expects (1, L) in prefill mode
+                    model._forward(chunk)
+            model.configs["current_user"] += 1
+            prefill_end = time.time()
+            prefill_time_per_user = prefill_end - prefill_start
+            total_prefill_time += prefill_time_per_user
+            prefill_throughput_per_user = prefill_length / prefill_time_per_user
+            if display:
+                print(f"Prefill throughput for user {user_idx} : {prefill_throughput_per_user:.2f} tok/s/u")
+        prefill_mean_throughput_per_user = prefill_length * num_users / total_prefill_time
         if display:
-            display_tokens(decoded)
-            print(f"Current total throughput: {throughput:.2f} tok/s")
-            print(f"Current throughput per user: {(throughput/batch_size):.2f} tok/s/u")
+            print(f"Prefill mean throughput per user: {(prefill_mean_throughput_per_user):.2f} tok/s/u")
+
+        # Decode
+        decode_model_config = model_config.create_model_config(
+            batch_size, model.args.d_model, mode=ModelMode.DECODE, seq_len=1
+        )
+        model.to_decode(decode_model_config)
+
+        total_length = prefill_length + generated_sequence_length
+        logger.info("Starting decoding...")
+        for token_idx in range(prefill_length, total_length):
+            with torch.no_grad():
+                start = time.time()
+                logits = model(sequences[:, token_idx].unsqueeze(1))
+                end = time.time()
+
+            logits = apply_repetition_penalty_(logits.squeeze(1), sequences, penalty=1.2)  # Adjust penalty as needed
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+            next_token = torch.argmax(probs, dim=-1)
+
+            sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=1)
+            decoded = tokenizer.batch_decode(sequences, skip_special_tokens=False)
+
+            throughput = batch_size / (end - start)
+
+            if display:
+                display_tokens(decoded)
+                print(f"Current total decode throughput: {throughput:.2f} tok/s")
+                print(f"Current decode throughput per user: {(throughput/batch_size):.2f} tok/s/u")
+
+        model.reset()
+        if iteration == 1:
+            logger.info(f"Prefill-Decode Iteration {iteration + 1}/{iterations} Summary:")
+            logger.info(
+                f"Prefill length: {prefill_length}, Prefill Chunk Size : {prefill_chunk_size}, Generated tokens: {generated_sequence_length}"
+            )
+            logger.info(f"Prefill throughput for User 32: {(prefill_throughput_per_user):.2f} tok/s/u")
+            logger.info(f"Prefill mean throughput per user: {(prefill_mean_throughput_per_user):.2f} tok/s/u")
+            logger.info(f"Current decode throughput per user: {(throughput/batch_size):.2f} tok/s/u")
+            # Write the summary to csv file
+            perf_summary_file = "models/demos/wormhole/mamba/data/prefill_decode_summary.csv"
+            file_exists = os.path.exists(perf_summary_file)
+            with open(perf_summary_file, "a") as f:
+                if not file_exists:
+                    f.write(
+                        "prefill_length,prefill_chunk_size,generated_sequence_length,prefill_throughput_per_user,prefill_mean_throughput_per_user,decode_throughput_per_user\n"
+                    )
+                f.write(
+                    f"{prefill_length},{prefill_chunk_size},{generated_sequence_length},{prefill_throughput_per_user},{prefill_mean_throughput_per_user},{throughput/batch_size}\n"
+                )
 
 
 @pytest.mark.parametrize(

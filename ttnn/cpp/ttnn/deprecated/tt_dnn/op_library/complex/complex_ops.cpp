@@ -12,7 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace tt {
 
@@ -90,7 +90,7 @@ Tensor complex_abs(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
-    return hypot(real, imag, output_mem_config);
+    return ttnn::hypot(real, imag, output_mem_config);
 }
 
 Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -151,7 +151,7 @@ Tensor angle(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
-    return ttnn::neg( atan2(imag, real, output_mem_config), output_mem_config );
+    return ttnn::neg( ttnn::atan2(imag, real, output_mem_config), output_mem_config );
 }
 
 #undef CHECK_FOR_COMPLEX

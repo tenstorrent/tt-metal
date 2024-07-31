@@ -77,6 +77,21 @@ def bcast_hw_shape_func(input_shape):
     return input_shape, input_shape_1
 
 
+def bcast_hw_shape_func_11(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, 1]
+    return input_shape, input_shape_1
+
+
+def bcast_h_shape_func_1(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 1, input_shape[-1]]
+    return input_shape, input_shape_1
+
+
+def bcast_w_shape_func_1(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], input_shape[-2], 1]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -146,15 +161,15 @@ def unary_pow_bw(x, y):
 
 
 def clamp_bw(x, y):
-    ttnn.clamp_bw(x, y, 0.1, 0.9)
+    ttnn.clamp_bw(x, y, min=0.1, max=0.9)
 
 
 def clamp_min_bw(x, y):
-    ttnn.clamp_min_bw(x, y, 0.1)
+    ttnn.clamp_bw(x, y, min=0.1)
 
 
 def clamp_max_bw(x, y):
-    ttnn.clamp_max_bw(x, y, 0.9)
+    ttnn.clamp_bw(x, y, max=0.9)
 
 
 def gelu_bw_none(x, y):
@@ -202,7 +217,7 @@ def unary_eq_bw(x, y):
 
 
 def logiteps_bw(x, y):
-    ttnn.logiteps_bw(x, y, 0.0001)
+    ttnn.logiteps_bw(x, y, eps=0.0001)
 
 
 def fmod_bw(x, y):
@@ -413,23 +428,23 @@ def angle_bw(x, y):
 
 
 def celu_bw(x, y):
-    ttnn.celu_bw(x, y, 1)
+    ttnn.celu_bw(x, y, alpha=1)
 
 
 def hardshrink_bw(x, y):
-    ttnn.hardshrink_bw(x, y, 0.5)
+    ttnn.hardshrink_bw(x, y, lambd=0.5)
 
 
 def leaky_relu_bw(x, y):
-    ttnn.leaky_relu_bw(x, y, 0.3)
+    ttnn.leaky_relu_bw(x, y, negative_slope=0.3)
 
 
 def softshrink_bw(x, y):
-    ttnn.softshrink_bw(x, y, 0.5)
+    ttnn.softshrink_bw(x, y, lambd=0.5)
 
 
 def unary_div_bw(x, y):
-    ttnn.div_bw(x, y, 3, round_mode="None")
+    ttnn.div_bw(x, y, 3.0, round_mode="None")
 
 
 all_binary_ops = [
@@ -444,6 +459,21 @@ all_binary_ops = [
     {
         "op": ttnn.mul,
         "name": "ttnn.mul",
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_h",
+        "shape_func": bcast_h_shape_func_1,
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_w",
+        "shape_func": bcast_w_shape_func_1,
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_hw",
+        "shape_func": bcast_hw_shape_func_11,
     },
     {
         "op": ttnn.divide,
@@ -636,7 +666,7 @@ all_binary_ops = [
     },
     {
         "op": ttnn.embedding,
-        "name": "tt_lib.tensor.embeddings",
+        "name": "ttnn.embedding",
         "layout": "ROW_MAJOR",
         "shape_func": embeddings_shape_func,
     },
@@ -1160,11 +1190,11 @@ def leaky_relu(x):
 
 
 def softshrink(x):
-    ttnn.softshrink(x, 70)
+    ttnn.softshrink(x, lambd=70)
 
 
 def hardshrink(x):
-    ttnn.hardshrink(x, 1)
+    ttnn.hardshrink(x, lambd=1)
 
 
 def elu(x):
@@ -1184,7 +1214,7 @@ def bias_gelu_unary(x):
 
 
 def logit(x):
-    ttnn.logit(x, 0.0001)
+    ttnn.logit(x, eps=0.0001)
 
 
 def logical_andi(x):
@@ -1297,14 +1327,6 @@ def zeros(x):
 
 def empty(x):
     ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
-
-
-def tril(x):
-    ttnn.tril(x, 1)
-
-
-def triu(x):
-    ttnn.triu(x, 1)
 
 
 def sum_dim_2(x):
@@ -1486,63 +1508,63 @@ def repeat(x):
 
 
 def repeat_interleave_0(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 0)
+    ttnn.repeat_interleave(x, 4, 0)
 
 
 def repeat_interleave_1(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 1)
+    ttnn.repeat_interleave(x, 4, 1)
 
 
 def repeat_interleave_2(x):
-    tt_lib.tensor.repeat_interleave(x, 4, 2)
+    ttnn.repeat_interleave(x, 4, 2)
 
 
 def pow_int(x):
-    tt_lib.tensor.pow(x, 3)
+    ttnn.pow(x, 3)
 
 
 def pow_float(x):
-    tt_lib.tensor.pow(x, 3.3)
+    ttnn.pow(x, 3.3)
 
 
 def argmax_1(x):
-    tt_lib.tensor.argmax(x, dim=-1)
+    ttnn.argmax(x, dim=-1)
 
 
 def argmax_2(x):
-    tt_lib.tensor.argmax(x, dim=-2)
+    ttnn.argmax(x, dim=-2)
 
 
 def argmax_3(x):
-    tt_lib.tensor.argmax(x, dim=-3)
+    ttnn.argmax(x, dim=-3)
 
 
 def argmax_4(x):
-    tt_lib.tensor.argmax(x, dim=-4)
+    ttnn.argmax(x, dim=-4)
 
 
 def argmax_all(x):
-    tt_lib.tensor.argmax(x, dim=-1, all=True)
+    ttnn.argmax(x, dim=-1, all=True)
 
 
 def argmin_1(x):
-    tt_lib.tensor.argmin(x, dim=-1)
+    ttnn.argmin(x, dim=-1)
 
 
 def argmin_2(x):
-    tt_lib.tensor.argmin(x, dim=-2)
+    ttnn.argmin(x, dim=-2)
 
 
 def argmin_3(x):
-    tt_lib.tensor.argmin(x, dim=-3)
+    ttnn.argmin(x, dim=-3)
 
 
 def argmin_4(x):
-    tt_lib.tensor.argmin(x, dim=-4)
+    ttnn.argmin(x, dim=-4)
 
 
 def argmin_all(x):
-    tt_lib.tensor.argmin(x, dim=-1, all=True)
+    ttnn.argmin(x, dim=-1, all=True)
 
 
 def primary_moreh_softmax_0(x):
@@ -1941,6 +1963,7 @@ all_unary_ops = [
     {
         "op": tilize,
         "name": "ttnn.tilize",
+        "layout": "ROW_MAJOR",
     },
     {
         "op": tt_lib.tensor.untilize,
@@ -1958,6 +1981,7 @@ all_unary_ops = [
     {
         "op": ttnn.tilize_with_zero_padding,
         "name": "ttnn.tilize_with_zero_padding",
+        "layout": "ROW_MAJOR",
     },
     {
         "op": pad,
@@ -2012,12 +2036,12 @@ all_unary_ops = [
         "name": "ttnn.empty",
     },
     {
-        "op": tril,
+        "op": ttnn.tril,
         "name": "ttnn.tril",
         "num_repeats": 3,
     },
     {
-        "op": triu,
+        "op": ttnn.triu,
         "name": "ttnn.triu",
         "num_repeats": 3,
     },
@@ -2171,20 +2195,20 @@ all_unary_ops = [
         "name": "tt_lib.tensor.mean_hw",
     },
     {
-        "op": tt_lib.tensor.var_hw,
-        "name": "tt_lib.tensor.var_hw",
+        "op": ttnn.var_hw,
+        "name": "ttnn.var_hw",
     },
     {
         "op": logical_noti,
         "name": "tt_lib.tensor.logical_noti",
     },
     {
-        "op": tt_lib.tensor.std_hw,
-        "name": "tt_lib.tensor.std_hw",
+        "op": ttnn.std_hw,
+        "name": "ttnn.std_hw",
     },
     {
-        "op": tt_lib.tensor.normalize_hw,
-        "name": "tt_lib.tensor.normalize_hw",
+        "op": ttnn.normalize_hw,
+        "name": "ttnn.normalize_hw",
     },
     {
         "op": tt_lib.tensor.normalize_global,
@@ -2228,16 +2252,16 @@ all_unary_ops = [
     },
     {
         "op": repeat_interleave_0,
-        "name": "tt_lib.tensor.repeat_interleave_dim_0",
+        "name": "ttnn.repeat_interleave_dim_0",
     },
     {
         "op": repeat_interleave_1,
-        "name": "tt_lib.tensor.repeat_interleave_dim_1",
+        "name": "ttnn.repeat_interleave_dim_1",
         "num_repeats": 2,
     },
     {
         "op": repeat_interleave_2,
-        "name": "tt_lib.tensor.repeat_interleave_dim_2",
+        "name": "ttnn.repeat_interleave_dim_2",
         "num_repeats": 2,
     },
     {
@@ -2254,42 +2278,42 @@ all_unary_ops = [
     },
     {
         "op": argmax_1,
-        "name": "tt_lib.tensor.argmax_dim_3",
+        "name": "ttnn.argmax_dim_3",
         "num_repeats": 2,
     },
     {
         "op": argmax_2,
-        "name": "tt_lib.tensor.argmax_dim_2",
+        "name": "ttnn.argmax_dim_2",
         "num_repeats": 2,
     },
     {
         "op": argmax_3,
-        "name": "tt_lib.tensor.argmax_dim_1",
+        "name": "ttnn.argmax_dim_1",
         "num_repeats": 2,
     },
     {
         "op": argmax_all,
-        "name": "tt_lib.tensor.argmax_all",
+        "name": "ttnn.argmax_all",
         "num_repeats": 2,
     },
     {
         "op": argmin_1,
-        "name": "tt_lib.tensor.argmin_dim_3",
+        "name": "ttnn.argmin_dim_3",
         "num_repeats": 2,
     },
     {
         "op": argmin_2,
-        "name": "tt_lib.tensor.argmin_dim_2",
+        "name": "ttnn.argmin_dim_2",
         "num_repeats": 2,
     },
     {
         "op": argmin_3,
-        "name": "tt_lib.tensor.argmin_dim_1",
+        "name": "ttnn.argmin_dim_1",
         "num_repeats": 2,
     },
     {
         "op": argmin_all,
-        "name": "tt_lib.tensor.argmin_all",
+        "name": "ttnn.argmin_all",
         "num_repeats": 2,
     },
     {
@@ -2524,18 +2548,23 @@ def div_bw(x, y, z):
     ttnn.div_bw(x, y, z, round_mode="None")
 
 
+def add_bw(x, y, z):
+    ttnn.add_bw(x, y, z)
+
+
 def primary_moreh_norm_backward(x, y, z):
     tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
 
 
-def fused_linear(x, weight, bias):
+def linear(x, weight, bias):
     ttnn.linear(x, weight, bias=bias)
 
 
-def fused_linear_shape_func(input_shape):
-    x_shape = [1, 1, input_shape[-2], input_shape[-1]]
-    weight_shape = [1, 1, input_shape[-2], input_shape[-1]]
-    bias_shape = [1, 1, 32, input_shape[-1]]
+def linear_shape_func(input_shape):
+    N = input_shape[-1]
+    x_shape = [1, input_shape[-2], N]
+    weight_shape = [N, N]
+    bias_shape = [1, N]
     return x_shape, weight_shape, bias_shape
 
 
@@ -2624,7 +2653,7 @@ all_ternary_ops = [
         "name": "ttnn.min_bw",
     },
     {
-        "op": ttnn.add_bw,
+        "op": add_bw,
         "name": "ttnn.add_bw",
     },
     # {
@@ -2716,9 +2745,9 @@ all_ternary_ops = [
         "name": "tt_lib.tensor.moreh_norm_backward",
     },
     {
-        "op": fused_linear,
+        "op": linear,
         "name": "ttnn.linear",
-        "shape_func": fused_linear_shape_func,
+        "shape_func": linear_shape_func,
     },
     {
         "op": ttnn.ge_bw,

@@ -103,11 +103,11 @@ class TtTransformer(nn.Module):
             )
             diagonal = 0
 
-            mask = tt_lib.tensor.tril(tensor, diagonal)
+            mask = ttnn.tril(tensor, diagonal)
             tensor.deallocate()
             # make the mask banded to account for sliding window
             diagonal = -self.args.sliding_window
-            mask = tt_lib.tensor.triu(mask, diagonal)
+            mask = ttnn.triu(mask, diagonal)
             mask = ttnn.log(mask)
             mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config, pad_value=-10000)
 

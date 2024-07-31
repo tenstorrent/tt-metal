@@ -103,6 +103,7 @@ void set_config_for_circular_buffer(
 void write_circular_buffer_config_vector_to_core(
     chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
+uint32_t generate_risc_startup_addr(bool is_eth_core);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
 bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);

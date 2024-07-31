@@ -63,7 +63,8 @@ struct ExampleDeviceOperation {
 
     struct SingleCore {
         struct shared_variables_t {
-            int some_variable_from_create_to_use_in_override_runtime_arguments;
+            KernelHandle unary_reader_kernel_id;
+            KernelHandle unary_writer_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -81,8 +82,10 @@ struct ExampleDeviceOperation {
 
     struct MultiCore {
         struct shared_variables_t {
-            int some_variable_from_create_to_use_in_override_runtime_arguments;
-            int some_other_variable_from_create_to_use_in_override_runtime_arguments;
+            KernelHandle unary_reader_kernel_id;
+            KernelHandle unary_writer_kernel_id;
+            std::size_t num_cores;
+            std::size_t num_cores_y;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

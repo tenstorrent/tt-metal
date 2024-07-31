@@ -9,7 +9,13 @@ from typing import List, Dict
 import ttnn
 
 
+def get_device_mesh_core_grid(device_mesh):
+    compute_with_storage_grid_size = device_mesh.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+
+
 DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
+DeviceMesh.core_grid = property(get_device_mesh_core_grid)
 
 
 def get_num_devices() -> List[int]:
@@ -55,7 +61,7 @@ def open_device_mesh(
 
 def close_device_mesh(device_mesh):
     """
-    close_device(multi_device: ttnn.Multi) -> None:
+    close_device_mesh(multi_device: ttnn.Multi) -> None:
 
     Close the device and remove it from the device cache.
     """
@@ -86,6 +92,19 @@ def create_device_mesh(
         yield device_mesh
     finally:
         close_device_mesh(device_mesh)
+
+
+def synchronize_devices(devices):
+    """
+    synchronize_device(device: ttnn.Device) -> None:
+
+    Synchronize the device with host by waiting for all operations to complete.
+    """
+    if isinstance(devices, ttnn.Device):
+        ttnn._ttnn.deprecated.device.Synchronize(devices)
+    else:
+        for device in devices.get_device_ids():
+            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device))
 
 
 class TensorToMesh:
@@ -135,6 +154,37 @@ class ShardTensorToMesh(TensorToMesh):
         }
 
 
+class ShardTensor2dMesh(TensorToMesh):
+    def __init__(self, device_mesh, shard_grid, shard_dimensions):
+        super().__init__(device_mesh)
+        self.shard_grid = shard_grid  # defines shape of 2D grid of shards
+        self.shard_dimensions = shard_dimensions  # defines which dimensions to shard
+
+    def map(self, tensor):
+        import torch
+
+        Y, X = self.shard_dimensions
+        # Returns list of tensors to map to row-major ordering of chips in shard grid
+        if self.shard_dimensions[Y] is None:
+            row_tensors = [tensor.clone() for _ in range(self.shard_grid[Y])]
+        else:
+            row_tensors = torch.chunk(tensor, self.shard_grid[Y], dim=self.shard_dimensions[Y])
+
+        if self.shard_dimensions[X] is None:
+            tensor_2d_shards = [row_tensor.clone() for row_tensor in row_tensors for _ in range(self.shard_grid[X])]
+        else:
+            tensor_2d_shards = [
+                tt for t in row_tensors for tt in torch.chunk(t, self.shard_grid[X], dim=self.shard_dimensions[X])
+            ]
+        return tensor_2d_shards
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dimensions[0] if self.shard_dimensions[0] else self.shard_dimensions[1]}",
+        }
+
+
 class ReplicateTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh: DeviceMesh):
         super().__init__(device_mesh)
@@ -145,6 +195,7 @@ class ReplicateTensorToMesh(TensorToMesh):
     def config(self):
         return {
             "strategy": "replicate",
+            "replication_factor": str(self.device_mesh.get_num_devices()),
         }
 
 

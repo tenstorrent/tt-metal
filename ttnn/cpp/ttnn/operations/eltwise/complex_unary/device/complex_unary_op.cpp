@@ -2,19 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
+#include "complex_unary_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
-#include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn::operations::complex_unary {
-using ComplexTensor = complex_binary::ComplexTensor;
 
 Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return input[0];
@@ -37,7 +34,7 @@ Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_confi
 }
 
 Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return tt::tt_metal::hypot(input[0],input[1],output_mem_config);
+    return ttnn::hypot(input[0],input[1],output_mem_config);
 }
 
 ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {

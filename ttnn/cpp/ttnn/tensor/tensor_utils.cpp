@@ -75,18 +75,22 @@ Tensor to_weight_special_padding_tile_layout(
             Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     };
-    return std::visit(
-        [&compute](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return compute(owned_buffer::get_as<T>(storage.buffer));
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return compute(borrowed_buffer::get_as<T>(storage.buffer));
-            } else {
-                TT_THROW("Unsupported storage type");
-            }
-        },
-        conv_weight_tensor.get_storage());
+    auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
+        return std::visit(
+            [&compute](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return compute(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            conv_weight_tensor.get_storage());
+    };
+
+    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
 template <typename T>
@@ -155,18 +159,22 @@ Tensor to_weight_tile_layout(
             Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     };
-    return std::visit(
-        [&compute](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return compute(owned_buffer::get_as<T>(storage.buffer));
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return compute(borrowed_buffer::get_as<T>(storage.buffer));
-            } else {
-                TT_THROW("Unsupported storage type");
-            }
-        },
-        conv_weight_tensor.get_storage());
+
+    auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
+        return std::visit(
+            [&compute](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return compute(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            conv_weight_tensor.get_storage());
+    };
+    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
 // Converts convolution weights to tilized 2d matrix layout.
@@ -537,7 +545,7 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
         }
         return tensors;
     } else if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceStorage>(multi_device_tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<MultiDeviceHostStorage>(multi_device_tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()),__FILE__, __LINE__));
         const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
         for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
             tensors.push_back(Tensor{
@@ -558,7 +566,7 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
         const auto& tensor_storage = std::get<MultiDeviceStorage>(tensor.get_storage());
         return tensor_storage.strategy;
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
         const auto& tensor_storage = std::get<MultiDeviceHostStorage>(tensor.get_storage());
         return tensor_storage.strategy;
     }
@@ -699,12 +707,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value());
+                    shard.tensor_attributes->shape.value);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value());
+                    shard.tensor_attributes->shape.value);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
