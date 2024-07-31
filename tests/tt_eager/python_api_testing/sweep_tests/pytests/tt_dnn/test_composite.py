@@ -262,6 +262,7 @@ def test_run_min_max_test(fn, input_shapes, device, function_level_defaults):
             torch.bfloat16,
         )
     ]
+
     comparison_func = comparison_funcs.comp_equal
     num_inputs = 1
     input_shapes = input_shapes * num_inputs
