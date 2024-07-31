@@ -287,8 +287,8 @@ Pointwise Binary
    ttnn/div
    ttnn/div_no_nan
    ttnn/floor_div
-   ttnn/remainder
-   ttnn/fmod
+   ttnn/binary_remainder
+   ttnn/binary_fmod
    ttnn/logical_and_
    ttnn/logical_or_
    ttnn/logical_xor_
