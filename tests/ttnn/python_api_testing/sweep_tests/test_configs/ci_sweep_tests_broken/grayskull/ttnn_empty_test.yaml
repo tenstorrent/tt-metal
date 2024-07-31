@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-empty:
+  - eltwise-empty:
       shape:
         start-shape: [1, 1, 1, 1]
         end-shape: [6, 12, 256, 256]
@@ -26,7 +26,7 @@ test-list:
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: empty_sweep.csv
-  - ttnn-empty:
+  - eltwise-empty:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]

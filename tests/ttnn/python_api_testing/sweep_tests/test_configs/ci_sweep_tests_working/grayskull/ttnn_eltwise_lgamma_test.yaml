@@ -1,5 +1,5 @@
 test-list:
-  - ttnn-eltwise-lgamma:
+  - eltwise-lgamma:
       shape:
         start-shape: [1, 1, 1, 1]
         end-shape: [6, 12, 256, 256]

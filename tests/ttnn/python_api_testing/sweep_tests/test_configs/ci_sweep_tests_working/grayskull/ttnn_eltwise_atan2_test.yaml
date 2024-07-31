@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-atan2:
+  - eltwise-atan2:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
