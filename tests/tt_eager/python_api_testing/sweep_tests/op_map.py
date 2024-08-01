@@ -404,10 +404,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_erfinv,
         "pytorch_op": pytorch_ops.erfinv,
     },
-    "eltwise-subalpha": {
-        "tt_op": tt_lib_ops.eltwise_subalpha,
-        "pytorch_op": pytorch_ops.subalpha,
-    },
     "lamb-optimizer": {
         "tt_op": tt_lib_ops.lamb_optimizer,
         "pytorch_op": pytorch_ops.lamb_optimizer,
