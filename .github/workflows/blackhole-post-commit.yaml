@@ -6,8 +6,8 @@ on:
   schedule:
     - cron: "0 20 * * *"
   # Pause this since not enough runners to support every commit to main
-  # push:
-  #  branches: ["main"]
+  push:
+   branches: ["mchiou/10880-rebase-onto-bh*"]
 
 permissions:
   actions: read
