@@ -22,17 +22,21 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
 }
 #endif
 
-template<int window_inner>
+template<int window_height, int window_width>
 FORCE_INLINE void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
-        const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
+        const uint32_t conv_act_c_bytes, const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
 
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
     // DPRINT<<"read_channels "<<reader_channel_idx<<"\n";
     #pragma GCC unroll 3
-    for (uint32_t inner = 0; inner < window_inner; inner++) {
-        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
-        l1_write_addr_act += coalesced_read_bytes;
-        // +2 is hard-coded, TODO: generalize
+    for (uint32_t outer = 0; outer < window_height; outer++) {
+        uint32_t act_l1_row_offset = act_l1_read_addr_plus_offset;
+        #pragma GCC unroll 3
+        for (uint32_t inner = 0; inner < window_width; inner++) {
+            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
+            l1_write_addr_act += conv_act_c_read_bytes;
+            act_l1_row_offset += conv_act_c_bytes;
+        }
         act_l1_read_addr_plus_offset += stride_h_bytes;
     }
 }
@@ -49,14 +53,16 @@ void kernel_main() {
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(10);
-    constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(11);
-    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(12);
-    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(13);
-    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(14);
-    constexpr uint32_t act_mcast_dest_noc_end_x   = get_compile_time_arg_val(15);
-    constexpr uint32_t act_mcast_dest_noc_end_y   = get_compile_time_arg_val(16);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
+    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
+    constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(12);
+    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(13);
+    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(14);
+    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(15);
+    constexpr uint32_t act_mcast_dest_noc_end_x   = get_compile_time_arg_val(16);
+    constexpr uint32_t act_mcast_dest_noc_end_y   = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(19);
+
 
     // constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
     // constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
@@ -71,6 +77,13 @@ void kernel_main() {
 
     uint32_t this_core_x = get_arg_val<uint32_t>(i); i+=1;
     uint32_t this_core_y = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t num_cores_x = get_arg_val<uint32_t>(i); i+=1;
+    tt_l1_ptr uint32_t *act_mcast_x_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
+    i+=num_cores_x;
+    tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
+
+
+
     // uint32_t act_mcast_dest_noc_end_x   = get_arg_val<uint32_t>(i); i+=1;
     // uint32_t act_mcast_dest_noc_end_y   = get_arg_val<uint32_t>(i); i+=1;
     // uint32_t act_mcast_sender_id        = get_arg_val<uint32_t>(i); i+=1;
@@ -117,9 +130,11 @@ void kernel_main() {
 
     // TODO: need to make the read coalescing optimization cleaner
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
-    constexpr uint32_t coalesced_read_bytes = weight_size_w * conv_act_c_read_bytes;
+    constexpr uint32_t coalesced_read_bytes = conv_act_c_read_bytes;
+    constexpr uint32_t stride_h_bytes = (conv_act_size_w ) * conv_act_c_read_bytes;
+    constexpr uint32_t conv_act_c_bytes = conv_act_c_read_bytes * act_num_blocks_w;
 
-
+    DPRINT<<"Conv Read "<<conv_act_c_read_bytes<<" "<<conv_act_c_bytes<<" "<<stride_h_bytes<<ENDL();
     // Fully create act matrix and tilize it before mcast
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
@@ -127,86 +142,95 @@ void kernel_main() {
 
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
-    cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
     // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<"CB_ACT_ADDR : "<<l1_write_addr_act<<"\n";
     // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<"IN_ACT_ADDR : "<<act_l1_read_addr<<"\n";
 
 
-    constexpr uint32_t stride_h_bytes = (conv_act_size_w ) * conv_act_c_read_bytes;
     static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
-    // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
-    for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        read_channels<weight_size_h>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
-        read_channels<weight_size_h>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
 
-        reader_idx++;
-    }
+    for(uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++)
+    {
+        // cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
-    // // incrementing num issued in one shot is actually slower
-    // // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
-    noc_async_read_barrier();
-    cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+        // DPRINT<<"Act L1 read offset "<<act_l1_read_addr-get_read_ptr(cb_id_sharded_act)<<ENDL();
+        // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
+        for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
 
-    DPRINT<<"Act Block Num Tiles "<<act_block_num_tiles<<"\n";
-
-    // DPRINT<<"MCast "<<act_w_num_outer<<"  "<<act_mcast_sender_id<<"num cores "<<act_mcast_num_cores<<"\n";
-    // Round robin self-mcast and receive tilized act matrix in cb_id_act
-    // Compute should function like regular mm
-   uint32_t act_w_outer_i = 0;
-    for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-        cb_reserve_back(cb_id_act, act_block_num_tiles);
-        if (act_w_outer_i == act_mcast_sender_id) {
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": MCast ID "<<act_w_outer_i<<"\n\n";
-            // MCAST SENDER: send entire tilized input to other cores in column
-            // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
-            // the semaphore_addr value back to zero for the next block
-
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore"<<*act_mcast_sender_semaphore_addr_ptr<<"\n\n";
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": Wait for "<<act_mcast_num_cores-1<<"\n\n";
-
-            noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_cores-1);
-
-            noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
-
-            noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
-            // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-            cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
-
-            // // Now we have the block in the CB address, we can mcast to dests!
-            uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
-
-            uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
-            // // num_dests will source, since we are copying to a different local CB as well
-            noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores , false, false);
-
-            // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
-            // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore_valid_addr"<<*(uint32_t *)act_mcast_sender_semaphore_valid_addr<<"\n\n";
-
-            // // We should also multicast VALID flag to destinations for receiver semaphore
-            noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores , false, false);
-
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
-
-            noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-        } else {
-            // MCAST RECEIVER: receive entire tilized input from sender core
-            // Set act semaphore value to INVALID
-            noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
-            // Atomic increment source core counter
-            uint64_t act_mcast_sender_semaphore_noc_addr = get_noc_addr(act_w_outer_i + 1, 1, act_mcast_sender_semaphore_addr);
-            noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-
-            // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
-
-            noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+            reader_idx++;
         }
-        cb_push_back(cb_id_act, act_block_num_tiles);
-    } // act_w_num_outer
-    cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+        act_l1_read_addr += conv_act_c_read_bytes;
+
+        // // incrementing num issued in one shot is actually slower
+        // // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
+        noc_async_read_barrier();
+        // cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+
+        DPRINT<<"Act Block Num Tiles "<<act_block_num_tiles<<"\n";
+
+        // DPRINT<<"MCast "<<act_w_num_outer<<"  "<<act_mcast_sender_id<<"num cores "<<act_mcast_num_cores<<"\n";
+        // Round robin self-mcast and receive tilized act matrix in cb_id_act
+        // Compute should function like regular mm
+        uint32_t act_w_outer_i = 0;
+        for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+            // cb_reserve_back(cb_id_act, act_block_num_tiles);
+            if (act_w_outer_i == act_mcast_sender_id) {
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": MCast ID "<<act_w_outer_i<<"\n\n";
+                // MCAST SENDER: send entire tilized input to other cores in column
+                // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
+                // the semaphore_addr value back to zero for the next block
+
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore"<<*act_mcast_sender_semaphore_addr_ptr<<"\n\n";
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": Wait for "<<act_mcast_num_cores-1<<"\n\n";
+
+                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_cores-1);
+
+                noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
+
+                noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                // cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+
+                // // Now we have the block in the CB address, we can mcast to dests!
+                uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
+
+                uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
+                // // num_dests will source, since we are copying to a different local CB as well
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores , false, false);
+
+                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore_valid_addr"<<*(uint32_t *)act_mcast_sender_semaphore_valid_addr<<"\n\n";
+
+                // // We should also multicast VALID flag to destinations for receiver semaphore
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores , false, false);
+
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
+
+                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+            } else {
+                // MCAST RECEIVER: receive entire tilized input from sender core
+                // Set act semaphore value to INVALID
+                noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                uint32_t sender_x = act_mcast_x_lookup[act_w_outer_i];
+                uint32_t sender_y = act_mcast_x_lookup[0];
+                DPRINT<<"MCast "<<act_w_outer_i<<"  "<<sender_x<<" "<<sender_y<<ENDL();
+                // Atomic increment source core counter
+                uint64_t act_mcast_sender_semaphore_noc_addr = get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
+                noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
+
+                // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
+
+                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+            }
+            // cb_push_back(cb_id_act, act_block_num_tiles);
+        } // act_w_num_outer
+        // cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+    }
 }

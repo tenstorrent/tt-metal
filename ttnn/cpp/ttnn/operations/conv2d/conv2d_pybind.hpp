@@ -196,7 +196,7 @@ void py_module(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -209,6 +209,7 @@ void py_module(py::module& module) {
             py::arg("deallocate_activation") = false,
             py::arg("reallocate_halo_output") = false,
             py::arg("act_block_h_override") = 0,
+            py::arg("act_block_w_div") = 1,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
             py::arg("height_sharding") = true,
@@ -230,6 +231,7 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation);
         py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output);
         py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override);
+        py_conv_config.def_readwrite("act_block_w_div", &Conv2dConfig::act_block_w_div);
         py_conv_config.def_readwrite("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal);
         py_conv_config.def_readwrite("override_sharding_config", &Conv2dConfig::override_sharding_config);
         py_conv_config.def_readwrite("height_sharding", &Conv2dConfig::height_sharding);
