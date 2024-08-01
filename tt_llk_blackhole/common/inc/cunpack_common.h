@@ -262,6 +262,9 @@ namespace ckernel::unpacker
 
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
+      uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16);
+      cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(src_zeroflags_disable);
+      
       //Set FP8 E4M3 mode, bit is accessible by unpacker/packer 
       if((unpA_src_format&0x1F) == (uint)DataFormat::Fp8_e4m3) {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(1);

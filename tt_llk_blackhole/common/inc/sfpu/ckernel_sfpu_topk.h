@@ -34,8 +34,8 @@ inline void bitonic_topk_load8(uint offset, uint dist) {
     TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
 
     // Load 16 consecutive indices
-    TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
-    TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
+    TT_SFPLOAD(p_sfpu::LREG4, 6, ADDR_MOD_7, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
+    TT_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
 
 }
 
@@ -50,8 +50,8 @@ inline void bitonic_topk_store8(uint offset, uint dist) {
     TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
 
     // Load 16 consecutive indices
-    TT_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
-    TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG4, 6, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TT_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
 }
 
 inline void bitonic_topk_load16(uint dist0, uint dist1) {
@@ -70,18 +70,19 @@ inline void bitonic_topk_load16(uint dist0, uint dist1) {
     }
 
      // Load 16 consecutive indices
-    TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TTI_SFPLOAD(p_sfpu::LREG4, 6, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 4);
-        TTI_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + 8);
-        TTI_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + 12);
+        TTI_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, 6, ADDR_MOD_7, dst_indices_offset + 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, 6, ADDR_MOD_7, dst_indices_offset + 12);
     } else {
-        TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + dist1);
-        TT_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG6, 6, ADDR_MOD_7, dst_indices_offset + dist1);
+        TT_SFPLOAD(p_sfpu::LREG7, 6, ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
     }
 }
 
+template <bool alt_addr_mod = false>
 inline void bitonic_topk_store16(uint dist0, uint dist1) {
     constexpr uint dst_indices_offset = 128;        // 2 tile x 64 rows per tile
 
@@ -97,21 +98,21 @@ inline void bitonic_topk_store16(uint dist0, uint dist1) {
         TT_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, dist1 + dist0);
     }
 
-     // Load 16 consecutive indices
-    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    // Load 16 consecutive indices
+    TTI_SFPSTORE(p_sfpu::LREG4, 6, ADDR_MOD_7, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 4);
-        TTI_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + 8);
-        TTI_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + 4);
+        TTI_SFPSTORE(p_sfpu::LREG6, 6, ADDR_MOD_7, dst_indices_offset + 8);
+        TTI_SFPSTORE(p_sfpu::LREG7, 6, alt_addr_mod ? ADDR_MOD_6 : ADDR_MOD_7, dst_indices_offset + 12);
     } else {
-        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, dst_indices_offset + dist1);
-        TT_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_7, dst_indices_offset + 0 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG6, 6, ADDR_MOD_7, dst_indices_offset + dist1);
+        TT_SFPSTORE(p_sfpu::LREG7, 6, alt_addr_mod ? ADDR_MOD_6 : ADDR_MOD_7, dst_indices_offset + dist1 + dist0);
     }
 }
 
-inline void bitonic_topk_ph3_st4_to_1(bool dir) {
-
+inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_start) {
+    
     if (dir == (bool)SortDir::ArgMin) {
         TT_LOG("Issue max/min reverse");
         TTI_SFPCONFIG(0x104, 0xF, 1);      // Reverse the max/min behaviour of SWAP
@@ -119,29 +120,28 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir) {
         TTI_SFPNOP;
     }
 
-    // Step 4
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
+    if (init_replay) {
+        load_replay_buf(replay_start, 7, 1,
+            [] {
+                // Step 4
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPNOP;
 
-    // Step 3
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
+                // Step 3
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPNOP;
 
-    TTI_SFPTRANSP(0,0,0,0);
-
-    // Step 2
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
-
-    // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
-
-    TTI_SFPTRANSP(0,0,0,0);
+                TTI_SFPTRANSP(0,0,0,0);
+            }
+        );
+        init_replay = false;
+    } else {
+        TT_REPLAY(replay_start, 7, 0, 0);
+    }
+    
+    TT_REPLAY(replay_start, 7, 0, 0);
 
     if (dir == (bool)SortDir::ArgMin) {
         TT_LOG("Restore max/min reverse");
@@ -246,60 +246,85 @@ inline void _bitonic_topk_phases_steps(
 {
     // If more than 1 phase is requested, do all the steps from all phases
     // If 1 phase is requested, use i_start_step/i_end_step parameters
+    
+    // init the replay buffer for local sort if uninitialized
+    bool init_load = (topk_replay_init >= 0) ? true : false;
+    bool init_store = (topk_replay_init >= 0) ? true : false;
+    bool init_phase;
+
     uint dst_addr_offset = 0;
     for (int face=0; face<2; face++) {
         for (int col=0; col<2; col++) {
-
             bool dir = idir;
             for (int ph=i_start_phase; ph<(i_end_phase+1); ph++) {
-
+                init_phase = true; // init each new phase of local sort in replay buffer
                 TT_LOG("Local Sort: phase = {}, dir = {}, idir = {}", ph, dir, idir);
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                 switch (ph) {
                 case 0:
                     for (int d=0; d<4; d++) {
                         // Groups of 16 datums being sorted at the same time
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph0_st1_to_1();
-                        bitonic_topk_store16(4, 8);
-                        TTI_INCRWC(0, 8, 0, 0);         // dst += 16
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
+                        if (init_load) {
+                            load_replay_buf<0, 8, true>([] {
+                                bitonic_topk_load16(4, 8);
+                            });
+                            init_load = false;
+                        } else {
+                            TTI_REPLAY(0, 8, 0, 0);
+                        }
+                        if (init_phase) {
+                            load_replay_buf<16, 7, true>([] {
+                                bitonic_topk_ph0_st1_to_1();
+                            });
+                            init_phase = false;
+                        } else {
+                            TTI_REPLAY(16, 7, 0, 0);
+                        }
+                        if (init_store) {
+                            load_replay_buf<8, 8, true>([] {
+                                bitonic_topk_store16<true>(4, 8);
+                            });
+                            init_store = false;
+                        } else {
+                            TTI_REPLAY(8, 8, 0, 0);
+                        }
+                        
                     }
                     break;
                 case 1:
                     for (int d=0; d<4; d++) {
                         // Groups of 16 datums being sorted at the same time
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph1_st2_to_1();
-                        bitonic_topk_store16(4, 8);
-                        TTI_INCRWC(0, 8, 0, 0);         // dst += 32
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
+                        TTI_REPLAY(0, 8, 0, 0);
+                        if (init_phase) {
+                            load_replay_buf<16, 8, true>([] {
+                                bitonic_topk_ph1_st2_to_1();
+                            });
+                            init_phase = false;
+                        } else {
+                            TTI_REPLAY(16, 8, 0, 0);
+                        }
+                        TTI_REPLAY(8, 8, 0, 0);
                     }
                     break;
                 case 2:
                     for (int d=0; d<4; d++) {
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph2_st3_to_1();
-                        bitonic_topk_store16(4, 8);
-                        TTI_INCRWC(0, 8, 0, 0);         // dst += 32
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
+                        TTI_REPLAY(0, 8, 0, 0);
+                        if (init_phase) {
+                            load_replay_buf<16, 13, true>([] {
+                                bitonic_topk_ph2_st3_to_1();
+                            });
+                            init_phase = false;
+                        } else {
+                            TTI_REPLAY(16, 13, 0, 0);
+                        }
+                        TTI_REPLAY(8, 8, 0, 0);
                     }
                     break;
                 case 3:
                     for (int d=0; d<4; d++) {
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph3_st4_to_1(dir);
-                        bitonic_topk_store16(4, 8);
-                        TTI_INCRWC(0, 8, 0, 0);         // dst += 32
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
+                        TTI_REPLAY(0, 8, 0, 0);
+                        bitonic_topk_ph3_st4_to_1(dir, init_phase, 16);
+                        TTI_REPLAY(8, 8, 0, 0);
                         dir = !dir;
                     }
                     break;
@@ -322,7 +347,7 @@ inline void _bitonic_topk_phases_steps(
                             for (uint ii=0; ii<inner_d; ii++) {
                                 bitonic_topk_load16(4, 2*dist);                 // load/store with offset of face 1 (in row major face layout)
                                 bitonic_topk_step_N(dir);
-                                bitonic_topk_store16(4, 2*dist);                // load/store with offset of face 1 (in row major face layout)
+                                bitonic_topk_store16<false>(4, 2*dist);         // load/store with offset of face 1 (in row major face layout)
                                 uint dst_inc = 8;
                                 dst_offset += dst_inc;
                                 bool dst_cr = false;
@@ -345,10 +370,9 @@ inline void _bitonic_topk_phases_steps(
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                     datums_compared = 0;
                     while (datums_compared < total_datums_to_compare) {
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph3_st4_to_1(dir);
-                        bitonic_topk_store16(4, 8);
-                        bitonic_topk_inc_x8_dest(32, false);
+                        TTI_REPLAY(0, 8, 0, 0);
+                        bitonic_topk_ph3_st4_to_1(dir, init_phase, 16);
+                        TTI_REPLAY(8, 8, 0, 0);
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                     }
@@ -361,6 +385,7 @@ inline void _bitonic_topk_phases_steps(
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
     }
+    topk_replay_init = -1;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -404,6 +429,9 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
+    // init replay buffer for rebuild interation 'm_iter' if uninitialized
+    bool init_rebuild = (topk_replay_init != m_iter+1) ? true : false;
+
     uint dst_addr_offset = 0;
     for (int face=0; face<2; face++) {
         for (int col=0; col<2; col++) {
@@ -424,36 +452,86 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     TT_RISC_ASSERT(false, "K=2 not supported!");
                     break;
                 case 1:
-                    ld_dist = (ld_offset < 16) ? 4*ld_offset : 2*ld_offset;
-                    while (datums_compared < total_datums_to_compare) {
-                        // Groups of 16 datums being sorted at the same time
-                        bitonic_topk_load16(ld_offset, ld_dist);
-                        bitonic_topk_ph1_st2_to_1();
-                        bitonic_topk_store16(ld_offset, ld_dist);
-                        uint dst_inc = 2*32;
-                        bitonic_topk_inc_x8_dest(dst_inc, false);
-                        datums_compared += 16;
+                    if (m_iter >= 2) {
+                        while (datums_compared < total_datums_to_compare) {
+                            // Groups of 8 datums being sorted at the same time
+                            if (init_rebuild) {
+                                load_replay_buf<0, 24, true>([ld_offset] {
+                                    bitonic_topk_load8(0, ld_offset);
+                                    bitonic_topk_ph1_st2_to_1();
+                                    bitonic_topk_store8(0, ld_offset);
+                                    bitonic_topk_inc_x8_dest(64,false);
+                                });
+                                init_rebuild = false;
+                            } else {
+                                TTI_REPLAY(0, 24, 0, 0);
+                            }
+                            datums_compared += 16;
+                        }
+                        break;
+                    } else {
+                        ld_dist = (ld_offset < 16) ? 4*ld_offset : 2*ld_offset;
+                        while (datums_compared < total_datums_to_compare) {
+                            // Groups of 16 datums being sorted at the same time
+                            if (init_rebuild) {
+                                load_replay_buf<0, 28, true>([ld_offset, ld_dist] {
+                                    bitonic_topk_load16(ld_offset, ld_dist);
+                                    bitonic_topk_ph1_st2_to_1();
+                                    bitonic_topk_store16<true>(ld_offset, ld_dist);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                });
+                                init_rebuild = false;
+                            } else {
+                                TTI_REPLAY(0, 28, 0, 0);
+                            }
+                            datums_compared += 16;
+                        }
+                        break;
                     }
-                    break;
                 case 2:
                     while (datums_compared < total_datums_to_compare) {
                         // Groups of 16 datums being sorted at the same time
-                        bitonic_topk_load16(4, ld_offset);
-                        bitonic_topk_ph2_st3_to_1();
-                        bitonic_topk_store16(4, ld_offset);
-                        uint dst_inc = 2*32;
-                        bitonic_topk_inc_x8_dest(dst_inc, false);
+                        if (init_rebuild) {
+                            load_replay_buf<0, 32, true>([ld_offset] {
+                                bitonic_topk_load16(4, ld_offset);
+                                bitonic_topk_ph2_st3_to_1();
+                                bitonic_topk_store16<true>(4, ld_offset);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                            });
+                            init_rebuild = false;
+                        } else {
+                            TTI_REPLAY(0, 32, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                        }
                         datums_compared += 16;
                     }
                     break;
                 case 3:
                     while (datums_compared < total_datums_to_compare) {
                         // Groups of 16 datums being sorted at the same time
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph3_st4_to_1(dir);
-                        bitonic_topk_store16(4, 8);
-                        uint dst_inc = 2*32;
-                        bitonic_topk_inc_x8_dest(dst_inc, false);
+                        if (init_rebuild) {
+                            load_replay_buf<0, 8, true>([] {
+                                bitonic_topk_load16(4, 8);
+                            });
+                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
+                            load_replay_buf<15, 12, true>([] {
+                                bitonic_topk_store16<true>(4, 8);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                            });
+                        } else {
+                            TTI_REPLAY(0, 8, 0, 0);
+                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
+                            TTI_REPLAY(15, 12, 0, 0);
+                        }
                         datums_compared += 16;
                         dir = !dir;
                     }
@@ -476,7 +554,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             for (uint ii=0; ii<inner_d; ii++) {
                                 bitonic_topk_load16(4, 2*dist);                 // load/store with offset of face 1 (in row major face layout)
                                 bitonic_topk_step_N(dir);
-                                bitonic_topk_store16(4, 2*dist);                // load/store with offset of face 1 (in row major face layout)
+                                bitonic_topk_store16<false>(4, 2*dist);         // load/store with offset of face 1 (in row major face layout)
                                 uint dst_inc = 8;
                                 dst_offset += dst_inc;
                                 bool dst_cr = false;
@@ -499,10 +577,19 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     datums_compared = 0;
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                     while (datums_compared < total_datums_to_compare) {
-                        bitonic_topk_load16(4, 8);
-                        bitonic_topk_ph3_st4_to_1(dir);
-                        bitonic_topk_store16(4, 8);
-                        bitonic_topk_inc_x8_dest(32, false);
+                        if (init_rebuild) {
+                            load_replay_buf<0, 8, true>([] {
+                                bitonic_topk_load16(4, 8);
+                            });
+                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
+                            load_replay_buf<15, 8, true>([] {
+                                bitonic_topk_store16<true>(4, 8);
+                            });
+                        } else {
+                            TTI_REPLAY(0, 8, 0, 0);
+                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
+                            TTI_REPLAY(15, 8, 0, 0);
+                        }
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                     }
@@ -514,6 +601,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
     }
+    topk_replay_init = m_iter+1;
 }
 
 inline void _init_topk()
