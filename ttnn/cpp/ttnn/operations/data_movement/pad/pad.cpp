@@ -4,7 +4,7 @@
 
 #include "pad.hpp"
 
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 

@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 

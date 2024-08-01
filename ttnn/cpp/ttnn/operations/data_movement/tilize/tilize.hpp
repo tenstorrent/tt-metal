@@ -7,7 +7,7 @@
 
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

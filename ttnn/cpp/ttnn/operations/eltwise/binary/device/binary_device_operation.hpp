@@ -8,7 +8,7 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"

@@ -8,7 +8,7 @@
 #include <functional>
 #include <variant>
 
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"

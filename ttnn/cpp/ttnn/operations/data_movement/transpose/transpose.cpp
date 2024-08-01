@@ -4,7 +4,7 @@
 
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"

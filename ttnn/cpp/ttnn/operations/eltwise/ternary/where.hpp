@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 

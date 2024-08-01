@@ -5,7 +5,7 @@
 #include "prefix_scan.hpp"
 
 #include "device/prefix_scan_op.hpp"
-#include "ttnn/common.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn::operations::experimental::ssm {
 
