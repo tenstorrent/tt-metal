@@ -4,46 +4,33 @@
 
 import torch
 import ttnn
+from ttnn import ReplicateTensorToMesh
 
 from models.utility_functions import is_wormhole_b0, torch2tt_tensor, pad_by_zero
 
 
 def get_weights_cached(
-    devices,
+    device_mesh,
     model_config,
     tt_cache_path,
     weight_cache_str,
     weight_config_str,
     weights_to_cache,
-    overwrite=False,
     padzero=False,
-    tt_layout=ttnn.experimental.tensor.Layout.TILE,
+    tt_layout=ttnn.TILE_LAYOUT,
     weights_dict=None,
     custom_output_shape=None,
 ):
     if padzero:
-        assert tt_layout == ttnn.experimental.tensor.Layout.TILE, "padding by zero currently only uses TILE layout"
+        assert tt_layout == ttnn.TILE_LAYOUT, "padding by zero currently only uses TILE layout"
 
     """Load weights from weights_dict or cache and duplicate per device. Store if not cached."""
     custom_output_shape_str = ""
     if custom_output_shape is not None:
         custom_output_shape_str = f"_{custom_output_shape[-2]}_{custom_output_shape[-1]}"
-    path = (
-        tt_cache_path
-        / f"{weight_cache_str}_{model_config[f'{weight_config_str}_DTYPE'].name}{custom_output_shape_str}.bin"
-    )
+    path = tt_cache_path / f"{weight_cache_str}{custom_output_shape_str}"
 
-    if weights_dict and str(path) in weights_dict.keys():
-        weights = weights_dict[str(path)]
-    elif not overwrite and path.exists():
-        # Load cached weights
-        weights_host = ttnn.experimental.tensor.load_tensor(str(path))
-        # Duplicate weights on all devices
-        weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
-        # Add to weights_dict
-        if weights_dict is not None:
-            weights_dict[str(path)] = weights
-    else:
+    def preprocess_weights(weights_to_cache):
         if weights_to_cache is None:
             raise ValueError(f"weights_to_cache is None for {weight_cache_str}")
 
@@ -64,20 +51,26 @@ def get_weights_cached(
                 )
                 weights_to_cache = torch.nn.functional.pad(weights_to_cache, padding, "constant", 0.0)
 
-            weights_host = torch2tt_tensor(
-                weights_to_cache,
-                tt_device=None,
-                tt_layout=tt_layout,
-                tt_memory_config=model_config[f"{weight_config_str}_MEMCFG"],
-                tt_dtype=model_config[f"{weight_config_str}_DTYPE"],
-            )
+            weights_host = weights_to_cache
+        return weights_host
 
-        weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
+    if weights_dict and str(path) in weights_dict.keys():
+        weights = weights_dict[str(path)]
+    else:
+        weights = ttnn.as_tensor(
+            weights_to_cache,
+            dtype=model_config[f"{weight_config_str}_DTYPE"],
+            layout=tt_layout,
+            device=device_mesh,
+            memory_config=model_config[f"{weight_config_str}_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            cache_file_name=str(path),
+            preprocess=preprocess_weights,
+        )
+
         # Save weights for reuse between prefill/decode
         if weights_dict is not None:
             weights_dict[str(path)] = weights
-        # Store weights
-        ttnn.experimental.tensor.dump_tensor(str(path), weights_host)
 
     return weights
 
