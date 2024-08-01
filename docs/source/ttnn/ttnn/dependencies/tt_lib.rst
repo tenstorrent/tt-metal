@@ -268,41 +268,13 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.div
-
-.. autofunction:: tt_lib.tensor.div_trunc
-
 .. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
-.. autofunction:: tt_lib.tensor.div_no_nan
 
 .. autofunction:: tt_lib.tensor.polyval
 
 .. autofunction:: tt_lib.tensor.mac
 
-.. autofunction:: tt_lib.tensor.softshrink
-
-.. autofunction:: tt_lib.tensor.hardshrink
-
-.. autofunction:: tt_lib.tensor.remainder
-
-.. autofunction:: tt_lib.tensor.fmod
-
-.. autofunction:: tt_lib.tensor.logical_xori
-
-.. autofunction:: tt_lib.tensor.celu
-
-.. autofunction:: tt_lib.tensor.logit
-
-.. autofunction:: tt_lib.tensor.logical_andi
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.logical_ori
-
-.. autofunction:: tt_lib.tensor.frac
-
-.. autofunction:: tt_lib.tensor.floor_div
 
 .. autofunction:: tt_lib.tensor.rfloor_div
 
@@ -360,8 +332,6 @@ Broadcast and Reduce
 .. autofunction:: tt_lib.tensor.global_sum
 
 .. autofunction:: tt_lib.tensor.global_mean
-
-.. autofunction:: tt_lib.tensor.rpow
 
 
 Fallback Operations
@@ -518,10 +488,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.mean_hw
-
-.. autofunction:: tt_lib.tensor.logical_noti
-
-.. autofunction:: tt_lib.tensor.normalize_global
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 

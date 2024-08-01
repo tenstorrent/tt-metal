@@ -31,12 +31,8 @@ def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
     if function in [
         "logical_xor",
-        "logical_ori",
         "logical_or",
-        "logical_xori",
-        "logical_noti",
         "logical_not",
-        "logical_andi",
         "is_close",
     ]:
         comparison_func = comparison_funcs.comp_equal
@@ -93,15 +89,11 @@ if is_wormhole_b0():
                 "atanh",
                 "atan2",
                 # TO-DO:
-                # "subalpha",
+                "subalpha",
                 # "bias_gelu_unary",
                 "addalpha",
                 "logit",
-                # "logical_ori",
                 "logical_xor",
-                # "logical_xori",
-                # "logical_noti",
-                # "logical_andi",
                 "isclose",
                 "digamma",
                 "lgamma",
@@ -145,9 +137,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["asinh"] = (-100, 100)
     options["isclose"] = (-100, 100)
     options["acosh"] = (1, 100)
-    options["logical_ori"] = (-100, 100)
-    options["logical_andi"] = (-100, 100)
-    options["logical_xori"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
 
@@ -157,7 +146,9 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     if is_grayskull():
         if fn in ["mish"]:
             pytest.skip("does not work for Grayskull -skipping")
-    if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
+    if fn in [
+        "logical_xor",
+    ]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
@@ -191,7 +182,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "isclose",
         "assign_binary",
         "nextafter",
-        # "scatter",
     ]:
         num_inputs = 2
 
@@ -221,8 +211,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"eps": np.random.randint(-10, 0.99)})
     elif fn in ["polygamma"]:
         test_args.update({"k": np.random.randint(1, 10)})
-    elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
-        test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["isclose"]:
         test_args.update(
             {
@@ -269,7 +257,7 @@ def test_run_min_max_test(fn, input_shapes, device, function_level_defaults):
     test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
 
     rank = len(input_shapes[0])
-    choices = [(rank - 1,), (rank - rank,)]
+    choices = [(rank - 1,), (rank - 2,)]
     idx = np.random.choice(len(choices), 1)
     dims = choices[idx.item()]
 

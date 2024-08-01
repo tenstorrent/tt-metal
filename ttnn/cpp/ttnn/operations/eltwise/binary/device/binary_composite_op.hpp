@@ -11,7 +11,6 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-
 namespace ttnn::operations::binary{
 
 enum class BinaryCompositeOpType {

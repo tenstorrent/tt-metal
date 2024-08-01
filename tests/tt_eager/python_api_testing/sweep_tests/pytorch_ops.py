@@ -502,9 +502,8 @@ def polygamma(x, *args, k, **kwargs):
     return torch.special.polygamma(n=k, input=x)
 
 
-def logical_xori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
+def logical_xor_(x, y, *args, **kwargs):
+    result = x.logical_xor_(y)
     return result
 
 
@@ -744,9 +743,8 @@ def multigammaln(x, *args, **kwargs):
     return torch.special.multigammaln(x, 4)
 
 
-def logical_andi(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
+def logical_and_(x, y, *args, **kwargs):
+    result = x.logical_and_(y)
     return result
 
 
@@ -960,9 +958,8 @@ def logical_and(x, y, *args, **kwargs):
     return result
 
 
-def logical_noti(x, *args, **kwargs):
-    immediate = kwargs.pop("immediate")
-    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
+def logical_not_(x, *args, **kwargs):
+    result = x.logical_not_()
     return result
 
 
@@ -1162,9 +1159,8 @@ def logical_or(x, y, *args, **kwargs):
     return torch.logical_or(x, y)
 
 
-def logical_ori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+def logical_or_(x, y, *args, **kwargs):
+    result = x.logical_or_(y)
     return result
 
 
@@ -2066,3 +2062,39 @@ def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
 def interleaved_to_sharded_partial_coregrid(x, num_slices, x_core, ycore, *args, **kwargs):
     res = torch.ones(x.shape).bfloat16().float()
     return res
+
+
+def log10_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log10(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log2_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log2(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log1p_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log1p(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

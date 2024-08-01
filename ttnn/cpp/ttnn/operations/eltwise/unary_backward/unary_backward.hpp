@@ -241,11 +241,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
 
-constexpr auto mul_bw = ttnn::register_operation<
-    "ttnn::mul_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::MUL_BW>>();
-
 constexpr auto add_bw = ttnn::register_operation<
     "ttnn::add_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
@@ -539,10 +534,6 @@ constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
         operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>();
-constexpr auto bias_gelu_bw = ttnn::register_operation<
-    "ttnn::bias_gelu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_BW>>();
 
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",

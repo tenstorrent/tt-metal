@@ -793,4 +793,20 @@ op_map = {
         "tt_op": ttnn_ops.ne_bw,
         "pytorch_op": pytorch_ops.ne_bw,
     },
+    "log10-bw": {
+        "tt_op": ttnn_ops.log10_bw,
+        "pytorch_op": pytorch_ops.log10_bw,
+    },
+    "log2-bw": {
+        "tt_op": ttnn_ops.log2_bw,
+        "pytorch_op": pytorch_ops.log2_bw,
+    },
+    "log1p-bw": {
+        "tt_op": ttnn_ops.log1p_bw,
+        "pytorch_op": pytorch_ops.log1p_bw,
+    },
+    "eltwise-subalpha": {
+        "tt_op": ttnn_ops.eltwise_subalpha,
+        "pytorch_op": pytorch_ops.subalpha,
+    },
 }

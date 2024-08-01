@@ -46,18 +46,6 @@ std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const Comp
     return grad_tensor;
 }
 
-// complex mul
-// grad_input = grad * other.conj()
-// grad_other = grad * input.conj()
-std::vector<ComplexTensor> _complex_mul_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_a = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(other,output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(input,output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-
 //  complex div
 //  self: grad / other.conj();
 //  other: -grad * ((self / other) / other).conj();

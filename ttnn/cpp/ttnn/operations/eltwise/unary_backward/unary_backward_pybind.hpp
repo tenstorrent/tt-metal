@@ -749,11 +749,6 @@ Example:
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_unary_backward_opt(
-        module,
-        ttnn::mul_bw,
-        R"doc(Performs backward operations for multiply on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc");
-
     detail::bind_unary_backward_optional_float_params_with_default(
         module,
         ttnn::clamp_bw,
@@ -867,17 +862,6 @@ void py_module(py::module& module) {
         "None",
         R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`round_mode`.
         :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc");
-
-    detail::bind_unary_backward_float_string_default(
-        module,
-        ttnn::bias_gelu_bw,
-        "bias",
-        "Bias value",
-        "approximate",
-        "Approximation type",
-        "none",
-        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
 
     detail::bind_unary_backward_shape(
         module,
