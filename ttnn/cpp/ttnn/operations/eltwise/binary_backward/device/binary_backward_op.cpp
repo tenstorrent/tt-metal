@@ -288,7 +288,8 @@ std::vector<Tensor> _binary_remainder_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::div(input, other, true, "floor");
+    Tensor result_div = ttnn::floor(ttnn::add(ttnn::multiply(input, ttnn::reciprocal(other)), 0.005f, std::nullopt, output_mem_config));
+    result_div = where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;

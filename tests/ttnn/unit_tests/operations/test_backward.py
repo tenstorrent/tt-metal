@@ -181,6 +181,6 @@ def test_max(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [-1, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
-@skip_for_grayskull("Skipped due to hardware restriction")
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for binary remainder backward")
 def test_binary_remainder(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.binary_remainder_bw, torch.remainder)
