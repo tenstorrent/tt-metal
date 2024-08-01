@@ -327,6 +327,16 @@ def run_conv_with_split(
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
         ## 1x1s2
         # (256, 256, 28, 28, 1, 1, 2, 2, 0, 0, True, {"num_cores_nhw": 98}),
+        # (256, 256, 1, 1, 1, 1, 1, 1, 0, 0, True, None),
+        # (64, 3, 224, 224, 3, 3, 2, 2, 1, 1, True, None),
+        # (128, 64, 56, 56, 1, 1, 1, 1, 1, 1, False, None),
+        # (256, 448, 56, 56, 1, 1, 1, 1, 1, 1, False, None),
+        # (160, 256, 28, 28, 1, 1, 1, 1, 1, 1, False, None),
+        # (512, 736, 28, 28, 1, 1, 1, 1, 1, 1, False, None),
+        # (192, 512, 14, 14, 1, 1, 1, 1, 1, 1, False, None),
+        # (768, 1088, 14, 14, 1, 1, 1, 1, 1, 1, False, None),
+        # (224, 768, 7, 7, 1, 1, 1, 1, 0, 0, True, None),
+        # (1024, 1440, 7, 7, 1, 1, 1, 1, 1, 1, False, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -1441,6 +1451,109 @@ def test_conv_groups(
 # @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 def test_yolov4_conv_groups_larger_than_one(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
+        pytest.skip("OOM")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        padded_input_channels=16 if input_channels == 3 else None,
+        output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant, groups",
+    (
+        # VoVNet Convs with bs1
+        (
+            1,
+            768,
+            1088,
+            14,
+            14,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            True,
+            None,
+            False,
+            1,
+        ),  # Fails with 'Statically allocated circular buffers in program 3 clash with L1 buffers on core range [(x=0,y=0) - (x=6,y=0)]. L1 buffer allocated at 892928 and static circular buffer region ends at 1021792'.
+        (
+            1,
+            1440,
+            1024,
+            7,
+            7,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            True,
+            None,
+            False,
+            1,
+        ),  # Fails with 'Statically allocated circular buffers on core range [(x=0,y=0) - (x=1,y=0)] grow to 1709408 B which is beyond max L1 size of 1048576 B'.
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_vovnet_conv_gs(
     device,
     use_program_cache,
     math_fidelity,
