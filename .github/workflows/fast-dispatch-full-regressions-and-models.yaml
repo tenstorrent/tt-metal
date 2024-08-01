@@ -120,16 +120,12 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
-        uses: nick-fields/retry@v3.0.0
+      - uses: ./.github/actions/retry-command
         with:
-          timeout_seconds: 180
-          max_attempts: 5
-          retry_wait_seconds: 10
-          command: |
-            timeout 120 sudo systemctl restart mnt-MLPerf.mount
-            timeout 45 sudo /etc/rc.local
-            ls -al /mnt/MLPerf/bit_error_tests
+          timeout-seconds: 150
+          max-retries: 10
+          backoff-seconds: 15
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
