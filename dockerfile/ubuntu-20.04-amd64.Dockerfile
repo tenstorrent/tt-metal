@@ -4,6 +4,15 @@ FROM ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 
+ARG UID=1000
+ARG GID=1000
+
+RUN  groupadd -g "${GID}" ubuntu \
+    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" ubuntu \
+    && chown ubuntu:ubuntu -R /app
+
+USER ubuntu
+
 # Install build and runtime deps
 COPY /scripts/docker/requirements.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
