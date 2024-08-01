@@ -28,7 +28,7 @@ runs:
           echo "Attempt $((count + 1)) of $max_retries..."
 
           # Execute the command with timeout
-          if timeout ${{ inputs.timeout-seconds }} ${{ inputs.command }}; then
+          if timeout ${{ inputs.timeout-seconds }} "${{ inputs.command }}"; then
             echo "Command succeeded."
             exit 0
           else

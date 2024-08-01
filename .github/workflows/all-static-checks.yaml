@@ -60,3 +60,4 @@ jobs:
           backoff-seconds: 5
           command: |
             sudo ls
+            sudo ls -hal
