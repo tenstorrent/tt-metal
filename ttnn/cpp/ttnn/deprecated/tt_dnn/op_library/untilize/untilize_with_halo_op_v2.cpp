@@ -210,9 +210,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = 0;
+    reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = 0;
-    reader_ct_args[2] = 0;
+    reader_ct_args[2] = remote_config_cb_id;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
