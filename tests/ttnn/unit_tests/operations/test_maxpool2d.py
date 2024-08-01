@@ -519,3 +519,159 @@ def test_pool_core_nondivis(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 64, 4091, 507],  # Fails with OOM issue
+            [1, 64, 2042, 250],  # Fails with OOM issue
+            [1, 64, 1018, 122],  # Fails with valid_page_size error
+            [1, 64, 506, 58],  # Fails with valid_page_size error
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_model_net_max_pool_4094x510(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 64, 2044, 252],  # Fails with OOM issue
+            [1, 64, 1019, 123],  # Fails with valid_page_size error
+            [1, 64, 506, 58],  # Fails with valid_page_size error
+            [1, 64, 250, 26],  # Fails with valid_page_size error
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_model_net_max_pool_2047x255(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 64, 1021, 125],  # Fails with valid_page_size error
+            [1, 64, 507, 59],  # Fails with valid_page_size error
+            [1, 64, 250, 26],  # Fails with valid_page_size error
+            [1, 64, 122, 10],  # Passed in Bfloat16
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_model_net_max_pool_1024x128(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 64, 509, 61],  # Fails with valid_page_size error
+            [1, 64, 251, 27],  # Fails with valid_page_size error
+            [1, 64, 122, 10],  # Passed in Bfloat16
+            [1, 64, 58, 2],  # Passed in Bfloat16
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_model_net_max_pool_512x64(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
