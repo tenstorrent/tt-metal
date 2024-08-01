@@ -419,7 +419,7 @@ def test_LlamaModel_demo(
     ground_truth,
     max_batch_size,
     max_context_len,
-    # use_program_cache,
+    use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
 
