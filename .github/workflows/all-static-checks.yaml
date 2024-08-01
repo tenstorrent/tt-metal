@@ -59,5 +59,4 @@ jobs:
           max-retries: 5
           backoff-seconds: 5
           command: |
-            sudo ls
-            sudo ls -hal
+            sudo ls; sudo ls -hal
