@@ -129,7 +129,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/repeat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads_decode.cpp

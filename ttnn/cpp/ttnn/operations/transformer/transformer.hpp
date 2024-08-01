@@ -11,6 +11,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -155,7 +156,7 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             input_tensor_kv_4d = input_tensor_kv.value().reshape(
                 padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]);
         }
-        const auto outputs = tt::tt_metal::nlp_create_qkv_heads(
+        const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
             input_tensor_4d,
             input_tensor_kv_4d,
             num_heads,
@@ -163,7 +164,7 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             transpose_key,
             memory_config.value_or(input_tensor.memory_config()));
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            {outputs.at(0), outputs.at(1), outputs.at(2)}, sequence_size, sequence_size_padded, transpose_key);
+            outputs, sequence_size, sequence_size_padded, transpose_key);
     }
 }
 

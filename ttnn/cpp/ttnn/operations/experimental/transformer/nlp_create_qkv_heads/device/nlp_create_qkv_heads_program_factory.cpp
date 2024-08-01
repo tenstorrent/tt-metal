@@ -1,21 +1,32 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "nlp_create_qkv_heads_device_operation.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 using namespace tt;
+using namespace tt::tt_metal;
 
-namespace tt {
+NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDeviceOperation::Interleaved::create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
 
-namespace tt_metal {
-
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
+    const Tensor &input_tensor = tensor_args.input_tensor_q;
+    std::optional<const Tensor> input_tensor_kv = tensor_args.input_tensor_kv;
+    const uint32_t num_q_heads = operation_attributes.num_q_heads;
+    const uint32_t num_kv_heads = operation_attributes.num_kv_heads;
+    const uint32_t head_dim = operation_attributes.head_dim;
+    const bool transpose_k_heads = operation_attributes.transpose_k_heads;
+    auto& output = tensor_return_value;
+    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();;
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
@@ -71,10 +82,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    TT_ASSERT((output.size() == 3), "Output vector must be size 3 for split fused qkv!");
-    tt_metal::Tensor& q = output[0];
-    tt_metal::Tensor& k = output[1];
-    tt_metal::Tensor& v = output[2];
+    tt_metal::Tensor& q = std::get<0>(output);
+    tt_metal::Tensor& k = std::get<1>(output);
+    tt_metal::Tensor& v = std::get<2>(output);
 
     tt_metal::Buffer *q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
@@ -145,12 +155,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -272,10 +282,57 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
         }
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y, read_from_input_tensor_kv}};
 }
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
+void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+
+        auto src_buffer = tensor_args.input_tensor_q.buffer();
+
+        uint32_t src_kv_buffer_addr = 0;
+        if (cached_program.shared_variables.read_from_input_tensor_kv) {
+            src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
+        }
+
+        auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+        auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+        auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
+
+        for (uint32_t i = 0, num_blocks_written = 0; i < cached_program.shared_variables.num_cores; i++){
+            CoreCoord core = {i / cached_program.shared_variables.num_cores_y, i % cached_program.shared_variables.num_cores_y};
+
+            {
+                auto &runtime_args = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+
+                if (cached_program.shared_variables.read_from_input_tensor_kv) {
+                    runtime_args[1] = src_kv_buffer_addr;
+                }
+            }
+
+            {
+                auto &runtime_args = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
+                runtime_args[0] = dst_buffer_query->address();
+                runtime_args[1] = dst_buffer_key->address();
+                runtime_args[2] = dst_buffer_value->address();
+            }
+        }
+    }
+
+NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOperation::Sharded::create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+    auto& input_tensor = tensor_args.input_tensor_q;
+    auto& input_tensor_kv = tensor_args.input_tensor_kv;
+    auto& output = tensor_return_value;
+    auto head_dim = operation_attributes.head_dim;
+    auto num_q_heads = operation_attributes.num_q_heads;
+    auto num_kv_heads = operation_attributes.num_kv_heads;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -292,7 +349,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
 
-    auto q_shard_spec = output[0].shard_spec().value();
+    auto q_shard_spec = std::get<0>(output).shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
 
@@ -305,10 +362,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
             q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
-            .set_page_size(q_output_cb_index, single_tile_size).set_globally_allocated_address(*output[0].buffer());
+            .set_page_size(q_output_cb_index, single_tile_size).set_globally_allocated_address(*std::get<0>(output).buffer());
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
-    auto k_shard_spec = output[1].shard_spec().value();
+    auto k_shard_spec = std::get<1>(output).shard_spec().value();
     auto k_cores = k_shard_spec.grid;
     auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
@@ -316,10 +373,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     tt_metal::CircularBufferConfig cb_k_output_config =
         tt_metal::CircularBufferConfig(
             k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
-            .set_page_size(k_output_cb_index, single_tile_size).set_globally_allocated_address(*output[1].buffer());
+            .set_page_size(k_output_cb_index, single_tile_size).set_globally_allocated_address(*std::get<1>(output).buffer());
     auto cb_k_output = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
 
-    auto v_shard_spec = output[0].shard_spec().value();
+    auto v_shard_spec = std::get<0>(output).shard_spec().value();
     auto v_cores = q_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
@@ -327,7 +384,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     tt_metal::CircularBufferConfig cb_v_output_config =
         tt_metal::CircularBufferConfig(
             v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})
-            .set_page_size(v_output_cb_index, single_tile_size).set_globally_allocated_address(*output[2].buffer());
+            .set_page_size(v_output_cb_index, single_tile_size).set_globally_allocated_address(*std::get<2>(output).buffer());
     auto cb_v_output = tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
     uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
@@ -352,12 +409,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     };
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -455,57 +512,147 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
-    auto override_runtime_arguments_callback = [
-            reader_kernel_id,
-            writer_kernel_id,
-            num_cores,
-            num_cores_y,
-            read_from_input_tensor_kv=read_from_input_tensor_kv,
-            cb_q_output,
-            cb_k_output,
-            cb_v_output,
-            cores,
-            head_size,
-            per_risc0_out_q_heads,
-            per_risc1_out_q_heads,
-            per_core_in_q_heads,
-            per_core_out_kv_heads,
-            per_core_in_kv_heads,
-            head_tiles,
-            num_kv_cores,
-            single_tile_size
-        ]
-    (
-        const void* operation,
-        Program &program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const std::vector<Tensor>& output_tensors
-    ) {
+    // auto override_runtime_arguments_callback = [
+    //         reader_kernel_id,
+    //         writer_kernel_id,
+    //         num_cores,
+    //         num_cores_y,
+    //         read_from_input_tensor_kv=read_from_input_tensor_kv,
+    //         cb_q_output,
+    //         cb_k_output,
+    //         cb_v_output,
+    //         cores,
+    //         head_size,
+    //         per_risc0_out_q_heads,
+    //         per_risc1_out_q_heads,
+    //         per_core_in_q_heads,
+    //         per_core_out_kv_heads,
+    //         per_core_in_kv_heads,
+    //         head_tiles,
+    //         num_kv_cores,
+    //         single_tile_size
+    //     ]
+    // (
+    //     const void* operation,
+    //     Program &program,
+    //     const std::vector<Tensor>& input_tensors,
+    //     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    //     const std::vector<Tensor>& output_tensors
+    // ) {
 
-        auto src_buffer = input_tensors.at(0).buffer();
+    //     auto src_buffer = input_tensors.at(0).buffer();
+
+    //     uint32_t src_kv_buffer_addr = 0;
+    //     if (read_from_input_tensor_kv) {
+    //         src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();
+    //     }
+
+    //     auto dst_buffer_query = output_tensors.at(0).buffer();
+    //     auto dst_buffer_key = output_tensors.at(1).buffer();
+    //     auto dst_buffer_value = output_tensors.at(2).buffer();
+
+    //     UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
+    //     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
+    //     UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
+
+    //     uint32_t q_base_addr = input_tensors[0].buffer()->address();
+    //     uint32_t k_base_addr = 0;
+    //     if (read_from_input_tensor_kv) {
+    //         k_base_addr = input_tensor_kv.value().buffer()->address();
+    //     } else {
+    //         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
+    //     }
+    //     uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
+
+    //     uint32_t remote_q_head_start_idx = 0;
+    //     uint32_t remote_kv_head_start_idx = 0;
+    //     uint32_t q_start_addr = q_base_addr;
+    //     uint32_t k_start_addr = k_base_addr;
+    //     uint32_t v_start_addr = v_base_addr;
+
+    //     for (uint32_t i = 0; i < num_cores; ++i) {
+    //         const auto& core = cores[i];
+    //         bool read_kv_heads = i < num_kv_cores;
+    //         {
+    //             auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+    //             runtime_args[6] = q_base_addr;
+    //             runtime_args[7] = q_start_addr;
+    //             runtime_args[15] = k_base_addr;
+    //             runtime_args[16] = k_start_addr;
+    //             remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
+    //             q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+    //         }
+    //         {
+    //             auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+    //             runtime_args[6] = q_base_addr;
+    //             runtime_args[15] = v_base_addr;
+    //             if (per_risc1_out_q_heads > 0) {
+    //                 runtime_args[7] = q_start_addr;
+    //                 remote_q_head_start_idx = (remote_q_head_start_idx + per_risc1_out_q_heads) % per_core_in_q_heads;
+    //                 q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+    //             }
+    //             if (read_kv_heads) {
+    //                 runtime_args[16] = v_start_addr;
+    //                 remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
+    //                 k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
+    //                 v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
+    //             }
+    //         }
+    //     }
+    // };
+
+    return {std::move(program),
+    {
+        reader_kernel_id,
+        writer_kernel_id,
+        num_cores,
+        num_cores_y,
+        read_from_input_tensor_kv,
+        cb_q_output,
+        cb_k_output,
+        cb_v_output,
+        cores,
+        head_size,
+        per_risc0_out_q_heads,
+        per_risc1_out_q_heads,
+        per_core_in_q_heads,
+        per_core_out_kv_heads,
+        per_core_in_kv_heads,
+        head_tiles,
+        num_kv_cores,
+        single_tile_size
+    }
+    };
+}
+
+void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+        auto src_buffer = tensor_args.input_tensor_q.buffer();
 
         uint32_t src_kv_buffer_addr = 0;
-        if (read_from_input_tensor_kv) {
-            src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();
+        if (cached_program.shared_variables.read_from_input_tensor_kv) {
+            src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
         }
 
-        auto dst_buffer_query = output_tensors.at(0).buffer();
-        auto dst_buffer_key = output_tensors.at(1).buffer();
-        auto dst_buffer_value = output_tensors.at(2).buffer();
+        auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+        auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+        auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
-        UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
-        UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
+        UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_q_output, *dst_buffer_query);
+        UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_k_output, *dst_buffer_key);
+        UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_v_output, *dst_buffer_value);
 
-        uint32_t q_base_addr = input_tensors[0].buffer()->address();
+        uint32_t q_base_addr = tensor_args.input_tensor_q.buffer()->address();
         uint32_t k_base_addr = 0;
-        if (read_from_input_tensor_kv) {
-            k_base_addr = optional_input_tensors[0].value().buffer()->address();
+        if (cached_program.shared_variables.read_from_input_tensor_kv) {
+            k_base_addr = tensor_args.input_tensor_kv.value().buffer()->address();
         } else {
-            k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
+            k_base_addr = q_base_addr + cached_program.shared_variables.per_core_in_q_heads * cached_program.shared_variables.head_tiles * cached_program.shared_variables.single_tile_size;
         }
-        uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
+        uint32_t v_base_addr = k_base_addr + cached_program.shared_variables.per_core_in_kv_heads * cached_program.shared_variables.head_tiles * cached_program.shared_variables.single_tile_size;
 
         uint32_t remote_q_head_start_idx = 0;
         uint32_t remote_kv_head_start_idx = 0;
@@ -513,40 +660,36 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         uint32_t k_start_addr = k_base_addr;
         uint32_t v_start_addr = v_base_addr;
 
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            const auto& core = cores[i];
-            bool read_kv_heads = i < num_kv_cores;
+        for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; ++i) {
+            const auto& core = cached_program.shared_variables.cores[i];
+            bool read_kv_heads = i < cached_program.shared_variables.num_kv_cores;
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
                 runtime_args[6] = q_base_addr;
                 runtime_args[7] = q_start_addr;
                 runtime_args[15] = k_base_addr;
                 runtime_args[16] = k_start_addr;
-                remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
-                q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+                remote_q_head_start_idx = (remote_q_head_start_idx + cached_program.shared_variables.per_risc0_out_q_heads) % cached_program.shared_variables.per_core_in_q_heads;
+                q_start_addr = q_base_addr + remote_q_head_start_idx * cached_program.shared_variables.head_size;
             }
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
                 runtime_args[6] = q_base_addr;
                 runtime_args[15] = v_base_addr;
-                if (per_risc1_out_q_heads > 0) {
+                if (cached_program.shared_variables.per_risc1_out_q_heads > 0) {
                     runtime_args[7] = q_start_addr;
-                    remote_q_head_start_idx = (remote_q_head_start_idx + per_risc1_out_q_heads) % per_core_in_q_heads;
-                    q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+                    remote_q_head_start_idx = (remote_q_head_start_idx + cached_program.shared_variables.per_risc1_out_q_heads) % cached_program.shared_variables.per_core_in_q_heads;
+                    q_start_addr = q_base_addr + remote_q_head_start_idx * cached_program.shared_variables.head_size;
                 }
                 if (read_kv_heads) {
                     runtime_args[16] = v_start_addr;
-                    remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
-                    k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
-                    v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
+                    remote_kv_head_start_idx = (remote_kv_head_start_idx + cached_program.shared_variables.per_core_out_kv_heads) % cached_program.shared_variables.per_core_in_kv_heads;
+                    k_start_addr = k_base_addr + remote_kv_head_start_idx * cached_program.shared_variables.head_size;
+                    v_start_addr = v_base_addr + remote_kv_head_start_idx * cached_program.shared_variables.head_size;
                 }
             }
         }
-    };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
-}
+    }
 
-} // namespace tt_metal
-
-} // namespace tt
+}  // ttnn::operations::experimental::transformer
