@@ -34,8 +34,8 @@ void kernel_main() {
         .data_format = weight_df
     };
 
+
     uint32_t weight_block_start_tile_id = weight_start_tile_id;
-    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
 
     for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_num_height_blocks; weight_tile_h_outer_i++)
     {
@@ -69,7 +69,7 @@ void kernel_main() {
             weight_current_block_start_tile_id += weight_next_channel_stride_h;
         }
         noc_async_read_barrier();
-        // cb_push_back(cb_id_weight,weight_block_num_tiles);
+        cb_push_back(cb_id_weight,weight_block_num_tiles);
         weight_block_start_tile_id +=weight_next_block_stride_h;
     }
 }

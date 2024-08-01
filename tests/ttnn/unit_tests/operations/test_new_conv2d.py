@@ -357,11 +357,11 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
-    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1])
-    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 256
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     # torch_input_tensor_nchw += (
-    #     torch.tensor(range(0, batch_size * input_height * input_width, 1))
+    #     torch.tensor(range(0, 2*batch_size * input_height * input_width, 2))
     #     .reshape([batch_size, 1, input_height, input_width])
     #     .broadcast_to(conv_input_shape)
     #     .float()
@@ -369,8 +369,8 @@ def test_conv_ws(
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()/2304
+    # torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
     # torch_weight_tensor = (
     #     torch.tensor(range(input_channels), dtype=torch.bfloat16).reshape(1, input_channels, 1, 1).float()
     # )
@@ -501,7 +501,7 @@ def test_conv_ws(
     pcc = 0.95
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print("PCC output ", pcc_msg)
-    assert passing
+    assert False
 
 
 @skip_for_wormhole_b0(

@@ -626,6 +626,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
         log_debug(LogOp, "per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
         log_debug(LogOp, "per_core_out_matrix_width_ntiles: {}", per_core_out_matrix_width_ntiles);
+        log_debug(LogOp, "per_core_num_blocks_act_w: {}", per_core_num_blocks_act_w);
+
         log_debug(LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
         log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
         log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
@@ -664,7 +666,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     std::set<CoreRange> all_cores;
     all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(p_config.num_cores_c-1, 0))); //TODO: Support multiple rows
 
-    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/compute_width_sharded.cpp";
     std::string activation_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/activation_reader_width_sharded.cpp";
     std::string weights_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/weights_reader_width_sharded.cpp";
 
@@ -709,15 +711,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     };
 
     weights_kernel_compile_args = {
-        weight_cb,                                                 //cb_id_weight
-        act_block_w_ntiles/(weight_size_h*weight_size_w),          //core_in_channels_ntiles
-        weight_size_h*weight_size_w,                               //window_size_hw
-        weight_block_w_ntiles,                                     //weight_block_width_ntiles
-        weight_block_num_tiles,                                    //weight_block_num_tiles
-        weight_matrix_width_ntiles,                                //weight_matrix_width_ntiles
-        (weight_matrix_width_ntiles * input_channels_padded)/32,   //weight_next_channel_stride_h
+        weight_cb,                                                  //cb_id_weight
+        act_block_w_ntiles/(weight_size_h*weight_size_w),           //core_in_channels_ntiles
+        weight_size_h*weight_size_w,                                //window_size_hw
+        weight_block_w_ntiles,                                      //weight_block_width_ntiles
+        weight_block_num_tiles,                                     //weight_block_num_tiles
+        weight_matrix_width_ntiles,                                 //weight_matrix_width_ntiles
+        (weight_matrix_width_ntiles * input_channels_padded)/32,    //weight_next_channel_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_stride_h
-        total_num_cores                                            //weights_height_num_blocks
+        total_num_cores*per_core_num_blocks_act_w                   //weights_height_num_blocks
     };
 
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
@@ -765,16 +767,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         std::cout<<it.first<<" : "<<it.second<<std::endl;
 
     compute_kernel_args = {
-        act_block_w_ntiles, //in0_block_w
-        act_num_subblocks, //in0_num_sublocks
-        act_block_num_tiles, //in0_block_num_tiles,
-        act_subblock_num_tiles, //in0_sublock_num_tiles
-        act_subblock_h_ntiles, //in0_subblock_h
+        act_block_w_ntiles,           //in0_block_w
+        act_num_subblocks,            //in0_num_sublocks
+        act_block_num_tiles,          //in0_block_num_tiles,
+        act_subblock_num_tiles,       //in0_sublock_num_tiles
+        act_subblock_h_ntiles,        //in0_subblock_h
 
 
-        weight_num_subblocks,  //in1_num_sublocks
-        weight_block_num_tiles,//in1_block_num_tiles,
-        weight_block_w_ntiles, //in1_block_w
+        weight_num_subblocks,         //in1_num_sublocks
+        weight_block_num_tiles,       //in1_block_num_tiles,
+        weight_block_w_ntiles,        //in1_block_w
 
         num_blocks_act_h_per_core,    //in0_num_blocks_h
         num_blocks_act_w,             //in0_num_blocks_w,
@@ -783,6 +785,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         out_subblock_h_ntiles_padded, //out_sublock_h
         out_subblock_w_ntiles,        //out_sublock_w
         out_subblock_num_tiles,       //out_sublock_num_tiles
+
+        total_num_cores,              //in0_nblocks_w_tilize
 
         tilize_in0,                   //tilize_in0
         untilize_out,                 //untilize_out
@@ -902,15 +906,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             .compile_args = weights_kernel_compile_args
         }
     );
-    // auto compute_id = CreateKernel(
-    //     program,
-    //     compute_kernel_path,
-    //     all_cores,
-    //     ComputeConfig{
-    //         .math_fidelity = math_fidelity,
-    //         .fp32_dest_acc_en = fp32_dest_acc_en,
-    //         .compile_args = compute_kernel_args,
-    //         .defines = compute_defines});
+    auto compute_id = CreateKernel(
+        program,
+        compute_kernel_path,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_kernel_args,
+            .defines = compute_defines});
 
     auto full_core_grid = device->compute_with_storage_grid_size();
     std::vector<uint32_t> act_mcast_noc_y;
