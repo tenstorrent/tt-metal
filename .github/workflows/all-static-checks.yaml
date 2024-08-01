@@ -58,4 +58,4 @@ jobs:
           timeout-seconds: 10
           max-retries: 5
           backoff-seconds: 5
-          command: sudo ls; sudo ls -hal
+          command: sudo ls && sudo ls -hal
