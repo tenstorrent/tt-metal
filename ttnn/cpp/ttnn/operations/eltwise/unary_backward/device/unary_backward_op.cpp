@@ -27,7 +27,6 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::unary_backward {
-using ComplexTensor = complex::ComplexTensor;
 
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {

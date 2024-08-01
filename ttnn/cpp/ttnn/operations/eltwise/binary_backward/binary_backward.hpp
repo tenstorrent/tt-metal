@@ -15,7 +15,6 @@
 namespace ttnn {
 
 namespace operations::binary_backward {
-using ComplexTensor = complex::ComplexTensor;
 
 template <BinaryBackwardOpType binary_backward_op_type>
 struct ExecuteBinaryBackwardTensor {

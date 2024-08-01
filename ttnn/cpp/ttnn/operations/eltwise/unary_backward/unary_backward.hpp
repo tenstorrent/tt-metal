@@ -13,7 +13,6 @@
 namespace ttnn {
 
 namespace operations::unary_backward {
-using ComplexTensor = complex::ComplexTensor;
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {

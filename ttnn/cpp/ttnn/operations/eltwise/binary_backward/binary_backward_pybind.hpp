@@ -19,7 +19,6 @@ namespace operations {
 namespace binary_backward {
 
 namespace detail {
-using ComplexTensor = complex::ComplexTensor;
 
 template <typename binary_backward_operation_t>
 void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
