@@ -14,13 +14,11 @@ namespace ttnn::operations::complex_binary_backward {
 
 constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexBinaryBackwardOpType {
-    COMPLEX_ADD_BW,
     COMPLEX_SUB_BW,
     COMPLEX_MUL_BW,
     COMPLEX_DIV_BW,
 };
 
-std::vector<ComplexTensor> _complex_add_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _complex_mul_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config);
@@ -39,13 +37,6 @@ template <>
 struct OpHandler<ComplexBinaryBackwardOpType::COMPLEX_DIV_BW> {
     static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config ) {
         return _complex_div_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexBinaryBackwardOpType::COMPLEX_ADD_BW> {
-    static std::vector<ComplexTensor> handle( const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const MemoryConfig& output_mem_config ) {
-        return _complex_add_bw(grad, input, other, alpha, output_mem_config);
     }
 };
 

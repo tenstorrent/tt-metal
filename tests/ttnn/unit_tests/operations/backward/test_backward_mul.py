@@ -8,7 +8,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.mul_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -31,7 +30,6 @@ def test_bw_mul(input_shapes, device):
     assert status
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.mul_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -62,8 +60,8 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
             input_tensor_a,
             input_tensor_b,
             are_required_outputs=are_required_outputs,
-            input_a_grad=input_a_grad,
-            input_b_grad=input_b_grad,
+            input_grad=input_a_grad,
+            other_grad=input_b_grad,
             queue_id=cq_id,
         )
     else:
@@ -72,8 +70,8 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
             input_tensor_a,
             input_tensor_b,
             are_required_outputs=are_required_outputs,
-            input_a_grad=input_a_grad,
-            input_b_grad=input_b_grad,
+            input_grad=input_a_grad,
+            other_grad=input_b_grad,
         )
 
     golden_function = ttnn.get_golden_function(ttnn.mul_bw)
@@ -95,7 +93,7 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
     ),
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
-def test_bw_unary_mul(input_shapes, scalar, device):
+def test_bw_mul_scalar(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
 
