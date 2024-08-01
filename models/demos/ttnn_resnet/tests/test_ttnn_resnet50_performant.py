@@ -77,7 +77,9 @@ def setup_dram_sharded_input(device, tt_inputs, tt_resnet50):
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_inference(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
+def test_run_resnet50_inference(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:
@@ -90,6 +92,7 @@ def test_run_resnet50_inference(device, use_program_cache, batch_size, act_dtype
         math_fidelity,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, input_mem_config = setup_l1_sharded_input(
@@ -120,7 +123,14 @@ def test_run_resnet50_inference(device, use_program_cache, batch_size, act_dtype
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, enable_async
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -137,6 +147,7 @@ def test_run_resnet50_trace_inference(
         math_fidelity,
         dealloc_input=True,
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -179,7 +190,9 @@ def test_run_resnet50_trace_inference(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_2cqs_inference(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
+def test_run_resnet50_2cqs_inference(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:
@@ -192,6 +205,7 @@ def test_run_resnet50_2cqs_inference(device, use_program_cache, batch_size, act_
         math_fidelity,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -259,6 +273,7 @@ def test_run_resnet50_trace_2cqs_inference(
     weight_dtype,
     math_fidelity,
     enable_async,
+    model_location_generator,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -275,6 +290,7 @@ def test_run_resnet50_trace_2cqs_inference(
         math_fidelity,
         dealloc_input=True,
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
