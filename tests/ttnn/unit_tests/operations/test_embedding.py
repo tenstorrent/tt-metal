@@ -7,7 +7,6 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random, skip_for_wormhole_b0
-from models.utility_functions import is_wormhole_b0
 
 
 def test_base_case(device):
@@ -44,10 +43,8 @@ def test_embedding(
     output_mem_config,
     layout,
 ):
-    if is_wormhole_b0() and device.core_grid.y > 7:
-        pytest.skip("ND failure on N150, see issue #10908")
-
     torch.manual_seed(1234)
+
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
