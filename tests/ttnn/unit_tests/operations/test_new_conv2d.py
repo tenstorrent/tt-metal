@@ -308,15 +308,15 @@ def run_conv_with_split(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, ncores",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, ncores, act_block_w_div",
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
         # rn50 layer1
-        (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4),
-        (256, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4),
-        (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
+        (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
+        (256, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
+        (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 2),
         # (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
         # (128, 256, 8, 8, 3, 3, 1, 1, 1, 1),
     ),
@@ -335,6 +335,7 @@ def test_conv_ws(
     pad_h,
     pad_w,
     ncores,
+    act_block_w_div,
 ):
     batch_size = 2
     weights_dtype = ttnn.bfloat16
@@ -451,6 +452,7 @@ def test_conv_ws(
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=False,
+        act_block_w_div=act_block_w_div,
     )
 
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(

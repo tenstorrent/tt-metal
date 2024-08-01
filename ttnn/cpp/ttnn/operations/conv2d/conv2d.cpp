@@ -228,6 +228,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t act_block_h_override,
+    uint32_t act_block_w_div,
     uint32_t window_w,
     bool fp32_accum,
     bool use_shallow_conv_variant) {
@@ -244,7 +245,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
                                : padded_in_channels;
     if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED)
     {
-        act_block_w = (padded_in_channels*window_w*window_w)/parallel_config.grid.num_cores();
+        act_block_w = (padded_in_channels*window_w*window_w)/(parallel_config.grid.num_cores()*act_block_w_div);
     }
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
@@ -638,6 +639,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         opt_conv_op_parallel_config,
         tt::round_up(in_channels, conv_config.input_channels_alignment),
         conv_config.act_block_h_override,
+        conv_config.act_block_w_div,
         kernel_size[1],
         conv_config.fp32_dest_acc_enabled,
         conv_config.input_channels_alignment == 16);

@@ -38,6 +38,7 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0;
+    uint32_t act_block_w_div = 1;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // used only if override_sharding_config is true
@@ -59,6 +60,7 @@ struct Conv2dConfig {
         "deallocate_activation",
         "reallocate_halo_output",
         "act_block_h_override",
+        "act_block_w_div",
         "reshard_if_not_optimal",
         "override_sharding_config",
         "shard_layout",
@@ -81,6 +83,7 @@ struct Conv2dConfig {
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),
+            std::cref(this->act_block_w_div),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
             std::cref(this->shard_layout),

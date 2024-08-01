@@ -69,7 +69,7 @@ void kernel_main() {
             weight_current_block_start_tile_id += weight_next_channel_stride_h;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_id_weight,weight_block_num_tiles);
+        // cb_push_back(cb_id_weight,weight_block_num_tiles);
         weight_block_start_tile_id +=weight_next_block_stride_h;
     }
 }

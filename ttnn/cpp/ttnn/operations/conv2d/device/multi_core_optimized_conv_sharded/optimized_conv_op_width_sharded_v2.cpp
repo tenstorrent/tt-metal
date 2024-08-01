@@ -450,12 +450,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
     assert(weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
     assert(act_matrix_height_ntiles % out_block_h_ntiles == 0);
-    TT_ASSERT((act_block_w_ntiles*32)==(weight_size_h*weight_size_w*input_channels_padded)/total_num_cores,act_block_w_ntiles,input_channels_padded);
 
     uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
+
+    TT_ASSERT(num_blocks_act_w%total_num_cores==0,num_blocks_act_w,total_num_cores);
+    uint32_t per_core_num_blocks_act_w = num_blocks_act_w/total_num_cores;
+
 
     // act block info
     uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
@@ -589,7 +592,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / total_num_cores;
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (total_num_cores*per_core_num_blocks_act_w);
 
     // log info for debugging opts
     {
@@ -694,6 +697,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)(split_reader ? act_block_h_datums_split : act_block_h_datums),
         (uint32_t)(split_reader ? act_block_num_tiles_split  : act_block_num_tiles ),
         (uint32_t)total_num_cores,
+        (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
         (uint32_t)act_mcast_start.x,
@@ -898,27 +902,48 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             .compile_args = weights_kernel_compile_args
         }
     );
-    auto compute_id = CreateKernel(
-        program,
-        compute_kernel_path,
-        all_cores,
-        ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = compute_defines});
+    // auto compute_id = CreateKernel(
+    //     program,
+    //     compute_kernel_path,
+    //     all_cores,
+    //     ComputeConfig{
+    //         .math_fidelity = math_fidelity,
+    //         .fp32_dest_acc_en = fp32_dest_acc_en,
+    //         .compile_args = compute_kernel_args,
+    //         .defines = compute_defines});
 
-    log_debug(LogOp, "Act MCast Start {},{}",act_mcast_start.x,act_mcast_start.y);
-    log_debug(LogOp, "Act MCast End {},{}",act_mcast_end.x,act_mcast_end.y);
-
+    auto full_core_grid = device->compute_with_storage_grid_size();
+    std::vector<uint32_t> act_mcast_noc_y;
+    std::vector<uint32_t> act_mcast_noc_x;
+    for(uint32_t core_index = 0; core_index < full_core_grid.x; core_index++)
+    {
+        act_mcast_noc_x.push_back(device->worker_core_from_logical_core(CoreCoord(core_index,0)).x);
+    }
+    for(uint32_t core_index = 0; core_index < full_core_grid.y; core_index++)
+    {
+        act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0,core_index)).y);
+    }
     for(uint32_t core_index = 0; core_index < total_num_cores; core_index++)
     {
         uint32_t core_x = core_index % num_cores_x;
         uint32_t core_y = core_index / num_cores_x;
-        SetRuntimeArgs(program,act_kernel_id,CoreCoord(core_x,core_y),{
+        std::vector<uint32_t> rt_args = {
             core_x,
-            core_y
-        });
+            core_y,
+            num_cores_x,
+        };
+        rt_args.insert(
+            rt_args.end(),
+            act_mcast_noc_x.begin(),
+            act_mcast_noc_x.end()
+        );
+        rt_args.insert(
+            rt_args.end(),
+            act_mcast_noc_y.begin(),
+            act_mcast_noc_y.end()
+        );
+
+        SetRuntimeArgs(program,act_kernel_id,CoreCoord(core_x,core_y),rt_args);
         std::cout<<"Core "<<core_index<<"Start Tile "<<core_index*weight_block_w_ntiles<<std::endl;
         SetRuntimeArgs(program,weights_kernel_id,CoreCoord(core_x,core_y),{
             core_index*weight_block_w_ntiles,
