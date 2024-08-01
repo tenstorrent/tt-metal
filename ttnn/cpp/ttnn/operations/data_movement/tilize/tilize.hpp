@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
 #include "device/tilize_op.hpp"
+
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/common.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -35,7 +36,6 @@ struct ExecuteTilize {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
-        constexpr uint8_t DefaultQueueId = 0;
         return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
     }
 };

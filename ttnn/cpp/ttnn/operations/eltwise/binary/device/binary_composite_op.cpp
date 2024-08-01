@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::binary{
 

@@ -18,6 +18,7 @@
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/where_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 namespace ttnn::operations::unary_backward {
 

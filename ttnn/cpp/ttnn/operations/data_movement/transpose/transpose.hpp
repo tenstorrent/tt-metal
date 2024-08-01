@@ -6,14 +6,12 @@
 
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/common.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/transpose/transpose_op.hpp"
 
 
 namespace ttnn {
 namespace operations::data_movement {
-
-constexpr uint32_t TransposeDefaultQueueID = 0;
-
 
 struct ExecuteTranspose {
     static inline ttnn::Tensor operator()(
@@ -31,11 +29,11 @@ struct ExecuteTranspose {
         const int64_t& dim1,
         const int64_t& dim2,
         const std::optional<MemoryConfig>& memory_config) {
-        return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, memory_config);
+        return operator()(DefaultQueueId, input_tensor, dim1, dim2, memory_config);
     }
 
     static inline ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
-        return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, std::nullopt);
+        return operator()(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt);
     }
 };
 

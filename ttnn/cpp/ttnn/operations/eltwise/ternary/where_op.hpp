@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/common.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
@@ -17,10 +18,6 @@ namespace ttnn {
 namespace operations {
 
 namespace ternary {
-
-namespace constants {
-   const uint8_t DefaultQueueId = 0;
-}
 
 struct WhereOp {
   static Tensor _where(uint8_t queue_id, const Tensor& predicate, const Tensor& value_true, const Tensor& value_false, const std::optional<MemoryConfig>& output_mem_config = std::nullopt, std::optional<Tensor> output_tensor = std::nullopt);
@@ -102,7 +99,7 @@ struct ExecuteTernaryWhere
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
         return WhereOp::_where(
-            constants::DefaultQueueId,
+            DefaultQueueId,
             predicate,
             value_true,
             value_false,
@@ -117,7 +114,7 @@ struct ExecuteTernaryWhere
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
         return WhereOp::_where(
-            constants::DefaultQueueId,
+            DefaultQueueId,
             predicate,
             value_true,
             value_false,
@@ -132,7 +129,7 @@ struct ExecuteTernaryWhere
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
         return WhereOp::_where(
-            constants::DefaultQueueId,
+            DefaultQueueId,
             predicate,
             value_true,
             value_false,
@@ -147,7 +144,7 @@ struct ExecuteTernaryWhere
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
         return WhereOp::_where(
-            constants::DefaultQueueId,
+            DefaultQueueId,
             predicate,
             value_true,
             value_false,

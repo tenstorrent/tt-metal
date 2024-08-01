@@ -6,12 +6,11 @@
 
 #include <optional>
 
+#include "ttnn/common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::reduction {
-
-constexpr uint8_t DefaultQueueId = 0;
 
 struct ArgMax {
     const DataType output_dtype;

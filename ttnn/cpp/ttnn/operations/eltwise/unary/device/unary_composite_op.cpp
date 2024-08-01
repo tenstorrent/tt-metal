@@ -14,9 +14,13 @@
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/creation.hpp"
+
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -432,7 +436,7 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
 Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
    Tensor a_t = ttnn::full_like(a,value_1);
    Tensor b_t = ttnn::full_like(a,value_2);
-   Tensor a_mac = mac(a, a_t, b_t);  // multiply and add.
+   Tensor a_mac = tt::tt_metal::mac(a, a_t, b_t);  // multiply and add.
    Tensor a_clip = relu_max(a_mac, 1.0f);
    return a_clip;
 }

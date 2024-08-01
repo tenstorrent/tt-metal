@@ -11,7 +11,6 @@
 
 namespace ttnn::operations::unary_backward {
 
-constexpr uint8_t DefaultQueueId = 0;
 enum class UnaryBackwardOpType {
     MUL_BW,
     CLAMP_BW,
