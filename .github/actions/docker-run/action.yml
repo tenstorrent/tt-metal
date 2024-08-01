@@ -54,11 +54,7 @@ runs:
         options: |
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           -v ${{ github.workspace }}:${{ github.workspace }}
-          -v /home/ubuntu/.cache/matplotlib:/home/ubuntu/.cache/matplotlib
-          -v /home/ubuntu/.cache/pip:/home/ubuntu/.cache/pip
-          -v /home/ubuntu/.cache/pre-commit:/home/ubuntu/.cache/pre-commit
-          -v /home/ubuntu/.cache/torch:/home/ubuntu/.cache/torch
-          -v /home/ubuntu/.cache/ttnn:/home/ubuntu/.cache/ttnn
+          -v /home/ubuntu/.cache:/home/ubuntu/.cache
           -e TT_METAL_HOME=${{ github.workspace }} 
           -e PYTHONPATH=${{ github.workspace }}
           -w ${{ github.workspace }}
