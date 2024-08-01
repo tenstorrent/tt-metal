@@ -25,6 +25,7 @@ from models.demos.ttnn_resnet.tests.test_ttnn_resnet50_performant import (
     setup_l1_sharded_input,
     setup_dram_sharded_input,
 )
+from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
 
@@ -283,6 +284,7 @@ def run_perf_resnet(
     hf_cat_image_sample_input,
     device,
     model_version,
+    model_location_generator,
 ):
     profiler.clear()
     disable_persistent_kernel_cache()
@@ -304,7 +306,7 @@ def run_perf_resnet(
     for i in range(batch_size - 1):
         inputs = torch.cat((inputs, inputs1), dim=0)
 
-    torch_resnet50 = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     parameters = preprocess_model_parameters(
@@ -378,9 +380,16 @@ def test_perf_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     run_perf_resnet(
-        batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device, "resnet50"
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+        "resnet50",
+        model_location_generator,
     )
 
 
@@ -402,6 +411,7 @@ def test_perf_trace_bare_metal(
     expected_compile_time,
     hf_cat_image_sample_input,
     enable_async,
+    model_location_generator,
 ):
     device.enable_async(enable_async)
     mode = "async" if enable_async else "sync"
@@ -412,6 +422,7 @@ def test_perf_trace_bare_metal(
         hf_cat_image_sample_input,
         device,
         f"resnet50_trace_{mode}",
+        model_location_generator,
     )
     device.enable_async(False)
 
@@ -430,9 +441,16 @@ def test_perf_2cqs_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     run_perf_resnet(
-        batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device, "resnet50_2cqs"
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+        "resnet50_2cqs",
+        model_location_generator,
     )
 
 
@@ -452,6 +470,7 @@ def test_perf_trace_2cqs_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     run_perf_resnet(
         batch_size,
@@ -460,4 +479,5 @@ def test_perf_trace_2cqs_bare_metal(
         hf_cat_image_sample_input,
         device,
         "resnet50_trace_2cqs",
+        model_location_generator,
     )
