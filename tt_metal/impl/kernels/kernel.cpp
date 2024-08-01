@@ -107,6 +107,13 @@ void ComputeKernel::process_defines(
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
+    if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0 and  !getenv("TT_DISABLE_MATMUL_STAGGER") and this->core_range_set_.num_cores() > 48) {
+        // Wouldn't mind mainting a full list of kernels that need this, but for now just check for matmul and bmm
+        if (this->name().find("matmul") != std::string::npos or
+            this->name().find("bmm") != std::string::npos) {
+            callback("MM_STAGGER_ODD_ROWS", "1");
+        }
+    }
 }
 
 void EthernetKernel::process_defines(
