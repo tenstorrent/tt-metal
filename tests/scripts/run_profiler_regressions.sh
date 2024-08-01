@@ -47,12 +47,6 @@ run_async_mode_T3000_test(){
     fi
 }
 
-run_matmul_stagger_test(){
-    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        pytest tests/ttnn/profiling/matmul_stagger/test_matmul_stagger.py
-    fi
-}
-
 run_profiling_test(){
     if [[ -z "$ARCH_NAME" ]]; then
       echo "Must provide ARCH_NAME in environment" 1>&2
@@ -69,8 +63,6 @@ run_profiling_test(){
     run_async_mode_T3000_test
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
-
-    run_matmul_stagger_test
 
     remove_default_log_locations
 

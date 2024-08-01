@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
@@ -341,7 +341,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, disable_stagger, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, enable_stagger, mm_kernel_defines);
 
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
@@ -824,7 +824,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
@@ -1056,7 +1056,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, disable_stagger, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, enable_stagger, mm_kernel_defines);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1494,7 +1494,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1637,7 +1637,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             a.memory_config().is_sharded(),
             output.memory_config().is_sharded(),
             untilize_out,
-            disable_stagger);
+            enable_stagger);
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
             device,
@@ -1668,7 +1668,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             a.memory_config().is_sharded(),
             output.memory_config().is_sharded(),
             untilize_out,
-            disable_stagger);
+            enable_stagger);
     }
 }
 
@@ -1689,7 +1689,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         a,
         b,
@@ -1707,7 +1707,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         fused_activation,
         mcast_in0,
         untilize_out,
-        disable_stagger);
+        enable_stagger);
 }
 
 }  // namespace tt_metal
