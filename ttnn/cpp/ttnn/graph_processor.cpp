@@ -169,6 +169,7 @@ namespace ttnn {
 
     void GraphProcessor::track_end_op(const std::any& output_tensors) {
         const std::lock_guard<std::mutex> lock(mutex);
+        tt::log_info("End op");
         auto counter = graph.size();
         {
             graph.push_back(Vertex{
