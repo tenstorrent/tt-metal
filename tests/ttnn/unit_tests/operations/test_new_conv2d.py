@@ -51,6 +51,8 @@ def run_conv(
     stride_w,
     pad_h,
     pad_w,
+    dilation_h,
+    dilation_w,
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant=False,
@@ -63,6 +65,7 @@ def run_conv(
     deallocate_activation=False,
     debug=False,
     groups=1,
+    activation=None,
 ):
     # has_bias = False
     has_bias = True
@@ -82,8 +85,11 @@ def run_conv(
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        dilation=(dilation_h, dilation_w),
         groups=groups,
     )
+    if activation == "relu":
+        torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
     output_shape_nhwc = [
         torch_out_golden_tensor.shape[0],
         torch_out_golden_tensor.shape[2],
@@ -113,11 +119,15 @@ def run_conv(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
+        fp32_dest_acc_enabled=True,
         packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        activation=activation,
+        math_approx_mode_enabled=True,
+        transpose_shards=True,
+        reallocate_halo_output=False,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -1487,4 +1497,503 @@ def test_yolov4_conv_groups_larger_than_one(
         groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation",
+    (
+        (1, 64, 10, 4094, 510, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Fails with OOM issue
+        (1, 64, 64, 2045, 253, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Fails with OOM issue
+        (1, 64, 64, 1021, 125, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+        (1, 64, 64, 509, 61, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+    ),
+)
+@pytest.mark.parametrize(
+    "config_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_4094x510(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation",
+    (
+        (1, 64, 10, 2047, 255, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Fails with OOM issue
+        (1, 64, 64, 1022, 126, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Fails with OOM issue
+        (1, 64, 64, 509, 61, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+        (1, 64, 64, 253, 29, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+    ),
+)
+@pytest.mark.parametrize(
+    "config_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_2047x255(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation,config_override",
+    (
+        (
+            1,
+            64,
+            10,
+            1024,
+            128,
+            4,
+            4,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            "relu",
+            {"act_block_h": 32},
+        ),  # Passed, Changed the padding from 0 to 1.
+        (1, 64, 64, 510, 62, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu", None),  # Passed
+        (1, 64, 64, 253, 29, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu", None),  # Passed
+        (1, 64, 64, 125, 13, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu", None),  # Passed
+    ),
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_1024x128(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation",
+    (
+        (1, 64, 10, 512, 64, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Fails with OOM
+        (1, 64, 64, 254, 30, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+        (1, 64, 64, 125, 13, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+        (1, 64, 64, 61, 5, 4, 4, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Passed
+    ),
+)
+@pytest.mark.parametrize(
+    "config_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_512x64(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation",
+    (
+        # Input resolution: 4094x510
+        (
+            1,
+            1,
+            2,
+            4034,
+            450,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            "None",
+        ),  # Fails with OOM issue | Activation is None since Linear op is not supported
+        # Input resolution: 2047x255
+        (
+            1,
+            1,
+            2,
+            1986,
+            194,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            "None",
+        ),  # Fails with OOM issue | Activation is None since Linear op is not supported
+    ),
+)
+@pytest.mark.parametrize(
+    "config_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_decoder(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation, config_override",
+    (
+        (1, 64, 10, 2047, 255, 4, 4, 2, 2, 2, 2, 1, 1, 1, "relu", {"act_block_h": 32}),  # Passed with padding = 2
+        (1, 64, 64, 1022, 126, 4, 4, 2, 2, 0, 0, 1, 1, 1, "relu", {"act_block_h": 32}),  # Passed
+        (1, 64, 64, 510, 62, 4, 4, 2, 2, 1, 1, 1, 1, 1, "relu", None),  # Passed with padding = 1
+        (1, 64, 64, 254, 30, 4, 4, 2, 2, 0, 0, 1, 1, 1, "relu", None),  # Passed
+    ),
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_net_encoder_2047x255_max_False(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
     )
