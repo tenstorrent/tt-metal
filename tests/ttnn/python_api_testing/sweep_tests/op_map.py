@@ -849,4 +849,8 @@ op_map = {
         "tt_op": ttnn_ops.i0_bw,
         "pytorch_op": pytorch_ops.i0_bw,
     },
+    "ceil-bw": {
+        "tt_op": ttnn_ops.ceil_bw,
+        "pytorch_op": pytorch_ops.ceil_bw,
+    },
 }
