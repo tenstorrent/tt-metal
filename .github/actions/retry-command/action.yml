@@ -32,7 +32,7 @@ runs:
             echo "Command succeeded."
             exit 0
           else
-            echo "Command failed or timed out."
+            echo "Command failed or timed out. Backing off..."
             count=$((count + 1))
           fi
 

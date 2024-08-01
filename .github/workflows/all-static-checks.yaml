@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/retry-command
         with:
-          timeout-seconds: 10
+          timeout-seconds: 120
           max-retries: 5
-          backoff-seconds: 5
+          backoff-seconds: 10
           command: ./.github/scripts/cloud_utils/mount_weka.sh
