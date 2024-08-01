@@ -155,7 +155,7 @@ target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-trackin
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-target_precompile_headers(ttnn PUBLIC ${TTNN_PRECOMPILED_HEADERS})
+target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
 
 # Make sure library built is _ttnn.so and that it can find all it's linked libraries

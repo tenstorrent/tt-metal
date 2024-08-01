@@ -11,12 +11,14 @@ namespace ttnn::operations::binary::utils {
 using ttnn::operations::unary::UnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
 
+
 std::map<std::string, std::string> get_defines(
-    const std::optional<tt::tt_metal::DataType> input_dtype,
     BinaryOpType op_type,
+    const std::optional<tt::tt_metal::DataType> input_dtype,
     const std::optional<tt::tt_metal::DataType> output_dtype,
     const std::optional<std::vector<UnaryWithParam>> fused_activations,
-    const std::optional<UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+
     std::map<std::string, std::string> defines;
     std::string op_name = "sub_tiles";
     std::string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -105,6 +107,7 @@ std::map<std::string, std::string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
+    using DataType = tt::tt_metal::DataType;
     if(input_dtype.has_value() && output_dtype.has_value() &&
         ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
