@@ -46,10 +46,9 @@ def run_test_FalconCausalLM_end_to_end(
     expected_compile_time,
     expected_inference_time,
     warmup_iterations,
-    is_ci_env,
+    export_perf_report=True,
 ):
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        from tracy import signpost
+    from tracy import signpost
 
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -140,8 +139,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
 
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("COMPILE_RUN")
+    signpost("COMPILE_RUN")
 
     if llm_mode == "prefill":
         tt_outs = []
@@ -186,8 +184,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Run warmup interations - profiler still disabled
     profiler.start(f"model_warmup_run_for_inference")
 
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("WARMUP_RUNS")
+    signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
         for device in devices:
@@ -243,8 +240,7 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.start(f"model_run_for_inference")
 
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("PERF_RUN")
+    signpost("PERF_RUN")
 
     if llm_mode == "prefill":
         # Push inputs to device and do preprocessing
@@ -297,16 +293,17 @@ def run_test_FalconCausalLM_end_to_end(
     cpu_time = profiler.get("hugging_face_reference_model")
     first_iter_time = profiler.get("first_model_run_with_compile")
     second_iter_time = profiler.get("model_run_for_inference")
-    prep_perf_report(
-        model_name=f"Falcon_{llm_mode}_{comment}",
-        batch_size=batch,
-        inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments=comment,
-        inference_time_cpu=cpu_time,
-    )
+    if export_perf_report:
+        prep_perf_report(
+            model_name=f"Falcon_{llm_mode}_{comment}",
+            batch_size=batch,
+            inference_and_compile_time=first_iter_time,
+            inference_time=second_iter_time,
+            expected_compile_time=expected_compile_time,
+            expected_inference_time=expected_inference_time,
+            comments=comment,
+            inference_time_cpu=cpu_time,
+        )
 
     compile_time = first_iter_time - second_iter_time
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
@@ -412,7 +409,6 @@ def test_perf_bare_metal(
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
-        is_ci_env=is_ci_env,
     )
 
 
@@ -486,5 +482,5 @@ def test_device_perf_bare_metal(
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
-        is_ci_env=is_ci_env,
+        export_perf_report=False,
     )

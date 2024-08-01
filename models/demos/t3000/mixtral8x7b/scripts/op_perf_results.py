@@ -91,6 +91,8 @@ def main():
     if args.write_ops_to_csv:
         write_blocks_to_csv(blocks, args.write_ops_to_csv)
 
+    return tokens_per_s
+
 
 def read_rows(csv_file):
     with open(csv_file, "r") as f:
