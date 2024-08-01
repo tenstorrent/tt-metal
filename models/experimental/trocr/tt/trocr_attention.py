@@ -93,7 +93,7 @@ class TtTrOCRAttention(nn.Module):
 
     def _shape(self, tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
         tensor = fallback_ops.reshape(tensor, bsz, seq_len, self.num_heads, self.head_dim)
-        tensor = tt_lib.tensor.transpose(tensor, 1, -2)
+        tensor = ttnn.transpose(tensor, 1, -2)
         return tensor
 
     def forward(
@@ -156,7 +156,7 @@ class TtTrOCRAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         src_len = key_states.get_legacy_shape()[2]
-        key_states = tt_lib.tensor.transpose(key_states, -2, -1)
+        key_states = ttnn.transpose(key_states, -2, -1)
         attn_weights = ttnn.matmul(query_states, key_states)
 
         if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
@@ -210,7 +210,7 @@ class TtTrOCRAttention(nn.Module):
             )
 
         attn_output = fallback_ops.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, embed_dim)
 
         attn_output = self.out_proj(attn_output)

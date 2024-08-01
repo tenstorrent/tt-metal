@@ -7,8 +7,8 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
-#include "ttnn/operations/eltwise/ternary/where_op.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 

@@ -775,29 +775,9 @@ op_map = {
         "pytorch_op": partial(pytorch_ops.reduce_sum, dims=(-2, -1)),
     },
     # Transpose
-    "transpose-wh": {
-        "tt_op": tt_lib_ops.transpose_wh,
+    "transpose": {
+        "tt_op": tt_lib_ops.transpose,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=-2, dim1=-1),
-    },
-    "transpose-hc": {
-        "tt_op": tt_lib_ops.transpose_hc,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=-3, dim1=-2),
-    },
-    "transpose-cn": {
-        "tt_op": tt_lib_ops.transpose_cn,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=1),
-    },
-    "transpose-nh": {
-        "tt_op": tt_lib_ops.transpose_nh,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=-2),
-    },
-    "transpose-nw": {
-        "tt_op": tt_lib_ops.transpose_nw,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=-1),
-    },
-    "transpose-cw": {
-        "tt_op": tt_lib_ops.transpose_cw,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=-1),
     },
     "sum": {
         "tt_op": tt_lib_ops.sum,

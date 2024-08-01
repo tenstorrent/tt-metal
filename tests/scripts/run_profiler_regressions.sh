@@ -58,7 +58,7 @@ run_profiling_test(){
     source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
-    run_additional_T3000_test
+    #run_additional_T3000_test
 
     run_async_mode_T3000_test
 

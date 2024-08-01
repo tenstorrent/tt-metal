@@ -15,8 +15,8 @@ import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
 import architecture
 from elasticsearch import Elasticsearch, NotFoundError
+from elastic_config import *
 
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 ARCH = os.getenv("ARCH_NAME")
 
 
@@ -25,6 +25,14 @@ def git_hash():
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
     except Exception as e:
         return "Couldn't get git hash!"
+
+
+def get_hostname():
+    return subprocess.check_output(["uname", "-n"]).decode("ascii").strip()
+
+
+def get_username():
+    return os.environ["USER"]
 
 
 def run(test_module, input_queue, output_queue):
@@ -74,49 +82,47 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["e2e_perf"] = None
-            result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            results.append(result)
-            suite_pbar.update()
-            continue
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
-        if p is None:
-            p = Process(target=run, args=(test_module, input_queue, output_queue))
-            p.start()
-        try:
-            if MEASURE_PERF:
-                # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+            if p is None:
+                p = Process(target=run, args=(test_module, input_queue, output_queue))
+                p.start()
+            try:
+                if MEASURE_PERF:
+                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                    input_queue.put(test_vector)
+                    output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
-                output_queue.get(block=True, timeout=timeout)
-            input_queue.put(test_vector)
-            response = output_queue.get(block=True, timeout=timeout)
-            status, message, e2e_perf = response[0], response[1], response[2]
-            if status:
-                result["status"] = TestStatus.PASS
-                result["message"] = message
-            else:
-                if "Out of Memory: Not enough space to allocate" in message:
-                    result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                elif "Watcher" in message:
-                    result["status"] = TestStatus.FAIL_WATCHER
+                response = output_queue.get(block=True, timeout=timeout)
+                status, message, e2e_perf = response[0], response[1], response[2]
+                if status:
+                    result["status"] = TestStatus.PASS
+                    result["message"] = message
                 else:
-                    result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-                result["exception"] = message
-            if e2e_perf and MEASURE_PERF:
-                result["e2e_perf"] = e2e_perf
-            else:
-                result["e2e_perf"] = None
-        except Empty as e:
-            print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-            p.terminate()
-            p = None
-            smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
-            if smi_process.returncode == 0:
-                print("SWEEPS: TT-SMI Reset Complete Successfully")
-            result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
+                    if "Out of Memory: Not enough space to allocate" in message:
+                        result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                    elif "Watcher" in message:
+                        result["status"] = TestStatus.FAIL_WATCHER
+                    else:
+                        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                    result["exception"] = message
+                if e2e_perf and MEASURE_PERF:
+                    result["e2e_perf"] = e2e_perf
+                else:
+                    result["e2e_perf"] = None
+            except Empty as e:
+                print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+                p.terminate()
+                p = None
+                smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
+                if smi_process.returncode == 0:
+                    print("SWEEPS: TT-SMI Reset Complete Successfully")
+                result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result["host"] = get_hostname()
+        result["user"] = get_username()
 
         suite_pbar.update()
         results.append(result)
@@ -154,7 +160,7 @@ def get_suite_vectors(client, vector_index, suite):
 
 
 def run_sweeps(module_name, suite_name, vector_id):
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
@@ -163,7 +169,7 @@ def run_sweeps(module_name, suite_name, vector_id):
         for file in sorted(sweeps_path.glob("*.py")):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
             test_module = importlib.import_module("sweeps." + sweep_name)
-            vector_index = sweep_name + "_test_vectors"
+            vector_index = VECTOR_INDEX_PREFIX + sweep_name
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
                 response = client.search(
@@ -197,7 +203,7 @@ def run_sweeps(module_name, suite_name, vector_id):
         except ModuleNotFoundError as e:
             print(f"SWEEPS: No module found with name {module_name}")
             exit(1)
-        vector_index = module_name + "_test_vectors"
+        vector_index = VECTOR_INDEX_PREFIX + sweep_name
 
         if vector_id:
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
@@ -241,9 +247,9 @@ def run_sweeps(module_name, suite_name, vector_id):
 def export_test_results(header_info, results):
     if len(results) == 0:
         return
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     sweep_name = header_info[0]["sweep_name"]
-    results_index = sweep_name + "_test_results"
+    results_index = RESULT_INDEX_PREFIX + sweep_name
 
     curr_git_hash = git_hash()
     for result in results:
@@ -277,7 +283,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--elastic", required=False, help="Elastic Connection String for the vector and results database."
+        "--elastic",
+        required=False,
+        default=ELASTIC_DEFAULT_URL,
+        help="Elastic Connection String for the vector and results database.",
     )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
@@ -313,7 +322,7 @@ if __name__ == "__main__":
         print("ERROR: Module name is required if vector id is specified.")
 
     global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = args.elastic if args.elastic else "http://localhost:9200"
+    ELASTIC_CONNECTION_STRING = args.elastic
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf

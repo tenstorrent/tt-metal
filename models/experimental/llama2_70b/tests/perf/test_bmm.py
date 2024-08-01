@@ -40,7 +40,7 @@ class TT_bmm:
 
         #### OPTION 1: transpose then tilize with padding
         # # Transpose Q in DRAM. This converts to RM
-        # q = tt_lib.tensor.transpose(
+        # q = ttnn.transpose(
         #     q,
         #     -2,
         #     -3,
@@ -63,7 +63,7 @@ class TT_bmm:
 
         q = ttnn.pad(q, [1, N_HEADS_PADDED, BATCH, HEAD_DIM], [0, 0, 0, 0], 0.0)
 
-        q = tt_lib.tensor.transpose(q, -2, -3)
+        q = ttnn.transpose(q, -2, -3)
 
         q = tt_lib.tensor.interleaved_to_sharded(
             q,
