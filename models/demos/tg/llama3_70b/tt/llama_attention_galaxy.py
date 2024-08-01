@@ -14,6 +14,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     num_to_corerange,
 )
+from models.demos.tg.llama3_70b.tt.llama_common import (
+    tt_all_reduce,
+    tt_all_gather,
+)
 
 
 class TtLlamaAttention_galaxy:
@@ -304,75 +308,6 @@ class TtLlamaAttention_galaxy:
         attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, attn_masks)
         return self.attn_selfout(attn_outputs)
 
-    def tt_all_gather(self, input_tensor, dim, cluster_axis, memory_config=None):
-        # Ensure the input tensor is in the correct memory configuration
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Get the full device tensors list from the input tensor
-        device_tensors = ttnn.get_device_tensors(input_tensor)
-
-        num_rows, num_cols = self.cluster_shape[1], self.cluster_shape[0]
-
-        def gather_tensors(indices):
-            tensors = ttnn.aggregate_as_tensor([device_tensors[i] for i in indices])
-            return ttnn.line_all_gather(
-                tensors,
-                dim=dim,
-                num_links=2,
-                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
-            )
-
-        aggregated_outputs = []
-
-        if cluster_axis == 0:
-            # Process row-wise when cluster_axis is 0
-            for row in range(num_rows):
-                start_idx = row * num_cols
-                end_idx = start_idx + num_cols
-                indices = range(start_idx, end_idx)
-                gathered_tensor = gather_tensors(indices)
-                aggregated_outputs.append(gathered_tensor)
-
-        elif cluster_axis == 1:
-            # Process column-wise when cluster_axis is 1
-            for col in range(num_cols):
-                indices = range(col, len(device_tensors), num_cols)
-                gathered_tensor = gather_tensors(indices)
-                aggregated_outputs.append(gathered_tensor)
-
-        # Flatten device tensors
-        if cluster_axis == 0:
-            flattened_tensors = [tensor for output in aggregated_outputs for tensor in ttnn.get_device_tensors(output)]
-        elif cluster_axis == 1:
-
-            def flatten_column_major(array):
-                flattened_list = []
-
-                for col in range(len(array[0])):
-                    for row in range(len(array)):
-                        flattened_list.append(array[row][col])
-
-                return flattened_list
-
-            flattened_tensors = flatten_column_major([ttnn.get_device_tensors(tensor) for tensor in aggregated_outputs])
-
-        final_output_tensor = ttnn.aggregate_as_tensor(flattened_tensors)
-
-        return final_output_tensor
-
-    def tt_all_reduce(self, input_tensor, cluster_axis, dim=0, memory_config=None):
-        # Ensure the input tensor is in the correct memory configuration
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-
-        gathered_tensor = ttnn.line_all_gather(
-            input_tensor, dim, num_links=2, cluster_axis=cluster_axis, device_mesh=self.device_mesh
-        )
-        reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
-            gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
-        )
-
-        return reduced_tensors
-
     def attn_qkv(
         self,
         xs,
@@ -389,8 +324,8 @@ class TtLlamaAttention_galaxy:
         )
         xs.deallocate(True)
 
-        fused_query_key_value = self.tt_all_reduce(
-            fused_query_key_value, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        fused_query_key_value = tt_all_reduce(
+            fused_query_key_value, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -497,10 +432,12 @@ class TtLlamaAttention_galaxy:
             num_heads=self.n_local_heads,
         )
 
-        attn_output = self.tt_all_gather(
+        attn_output = tt_all_gather(
             attn_output,
+            self.device_mesh,
             dim=2,
-            cluster_axis=0,
+            cluster_axis=1,
+            num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         # user_selection_matrix = [1, 1, 32, 128]
@@ -521,6 +458,12 @@ class TtLlamaAttention_galaxy:
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )
 
-        attn_output = self.tt_all_reduce(attn_output, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        attn_output = tt_all_reduce(
+            attn_output,
+            self.device_mesh,
+            cluster_axis=0,
+            num_links=2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
 
         return attn_output

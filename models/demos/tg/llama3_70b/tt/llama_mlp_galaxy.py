@@ -9,6 +9,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
 
 
 class TtLlamaMLP_galaxy:
@@ -206,19 +207,6 @@ class TtLlamaMLP_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, input_tensor, cluster_axis, dim=0, memory_config=None):
-        # Ensure the input tensor is in the correct memory configuration
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-
-        gathered_tensor = ttnn.line_all_gather(
-            input_tensor, dim, num_links=2, cluster_axis=cluster_axis, device_mesh=self.device_mesh
-        )
-        reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
-            gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
-        )
-
-        return reduced_tensors
-
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         w1_out = ttnn.matmul(
             x,
@@ -241,8 +229,12 @@ class TtLlamaMLP_galaxy:
         )
         x.deallocate(True)
 
-        w1_out = self.tt_all_reduce(w1_out, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-        w3_out = self.tt_all_reduce(w3_out, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        w1_out = tt_all_reduce(
+            w1_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
+        w3_out = tt_all_reduce(
+            w3_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
 
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
         w1_out = ttnn.silu(w1_out)
@@ -269,8 +261,12 @@ class TtLlamaMLP_galaxy:
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
-        hidden_states = self.tt_all_reduce(
-            hidden_states, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        hidden_states = tt_all_reduce(
+            hidden_states,
+            self.device_mesh,
+            cluster_axis=0,
+            num_links=2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
