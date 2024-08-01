@@ -8,7 +8,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.bias_gelu_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (

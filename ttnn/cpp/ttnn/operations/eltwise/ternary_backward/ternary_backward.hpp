@@ -103,6 +103,23 @@ struct ExecuteTernaryBackwardOptional {
     }
 };
 
+struct ExecuteTernaryBackwardLerp {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const Tensor &input_tensor_c_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
 }  // operations::ternary_backward
 
 //type 1
@@ -118,5 +135,7 @@ constexpr auto where_bw = ttnn::register_operation<
     "ttnn::where_bw",
     operations::ternary_backward::ExecuteTernaryBackwardOptional<
         operations::ternary_backward::TernaryBackwardOpType::WHERE_BW>>();
-
+constexpr auto lerp_bw = ttnn::register_operation<
+    "ttnn::lerp_bw",
+    operations::ternary_backward::ExecuteTernaryBackwardLerp>();
 }  // namespace ttnn

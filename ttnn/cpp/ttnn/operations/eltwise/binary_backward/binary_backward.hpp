@@ -118,6 +118,22 @@ struct ExecuteUnaryBackwardMul  {
         const ComplexTensor &input_tensor_a_arg,
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config);
+};
+
+struct ExecuteBinaryBackwardBiasGelu {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        string approximate,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        float scalar,
+        string approximate,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 
 };
 
@@ -141,8 +157,9 @@ constexpr auto subalpha_bw = ttnn::register_operation<"ttnn::subalpha_bw", opera
 
 constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
 
-constexpr auto lerp_bw = ttnn::register_operation<"ttnn::lerp_bw", operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>();
-
 constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::binary_backward::ExecuteUnaryBackwardMul>();
 
+constexpr auto bias_gelu_bw = ttnn::register_operation<
+    "ttnn::bias_gelu_bw",
+    operations::binary_backward::ExecuteBinaryBackwardBiasGelu>();
 }  // namespace ttnn

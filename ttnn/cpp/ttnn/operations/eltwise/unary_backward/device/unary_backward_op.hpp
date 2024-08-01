@@ -19,7 +19,6 @@ enum class UnaryBackwardOpType {
     SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
-    BIAS_GELU_BW,
     POW_BW,
     TANH_BW,
     EXP_BW,
@@ -183,7 +182,6 @@ std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::opt
 
 std::vector<Tensor> _div_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _bias_gelu_bw( const Tensor& grad, const Tensor& input, float bias, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -717,13 +715,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::BIAS_GELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _bias_gelu_bw(grad, input, bias, approximate, output_mem_config);
     }
 };
 

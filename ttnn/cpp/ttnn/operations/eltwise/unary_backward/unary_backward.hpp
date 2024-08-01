@@ -534,10 +534,6 @@ constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
         operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>();
-constexpr auto bias_gelu_bw = ttnn::register_operation<
-    "ttnn::bias_gelu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::BIAS_GELU_BW>>();
 
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",

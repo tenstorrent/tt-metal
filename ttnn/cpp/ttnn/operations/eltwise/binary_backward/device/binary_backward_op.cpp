@@ -22,6 +22,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 
+#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 namespace ttnn::operations::binary_backward {
 
@@ -369,17 +370,22 @@ std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Ten
     return grad_tensor;
 }
 
-std::vector<Tensor> _bias_gelu_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    string approximate,
-    const MemoryConfig& output_mem_config) {
+std::vector<Tensor> ExecuteBinaryBackwardBiasGelu::operator()(
+    const Tensor& grad, const Tensor& input_a, const Tensor& input_b, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
     Tensor input = ttnn::add(input_a, input_b);
     grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
     grad_tensor.emplace_back(grad_tensor[0]);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBinaryBackwardBiasGelu::operator()(
+    const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
+    Tensor input = ttnn::add(input_tensor, bias);
+    grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate);
     return grad_tensor;
 }
 
@@ -498,17 +504,6 @@ std::vector<Tensor> _div_bw(
     return grad_tensor;
 }
 
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float sub_scalar = 1.0f - weight;
-    Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_1);
-    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_2);
-    return grad_tensor;
-}
 
 std::vector<Tensor> ExecuteUnaryBackwardMul::operator()(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
