@@ -21,11 +21,44 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
+def create_event(device):
+    event = []
+    if isinstance(device, ttnn.Device):
+        event.append(tt_lib.device.CreateEvent())
+    else:
+        for dev in device.get_device_ids():
+            event.append(tt_lib.device.CreateEvent())
+    return event
+
+
+def wait_for_event(device, cq_id, event):
+    if isinstance(device, ttnn.Device):
+        tt_lib.device.WaitForEvent(device, cq_id, event)
+    else:
+        for dev, eve in zip(device.get_device_ids(), event):
+            tt_lib.device.WaitForEvent(device.get_device(dev), cq_id, eve)
+
+
+def record_event(device, cq_id, event):
+    if isinstance(device, ttnn.Device):
+        tt_lib.device.RecordEvent(device, cq_id, event)
+    else:
+        for dev, eve in zip(device.get_device_ids(), event):
+            tt_lib.device.RecordEvent(device.get_device(dev), cq_id, eve)
+
+
+def buffer_address(tensor):
+    addr = []
+    for ten in ttnn.get_device_tensors(tensor):
+        addr.append(ten.buffer_address())
+    return addr
+
+
 # TODO: Create ttnn apis for these
-ttnn.create_event = tt_lib.device.CreateEvent
-ttnn.wait_for_event = tt_lib.device.WaitForEvent
-ttnn.record_event = tt_lib.device.RecordEvent
-ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
+ttnn.create_event = create_event
+ttnn.wait_for_event = wait_for_event
+ttnn.record_event = record_event
+ttnn.buffer_address = buffer_address
 
 
 # TODO: Move these into Resnet model preprocessing/member functions
@@ -84,7 +117,7 @@ def setup_dram_sharded_input(device, tt_inputs, tt_resnet50, mesh_mapper, mesh_c
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_inference(
     device_mesh,
     use_program_cache,
@@ -92,17 +125,13 @@ def test_run_resnet50_inference(
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(enable_async)
-        device_mesh.get_device(device).enable_program_cache()
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
@@ -146,10 +175,6 @@ def test_run_resnet50_inference(
         signpost(header="stop")
     test_infra.validate()
 
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(False)
-        device_mesh.get_device(device).disable_and_clear_program_cache()
-
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
@@ -157,7 +182,7 @@ def test_run_resnet50_inference(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_inference(
     device_mesh,
     use_program_cache,
@@ -165,17 +190,13 @@ def test_run_resnet50_trace_inference(
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(enable_async)
-        device_mesh.get_device(device).enable_program_cache()
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
@@ -230,19 +251,14 @@ def test_run_resnet50_trace_inference(
         signpost(header="stop")
     test_infra.validate()
 
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(False)
-        device_mesh.get_device(device).disable_and_clear_program_cache()
 
-
-@pytest.mark.skip()
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_2cqs_inference(
     device_mesh,
     use_program_cache,
@@ -250,16 +266,13 @@ def test_run_resnet50_2cqs_inference(
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(enable_async)
-        device_mesh.get_device(device).enable_program_cache()
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
@@ -287,8 +300,8 @@ def test_run_resnet50_2cqs_inference(
         output_mesh_composer,
     )
     tt_image_res = tt_inputs_host.to(device_mesh, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device_mesh)
+    write_event = ttnn.create_event(device_mesh)
     # Initialize the op event so we can write
     ttnn.record_event(device_mesh, 0, op_event)
 
@@ -325,28 +338,23 @@ def test_run_resnet50_2cqs_inference(
         ttnn.record_event(device_mesh, 0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_devices(device_mesh)
 
     if use_signpost:
         signpost(header="stop")
     for output in outputs:
         test_infra.validate(output)
 
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(False)
-        device_mesh.get_device(device).disable_and_clear_program_cache()
 
-
-@pytest.mark.skip()
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
     device_mesh,
     use_program_cache,
@@ -354,16 +362,13 @@ def test_run_resnet50_trace_2cqs_inference(
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(enable_async)
-        device_mesh.get_device(device).enable_program_cache()
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
@@ -391,8 +396,8 @@ def test_run_resnet50_trace_2cqs_inference(
         output_mesh_composer,
     )
     tt_image_res = tt_inputs_host.to(device_mesh, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device_mesh)
+    write_event = ttnn.create_event(device_mesh)
     # Initialize the op event so we can write
     ttnn.record_event(device_mesh, 0, op_event)
 
@@ -412,7 +417,7 @@ def test_run_resnet50_trace_2cqs_inference(
     ttnn.record_event(device_mesh, 1, write_event)
     ttnn.wait_for_event(device_mesh, 0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = test_infra.input_tensor.buffer_address()
+    first_out_addr = ttnn.buffer_address(test_infra.input_tensor)
     ttnn.record_event(device_mesh, 0, op_event)
     test_infra.run()
     test_infra.validate()
@@ -434,7 +439,7 @@ def test_run_resnet50_trace_2cqs_inference(
         input_mem_config,
     )
     ttnn.end_trace_capture(device_mesh, tid, cq_id=0)
-    assert first_out_addr == test_infra.input_tensor.buffer_address()
+    assert first_out_addr == ttnn.buffer_address(test_infra.input_tensor)
     test_infra.validate()
 
     # More optimized run with caching
@@ -452,19 +457,10 @@ def test_run_resnet50_trace_2cqs_inference(
         )
         ttnn.record_event(device_mesh, 0, op_event)
         ttnn.execute_trace(device_mesh, tid, cq_id=0, blocking=False)
-        outputs.append(
-            ttnn.from_device(
-                test_infra.output_tensor, device=device_mesh, mesh_composer=output_mesh_composer, blocking=False
-            )
-        )
-
+        outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
     ttnn.synchronize_devices(device_mesh)
 
     if use_signpost:
         signpost(header="stop")
     for output in outputs:
         test_infra.validate(output)
-
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(False)
-        device_mesh.get_device(device).disable_and_clear_program_cache()

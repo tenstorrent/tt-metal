@@ -346,7 +346,7 @@ def test_run_resnet50_trace_2cqs_inference(
     if use_signpost:
         signpost(header="start")
     outputs = []
-    for iter in range(0, 1):
+    for iter in range(0, 2):
         ttnn.wait_for_event(device, 1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         ttnn.record_event(device, 1, write_event)

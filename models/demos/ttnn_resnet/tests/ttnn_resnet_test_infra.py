@@ -254,7 +254,6 @@ class ResNet50TestInfra:
                     valid_pcc = 0.93
                 else:
                     valid_pcc = 0.982
-        print(valid_pcc)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(
