@@ -175,13 +175,11 @@ class TtMambaSSM(torch.nn.Module):
 
         # calculate abar
         abar0 = ttnn.to_memory_config(self.A, memory_config=ttnn.L1_MEMORY_CONFIG)
-        abar1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+        abar1 = ttnn.experimental.repeat_and_interleave_eltwise_mul(
             abar0,
             delta_t2,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-            output_dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(abar0)
@@ -204,26 +202,22 @@ class TtMambaSSM(torch.nn.Module):
         )
 
         # bbar
-        bbar0 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+        bbar0 = ttnn.experimental.repeat_and_interleave_eltwise_mul(
             B0,
             delta_t2,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-            output_dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(delta_t2)
         ttnn.deallocate(B0)
 
         # bbar * x
-        bmulx0 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+        bmulx0 = ttnn.experimental.repeat_and_interleave_eltwise_mul(
             bbar0,
             x,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-            output_dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
 
@@ -295,13 +289,11 @@ class TtMambaSSM(torch.nn.Module):
         )  # b,n
 
         # c * hidden_state
-        C1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+        C1 = ttnn.experimental.repeat_and_interleave_eltwise_mul(
             C0,
             hidden_state0,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-            output_dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(hidden_state0)

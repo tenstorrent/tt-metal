@@ -34,11 +34,6 @@ void py_module(py::module& m_transformers) {
             B = torch.repeat_interleave(B, q_heads // kv_heads, dim=1)
             torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
     )doc");
-    m_transformers.def("ssm_eltwise_mul", &ssm_eltwise_mul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4, R"doc(
-        Performs a special eltwise multiply for SSM models. Given tensor A with shape [1, 1, 32, 32] and tensor B with shape [1, 1, 32, W] where W is some multiple of 32, perform the following PyTorch equivalent:
-            A.repeat(1, 1, 1, W) * B.repeat_interleave(32, dim=-1)
-    )doc");
     m_transformers.def("ssm_1d_sum_reduce", &ssm_1d_sum_reduce,
         py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4, R"doc(
         Performs a custom reduction along dim 3 which is used in the SSM block of the Mamba architecture. Performs the following PyTorch equivalent (where latent_size = 32):
