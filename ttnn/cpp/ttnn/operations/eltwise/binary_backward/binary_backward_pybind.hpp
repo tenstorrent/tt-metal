@@ -447,6 +447,67 @@ void bind_binary_backward_float(py::module& module, const binary_backward_operat
             py::arg("memory_config") = std::nullopt});
 }
 
+template <typename binary_backward_operation_t>
+void bind_binary_bw_comparison(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor_a: ttnn.Tensor , input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+        {2}
+        Supports broadcasting.
+
+        Args:
+            * :attr:`input_tensor_a` ttnn.Tensor
+            * :attr:`input_tensor_b` (ttnn.Tensor or Number)
+
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+
+        Example:
+
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(tensor1, tensor2)
+
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const Tensor& grad_tensor,
+               const Tensor& input_tensor,
+               const float scalar,
+               const std::optional<MemoryConfig>& memory_config){
+                return self(grad_tensor, input_tensor, scalar, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("scalar"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const Tensor& grad_tensor,
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
 }  // namespace detail
 
 
@@ -529,6 +590,7 @@ void py_module(py::module& module) {
         module,
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+    
     detail::bind_binary_backward_float_string_default(
         module,
         ttnn::bias_gelu_bw,
@@ -539,6 +601,18 @@ void py_module(py::module& module) {
         "none",
         R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
         :attr:`approximate` mode can be 'none', 'tanh'.)doc");
+
+    detail::bind_binary_bw_comparison(
+        module,
+        ttnn::le_bw,
+        R"doc(Performs backward operations for less than or equal comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
+
+    detail::bind_binary_bw_comparison(
+        module,
+        ttnn::ne_bw,
+        R"doc(Performs backward operations for not equal comparison on :attr:`input_tensor`, :attr:`alpha` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.
+        Returns an tensor of zeros like input tensors.)doc");
 }
 
 }  // namespace binary_backward

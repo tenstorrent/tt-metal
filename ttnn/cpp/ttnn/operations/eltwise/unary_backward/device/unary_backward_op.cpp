@@ -322,17 +322,7 @@ std::vector<Tensor> _lt_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
-std::vector<Tensor> _le_bw(
-    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
-}
-
 std::vector<Tensor> _ge_bw(
-    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
-}
-
-std::vector<Tensor> _ne_bw(
     const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
     return _unary_comp_bw(grad, output_mem_config);
 }
