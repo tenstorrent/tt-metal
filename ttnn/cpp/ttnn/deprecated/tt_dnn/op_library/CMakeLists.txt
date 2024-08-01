@@ -102,6 +102,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_h/moreh_bias_backward_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_hw/moreh_bias_backward_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/multi_core/moreh_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/moreh_matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul_backward/moreh_matmul_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm/moreh_norm_op.cpp

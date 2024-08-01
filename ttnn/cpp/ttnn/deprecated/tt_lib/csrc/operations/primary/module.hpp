@@ -237,6 +237,16 @@ void py_module(py::module& m_primary) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_matmul operation.");
 
+    // moreh_test
+    m_primary.def(
+        "moreh_test",
+        &moreh_test,
+        py::arg("input").noconvert(),
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        "Performs a moreh_test operation.");
+
     // moreh_matmul_backward
     m_primary.def(
         "moreh_matmul_backward",

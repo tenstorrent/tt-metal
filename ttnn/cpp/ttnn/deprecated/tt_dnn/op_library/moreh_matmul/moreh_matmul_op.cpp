@@ -296,6 +296,54 @@ Tensor moreh_matmul(
     return moreh_matmul_(input, other, transpose_input, transpose_other, output, bias, output_mem_config, compute_kernel_config);
 }
 
+/////////////
+void MorehTest::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {}
+
+std::vector<Shape> MorehTest::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    return {input_tensors.at(0).get_legacy_shape()};
+}
+
+std::vector<Tensor> MorehTest::create_output_tensors(
+    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    return {output_tensors.at(0).value()};
+}
+
+operation::ProgramWithCallbacks MorehTest::create_program(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto &input{input_tensors.at(0)};
+    const auto& output{output_tensors.at(0)};
+    return moreh_test_impl(input, output, this->compute_kernel_config);
+}
+
+Tensor moreh_test(
+    const Tensor& input,
+    const std::optional<const Tensor> output,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto kernel_config_val =
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
+    operation::launch_op(
+        [kernel_config_val](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehTest{.compute_kernel_config = kernel_config_val},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input},
+        output_tensors,
+        {},
+        {output});
+
+    return output_tensors.at(0);
+}
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt
