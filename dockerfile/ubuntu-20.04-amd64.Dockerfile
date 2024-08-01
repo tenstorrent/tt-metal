@@ -17,18 +17,18 @@ COPY --chown=ubuntu:ubuntu /scripts/docker/requirements.txt /opt/tt_metal_infra/
 
 RUN apt-get -y update \
     && xargs -a /opt/tt_metal_infra/scripts/docker/requirements.txt apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    && sudo rm -rf /var/lib/apt/lists/*
 
 # Install dev deps
 COPY --chown=ubuntu:ubuntu /scripts/docker/requirements_dev.txt /opt/tt_metal_infra/scripts/docker/requirements_dev.txt
 RUN apt-get -y update \
     && xargs -a /opt/tt_metal_infra/scripts/docker/requirements_dev.txt apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    && sudo rm -rf /var/lib/apt/lists/*
 
 ## Test Related Dependencies
 COPY --chown=ubuntu:ubuntu /scripts/docker/install_test_deps.sh /opt/tt_metal_infra/scripts/docker/install_test_deps.sh
 
-RUN  mkdir -p /opt/tt_metal_infra/doxygen
+RUN mkdir -p /opt/tt_metal_infra/doxygen
 RUN wget -O /opt/tt_metal_infra/doxygen/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
 RUN tar -xzf /opt/tt_metal_infra/doxygen/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz -C /opt/tt_metal_infra/doxygen/
 RUN rm /opt/tt_metal_infra/doxygen/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz
