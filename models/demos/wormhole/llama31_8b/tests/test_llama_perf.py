@@ -112,10 +112,9 @@ def test_llama_model_perf(
     run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference")
     profiler.print()
-    iter_time = profiler.get("model_run_for_inference_0")
+    iter_time = profiler.get("end_to_end_inference")
 
     comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
-    iter_time = profiler.get("model_run_for_inference_0")
 
     prep_perf_report(
         model_name=f"Llama_31_8B_{comment}",
