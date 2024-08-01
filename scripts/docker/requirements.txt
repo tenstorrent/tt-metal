@@ -16,8 +16,9 @@ libhwloc-dev
 libhdf5-serial-dev
 ruby=1:2.7+1
 python3-dev=3.8.2-0ubuntu2
-python3.8-venv=3.8.10-0ubuntu1~20.04.10
+python3.8-venv
 cargo
 ninja-build
 libyaml-cpp-dev=0.6.2-4ubuntu1
 libboost-all-dev=1.71.0.0ubuntu2
+patchelf

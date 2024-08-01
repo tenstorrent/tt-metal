@@ -33,13 +33,14 @@ ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
 # ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 
 # Copy requirements from tt-metal folders with requirements.txt docs
-COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
-COPY /tt_metal/python_env/* ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
+
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
     && python3 -m pip install setuptools wheel
 
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
-RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt 
 
 # Install Clang-17
 RUN cd $TT_METAL_INFRA_DIR \
