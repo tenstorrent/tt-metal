@@ -108,7 +108,7 @@ ttnn::Tensor ExecuteTranspose::operator()(
 }
 
 ttnn::Tensor ExecuteTranspose::operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
-    return operator()(DefaultQueueI, input_tensor, dim1, dim2, std::nullopt);
+    return operator()(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

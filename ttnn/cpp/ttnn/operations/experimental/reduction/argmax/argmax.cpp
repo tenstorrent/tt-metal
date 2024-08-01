@@ -6,6 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
