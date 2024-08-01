@@ -1369,26 +1369,16 @@ def gen_celu_args(
     dtypes,
     layouts,
     mem_configs,
-    low=-10,
+    low=-0.01,
     high=10,
     dtype=torch.bfloat16,
     do_sanitize_args=True,
     coregrid=[],
 ):
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    for input_info in gen_scalar_symmetric_args(
+        input_shapes, dtypes, layouts, mem_configs, "alpha", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
-        if input_info is not None:
-            if dtype.is_floating_point:
-                scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
-                while scalar == 0.0:
-                    scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
-            else:
-                scalar = torch.tensor(1, dtype=dtype).random_(low, high).item()
-                while scalar == 0.0:
-                    scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
-            input_info.update({"alpha": scalar})
-            yield input_info
+        yield input_info
 
 
 def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
