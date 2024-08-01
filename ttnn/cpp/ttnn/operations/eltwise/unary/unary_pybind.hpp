@@ -22,8 +22,6 @@ namespace unary {
 
 namespace detail {
 
-using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
-
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(

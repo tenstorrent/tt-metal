@@ -8,8 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "export_enum.hpp"
 
 namespace py = pybind11;
@@ -34,7 +33,7 @@ void py_module(py::module& m) {
     py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
 
-    m.def("string_to_unary_with_param", &string_to_unary_with_param);
+    m.def("string_to_unary_with_param", &utils::string_to_unary_with_param);
 }
 
 }

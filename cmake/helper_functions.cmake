@@ -13,7 +13,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
         endif()
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
 
-        target_link_libraries(${TEST_TARGET} PUBLIC test_eager_common_libs)
+        target_link_libraries(${TEST_TARGET} PUBLIC test_eager_common_libs ttnn)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}

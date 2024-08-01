@@ -4,6 +4,7 @@
 
 
 #include "ternary_composite_op.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::ternary{
 

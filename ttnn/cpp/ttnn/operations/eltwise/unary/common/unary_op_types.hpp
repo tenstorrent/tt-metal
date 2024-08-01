@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace ttnn::operations::unary {
 
 // These operations have a corresponding LLK available
@@ -81,5 +83,21 @@ enum class UnaryOpType {
     REMAINDER,
     FMOD,
 };
+
+struct UnaryWithParam {
+    UnaryOpType op_type;
+    std::vector<float> params;
+
+    UnaryWithParam(UnaryOpType op_type, const std::vector<float>& params) : op_type{op_type}, params{params} {}
+    UnaryWithParam(UnaryOpType op_type, float param) : op_type{op_type}, params{param} {}
+    UnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
+
+    bool has_parameter() const { return params.size() > 0; }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
+    const auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
+};
+
+using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }

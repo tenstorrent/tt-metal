@@ -15,7 +15,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>

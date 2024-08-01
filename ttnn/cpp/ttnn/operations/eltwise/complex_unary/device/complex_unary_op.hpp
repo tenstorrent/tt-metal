@@ -12,7 +12,6 @@
 
 namespace ttnn::operations::complex_unary {
 
-constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexUnaryOpType {
     REAL,
     IMAG,

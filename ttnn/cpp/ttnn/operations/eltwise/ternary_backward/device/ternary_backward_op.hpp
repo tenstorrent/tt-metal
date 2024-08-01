@@ -12,8 +12,6 @@
 
 namespace ttnn::operations::ternary_backward {
 
-constexpr uint8_t DefaultQueueId = 0;
-
 using OptionalTensor = std::optional<Tensor>;
 
 enum class TernaryBackwardOpType {

@@ -4,6 +4,7 @@
 
 #include "pad.hpp"
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 
@@ -12,7 +13,6 @@
 namespace ttnn::operations::data_movement {
 
 namespace {
-constexpr uint8_t DefaultQueueId = 0;
 
 template <typename ShapeType>
 static ttnn::Tensor pad_impl(

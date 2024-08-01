@@ -12,7 +12,6 @@
 
 namespace ttnn::operations::complex_binary {
 
-constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexBinaryOpType {
     ADD,
     SUB,

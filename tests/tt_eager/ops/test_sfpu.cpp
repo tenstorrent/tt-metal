@@ -14,7 +14,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 
 
@@ -38,7 +38,7 @@ void update_sfpu_op_to_hlk_op()
             unary_op_name = "RECIP";
         }
         auto unary_op_type = magic_enum::enum_cast<UnaryOpType>(unary_op_name).value();
-        if ( ttnn::operations::unary::is_parametrized_type(unary_op_type) ) {
+        if (ttnn::operations::unary::utils::is_parametrized_type(unary_op_type)) {
             if (unary_op_type == UnaryOpType::EXP) {
                 sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 1.0}});
             } else {

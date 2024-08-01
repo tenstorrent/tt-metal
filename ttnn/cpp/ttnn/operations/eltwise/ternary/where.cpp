@@ -5,14 +5,18 @@
 
 #include "where.hpp"
 
+#include <functional>
+#include <variant>
+
+#include "ttnn/common/constants.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
 namespace ttnn {
-
 namespace operations {
-
 namespace ternary {
-
-
-const uint8_t DefaultQueueId = 0;
 
 namespace ternary_utils {
 

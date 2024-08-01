@@ -10,8 +10,8 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt;
