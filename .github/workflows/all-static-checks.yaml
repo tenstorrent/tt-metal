@@ -49,3 +49,14 @@ jobs:
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
+  check-retry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 10
+          max-retries: 5
+          backoff-seconds: 5
+          command: |
+            sudo ls
