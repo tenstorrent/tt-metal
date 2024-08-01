@@ -208,14 +208,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_div,
         "pytorch_op": pytorch_ops.div,
     },
-    "eltwise-div_trunc": {
-        "tt_op": tt_lib_ops.eltwise_div_trunc,
-        "pytorch_op": pytorch_ops.div_trunc,
-    },
-    "eltwise-unary_div_trunc": {
-        "tt_op": tt_lib_ops.eltwise_unary_div_trunc,
-        "pytorch_op": pytorch_ops.unary_div_trunc,
-    },
     "eltwise-unary_rdiv_trunc": {
         "tt_op": tt_lib_ops.eltwise_unary_rdiv_trunc,
         "pytorch_op": pytorch_ops.unary_rdiv_trunc,
