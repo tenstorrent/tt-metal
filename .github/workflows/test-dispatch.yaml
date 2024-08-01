@@ -57,7 +57,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ inputs.arch }}
+          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files
         run: tar -xvf ttm_${{ inputs.arch }}.tar
       - uses: ./.github/actions/install-python-deps
