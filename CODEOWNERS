@@ -116,8 +116,8 @@ ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified
 ttnn/setup.py @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
-ttnn/cpp/ttnn/operations/pool/ @mywoodstock @pavlejosipovic
-ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @pavlejosipovic
+ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
+ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @arakhmati @eyonland
@@ -130,7 +130,7 @@ tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**
-models/conv_on_device_utils*.py @mywoodstock @sankarmanoj-tt
+models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
@@ -148,8 +148,8 @@ models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/grayskull @uaydonat @eyonland
-models/demos/resnet @mywoodstock @tt-aho
-models/demos/ttnn_resnet @mywoodstock @tt-aho
+models/demos/resnet @mywoodstock @shwetankTT @tt-aho
+models/demos/ttnn_resnet @mywoodstock @shwetankTT @tt-aho
 models/perf/ @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
