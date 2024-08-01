@@ -19,7 +19,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
@@ -86,7 +85,6 @@ void TensorModule(py::module& m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
-    detail::export_enum<LossReductionMode>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)

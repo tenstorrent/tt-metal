@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
@@ -147,25 +146,5 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         )doc");
 
 
-    // loss functions
-    m_tensor.def(
-        "mseloss",
-        py::overload_cast<const Tensor&, const Tensor&, const LossReductionMode, const MemoryConfig&>(
-            tt::tt_metal::mseloss),
-        py::arg("input_reference"),
-        py::arg("input_prediction"),
-        py::arg("reduce_mode"),
-        py::arg("output_mem_config").noconvert() = std::nullopt,
-        R"doc(Returns mean squared error loss function for ``{0}`` and ``{1}``.)doc");
-
-    m_tensor.def(
-        "maeloss",
-        py::overload_cast<const Tensor&, const Tensor&, const LossReductionMode, const MemoryConfig&>(
-            tt::tt_metal::maeloss),
-        py::arg("input_reference"),
-        py::arg("input_prediction"),
-        py::arg("reduce_mode"),
-        py::arg("output_mem_config").noconvert() = std::nullopt,
-        R"doc(Returns mean absolute error loss function for ``{0}`` and ``{1}``.)doc");
 }
 }  // namespace tt::tt_metal::detail
