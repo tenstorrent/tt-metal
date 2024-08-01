@@ -244,6 +244,10 @@ constexpr auto gt_bw = ttnn::register_operation<
     "ttnn::gt_bw",
     operations::binary_backward::ExecuteUnaryBackwardComparison>();
 
+constexpr auto ge_bw = ttnn::register_operation<
+    "ttnn::ge_bw",
+    operations::binary_backward::ExecuteUnaryBackwardComparison>();
+
 constexpr auto eq_bw = ttnn::register_operation<
     "ttnn::eq_bw",
     operations::binary_backward::ExecuteUnaryBackwardComparison>();
