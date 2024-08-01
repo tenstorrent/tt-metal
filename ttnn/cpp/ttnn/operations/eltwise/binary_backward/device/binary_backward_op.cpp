@@ -389,18 +389,9 @@ std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _ne_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_comp_bw(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _ge_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
-
-std::vector<Tensor> _le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_comp_bw(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _lt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
@@ -500,7 +491,7 @@ std::vector<Tensor> _div_bw(
 }
 
 
-std::vector<Tensor> ExecuteUnaryBackwardMul::operator()(
+std::vector<Tensor> ExecuteBackwardMul::operator()(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
@@ -508,7 +499,7 @@ std::vector<Tensor> ExecuteUnaryBackwardMul::operator()(
     return grad_tensor;
 }
 
-std::vector<ComplexTensor> ExecuteUnaryBackwardMul::operator()(
+std::vector<ComplexTensor> ExecuteBackwardMul::operator()(
     const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor grad_a = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(other,output_mem_config), output_mem_config);
@@ -518,7 +509,7 @@ std::vector<ComplexTensor> ExecuteUnaryBackwardMul::operator()(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardMul::operator()(
+std::vector<std::optional<Tensor>> ExecuteBackwardMul::operator()(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
@@ -551,4 +542,22 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardMul::operator()(
     return std::move(result);
 }
 
+std::vector<Tensor> ExecuteBackwardComparison::operator()(
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+
+
+std::vector<Tensor> ExecuteBackwardComparison::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    Tensor zero_input = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero_input);
+    return grad_tensor;
+}
 }  // namespace ttnn::operations::binary_backward
