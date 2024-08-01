@@ -38,10 +38,14 @@ void update_sfpu_op_to_hlk_op()
             unary_op_name = "RECIP";
         }
         auto unary_op_type = magic_enum::enum_cast<UnaryOpType>(unary_op_name).value();
-        if (unary_op_type == UnaryOpType::EXP) {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 1.0}});
+        if (ttnn::operations::unary::utils::is_parametrized_type(unary_op_type)) {
+            if (unary_op_type == UnaryOpType::EXP) {
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 1.0}});
+            } else {
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 0.5}});
+            }
         } else {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 0.5}});
+            sfpu_op_to_hlk_op_name[sfpu_op_name]  = ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type}});
         }
     }
 }

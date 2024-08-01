@@ -22,43 +22,6 @@ union Converter {
     }
 };
 
-template <typename T>
-bool is_parametrized_type(T val) {
-    switch (val) {
-        case UnaryOpType::RELU_MAX:
-        case UnaryOpType::RELU_MIN:
-        case UnaryOpType::POWER:
-        case UnaryOpType::LEAKY_RELU:
-        case UnaryOpType::ELU:
-        case UnaryOpType::GELU:
-        case UnaryOpType::RSQRT:
-        case UnaryOpType::HEAVISIDE:
-        case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
-        case UnaryOpType::RSUB:
-        case UnaryOpType::RDIV:
-        case UnaryOpType::EXP:
-        case UnaryOpType::SOFTPLUS:
-        case UnaryOpType::ADD_UNARY_SFPU:
-        case UnaryOpType::SUB_UNARY_SFPU:
-        case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::DIV_UNARY_SFPU:
-        case UnaryOpType::UNARY_NE:
-        case UnaryOpType::UNARY_GT:
-        case UnaryOpType::UNARY_LT:
-        case UnaryOpType::TYPECAST:
-        case UnaryOpType::BITWISE_XOR:
-        case UnaryOpType::BITWISE_NOT:
-        case UnaryOpType::BITWISE_AND:
-        case UnaryOpType::BITWISE_OR:
-        case UnaryOpType::RIGHT_SHIFT:
-        case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER:
-        case UnaryOpType::FMOD: return true;
-        default: return false;
-    }
-    return false;
-}
 
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
