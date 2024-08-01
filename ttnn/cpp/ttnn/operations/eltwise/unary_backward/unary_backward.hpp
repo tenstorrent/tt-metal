@@ -271,20 +271,10 @@ constexpr auto lt_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::LT_BW>>();
 
-constexpr auto le_bw = ttnn::register_operation<
-    "ttnn::le_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::LE_BW>>();
-
 constexpr auto ge_bw = ttnn::register_operation<
     "ttnn::ge_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloat<
         operations::unary_backward::UnaryBackwardOpType::GE_BW>>();
-
-constexpr auto ne_bw = ttnn::register_operation<
-    "ttnn::ne_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::NE_BW>>();
 
 //ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
