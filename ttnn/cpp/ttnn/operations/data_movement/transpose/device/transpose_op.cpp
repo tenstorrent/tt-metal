@@ -43,8 +43,18 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(!this->output_mem_config.is_sharded());
         }
     } else {
-        TT_FATAL(!input_tensor.is_sharded());
-        TT_FATAL(!this->output_mem_config.is_sharded());
+        if (input_tensor.is_sharded()) {
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            const auto shard_spec = input_tensor.shard_spec().value();
+            TT_FATAL(shard_spec.shape[1] == W);
+            TT_FATAL(shard_spec.shape[0] % H == 0 or H % shard_spec.shape[0] == 0);
+            TT_FATAL(shard_spec.shape[0] % C == 0 or C % shard_spec.shape[0] == 0);
+            TT_FATAL(C % H == 0 or H % C == 0);
+            TT_FATAL(this->output_mem_config.is_sharded());
+            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        } else {
+            TT_FATAL(!this->output_mem_config.is_sharded());
+        }
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
@@ -117,6 +127,16 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
                 input_tensor.get_layout(),
                 input_tensor.device(),
                 mem_config)};
+        } else if (this->dim == TransposeOpDim::HC) {
+            const auto output_shape = this->compute_output_shapes(input_tensors)[0];
+            auto mem_config = this->output_mem_config;
+            mem_config.shard_spec = input_tensor.shard_spec().value();
+            return {create_device_tensor(
+                output_shape,
+                input_tensor.get_dtype(),
+                input_tensor.get_layout(),
+                input_tensor.device(),
+                mem_config)};
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
@@ -139,7 +159,11 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
             }
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            return detail::transpose_hc_multi_core(input_tensor, output_tensor);
+            if (input_tensor.is_sharded()) {
+                return detail::transpose_hc_multi_core_sharded(input_tensor, output_tensor);
+            } else {
+                return detail::transpose_hc_multi_core(input_tensor, output_tensor);
+            }
         case TransposeOpParallelizationStrategy::MULTI_CORE_CN:
             return detail::transpose_cn_multi_core(input_tensor, output_tensor);
         default:
