@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::utils {

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "binary_op_utils.hpp"
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
