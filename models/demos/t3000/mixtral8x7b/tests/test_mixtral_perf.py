@@ -252,6 +252,10 @@ def test_mixtral_model_with_prefill_perf(
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
 
+    # profile dump
+    for device_id in t3k_device_mesh.get_device_ids():
+        tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seq_len
     generation_length = 1
@@ -336,11 +340,11 @@ def run_inference_prefill(tt_model, model_args, prefill_seq_len, device_mesh, pt
         profiler.end(f"e2e_prefill_inference_{batch_id}")
 
         # Device sync to get proper e2e timing
-        profiler.start(f"e2e_prefill_inference_get_output_{batch_id}")
+        profiler.start(f"e2e_prefill_inference_sync_{batch_id}")
         devices = device_mesh.get_devices()
         for device in devices:
             ttnn.device.synchronize_device(device)
-        profiler.end(f"e2e_prefill_inference_get_output_{batch_id}")
+        profiler.end(f"e2e_prefill_inference_sync_{batch_id}")
 
 
 def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length):
