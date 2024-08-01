@@ -11,8 +11,6 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -28,6 +26,8 @@ from models.utility_functions import (
 
 def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
@@ -75,6 +75,8 @@ def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds
 
 
 def test_grok_rms_norm_sharded_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")

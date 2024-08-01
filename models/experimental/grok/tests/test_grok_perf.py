@@ -10,8 +10,6 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ConcatMeshToTensor
@@ -51,6 +49,8 @@ def test_grok_model_perf(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)

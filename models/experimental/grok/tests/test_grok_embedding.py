@@ -11,8 +11,6 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from models.experimental.grok.tt.grok_embedding import TtGrokEmbedding
@@ -34,6 +32,8 @@ class Emb(torch.nn.Module):
 
 
 def test_grok_embedding(device, use_program_cache, reset_seeds):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device, dummy_weights=os.getenv("CI") == "true")

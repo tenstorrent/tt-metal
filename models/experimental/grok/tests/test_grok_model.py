@@ -13,8 +13,6 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ConcatMeshToTensor
@@ -44,6 +42,8 @@ from models.experimental.grok.reference.configuration_grok1 import Grok1Config
     (1, 2, 10),
 )
 def test_grok_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, iterations, n_layers, validation_type):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
     pcc = 0.97
     dtype = ttnn.bfloat8_b
 

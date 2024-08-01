@@ -119,10 +119,10 @@ run_t3000_grok_tests() {
 
   echo "LOG_METAL: Running run_t3000_grok_tests"
 
-  pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
