@@ -4,14 +4,6 @@ FROM ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 
-ARG UID=1000
-ARG GID=1000
-
-RUN  groupadd -g "${GID}" ubuntu \
-    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" ubuntu
-
-USER ubuntu
-
 # Install build and runtime deps
 COPY /scripts/docker/requirements.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
@@ -23,6 +15,15 @@ COPY /scripts/docker/requirements_dev.txt /opt/tt_metal_infra/scripts/docker/req
 RUN apt-get -y update \
     && xargs -a /opt/tt_metal_infra/scripts/docker/requirements_dev.txt apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
+
+
+ARG UID=1000
+ARG GID=1000
+
+RUN  groupadd -g "${GID}" ubuntu \
+    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" ubuntu
+
+USER ubuntu
 
 ## Test Related Dependencies
 COPY /scripts/docker/install_test_deps.sh /opt/tt_metal_infra/scripts/docker/install_test_deps.sh
