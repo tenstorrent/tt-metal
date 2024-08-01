@@ -157,6 +157,57 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
     return {cb_sharded_act, cb_output};
 }
 
+/*
+ * This function converts a convolution operation to a matrix multiplication.
+ * When we have the following input and weight for a convolution operation:
+ *
+ * Input:
+ *                      _________________ ~~~ _____
+ *                     /                  ~~~      /\
+ *                    / ^                         /  \
+ *                 ~~~  |                      ~~~    ~~~
+ *                 ~~~   conv_act_size_h       ~~~    ~~~
+ *                 /   /                       /         \
+ *                / <-/                       /           \
+ *               /_________________ ~~~ _____/            /
+ *             ^ \ ^                ~~~    ^ \           /
+ *             |  \ \____  conv_act_size_c/   \         /
+ *             |   ~~~                         ~~~   ~~~
+ * conv_act_size_w ~~~                         ~~~   ~~~
+ *              \    \                           \  /
+ *               \--> \________________ ~~~ ______\/
+ *                                      ~~~
+ *
+ * Weight:
+ *                   _________________ ~~~ ______
+ *                  /<-\               ~~~      /\
+ *                 /   /   weight_size_h       /  \
+ *                / <-/                       /    \
+ *               /_________________ ~~~______/      \
+ *             ^ \ ^                ~~~    ^ \      /  x (number of channels
+ *             |  \ \____  conv_act_size_c/   \    /      in output)
+ * weight_size_w   \                           \  /
+ *              \-->\_________________~~~_______\/
+ *                                    ~~~
+ *
+ * In the convolution operation, assuming that we flatten the part of weight for
+ * "one" output channel as a vector and flatten the part of the input whose size
+ * is the same as the part of weight for "one" output channel as a vector, the
+ * output for that weight and input will be a single element of the output
+ * that is a result of a dot-product between them.
+ *
+ * Therefore, we can list them i.e., weight for each output channel and
+ * corresponding input into two matrices: matrix A for the weight whose single
+ * row is the weight for single output channel, and matrix B for input whose
+ * single column is a part of the input that should be used for the dot-product
+ * with each row of A. Note that we conduct element-wise element-wise
+ * multiplication between the input and the weight of the convolution and get
+ * the sum of the element-wise multiplication results to get an output element,
+ * which is the same as the dot-product.
+ *
+ * |act_matrix_height| is the height (number of rows) for the first matrix (A).
+ * |act_matrix_width| is the width (number of columns) for the first matrix (A).
+ */
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
