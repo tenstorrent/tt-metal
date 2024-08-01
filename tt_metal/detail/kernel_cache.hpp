@@ -13,11 +13,11 @@ namespace tt::tt_metal::detail
     }
 
     bool exists(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         return hashes_.find(khash) != hashes_.end();
     }
     bool add(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         bool ret = false;
         if (hashes_.find(khash) == hashes_.end() ){
             hashes_.insert(khash);
@@ -27,17 +27,17 @@ namespace tt::tt_metal::detail
     }
 
     bool is_bin_generated(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         return generated_bins_.find(khash) != generated_bins_.end();
     }
 
     void add_generated_bin(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         generated_bins_.insert(khash);
     }
 
     void clear() {
-        unique_lock<mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         hashes_.clear();
         generated_bins_.clear();
     }

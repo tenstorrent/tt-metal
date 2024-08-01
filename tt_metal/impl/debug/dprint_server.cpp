@@ -160,7 +160,7 @@ private:
     std::map<uint32_t, uint32_t> noc_xfer_counts;
 
     // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
-    std::map<tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
     // Keep a separate set of raised signal codes so that multiple harts can wait for the same
     // signal.
     std::set<uint32_t> raised_signals_;
@@ -637,7 +637,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
 
     // Check whether this hart is currently waiting on a WAIT to be fulfilled.
-    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
     raise_wait_lock_.lock();
     if (hart_waiting_on_signal_.count(hart_key) > 0) {
         // Check if the signal the hart is wairint for has been raised.
@@ -856,7 +856,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     memcpy (&sigval, ptr, sizeof(uint32_t));
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
-                    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+                    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
                     raise_wait_lock_.lock();
                     TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
                     // Set that this hart is waiting on this signal, and then stop reading for now.

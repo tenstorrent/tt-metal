@@ -125,7 +125,7 @@ Tensor to_layout_impl(
                 }
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
-                throw runtime_error("ttnn::to_layout: Unsupported layout!");
+                throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");

@@ -164,7 +164,7 @@ void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_
 
 void continue_cmd(uint32_t chip_id, CoreCoord core, string thread_type) {
 
-    const vector<uint32_t> breakpoint_flag = {0};
+    const std::vector<uint32_t> breakpoint_flag = {0};
 
     tt::llrt::write_hex_vec_to_core(chip_id, core, breakpoint_flag, thread_type_to_bp_addr.at(thread_type));
     // std::cout << "Continue command issued for core " << core.x << ", " << core.y << " for thread " << thread_type << std::endl;

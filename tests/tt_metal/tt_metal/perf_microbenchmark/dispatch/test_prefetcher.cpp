@@ -328,7 +328,7 @@ void add_prefetcher_debug_epilogue(vector<uint32_t>& cmds,
 
 void add_prefetcher_cmd_to_hostq(vector<uint32_t>& cmds,
                                  vector<uint32_t>& sizes,
-                                 const vector<uint32_t>& payload,
+                                 const std::vector<uint32_t>& payload,
                                  size_t prior_end) {
     uint32_t cmd_size_bytes = (cmds.size() - prior_end) * sizeof(uint32_t);
     for (int i = 0; i < payload.size(); i++) {

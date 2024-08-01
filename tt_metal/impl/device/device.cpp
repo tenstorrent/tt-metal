@@ -1322,8 +1322,8 @@ void Device::setup_tunnel_for_remote_devices() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
-    unique_ptr<Program, detail::ProgramDeleter> mmio_command_queue_program_ptr(new Program);
+    std::unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
+    std::unique_ptr<Program, detail::ProgramDeleter> mmio_command_queue_program_ptr(new Program);
 
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";

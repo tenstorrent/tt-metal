@@ -300,7 +300,7 @@ using namespace tt::tt_metal;
 
 // Ensure there are always symmetrical values. Different paths use different
 // index ordering (0,1 vs 1,0) to meet test PCC requirements.
-constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
+constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8},  // subblock_hw = 8
     {7, 1}, {1, 7},                  // subblock_hw = 7
     {3, 2}, {2, 3}, {6, 1}, {1, 6},  // subblock_hw = 6
@@ -311,7 +311,7 @@ constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {1, 1},                          // subblock_hw = 1
 }};
 
-tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w);
 
 CoreCoord get_core_range(
@@ -343,7 +343,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
     std::optional<CoreCoord> compute_with_storage_grid_size = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-tuple<uint32_t, uint32_t> get_matmul_subblock_params(
+std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const uint32_t per_core_M,
     const uint32_t per_core_N,
     const bool per_core_M_equals_subblock_h_constraint,
