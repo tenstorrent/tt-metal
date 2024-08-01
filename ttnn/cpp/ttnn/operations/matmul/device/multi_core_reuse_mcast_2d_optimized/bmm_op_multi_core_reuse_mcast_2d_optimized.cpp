@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     tt_metal::Program program{};
 
@@ -465,7 +465,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), disable_stagger, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), enable_stagger, mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -1213,7 +1213,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1359,7 +1359,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format,
         output_data_format,
         untilize_out,
-        disable_stagger);
+        enable_stagger);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1379,7 +1379,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         a,
         b,
@@ -1397,7 +1397,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         transpose_mcast,
         fused_activation,
         untilize_out,
-        disable_stagger);
+        enable_stagger);
 }
 
 }  // namespace tt_metal

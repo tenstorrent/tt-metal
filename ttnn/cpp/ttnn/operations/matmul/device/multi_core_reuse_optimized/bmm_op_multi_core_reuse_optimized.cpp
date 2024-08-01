@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    bool disable_stagger
+    bool enable_stagger
 ) {
     tt_metal::Program program{};
 
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks create_program(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, disable_stagger, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, enable_stagger, mm_kernel_defines);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
@@ -471,7 +471,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
 
@@ -578,7 +578,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
         in1_data_format,
         output_data_format,
         untilize_out,
-        disable_stagger);
+        enable_stagger);
 }
 
 // TODO: Get rid of no-op reshapes when we generalize
@@ -598,7 +598,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out,
-    bool disable_stagger) {
+    bool enable_stagger) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -621,7 +621,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         per_core_N,
         fuse_batch,
         untilize_out,
-        disable_stagger);
+        enable_stagger);
 }
 
 }  // namespace tt_metal
