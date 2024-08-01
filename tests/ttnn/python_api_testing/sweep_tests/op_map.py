@@ -812,7 +812,7 @@ op_map = {
     "log-sigmoid-bw": {
         "tt_op": ttnn_ops.log_sigmoid_bw,
         "pytorch_op": pytorch_ops.log_sigmoid_bw,
-    },    
+    },
     "logaddexp-bw": {
         "tt_op": ttnn_ops.logaddexp_bw,
         "pytorch_op": pytorch_ops.logaddexp_bw,
@@ -820,5 +820,5 @@ op_map = {
     "logaddexp2-bw": {
         "tt_op": ttnn_ops.logaddexp_bw,
         "pytorch_op": pytorch_ops.logaddexp_bw,
-    },    
+    },
 }
