@@ -48,30 +48,5 @@ std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const Comp
     return grad_tensor;
 }
 
-//  complex div
-//  self: grad / other.conj();
-//  other: -grad * ((self / other) / other).conj();
-std::vector<ComplexTensor> _complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    Tensor condition_nan = ttnn::logical_and(ttnn::eqz(other.real(),output_mem_config), ttnn::eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
-    ComplexTensor grad_a = ttnn::operations::complex_binary::_div(grad, ttnn::conj(other,output_mem_config), output_mem_config);
-    Tensor grad_a_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_a,output_mem_config),  output_mem_config);
-    Tensor grad_a_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_a,output_mem_config),  output_mem_config);
-    grad_a = ComplexTensor({grad_a_r, grad_a_i});
-    grad_a_r.deallocate();
-    grad_a_i.deallocate();
-    grad_tensor.emplace_back(grad_a);
-    ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
-    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_div(ttnn::operations::complex_binary::_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
-    neg_grad.deallocate();
-    Tensor grad_b_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_b,output_mem_config),  output_mem_config);
-    Tensor grad_b_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_b,output_mem_config),  output_mem_config);
-    grad_b = ComplexTensor({grad_b_r, grad_b_i});
-    grad_b_r.deallocate();
-    grad_b_i.deallocate();
-    condition_nan.deallocate();
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
 
 }  // namespace ttnn::operations::complex_binary_backward
