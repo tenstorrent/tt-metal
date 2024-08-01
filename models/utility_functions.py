@@ -957,8 +957,8 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         [N, C, H, W] = x.get_legacy_shape()
         if channel_transpose:
             # n c h w -> n h w c
-            x = tt_lib.tensor.transpose(x, 1, -2)
-            x = tt_lib.tensor.transpose(x, -2, -1)  # wh
+            x = ttnn.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)  # wh
 
         logger.info("Running Conv with following parameters on device -")
         logger.info(
@@ -997,8 +997,8 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
             x = ttnn.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
         if channel_transpose:
-            x = tt_lib.tensor.transpose(x, -2, -1)
-            x = tt_lib.tensor.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)
+            x = ttnn.transpose(x, 1, -2)
 
         logger.info("conv on tt device done")
         return x

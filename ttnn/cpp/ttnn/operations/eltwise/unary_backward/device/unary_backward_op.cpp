@@ -16,18 +16,10 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
-#include "ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 namespace ttnn::operations::unary_backward {
-
-std::vector<ttnn::Tensor> _mul_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
 
 std::vector<Tensor> _clamp_bw(
     const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {

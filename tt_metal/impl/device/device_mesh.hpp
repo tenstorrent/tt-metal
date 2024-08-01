@@ -12,14 +12,8 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_mesh_view.hpp"
 
-using Device = tt::tt_metal::Device;
-using DeviceMeshView = tt::tt_metal::DeviceMeshView;
-using Coordinate = tt::tt_metal::Coordinate;
+namespace tt::tt_metal {
 
-
-namespace ttnn {
-
-namespace multi_device {
 using DeviceGrid = std::pair<int, int>;
 using DeviceIds = std::vector<int>;
 
@@ -67,14 +61,6 @@ public:
     bool is_galaxy_;
 };
 
+bool validate_worker_modes(const std::vector<Device*>& workers);
 
-}  // namespace multi_device
-
-}  // namespace ttnn
-
-namespace tt {
-namespace tt_metal {
-    using DeviceMesh = ttnn::multi_device::DeviceMesh;
-    bool validate_worker_modes(const std::vector<Device*>& workers);
-} // namespace tt_metal
-} // namespace tt
+} // namespace tt::tt_metal

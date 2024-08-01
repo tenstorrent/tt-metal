@@ -88,7 +88,7 @@ class TtRobertaSelfAttention(nn.Module):
         return x
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
+        weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
@@ -149,7 +149,7 @@ class TtRobertaSelfAttention(nn.Module):
             past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
+        key_layer_transposed = ttnn.transpose(key_layer, -2, -1)
 
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed, memory_config=self.mem_config)
 

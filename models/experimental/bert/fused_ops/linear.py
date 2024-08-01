@@ -5,7 +5,7 @@
 from typing import List, Union, Optional
 from tt_lib import tensor
 from ttnn import matmul
-
+import ttnn
 
 def Linear(
     in_features: int,
@@ -27,7 +27,7 @@ def Linear(
         assert bias.get_legacy_shape() == [1, 1, 32, out_features]
 
     def linear_(activation):
-        weight_T = tensor.transpose(weight, -2, -1)
+        weight_T = ttnn.transpose(weight, -2, -1)
         output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:

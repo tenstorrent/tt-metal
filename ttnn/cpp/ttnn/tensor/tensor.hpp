@@ -18,7 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {

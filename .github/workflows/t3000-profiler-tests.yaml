@@ -11,7 +11,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '["wormhole_b0"]'
-      profiler-build: true
+      tracy: true
     secrets: inherit
   t3000-profiler-tests:
     needs: build-artifact-profiler

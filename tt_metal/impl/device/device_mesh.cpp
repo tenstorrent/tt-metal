@@ -4,15 +4,13 @@
 
 #include <memory>
 
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 #include "tt_metal/impl/device/device_mesh_view.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 
-namespace ttnn {
-
-namespace multi_device {
+namespace tt::tt_metal {
 
 DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues)
     : device_grid(device_grid)
@@ -176,14 +174,6 @@ void DeviceMesh::close_devices() {
     managed_devices.clear();
 }
 
-}  // namespace multi_device
-
-}  // namespace ttnn
-
-namespace tt {
-
-namespace tt_metal {
-
 bool validate_worker_modes(const std::vector<Device*>& workers) {
     bool worker_modes_match = true;
     auto first_worker_mode = workers.at(0)->get_worker_mode();
@@ -193,6 +183,4 @@ bool validate_worker_modes(const std::vector<Device*>& workers) {
     return worker_modes_match;
 }
 
-}
-
-}
+} // namespace tt::tt_metal

@@ -17,13 +17,14 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace tt {
 
@@ -260,54 +261,6 @@ Tensor logical_noti(const Tensor& input_a, float immediate, const MemoryConfig& 
     return operation::decorate_as_composite(__func__, _logical_noti)(input_a, immediate, output_mem_config);
 }
 
-Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, string round_mode,  const MemoryConfig& output_mem_config) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
-    Tensor result = ttnn::divide(input_a, input_b);
-    if(round_mode == "trunc"){
-        result = ttnn::trunc(result);
-    }
-    else if(round_mode == "floor"){
-        result = ttnn::floor(result);
-    }
-
-    if (accurate_mode == false) {  // If input_b is non-zero tensor
-        return result;
-    }
-
-    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
-    return ttnn::where(
-        ttnn::eqz(input_b, output_mem_config),
-        ttnn::where(
-            ttnn::eqz(input_a, output_mem_config),
-            t_nan,
-            ttnn::multiply(t_inf, ttnn::sign(input_a, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        result,
-        output_mem_config);
-}
-Tensor div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, string round_mode, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, round_mode, output_mem_config);
-}
-
-Tensor _div_overload(const Tensor& input_a, float scalar, bool accurate_mode, string round_mode,  const MemoryConfig& output_mem_config) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
-    Tensor result = ttnn::multiply(input_a, (1.0f/scalar));
-
-    if(round_mode == "trunc"){
-        result = ttnn::trunc(result);
-    }
-    else if(round_mode == "floor"){
-        result = ttnn::floor(result);
-    }
-
-    return result;
-}
-Tensor div(const Tensor& input_a, float scalar, bool accurate_mode, string round_mode, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_overload)(input_a, scalar, accurate_mode, round_mode, output_mem_config);
-}
-
-
 Tensor _frac(const Tensor& input, const MemoryConfig& output_mem_config) {
     auto arch = input.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
@@ -317,38 +270,6 @@ Tensor _frac(const Tensor& input, const MemoryConfig& output_mem_config) {
 }
 Tensor frac(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _frac)(input, output_mem_config);
-}
-
-Tensor _div_trunc(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor result = div(input_a, input_b, true);
-    return ttnn::trunc(result);
-}
-Tensor div_trunc(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_trunc)(input_a, input_b, output_mem_config);
-}
-
-Tensor _div_trunc_overload(
-    const Tensor& input,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor result = ttnn::multiply(input, (1 / value));
-    return ttnn::trunc(result);
-}
-Tensor div_trunc(
-    const Tensor& input,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_trunc_overload)(input, value, output_mem_config);
 }
 
 Tensor _unary_rdiv_trunc(
@@ -373,92 +294,12 @@ Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
     return ttnn::ne(result, floor_res);
 }
 
-Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor temp = div(input_a, input_b, true);
-    // floor(nan, inf, -inf) = nan, inf, -inf
-    return ttnn::where(
-        ttnn::logical_or(
-            ttnn::eq(temp, std::nanf("")),
-            ttnn::logical_or(
-                ttnn::eq(temp, std::numeric_limits<float>::infinity()),
-                ttnn::eq(temp, -std::numeric_limits<float>::infinity()))),
-        temp,
-        ttnn::floor(temp, output_mem_config));
-}
-Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _floor_div)(input_a, input_b, output_mem_config);
-}
-
-Tensor _floor_div_overload(const Tensor& input, float value, const MemoryConfig& output_mem_config) {
-    if (value == 0) {
-        Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-        Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-        return ttnn::where(
-            ttnn::eqz(input, output_mem_config),
-            t_nan,
-            ttnn::multiply(t_inf, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config);
-
-    }
-    Tensor temp = ttnn::multiply(input, (1.0f/value));
-    return ttnn::floor(temp);
-}
-Tensor floor_div(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _floor_div_overload)(input_a, value, output_mem_config);
-}
-
 Tensor _rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::multiply(ttnn::full_like(input, value), ttnn::reciprocal(input));
     return ttnn::floor(result, output_mem_config);
 }
 Tensor rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _rfloor_div)(value, input, output_mem_config);
-}
-
-Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor div_result = div(input_a, input_b);
-    return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0, div_result);
-}
-Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_no_nan)(input_a, input_b, output_mem_config);
-}
-
-Tensor _div_no_nan_overload(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
-    if (value == 0)
-        return full_like(input_a, 0.0f, output_mem_config);
-    else
-        return ttnn::multiply(input_a, (1.0f/value));
-}
-Tensor div_no_nan(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_no_nan_overload)(input_a, value, output_mem_config);
-}
-
-Tensor _remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    DataType input_dtype = input_a.get_dtype();
-    Tensor a = ttnn::typecast(input_a, DataType::FLOAT32);
-    Tensor b = ttnn::typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(b, floor_div(input_a, input_b, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
-    result = ttnn::where(ttnn::ltz(b), ttnn::add(result, b), result);
-    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f, output_mem_config), result, output_mem_config);
-    return ttnn::typecast(result, input_dtype);
-}
-Tensor remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _remainder)(input_a, input_b, output_mem_config);
-}
-
-Tensor _fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    DataType input_dtype = input_a.get_dtype();
-    Tensor a = ttnn::typecast(input_a, DataType::FLOAT32);
-    Tensor b = ttnn::typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f, output_mem_config), result, output_mem_config);
-    return ttnn::typecast(result, input_dtype);
-}
-Tensor fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fmod)(input_a, input_b, output_mem_config);
 }
 
 // logit(input, eps)=log(input / 1 - input)

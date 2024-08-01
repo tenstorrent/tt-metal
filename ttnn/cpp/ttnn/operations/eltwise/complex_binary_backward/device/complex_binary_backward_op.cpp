@@ -10,7 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 
 namespace ttnn::operations::complex_binary_backward {
@@ -42,18 +42,6 @@ std::vector<ComplexTensor> _complex_sub_bw(const ComplexTensor& grad, const Comp
     UnaryWithParam{UnaryOpType::NEG},
     UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
     ComplexTensor grad_b = ComplexTensor({ttnn::unary_chain( grad_r, ops_chain, output_mem_config), ttnn::unary_chain( grad_i, ops_chain, output_mem_config)});
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-
-// complex mul
-// grad_input = grad * other.conj()
-// grad_other = grad * input.conj()
-std::vector<ComplexTensor> _complex_mul_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_a = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(other,output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(input,output_mem_config), output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }

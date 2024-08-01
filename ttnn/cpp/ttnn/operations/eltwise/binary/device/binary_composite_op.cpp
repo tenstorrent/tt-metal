@@ -9,7 +9,7 @@
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"

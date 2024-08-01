@@ -40,7 +40,7 @@ def transpose(
     ).to(ttl.tensor.Layout.TILE)
 
     xt = xt.to(device, input_mem_config)
-    xtt = ttl.tensor.transpose(xt, dim0, dim1, output_mem_config)
+    xtt = ttnn.transpose(xt, dim0, dim1, memory_config=output_mem_config)
     assert list(xtt.get_legacy_shape()) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
@@ -332,7 +332,7 @@ def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
         ),
         value=0,
     )
-    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
@@ -355,7 +355,7 @@ def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
@@ -372,7 +372,7 @@ def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 2, 3, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
@@ -414,7 +414,7 @@ def test_tranpose_hc_rm(device, n, c, h, w):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 1, 2, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
@@ -432,7 +432,7 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    activation_pyt_padded = ttl.tensor.transpose(activation_pyt_padded, 1, 2, ttnn.L1_MEMORY_CONFIG)
+    activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)

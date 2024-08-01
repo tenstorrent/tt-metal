@@ -268,13 +268,7 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.div
-
-.. autofunction:: tt_lib.tensor.div_trunc
-
 .. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
-.. autofunction:: tt_lib.tensor.div_no_nan
 
 .. autofunction:: tt_lib.tensor.polyval
 
@@ -283,10 +277,6 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.softshrink
 
 .. autofunction:: tt_lib.tensor.hardshrink
-
-.. autofunction:: tt_lib.tensor.remainder
-
-.. autofunction:: tt_lib.tensor.fmod
 
 .. autofunction:: tt_lib.tensor.logical_xori
 
@@ -302,8 +292,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.frac
 
-.. autofunction:: tt_lib.tensor.floor_div
-
 .. autofunction:: tt_lib.tensor.rfloor_div
 
 
@@ -314,8 +302,6 @@ These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
-
-.. autofunction:: tt_lib.tensor.transpose
 
 .. autofunction:: tt_lib.tensor.untilize
 

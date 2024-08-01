@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -620,7 +620,7 @@ Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryC
         Tensor rounded_non_half = ttnn::floor(
             ttnn::add(ttnn::multiply(input, power_10, std::nullopt, output_mem_config), 0.5, std::nullopt, output_mem_config),
             output_mem_config);
-        rounded_non_half = div(rounded_non_half, power_10);
+        rounded_non_half = ttnn::div(rounded_non_half, power_10);
         return rounded_non_half;
     } else {  // Bankers' Rounding
         Tensor rounded_non_half = ttnn::floor(

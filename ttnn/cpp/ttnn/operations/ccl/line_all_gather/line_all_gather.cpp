@@ -20,7 +20,7 @@ ttnn::Tensor ExecuteLineAllGather::operator()(
     const ttnn::Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
-    const multi_device::DeviceMesh& device_mesh,
+    const DeviceMesh& device_mesh,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     return ttnn::operations::ccl::line_all_gather(

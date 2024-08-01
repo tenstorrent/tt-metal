@@ -224,8 +224,8 @@ class TtBloomAttention(torch.nn.Module):
         self.bias_d = pad_by_zero(state_dict[f"{base_address}.dense.bias"], device)[0]
 
         # Transpose the weights
-        self.weight_q = tt_lib.tensor.transpose(self.weight_q, -2, -1)
-        self.weight_d = tt_lib.tensor.transpose(self.weight_d, -2, -1)
+        self.weight_q = ttnn.transpose(self.weight_q, -2, -1)
+        self.weight_d = ttnn.transpose(self.weight_d, -2, -1)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)

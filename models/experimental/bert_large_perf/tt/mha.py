@@ -92,7 +92,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             )
 
             # N, 128, 2, 64
-            transposed = ttl.tensor.transpose(reshaped_unt, 1, -2)
+            transposed = ttnn.transpose(reshaped_unt, 1, -2)
             # N, 2, 128, 64
             retilized = ttnn.tilize(transposed)
             return retilized
@@ -150,7 +150,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op6_transpose_hw(K):
         # profiler.start("___op6_transpose_hw")
-        kt = ttl.tensor.transpose(K, -2, -1)
+        kt = ttnn.transpose(K, -2, -1)
         # profiler.end("___op6_transpose_hw")
 
         return kt
@@ -208,7 +208,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             """
 
             # profiler.start("___op10_unmake_attention_heads")
-            ctx = ttl.tensor.transpose(x, 1, -2)
+            ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
             reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttnn.tilize(reshaped)

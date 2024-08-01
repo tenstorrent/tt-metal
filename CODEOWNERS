@@ -59,6 +59,7 @@ tests/scripts/tgg/ @ttmchiou
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT
 tt_metal/host_api.hpp @abhullar-tt @davorchap @pgkeller @aliuTT
+tt_metal/impl/device/ @abhullar-tt @davorchap @pgkeller @aliuTT @cfjchu
 
 # metal - dispatch
 tt_metal/impl/dispatch/ @pgkeller @tt-asaigal @aliuTT
@@ -114,7 +115,7 @@ ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dma
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/setup.py @tt-rkim
 ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @TT-BrianLiu
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
@@ -125,6 +126,7 @@ ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/moreh* @razorback3 @dongjin-na
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
+tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**
