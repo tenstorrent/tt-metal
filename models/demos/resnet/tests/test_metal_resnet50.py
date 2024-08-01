@@ -4,12 +4,12 @@
 
 from loguru import logger
 import torch
-from torchvision import models
 import pytest
 import tt_lib
 
 from models.utility_functions import is_e75, skip_for_wormhole_b0, divup
 
+from models.demos.resnet.tests.demo_utils import load_resnet50_model
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     get_atol_rtol_pcc,
@@ -295,6 +295,7 @@ def run_resnet50_inference(
     math_fidelity,
     imagenet_sample_input,
     run_fn,
+    model_location_generator,
 ):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
@@ -317,7 +318,7 @@ def run_resnet50_inference(
     with torch.no_grad():
         torch.manual_seed(1234)
 
-        torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        torch_resnet50 = load_resnet50_model(model_location_generator)
         torch_resnet50.eval()
 
         state_dict = torch_resnet50.state_dict()
@@ -387,7 +388,14 @@ def run_resnet50_inference(
     ids=["HiFi4", "HiFi2", "LoFi"],
 )
 def test_run_resnet50_inference(
-    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device,
+    use_program_cache,
+    batch_size,
+    weights_dtype,
+    activations_dtype,
+    math_fidelity,
+    imagenet_sample_input,
+    model_location_generator,
 ):
     run_resnet50_inference(
         device,
@@ -397,4 +405,5 @@ def test_run_resnet50_inference(
         math_fidelity,
         imagenet_sample_input,
         run_model,
+        model_location_generator,
     )
