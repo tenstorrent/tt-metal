@@ -8,8 +8,7 @@ ARG UID=1000
 ARG GID=1000
 
 RUN  groupadd -g "${GID}" ubuntu \
-    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" ubuntu \
-    && chown ubuntu:ubuntu -R /app
+    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" ubuntu
 
 USER ubuntu
 

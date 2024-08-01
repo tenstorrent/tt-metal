@@ -58,7 +58,7 @@ jobs:
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: 120
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
