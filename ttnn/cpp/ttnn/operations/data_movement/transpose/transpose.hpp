@@ -4,11 +4,7 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "device/transpose_op.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -25,9 +21,9 @@ struct ExecuteTranspose {
         const ttnn::Tensor& input_tensor,
         const int64_t& dim1,
         const int64_t& dim2,
-        const std::optional<MemoryConfig>& memory_config); 
+        const std::optional<MemoryConfig>& memory_config);
 
-    static ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2); 
+    static ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2);
 };
 
 

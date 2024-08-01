@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "ttnn/common/constants.hpp"
 #include "device/binary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"

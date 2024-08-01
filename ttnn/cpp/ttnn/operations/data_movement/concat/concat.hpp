@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -107,7 +108,6 @@ struct Concat {
         int dim,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<ttnn::Tensor>& optional_output_tensor) {
-        constexpr uint8_t DefaultQueueId = 0;
         return operator()(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
     }
 };

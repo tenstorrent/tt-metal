@@ -8,6 +8,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -550,7 +551,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .fuse_batch = true,
             .mcast_in0 = false};
         if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
         }
         return matmul_config;
     } else {
@@ -564,7 +565,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
             .transpose_mcast = transpose_mcast};
         if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
         }
         return matmul_config;
     }

@@ -4,6 +4,7 @@
 
 
 #include "ttnn/run_operation.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -11,8 +12,6 @@
 
 
 namespace ttnn::operations::data_movement {
-
-constexpr uint32_t TransposeDefaultQueueID = 0;
 
 namespace detail {
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
@@ -105,11 +104,11 @@ ttnn::Tensor ExecuteTranspose::operator()(
     const int64_t& dim1,
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, memory_config);
+    return operator()(DefaultQueueId, input_tensor, dim1, dim2, memory_config);
 }
 
 ttnn::Tensor ExecuteTranspose::operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
-    return operator()(TransposeDefaultQueueID, input_tensor, dim1, dim2, std::nullopt);
+    return operator()(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace
