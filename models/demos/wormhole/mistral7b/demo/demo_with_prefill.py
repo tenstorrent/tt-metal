@@ -94,7 +94,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
     # Select the first token from the prompts for initial decoding
     pt_tokenized_inputs_decode = torch.tensor(input_tokens_decode)
-    # pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
+    pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
     emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(model_args.max_batch_size, 1, -1)
     if prefill_seq_len > 0:
         emb_prefill_inputs = [
@@ -127,9 +127,12 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     )
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches):
+def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_filename = f"/home/mvanniasinghe/output/demo_user_output_{timestamp}.txt"
+    output_directory = "models/demos/wormhole/mistral7b/demo/output"
+    os.makedirs(output_directory, exist_ok=True)
+    os.chmod(output_directory, 0o755)
+    output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
     # Set Mistral flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
         os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
@@ -178,17 +181,15 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     users_decoding = True
 
     (
-        pt_encoded_input,
-        tt_decode_input,
-        pt_prefill_input,
-        input_mask,
+        _,
+        _,
+        _,
+        _,
         rot_emb_matrix_list,
-        prefill_seq_len,
-        encoded_prompts,
+        _,
+        _,
     ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device)
     generation_start_pos = prefill_seq_len
-
-    breakpoint()
 
     logger.info("Caching attention ops...")
     cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
@@ -231,10 +232,11 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
         generation_start_pos = prefill_seq_len
 
         # set kv cache to zeros if not first batch
-        for layer in tt_model.layers:
-            k_cache, v_cache = layer.attention.layer_past_list[0]
-            k_cache = k_cache * 0
-            v_cache = v_cache * 0
+        if batch_idx != 0:
+            for layer in tt_model.layers:
+                k_cache, v_cache = layer.attention.layer_past_list[0]
+                k_cache = k_cache * 0
+                v_cache = v_cache * 0
 
         if prefill_seq_len > 0:
             logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
@@ -295,6 +297,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             tt_output_torch = (
                 ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
             )  # [batch, seq, hidden_dim]
+
+            if batch_idx == 0:
+                torch.manual_seed(42)  # set random seed for reproducabilty
 
             # If temperature is 0, does greedy decoding (top-1)
             tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
@@ -374,7 +379,10 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                             text_after_prompt = split_text[1]
                         else:
                             text_after_prompt = text  # If prompt is not found, use the whole text
-                        f.write(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
+                        if print_to_file:
+                            f.write(
+                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
+                            )
 
         # In CI only print the final generated output to avoid spamming the logs
         if is_ci_env:
@@ -387,12 +395,33 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
 
 
 @pytest.mark.parametrize(
-    "input_prompts, instruct_weights",
+    "input_prompts, instruct_weights, num_batches",
     [
-        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True),
+        # Combinations for general weights
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 1),
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 2),
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 3),
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 4),
+        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 5),
+        # Combinations for instruct weights
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 1),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 2),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 4),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 5),
     ],
-    ids=["general_weights", "instruct_weights"],
+    ids=[
+        "general_weights-1_batch",
+        "general_weights-2_batch",
+        "general_weights-3_batch",
+        "general_weights-4_batch",
+        "general_weights-5_batch",
+        "instruct_weights-1_batch",
+        "instruct_weights-2_batch",
+        "instruct_weights-3_batch",
+        "instruct_weights-4_batch",
+        "instruct_weights-5_batch",
+    ],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
@@ -405,8 +434,5 @@ def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weigh
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
         num_batches=num_batches,
+        print_to_file=True,
     )
-
-
-if __name__ == "__main__":
-    pytest.main(["-s", __file__])
