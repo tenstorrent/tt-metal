@@ -8,6 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -58,6 +59,12 @@ struct BinaryOperation {
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static ComplexTensor operator()(
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
+
 };
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -125,7 +132,7 @@ constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>();
-constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
+constexpr auto multiply = ttnn::register_operation<
     "ttnn::multiply",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, false>>();
 constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
@@ -169,7 +176,7 @@ constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
 constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op<
     "ttnn::squared_difference",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>();
-constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
+constexpr auto divide = ttnn::register_operation<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
 
