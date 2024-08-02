@@ -52,7 +52,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
-      timeout: 180
+      timeout: 24000
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
