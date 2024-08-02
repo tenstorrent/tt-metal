@@ -57,7 +57,7 @@ class TtLlamaMLP_galaxy:
                     )
                 }
             )
-            M, K, N = 32, 8192, 28 * 1024
+            M, K, N = 32, self.model_config["HIDDEN_SIZE"], self.model_config["FFN_EXPANDED_HIDDEN_SIZE"]
 
             K = K // self.cluster_shape[0]
             N = N // self.cluster_shape[1]
