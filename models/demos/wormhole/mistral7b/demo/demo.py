@@ -85,7 +85,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     return emb_inputs, pt_tokenized_inputs, input_mask, rot_emb_matrix_list
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
+def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches):
     # Set Mistral flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
         os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
@@ -108,6 +108,11 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     else:
         input_prompts = load_inputs(user_input, model_args.max_batch_size)
     model_args.n_layers = 32
+
+    # Generate the batched prompts
+    batch_prompts = []
+    for i in range(num_batches):
+        batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path)
@@ -133,39 +138,47 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
+    for batch_idx, input_prompts in enumerate(batch_prompts):
+        if batch_idx == 0:
+            logger.info("Caching attention ops...")
+            cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
 
-    logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
+            if instruct_mode:
+                tokenizer._model.pad_id = tokenizer._model.eos_id
 
-    if instruct_mode:
-        tokenizer._model.pad_id = tokenizer._model.eos_id
-
-    # Load TTNN mistral model
-    logger.info("Loading weights to device...")
-    tt_model = TtTransformer(
-        args=model_args,
-        device=device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
-        start_pos=generation_start_pos,
-    )
-    tt_embd = TtMistralEmbedding(
-        device=device,
-        args=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        state_dict=state_dict,
-        dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-    )
-    logger.info("Finished loading weights to device. Starting inference...")
+            # Load TTNN mistral model
+            logger.info("Loading weights to device...")
+            tt_model = TtTransformer(
+                args=model_args,
+                device=device,
+                dtype=dtype,
+                state_dict=state_dict,
+                weight_cache_path=model_args.weight_cache_path(dtype),
+                layers=list(range(model_args.n_layers)),
+                rot_mat=rot_emb_matrix_list,
+                start_pos=generation_start_pos,
+            )
+            tt_embd = TtMistralEmbedding(
+                device=device,
+                args=model_args,
+                weight_cache_path=model_args.weight_cache_path(dtype),
+                state_dict=state_dict,
+                dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+            )
+            logger.info("Finished loading weights to device. Starting inference...")
+        else:
+            # set kv cache to zeros if not first batch
+            for layer in tt_model.layers:
+                k_cache, v_cache = layer.attention.layer_past_list[0]
+                k_cache = k_cache * 0
+                v_cache = v_cache * 0
 
     # Keep track of generated outputs to print out every iteration
     all_outputs = [[] for _ in range(batch_size)]
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     iteration = 0
+    users_decoding = True  # reset to handle next batch
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     while users_decoding:
         iteration_time_start = time()
@@ -271,10 +284,15 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     return run_mistral_demo(
-        user_input=input_prompts, batch_size=8, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+        user_input=input_prompts,
+        batch_size=8,
+        device=device,
+        instruct_mode=instruct_weights,
+        is_ci_env=is_ci_env,
+        num_batches=num_batches,
     )
