@@ -22,12 +22,12 @@ using namespace ckernel;
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    UNPACK(( DPRINT << "======" << ENDL() ));
+    DPRINT_UNPACK(DPRINT << "======" << ENDL());
     for (uint16_t r = 0; r < 32; ++ r) {
         SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
+        DPRINT_UNPACK(DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL());
     }
-    UNPACK(( DPRINT << "++++++" << ENDL() ));
+    DPRINT_UNPACK(DPRINT << "++++++" << ENDL());
 }
 namespace NAMESPACE {
 template<uint32_t in0, uint32_t in1, uint32_t num_tiles>
@@ -236,9 +236,13 @@ void top_k() {
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
-
+    cb_wait_front(input_cb_index, Ht*Wt);
     ckernel::topk_tile_init();
+    //print_full_tile(input_cb_index);
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
+    //transpose_wh_init_short(input_cb_index);
+    //cb_wait_front(input_cb_index, 1);
+    print_full_tile(input_cb_index);
 
     for(uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
@@ -368,7 +372,6 @@ void top_k() {
         cb_pop_front(index_transposed_cb_index, Wt);
     }
     //sfpu::_init_sfpu_config_reg();
-    sfpu::_llk_math_eltwise_unary_sfpu_init_();
 }
 
 void MAIN {
@@ -396,24 +399,26 @@ void MAIN {
 
     // mask out invalid experts
     add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt);
-    //print_full_tile(input_cb_index);
     // top-k
     top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
+    //print_full_tile(input_cb_index);
+    //top_k<Ht, Wt, K, logWt, logk, values_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
+
     //sfpu::_init_sfpu_config_reg();
-    print_full_tile(values_cb_index);
+
     // mask out all experts except the top-k
-    add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt);
-    eqz_block_inplace(output_ind_cb_index, Ht*Kt);
+    //add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt);
+    //eqz_block_inplace(output_ind_cb_index, Ht*Kt);
 
     //softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
-    sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
-    recip_block_inplace(cb_cur_sum, Ht);
-    mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
+    // reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+    // sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
+    // reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
+    // recip_block_inplace(cb_cur_sum, Ht);
+    // mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
     // select 0th expert
-    mul_block_inplace(values_cb_index, output_ind_cb_index, Ht*Kt);
+    //mul_block_inplace(values_cb_index, output_ind_cb_index, Ht*Kt);
 
     //final sum
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();

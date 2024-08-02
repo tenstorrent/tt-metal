@@ -242,13 +242,8 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
 
     };
 
-    tt::log_info("reader_runtime_args[0]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[0]);
-    tt::log_info("reader_runtime_args[1]: beff u{}",GetRuntimeArgs(program, unary_writer_kernel_id)[0]);
-    // tt::log_info("reader_runtime_args[1]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[1]);
-    // tt::log_info("reader_runtime_args[2]: beff u{}",GetRuntimeArgs(program, unary_reader_kernel_id)[2]);
-    // tt::log_info("writer_runtime_args[0]: beff u{}",out_buffer->address());
-
-
+    tt::log_info("reader_runtime_args[0]: {}",GetRuntimeArgs(program, unary_reader_kernel_id)[0]);
+    tt::log_info("writer_runtime_args[1]: {}",GetRuntimeArgs(program, unary_writer_kernel_id)[0]);
 
     return {std::move(program), override_runtime_args_callback};
 }
