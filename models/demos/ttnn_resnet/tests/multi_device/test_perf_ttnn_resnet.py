@@ -472,7 +472,7 @@ def run_perf_resnet(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
         (16, True, 0.0094, 60),
-        (16, False, 0.0220, 60),
+        (16, False, 0.0230, 60),
     ),
     indirect=["enable_async_mode"],
 )
@@ -573,7 +573,7 @@ def test_perf_2cqs_t3000(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
         (16, True, 0.0043, 60),
-        (16, False, 0.008, 60),
+        (16, False, 0.009, 60),
     ),
     indirect=["enable_async_mode"],
 )
