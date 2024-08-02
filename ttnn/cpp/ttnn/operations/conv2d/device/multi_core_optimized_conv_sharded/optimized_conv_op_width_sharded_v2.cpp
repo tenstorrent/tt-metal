@@ -684,7 +684,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     CoreCoord act_mcast_start_core_logical(0,0);
     CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,0);
-    std::cout<<"MCast Cores "<<act_mcast_end_core_logical.x<<" to  "<<act_mcast_end_core_logical.y<<std::endl;
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
 
@@ -766,9 +765,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (false) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-    std::cout<<"Compute defines \n";
-    for(const auto &it : compute_defines )
-        std::cout<<it.first<<" : "<<it.second<<std::endl;
 
     compute_kernel_args = {
         act_block_w_ntiles,           //in0_block_w
