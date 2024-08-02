@@ -81,9 +81,9 @@ void kernel_main() {
     tt_l1_ptr uint32_t *act_mcast_x_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
     i+=num_cores_x;
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
-    DPRINT<<"Act Params L1 :  "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
-    "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
-    "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
+    // DPRINT<<"Act Params L1 :  "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
+    // "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
+    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
     // uint32_t act_mcast_dest_noc_end_x   = get_arg_val<uint32_t>(i); i+=1;
     // uint32_t act_mcast_dest_noc_end_y   = get_arg_val<uint32_t>(i); i+=1;
@@ -142,6 +142,7 @@ void kernel_main() {
 
     static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
     // Reset reader_idx to finish act_block_h_datums
+
     for(uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++)
     {
         uint32_t reader_idx = 0;
@@ -206,7 +207,9 @@ void kernel_main() {
                 // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+
             } else {
+
                 // MCAST RECEIVER: receive entire tilized input from sender core
                 // Set act semaphore value to INVALID
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);

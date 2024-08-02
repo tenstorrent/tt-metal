@@ -36,13 +36,10 @@ inline void tilize_in(
     tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
-            DPRINT_MATH(DPRINT<<"Wait Front "<<"\n";)
             cb_wait_front(in_cb_id, in_block_w);
             cb_reserve_back(out_cb_id, in_block_w);
             tilize_block(in_cb_id, in_block_w, out_cb_id);
-            DPRINT_MATH(DPRINT<<"Push Back  "<<"\n";)
             cb_push_back(out_cb_id, in_block_w);
-            DPRINT_MATH(DPRINT<<"Pop Back"<<"\n";)
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
@@ -189,7 +186,7 @@ void MAIN {
                     #ifdef PRE_TILIZE
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
-                    DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
+                    // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
                     tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
                     mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -197,27 +194,6 @@ void MAIN {
                 }
 
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
-                if constexpr (tilize_in0) {
-                    #if defined PACK_RELU and not defined FUSE_BIAS
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
-                    }
-                    #endif
-                    #ifdef PACKER_L1_ACC
-                        pack_reconfig_l1_acc(0);
-                        pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
-                    #endif
-
-                    unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
-
-                    tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-                    #ifdef SPLIT_READER
-                    tilize_in(in0_cb_second_reader_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-                    #endif
-
-                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-                }
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
@@ -238,6 +214,7 @@ void MAIN {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
+                        // DPRINT<<"Reload"<<(uint32_t)enable_reload<<ENDL();
                         if (enable_reload) {
                             // Reconfigure input
                             copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);

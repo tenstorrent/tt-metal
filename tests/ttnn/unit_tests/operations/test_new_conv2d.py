@@ -314,7 +314,9 @@ def run_conv_with_split(
         # first conv post folding and input_channels padding to tile width
         # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
         # rn50 layer1
+        (128, 128, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
+        (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 2),
         (256, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 2),
         # (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
@@ -357,11 +359,11 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
-    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 128
+    torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 128
     # torch_input_tensor_nchw = torch.tensor([-1,0,1,0]*(input_channels//4)).reshape([1, input_channels, 1, 1])
     # torch_input_tensor_nchw =  torch.tensor([-1,0,1,0]*((batch_size * input_height * input_width)//4)).reshape([batch_size, 1, input_height, input_width])
 
-    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     # torch_input_tensor_nchw += (
     #     torch.tensor(range(0, batch_size * input_height * input_width))
@@ -373,7 +375,7 @@ def test_conv_ws(
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()/256
     # torch_weight_tensor = (
     #     torch.tensor(range(input_channels), dtype=torch.bfloat16).reshape(1, input_channels, 1, 1).float()
     # )
@@ -503,6 +505,8 @@ def test_conv_ws(
         pcc = 0.998
     pcc = 0.95
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    print(torch_output_tensor)
+    print(torch_out_golden_tensor)
     print("PCC output ", pcc_msg)
     assert passing
 
