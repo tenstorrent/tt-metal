@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "device/binary_device_operation.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -136,7 +137,7 @@ constexpr auto add = ttnn::register_operation<
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>();
-constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subtract = ttnn::register_operation<
     "ttnn::subtract",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>();
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
