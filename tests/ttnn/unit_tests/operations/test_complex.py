@@ -293,7 +293,6 @@ def test_level2_add(bs, memcfg, dtype, device, function_level_defaults):
     assert passing
 
 
-@pytest.mark.skip(reason="This test is failing because ttnn.sub doesn't support complex tensors")
 @pytest.mark.parametrize(
     "memcfg",
     (
