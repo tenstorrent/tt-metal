@@ -22,6 +22,7 @@ from ttnn import (
 from models.utility_functions import nearest_32
 
 
+@pytest.mark.skip("1D device mesh not supported")
 @pytest.mark.parametrize(
     "device_mesh",
     [
@@ -77,13 +78,13 @@ class CustomShardTensor2dMesh(TensorToMesh):
     def map(self, tensor: torch.tensor):
         # Returns list of tensors to map to row-major ordering of chips in cluster
         tensors_grid_y = None
-        if self.dims[1] == None:
+        if self.dims[1] == None:  # None means we replicate along this dimension
             tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
         else:
             tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
 
         tensors_grid_all = None
-        if self.dims[0] == None:
+        if self.dims[0] == None:  # None means we replicate along this dimension
             tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
         else:
             tensors_grid_all = [
@@ -118,36 +119,48 @@ class ConcatMesh2DToTensor(MeshToTensor):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, K, N, weights_dtype",
     [
-        pytest.param(32, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_decode_FF1"),
-        pytest.param(32, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_decode_FF2"),
-        pytest.param(512, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_prefill_FF1"),
-        pytest.param(512, 8192, 32768, ttnn.bfloat4_b, id="Llama3-70B_prefill_FF3"),
-        pytest.param(512, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_prefill_FF2"),
-        # pytest.param(32, 16 * 1024, 64 * 1024, ttnn.bfloat4_b, id="Llama3-400B_decode_FF1"),
-        # pytest.param(32, 64 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-400B_decode_FF2"),
-        # pytest.param(512, 16*1024, 64*1024, ttnn.bfloat4_b, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
-        # pytest.param(512, 64 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-400B_prefill_FF2"),
+        # llama3_1-70B
+        pytest.param(32, 8192, 28 * 1024, ttnn.bfloat4_b, id="Llama3-70B_decode_FF1"),  # same shapes for FF1 and FF3
+        pytest.param(32, 28 * 1024, 8192, ttnn.bfloat8_b, id="Llama3-70B_decode_FF2"),
+        pytest.param(512, 8192, 28 * 1024, ttnn.bfloat4_b, id="Llama3-70B_prefill_seq512_FF1"),
+        pytest.param(512, 28 * 1024, 8192, ttnn.bfloat8_b, id="Llama3-70B_prefill_seq512_FF2"),
+        # llama3_1-405B
+        pytest.param(
+            32, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_decode_FF1"
+        ),  # same shapes for FF1 and FF3
+        pytest.param(32, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_decode_FF2"),
+        pytest.param(128, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq128_FF1"),
+        pytest.param(128, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq128_FF2"),
+        pytest.param(256, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq256_FF1"),
+        pytest.param(256, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq256_FF2"),
+        # pytest.param(
+        #     512, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq512_FF1"
+        # ),  # PCC check failed, PCC: -0.00014127559109112134, see issue 10936
+        pytest.param(512, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq512_FF2"),
     ],
 )
+# Llama FF1, FF2, FF3 in MLP with dram interleaved weights
 def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
 
-    act_shard_dim = (3, None) if K == 8192 else (None, 3)
-    weight_shard_dim = (2, 3) if K == 8192 else (3, 2)
-    concat_dim = (1, 3) if K == 8192 else (3, 1)
+    # If K < N it's FF1, else FF2
+    act_shard_dim = (3, None) if K < N else (None, 3)  # None means to replicate along this dim
+    weight_shard_dim = (2, 3) if K < N else (3, 2)
+    concat_dim = (1, 3) if K < N else (3, 1)  # dim 1 for reduce, dim 3 for concatenating fractures
 
-    K = K // cluster_shape[0] if K == 8192 else K // cluster_shape[1]
-    N = N // cluster_shape[1] if N == 32768 else N // cluster_shape[0]
+    K = K // cluster_shape[0] if K < N else K // cluster_shape[1]
+    N = N // cluster_shape[1] if K < N else N // cluster_shape[0]
 
+    core_grid = ttnn.CoreGrid(y=1, x=8)
     act_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, K // 8),
-        core_grid=ttnn.CoreGrid(y=1, x=8),
+        shape=(M // core_grid.y, K // core_grid.x),
+        core_grid=core_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -182,7 +195,6 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
         act,
         weights,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
         compute_kernel_config=compute_kernel_lofi,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -199,7 +211,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
 
 @pytest.mark.skip("See GH #10673: DRAM-SHARDED Matmuls gives ND PCC on TG")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, K, N, weights_dtype",
@@ -208,6 +220,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
         pytest.param(32, 32768, 8192, ttnn.bfloat8_b, id="Llama3-70B_decode_FF2"),
     ],
 )
+# Llama FF1, FF2, FF3 in MLP with dram sharded weights
 def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
@@ -294,17 +307,19 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
 
 
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N",
     [
-        pytest.param(32, 32768, id="Llama3-70B_decode_FF1"),
-        pytest.param(512, 32768, id="Llama3-70B_prefill_FF1"),
-        # pytest.param(32, 64 * 1024, id="Llama3-400B_decode_FF1"),  # Skipped
-        # pytest.param(512, 64 * 1024, id="Llama3-400B_prefill_FF1"),  # Skipped, OOM
+        pytest.param(32, 28 * 1024, id="Llama3-70B_decode_FF1"),
+        pytest.param(512, 28 * 1024, id="Llama3-70B_prefill_seq512_FF1"),
+        pytest.param(32, 52 * 1024, id="Llama3-405B_decode_FF1"),
+        pytest.param(256, 52 * 1024, id="Llama3-405B_prefill_seq256_FF1"),
+        pytest.param(512, 52 * 1024, id="Llama3-405B_prefill_seq512_FF1"),
     ],
 )
+# Llama FF1 * FF3 in MLP
 def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
     FF1_pt = torch.randn(1, 1, M, N)
     FF3_pt = torch.randn(1, 1, M, N)
@@ -341,16 +356,18 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
     assert out_pass
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "M, N",
     [
         pytest.param(32, 8192, id="Llama3-70B_decode"),
-        pytest.param(512, 8192, id="Llama3-70B_prefill"),
-        # pytest.param(32, 64 * 1024, id="Llama3-400B_decode"),  # Skipped
-        # pytest.param(512, 64*1024, id="Llama3-400B_prefill"),  # Skipped, OOM
+        pytest.param(512, 8192, id="Llama3-70B_prefill_seq512"),
+        pytest.param(32, 16 * 1024, id="Llama3-400B_decode"),
+        pytest.param(256, 16 * 1024, id="Llama3-400B_prefill_seq256"),
+        # pytest.param(512, 16 * 1024, id="Llama3-400B_prefill_seq512"),  # Skipped, OOM
     ],
 )
+# Llama residual add
 def test_galaxy_eltwise_add(M, N, device_mesh):
     residual_pt = torch.randn(1, 1, M, N)
     attn_output_pt = torch.randn(1, 1, M, N)
@@ -413,16 +430,24 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N, head_dim, num_heads",
     [
         (32, 8192, 128, 80),  # Llama3-70B decode attn fused_qkv
         (32, 8192, 128, 64),  # Llama3-70B decode attn selfout
+        # (32, 16 * 1024, 128, 144),  # Llama3-405B decode attn fused_qkv
+        # (32, 16 * 1024, 128, 128),  # Llama3-405B decode attn selfout
     ],
-    ids=["Llama3-70B-decode-attn-fused_qkv", "Llama3-70B-decode-attn-selfout"],
+    ids=[
+        "Llama3-70B-decode-attn-fused_qkv",
+        "Llama3-70B-decode-attn-selfout",
+        # "Llama3-405B-decode-attn-fused_qkv",  # Skipping because of CI failure
+        # "Llama3-405B-decode-attn-selfout",  # Skipping because of CI failure
+    ],
 )
+# Llama attention matmuls
 def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, N)
     weights_pt = torch.randn(1, 1, N, head_dim * num_heads)
@@ -450,11 +475,22 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         packer_l1_acc=True,
     )
 
+    if num_heads == 80:
+        core_grid = ttnn.CoreGrid(y=5, x=8)
+    elif num_heads == 64:
+        core_grid = ttnn.CoreGrid(y=4, x=8)
+    elif num_heads == 144:
+        core_grid = ttnn.CoreGrid(y=6, x=8)
+    elif num_heads == 128:
+        core_grid = ttnn.CoreGrid(y=8, x=8)
+    else:
+        assert False
+
     out = ttnn.matmul(
         act,
         weights,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=5, x=8) if num_heads == 80 else ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -468,31 +504,54 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
     assert out_pass
 
 
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
+def num_to_corerange(total_max_cores):
+    if total_max_cores == 1:
+        return ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    assert total_max_cores < 8 or (total_max_cores % 8 == 0 and total_max_cores <= 80)  # TG has 10x8 grids
+    num_x = min(total_max_cores, 8)
+    num_y = total_max_cores // num_x
+    assert num_x * num_y == total_max_cores
     return ttnn.CoreRange(
         ttnn.CoreCoord(0, 0),
         ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
-    "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads",
+    "device_mesh",
     [
-        (8, 1, 128, 8, 1),  # Llama3-70B decode
+        pytest.param((8, 4), id="8x4_grid"),
     ],
-    ids=["Llama3-70B-decode"],
+    indirect=True,
 )
-def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, device_mesh):
+@pytest.mark.parametrize(
+    "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, is_multicore",
+    [
+        (8, 1, 128, 8, 1, True),  # Llama3-70B decode multicore
+        # (8, 1, 128, 16, 1, True),  # Llama3-405B decode multicore
+        (8, 1, 128, 16, 1, False),  # Llama3-405B decode single core
+    ],
+    ids=[
+        "Llama3-70B-decode",
+        # "Llama3-405B-decode" # Not enough cores to run one tile per core: RuntimeError: TT_FATAL @ ../tt_metal/impl/allocator/allocator.cpp:123: num_shards.value() <= num_compute_banks
+        "Llama3-405B-decode-singlecore-sharded",
+    ],
+)
+# Llama nlp_create_heads for decode
+# 8 attention groups are fractured over 8 devices along the column
+# users are fractured over 4 devices along the rows (batch of 8)
+# Note: interleaved inputs are not supported
+def test_galaxy_nlp_create_heads_decode(
+    batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, is_multicore, device_mesh
+):
     total_heads = n_local_heads + n_local_kv_heads * 2
     qkv_heads_pt = torch.rand(1, seq_len, batch, head_dim * total_heads)
-    total_cores = total_heads * head_dim // 32
+    total_max_cores = total_heads * head_dim // 32 if is_multicore else 1  # 40 for llama3-70B; 72 for llama3-405B
 
-    shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(total_cores)})
+    shard_spec_n_cores_grid = ttnn.CoreRangeSet(
+        {num_to_corerange(total_max_cores)}
+    )  # for 40 cores it's 0,0 - 7,4; for 72 cores it's 0,0 - 7,8
+
     CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -500,7 +559,7 @@ def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads,
             shard_spec_n_cores_grid,
             [
                 32,
-                32,
+                32 if is_multicore else total_heads * head_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -559,14 +618,16 @@ def test_galaxy_nlp_create_heads_decode(batch, seq_len, head_dim, n_local_heads,
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads",
     [
         (8, 1, 128, 8, 1),  # Llama3-70B decode attn
+        (8, 1, 128, 16, 1),  # Llama3-405B decode attn
     ],
-    ids=["Llama3-70B-decode"],
+    ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
+# Llama rotary matmul (decode only)
 def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, device_mesh):
     q_heads_pt = torch.rand(
         seq_len, batch, max(n_local_heads, 32), head_dim
@@ -675,7 +736,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
     assert out_pass_q and out_pass_k
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8])
@@ -972,7 +1033,7 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "dtype, q_dtype, mask_dtype",
     [
@@ -988,7 +1049,11 @@ def run_test_sdpa_decode_single_iter(
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 32768, 128, (8, 8)],),  # Llama3-70B
+    (
+        [8, 8, 1, 32768, 128, (8, 8)],  # Llama3-70B
+        [8, 16, 1, 32768, 128, (8, 8)],  # Llama3-405B
+    ),
+    ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
 def test_sdpa_decode_sharded(device_mesh, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
     run_test_sdpa_decode_single_iter(
@@ -999,13 +1064,14 @@ def test_sdpa_decode_sharded(device_mesh, b, nh, nkv, s, d, dtype, grid_size, q_
     )
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads",
     [
         (8, 1, 128, 8, 1, 32),  # Llama3-70B decode
+        (8, 1, 128, 16, 1, 32),  # Llama3-405B decode
     ],
-    ids=["Llama3-70B-decode"],
+    ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
 def test_galaxy_nlp_concat_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads, device_mesh
@@ -1060,19 +1126,21 @@ def rmsnorm(x, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma + beta
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "M, N",
     [
         (32, 8192),  # Llama3-70B decode
+        (32, 16 * 1024),  # Llama3-405B decode
     ],
-    ids=["Llama3-70B-decode"],
+    ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
 def test_galaxy_layernorm(M, N, device_mesh):
     layernorm_input = torch.rand(1, 1, M, N) * 2 - 0.95
-    norm_weights = torch.rand(1, 1, 256, 32) * 2 - 1
+    norm_weights = torch.rand(1, 1, N // 32, 32) * 2 - 1
     norm_eps = 1e-05
 
+    num_cores = 32
     shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -1107,7 +1175,7 @@ def test_galaxy_layernorm(M, N, device_mesh):
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
         block_h=M // 32,
-        block_w=8,
+        block_w=N // num_cores // 32,
         inplace=True,
     )
 
@@ -1138,7 +1206,7 @@ def test_galaxy_layernorm(M, N, device_mesh):
     )
 
     # Compare
-    beta = torch.zeros(1, 1, 256, 32)
+    beta = torch.zeros(1, 1, N // 32, 32)
     norm_output_tt_cpu = ttnn.to_torch(norm_output, mesh_composer=ListMeshToTensor(device_mesh))[0]
     ref_rmsnorm = rmsnorm(layernorm_input, norm_weights.flatten(), beta.flatten(), norm_eps)
 
@@ -1169,7 +1237,7 @@ def test_device_submesh(device_mesh):
         assert torch.all(device_tensor_torch == full_tensor[0, 0, row_start:row_end, col_start:col_end])
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((1, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
 def test_device_line_all_gather_1x4(device_mesh):
     rows, cols, tile_size = 1, 4, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
@@ -1187,7 +1255,7 @@ def test_device_line_all_gather_1x4(device_mesh):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
-@pytest.mark.parametrize("device_mesh", [pytest.param((8, 1), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
 def test_device_line_all_gather_8x1(device_mesh):
     rows, cols, tile_size = 8, 1, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
