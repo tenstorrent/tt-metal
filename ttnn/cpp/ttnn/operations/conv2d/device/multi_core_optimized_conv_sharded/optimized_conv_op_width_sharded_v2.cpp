@@ -952,7 +952,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         );
 
         SetRuntimeArgs(program,act_kernel_id,CoreCoord(core_x,core_y),rt_args);
-        std::cout<<"Core "<<core_index<<"Start Tile "<<core_index*weight_block_w_ntiles<<std::endl;
         SetRuntimeArgs(program,weights_kernel_id,CoreCoord(core_x,core_y),{
             core_index*weight_block_w_ntiles,
             b.buffer()->address()

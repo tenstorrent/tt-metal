@@ -148,7 +148,7 @@ void kernel_main() {
         uint32_t reader_idx = 0;
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-        DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
+        // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
 
 
         // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
@@ -160,6 +160,7 @@ void kernel_main() {
             reader_idx++;
         }
 
+        act_l1_read_addr +=conv_act_c_read_bytes;
         // // incrementing num issued in one shot is actually slower
         // // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
         noc_async_read_barrier();
@@ -171,9 +172,9 @@ void kernel_main() {
         // Compute should function like regular mm
         uint32_t act_w_outer_i = 0;
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": MCast ID "<<act_w_outer_i<<"\n\n";
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             if (act_w_outer_i == act_mcast_sender_id) {
-                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": MCast ID "<<act_w_outer_i<<"\n\n";
                 // MCAST SENDER: send entire tilized input to other cores in column
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block

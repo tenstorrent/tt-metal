@@ -54,7 +54,7 @@ void kernel_main() {
             uint32_t weights_start_address = weight_write_l1_addr;
             uint32_t weights_block_size_bytes = 0;
             uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
-            DPRINT<<"Read Start tile "<<weight_current_block_start_tile_id<<"\n";
+            // DPRINT<<"Read Start tile "<<weight_current_block_start_tile_id<<"\n";
 
             //for window size, picking up the channels for that window.
             for(uint32_t block_weight_h = 0; block_weight_h < window_size_hw; block_weight_h++) {
