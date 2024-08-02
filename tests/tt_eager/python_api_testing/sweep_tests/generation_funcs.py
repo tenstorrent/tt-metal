@@ -2028,6 +2028,7 @@ def gen_fmod_args(
     high=10,
     dtype=torch.bfloat16,
     do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -2039,6 +2040,7 @@ def gen_fmod_args(
         high,
         dtype,
         do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
     ):
         input_info.update({"value": random.randint(-100, 100) + 0.5})
 

@@ -821,4 +821,32 @@ op_map = {
         "tt_op": ttnn_ops.logaddexp_bw,
         "pytorch_op": pytorch_ops.logaddexp_bw,
     },
+    "fmod-bw": {
+        "tt_op": ttnn_ops.fmod_bw,
+        "pytorch_op": pytorch_ops.fmod_bw,
+    },
+    "frac-bw": {
+        "tt_op": ttnn_ops.frac_bw,
+        "pytorch_op": pytorch_ops.frac_bw,
+    },
+    "gelu-bw": {
+        "tt_op": ttnn_ops.gelu_bw,
+        "pytorch_op": pytorch_ops.gelu_bw,
+    },
+    "hardshrink-bw": {
+        "tt_op": ttnn_ops.hardshrink_bw,
+        "pytorch_op": pytorch_ops.hardshrink_bw,
+    },
+    "hardtanh-bw": {
+        "tt_op": ttnn_ops.hardtanh_bw,
+        "pytorch_op": pytorch_ops.hardtanh_bw,
+    },
+    "hypot-bw": {
+        "tt_op": ttnn_ops.hypot_bw,
+        "pytorch_op": pytorch_ops.hypot_bw,
+    },
+    "i0-bw": {
+        "tt_op": ttnn_ops.i0_bw,
+        "pytorch_op": pytorch_ops.i0_bw,
+    },
 }
