@@ -3898,3 +3898,64 @@ def log1p_bw(
     t2 = ttnn.log1p_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def log_sigmoid_bw(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.log_sigmoid_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def logaddexp_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+
+    t3 = ttnn.logaddexp_bw(t0, t1, t2, memory_config=output_mem_config)
+
+    return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
+
+
+def logaddexp2_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+
+    t3 = ttnn.logaddexp2_bw(t0, t1, t2, memory_config=output_mem_config)
+
+    return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
