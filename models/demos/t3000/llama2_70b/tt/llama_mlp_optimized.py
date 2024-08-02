@@ -28,7 +28,7 @@ class TtLlamaMLP_optimized:
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
-        self.read_cache = read_cache
+        self.read_cache = False  # read_cache
 
         self.hidden_size = hidden_size
 
@@ -49,6 +49,7 @@ class TtLlamaMLP_optimized:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
+        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard.weight"
         w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard.weight"
         w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
 
@@ -82,14 +83,17 @@ class TtLlamaMLP_optimized:
             }
         )
 
+        w1_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
+        w1_shard_spec = ttnn.ShardSpec(weight_grid, w1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w1_shard_spec)
         self.w1 = ttnn.as_tensor(
             padded_w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=w1_memory_config,
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            cache_file_name=self.cache_path / w1_str,
+            cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
         w2_shard_shape = (32768, 96)  # Padded cols 1024/12
