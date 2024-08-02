@@ -121,10 +121,10 @@ void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_
     }
     DEBUG_STATUS("NSID");
 
-    constexpr bool multicast_path_reserve = false;
+    constexpr bool multicast_path_reserve = mcast;
     constexpr bool posted = false;
     constexpr bool linked = false;
-    constexpr uint32_t vc = mcast ? NOC_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
+    constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
     constexpr uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR |

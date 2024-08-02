@@ -12,6 +12,19 @@ on:
       runner-label:
         required: true
         type: string
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
       command:
         required: true
         type: string
@@ -26,6 +39,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '[ "${{ inputs.arch }}" ]'
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.tracy }}
     secrets: inherit
   test-dispatch:
     needs: build-artifact
@@ -42,7 +57,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ inputs.arch }}
+          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files
         run: tar -xvf ttm_${{ inputs.arch }}.tar
       - uses: ./.github/actions/install-python-deps

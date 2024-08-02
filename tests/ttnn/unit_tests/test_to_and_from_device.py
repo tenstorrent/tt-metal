@@ -9,13 +9,41 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("h", [7])
-@pytest.mark.parametrize("w", [8])  # must be even to be put on device
-def test_to_and_from_4D(device, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    tensor = ttnn.from_torch(torch_input_tensor)
-    tensor = ttnn.to_device(tensor, device)
-    tensor = ttnn.from_device(tensor)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2,),
+        (2, 4),
+        (2, 3, 4),
+        (2, 3, 4, 6),
+        (2, 3, 4, 5, 6),
+        (2, 3, 4, 5, 6, 8),
+        (2, 3, 4, 5, 6, 7, 8),
+        (2, 3, 4, 5, 6, 7, 8, 10),
+    ],
+)
+def test_to_and_from(device, shape):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(torch_input_tensor, device=device)
+    torch_output_tensor = ttnn.to_torch(tensor)
+    assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 3),
+        (2, 3, 4),
+        (2, 3, 4, 5),
+        (2, 3, 4, 5, 6),
+        (2, 3, 4, 5, 6, 7),
+        (2, 3, 4, 5, 6, 7, 8),
+        (2, 3, 4, 5, 6, 7, 8, 9),
+    ],
+)
+def test_to_and_from_using_tile_layout(device, shape):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 

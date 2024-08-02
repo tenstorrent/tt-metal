@@ -18,7 +18,7 @@ from models.utility_functions import (
     profiler,
 )
 
-from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_batch
+from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_batch, load_resnet50_model
 
 from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
@@ -44,7 +44,7 @@ def run_resnet_imagenet_inference(
     profiler.clear()
 
     # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -101,6 +101,7 @@ def run_resnet_inference(
     input_loc,
     imagenet_label_dict,
     device,
+    model_location_generator,
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
@@ -108,7 +109,7 @@ def run_resnet_inference(
     disable_compilation_reports()
 
     # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -231,16 +232,5 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
     "batch_size, input_loc",
     ((20, "models/demos/resnet/demo/images/"),),
 )
-def test_demo_sample(
-    device,
-    use_program_cache,
-    batch_size,
-    input_loc,
-    imagenet_label_dict,
-):
-    run_resnet_inference(
-        batch_size,
-        input_loc,
-        imagenet_label_dict,
-        device,
-    )
+def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
+    run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

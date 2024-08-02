@@ -88,7 +88,7 @@ def run_test_transpose(device):
     test_input = (torch.rand(1, 1, 2048, 512) * 2) - 1
 
     pt_out = test_input.transpose(3, 2)
-    tt_out = tt_lib.tensor.transpose(torch2tt_tensor(test_input, device), -2, -1)
+    tt_out = ttnn.transpose(torch2tt_tensor(test_input, device), -2, -1)
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)

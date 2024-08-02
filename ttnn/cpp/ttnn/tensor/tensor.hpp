@@ -18,7 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 struct Tensor {
-    struct TensorAttributes : public enable_shared_from_this<TensorAttributes> {
+    struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         ttnn::Shape shape;
         DataType dtype;

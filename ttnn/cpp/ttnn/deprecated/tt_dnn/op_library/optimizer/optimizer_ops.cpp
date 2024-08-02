@@ -3,16 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace tt {
 
@@ -44,7 +44,7 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     auto rmsnorm = [&output_mem_config](Tensor data) -> Tensor {
         Tensor data_val = ttnn::square(data, output_mem_config);
         data_val = global_sum(data_val,output_mem_config);
-        Tensor zeros = zeros_like(data, output_mem_config);
+        Tensor zeros = ttnn::full_like(data, 0.0f);
         data_val = ttnn::sqrt(ttnn::add(zeros, data_val,  std::nullopt, output_mem_config), output_mem_config);
         return data_val;
     };
@@ -52,7 +52,7 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     Tensor weight_norm = ttnn::clamp(data_val, 0.0f, 10.0f, output_mem_config);
 
     Tensor adam_norm = rmsnorm(adam_step);
-    Tensor ones = ones_like(weight_norm, output_mem_config);
+    Tensor ones = ttnn::full_like(weight_norm, 1.0f);
 
     Tensor trust_ratio_mid = ttnn::multiply(weight_norm, ttnn::reciprocal(ttnn::add(adam_norm, eps, std::nullopt, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
     Tensor trust_ratio = ttnn::where(ttnn::gtz(weight_norm, output_mem_config), ttnn::where(ttnn::gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);

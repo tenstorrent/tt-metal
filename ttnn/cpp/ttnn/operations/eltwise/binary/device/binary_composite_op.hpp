@@ -11,7 +11,6 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-
 namespace ttnn::operations::binary{
 
 enum class BinaryCompositeOpType {
@@ -50,8 +49,8 @@ Tensor _binary_fmod(const Tensor&, const Tensor&, const std::optional<MemoryConf
 Tensor _addalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _subalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _isclose(const Tensor&, const Tensor&, float, float, const bool, const std::optional<MemoryConfig>&);
-Tensor _div(const Tensor&, const Tensor&, bool, std::string, const std::optional<MemoryConfig>&);
-Tensor _div_overload(const Tensor&, float, bool, std::string, const std::optional<MemoryConfig>&);
+Tensor _div(const Tensor&, const Tensor&, bool, const std::string&, const std::optional<MemoryConfig>&);
+Tensor _div_overload(const Tensor&, float, bool, const std::string&, const std::optional<MemoryConfig>&);
 Tensor _div_no_nan(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _div_no_nan_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -175,10 +174,10 @@ struct OpHandler<BinaryCompositeOpType::ISCLOSE> {
 
 template <>
 struct OpHandler<BinaryCompositeOpType::DIV> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& mem_cfg) {
+    static Tensor handle(const Tensor& t1, const Tensor& t2, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& mem_cfg) {
         return _div(t1, t2, accurate_mode, round_mode, mem_cfg);
     }
-    static Tensor handle(const Tensor& t1, float value, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& mem_cfg) {
+    static Tensor handle(const Tensor& t1, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& mem_cfg) {
         return _div_overload(t1, value, accurate_mode, round_mode, mem_cfg);
     }
 };

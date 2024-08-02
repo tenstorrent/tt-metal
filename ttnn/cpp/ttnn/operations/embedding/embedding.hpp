@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -64,7 +65,6 @@ struct EmbeddingOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt
         ) {
-            constexpr auto DefaultQueueId = 0;
             return operator()(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
         }
 };

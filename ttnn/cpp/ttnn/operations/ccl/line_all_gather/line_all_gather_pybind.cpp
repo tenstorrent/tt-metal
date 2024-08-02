@@ -38,7 +38,7 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const ttnn::Tensor& input_tensor,
                const uint32_t dim,
                const uint32_t cluster_axis,
-               const multi_device::DeviceMesh& device_mesh,
+               const DeviceMesh& device_mesh,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
                 return self(input_tensor, dim, cluster_axis, device_mesh, num_links, memory_config);

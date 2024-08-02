@@ -5,9 +5,12 @@
 
 #pragma once
 
+#include "ttnn/common/constants.hpp"
 #include "device/binary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -94,6 +97,107 @@ struct ExecuteBinaryBackwardFloat {
     }
 };
 
+struct ExecuteBackwardMul  {
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> operator()(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
+};
+
+struct ExecuteBackwardBiasGelu {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        string approximate,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        float scalar,
+        string approximate,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
+struct ExecuteBackwardAdd {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        float alpha,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
+struct ExecuteBackwardSub {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        float alpha,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
+struct ExecuteBackwardComparison {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
 }  // operations::binary
 
 constexpr auto atan2_bw = ttnn::register_operation<"ttnn::atan2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>();
@@ -114,6 +218,38 @@ constexpr auto subalpha_bw = ttnn::register_operation<"ttnn::subalpha_bw", opera
 
 constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
 
-constexpr auto lerp_bw = ttnn::register_operation<"ttnn::lerp_bw", operations::binary_backward::ExecuteBinaryBackwardFloat<operations::binary_backward::BinaryBackwardOpType::LERP_BW>>();
+constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::binary_backward::ExecuteBackwardMul>();
+
+constexpr auto bias_gelu_bw = ttnn::register_operation<
+    "ttnn::bias_gelu_bw",
+    operations::binary_backward::ExecuteBackwardBiasGelu>();
+
+constexpr auto le_bw = ttnn::register_operation<"ttnn::le_bw",operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto ne_bw = ttnn::register_operation<"ttnn::ne_bw",operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto add_bw = ttnn::register_operation<
+    "ttnn::add_bw",
+    operations::binary_backward::ExecuteBackwardAdd>();
+
+constexpr auto sub_bw = ttnn::register_operation<
+    "ttnn::sub_bw",
+    operations::binary_backward::ExecuteBackwardSub>();
+
+constexpr auto lt_bw = ttnn::register_operation<
+    "ttnn::lt_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto gt_bw = ttnn::register_operation<
+    "ttnn::gt_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto ge_bw = ttnn::register_operation<
+    "ttnn::ge_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto eq_bw = ttnn::register_operation<
+    "ttnn::eq_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
 
 }  // namespace ttnn

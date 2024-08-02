@@ -4,7 +4,6 @@
 
 import torch
 from loguru import logger
-from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
 import numpy as np
@@ -19,7 +18,7 @@ from models.utility_functions import (
     skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.demos.resnet.tests.demo_utils import get_data
+from models.demos.resnet.tests.demo_utils import get_data, load_resnet50_model
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from datasets import load_dataset
 
@@ -53,7 +52,7 @@ def run_perf_resnet(
     inputs = inputs["pixel_values"].repeat([batch_size, 1, 1, 1])
     comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
 
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()

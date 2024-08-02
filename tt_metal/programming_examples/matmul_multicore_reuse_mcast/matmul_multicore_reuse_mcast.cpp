@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
+void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
@@ -27,7 +27,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
 
     float c_f;
     float float_tmp;
-    vector<bfloat16> c_bf(M * N, 0);
+    std::vector<bfloat16> c_bf(M * N, 0);
 
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
@@ -46,7 +46,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
     }
 }
 
-void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output, bool bcast_batch,
+void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*

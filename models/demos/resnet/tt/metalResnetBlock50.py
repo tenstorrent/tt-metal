@@ -95,7 +95,7 @@ def ResnetLinear(
 
     if transpose:
         assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
-        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
+        weight_T = ttnn.transpose(weight, -2, -1)
     else:
         assert weight.get_legacy_shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
         weight_T = weight

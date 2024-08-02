@@ -41,7 +41,7 @@ struct ToMemoryConfig {
                 if (tensor.get_layout() == ttnn::TILE_LAYOUT ||
                     input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
                     if (dtype.has_value()) {
-                        throw runtime_error(
+                        throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
                     return operation::run(

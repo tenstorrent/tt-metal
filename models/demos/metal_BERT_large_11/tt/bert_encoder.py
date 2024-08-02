@@ -94,7 +94,7 @@ class TtBertEncoder:
             )
 
             # Weights pre-transposed on host​. No on-the fly transpose of W.
-            # self.attention_output_weight = tt_lib.tensor.transpose(
+            # self.attention_output_weight = ttnn.transpose(
             #     self.attention_output_weight,
             #     -2, -1,
             # )

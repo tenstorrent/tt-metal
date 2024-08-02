@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union, List
 
 import tt_lib
-
+import ttnn
 from models.experimental.roberta.tt.roberta_encoder import TtRobertaEncoder
 from models.experimental.roberta.tt.roberta_pooler import TtRobertaPooler
 from models.experimental.roberta.tt.roberta_embeddings import PytorchEmbeddings
@@ -170,8 +170,8 @@ class TtRobertaModel(nn.Module):
         # positions we want to attend and the dtype's smallest value for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        self.ones_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), 1.0)
-        self.mul_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
+        self.ones_const = ttnn.full(extended_attention_mask.get_legacy_shape(), 1.0)
+        self.mul_const = ttnn.full(extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
         extended_attention_mask = ttnn.sub(self.ones_const, extended_attention_mask, memory_config=self.mem_config)
 
         extended_attention_mask = ttnn.mul(extended_attention_mask, self.mul_const, memory_config=self.mem_config)
@@ -196,8 +196,8 @@ class TtRobertaModel(nn.Module):
 
         encoder_extended_attention_mask = torch2tt_tensor(torch_encoder_extended_attention_mask, self.device)
 
-        self.ones_const = tt_lib.tensor.full(encoder_extended_attention_mask.get_legacy_shape(), 1.0)
-        self.mul_const = tt_lib.tensor.full(encoder_extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
+        self.ones_const = ttnn.full(encoder_extended_attention_mask.get_legacy_shape(), 1.0)
+        self.mul_const = ttnn.full(encoder_extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
 
         encoder_extended_attention_mask = ttnn.sub(
             self.ones_const,
@@ -339,7 +339,7 @@ class TtRobertaModel(nn.Module):
         past_key_values_length = past_key_values[0][0].get_legacy_shape()[2] if past_key_values is not None else 0
 
         if attention_mask is None:
-            attention_mask = tt_lib.tensor.full((1, 1, batch_size, seq_length + past_key_values_length), 0.0)
+            attention_mask = ttnn.full((1, 1, batch_size, seq_length + past_key_values_length), 0.0)
 
         if token_type_ids is None:
             if hasattr(self.embeddings, "token_type_ids"):
@@ -364,7 +364,7 @@ class TtRobertaModel(nn.Module):
             ) = encoder_hidden_states.get_legacy_shape()
             encoder_hidden_shape = (1, 1, encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = tt_lib.tensor.full(encoder_hidden_shape, 1.1)
+                encoder_attention_mask = ttnn.full(encoder_hidden_shape, 1.1)
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None

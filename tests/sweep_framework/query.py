@@ -10,8 +10,7 @@ from elasticsearch import Elasticsearch, NotFoundError
 from tests.sweep_framework.statuses import TestStatus
 from beautifultable import BeautifulTable, STYLE_COMPACT
 from termcolor import colored
-
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+from elastic_config import *
 
 
 @click.group()
@@ -19,7 +18,7 @@ ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 @click.option("--suite-name", default=None, help="Suite name to filter by.")
 @click.option("--vector-id", default=None, help="Individual Vector ID to filter by.")
 @click.option("--run-id", default=None, help="Individual Run ID to filter by.")
-@click.option("--elastic", default="http://localhost:9200", help="Elastic Connection String")
+@click.option("--elastic", default=ELASTIC_DEFAULT_URL, help="Elastic Connection String")
 @click.option(
     "--all", is_flag=True, default=False, help="Displays total run statistics instead of the most recent run."
 )
@@ -42,8 +41,9 @@ def vector(ctx):
         print("QUERY: Module name and vector ID are required for test vector lookup.")
         exit(1)
 
-    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
-    response = client.get(index=(ctx.obj["module_name"] + "_test_vectors"), id=ctx.obj["vector_id"])
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
+    vector_index = VECTOR_INDEX_PREFIX + ctx.obj["module_name"]
+    response = client.get(index=vector_index, id=ctx.obj["vector_id"])
     pprint.pp(response["_source"])
 
 
@@ -54,8 +54,9 @@ def result(ctx):
         print("QUERY: Module name and run ID are required for run result lookup.")
         exit(1)
 
-    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
-    response = client.get(index=(ctx.obj["module_name"] + "_test_results"), id=ctx.obj["run_id"])
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
+    results_index = RESULT_INDEX_PREFIX + ctx.obj["module_name"]
+    response = client.get(index=results_index, id=ctx.obj["run_id"])
     pprint.pp(response["_source"])
 
 
@@ -72,13 +73,13 @@ def summary(ctx):
         colored("FAIL (Watcher)", "light_red"),
     ]
 
-    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     if ctx.obj["module_name"] is None:
         for file in sorted(sweeps_path.glob("*.py")):
             module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
-            results_index = module_name + "_test_results"
+            results_index = RESULT_INDEX_PREFIX + module_name
             if not client.indices.exists(index=results_index):
                 continue
             if not ctx.obj["all"]:
@@ -112,7 +113,7 @@ def summary(ctx):
             table.rows.append(row, module_name)
     elif ctx.obj["suite_name"] is None:
         module_name = ctx.obj["module_name"]
-        results_index = module_name + "_test_results"
+        results_index = RESULT_INDEX_PREFIX + module_name
         if not client.indices.exists(index=results_index):
             print(f"SWEEPS: There are no results for module {module_name}.")
             return
@@ -169,7 +170,7 @@ def summary(ctx):
 
     else:
         module_name = ctx.obj["module_name"]
-        results_index = module_name + "_test_results"
+        results_index = RESULT_INDEX_PREFIX + module_name
         suite_name = ctx.obj["suite_name"]
         if not client.indices.exists(index=results_index):
             print(f"SWEEPS: There are no results for module {module_name}.")
@@ -242,9 +243,11 @@ def detail(ctx):
         colored("Details", "light_red"),
         colored("Git Hash", "light_red"),
         colored("e2e Perf", "light_red"),
+        colored("User", "light_red"),
+        colored("Host", "light_red"),
     ]
 
-    client = Elasticsearch(ctx.obj["elastic"], basic_auth=("elastic", ELASTIC_PASSWORD))
+    client = Elasticsearch(ctx.obj["elastic"], basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     matches = []
@@ -254,7 +257,7 @@ def detail(ctx):
         matches.append({"match": {"vector_id": ctx.obj["vector_id"]}})
 
     def add_results_for_module(module_name):
-        results_index = module_name + "_test_results"
+        results_index = RESULT_INDEX_PREFIX + module_name
         results = client.search(
             index=results_index,
             size=10000,
@@ -277,6 +280,8 @@ def detail(ctx):
                     detail,
                     source["git_hash"],
                     source["e2e_perf"] + " ms" if source["e2e_perf"] != "None" else "None",
+                    source["user"],
+                    source["host"],
                 ],
                 result["_id"],
             )

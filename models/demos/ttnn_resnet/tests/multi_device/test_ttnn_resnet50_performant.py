@@ -86,7 +86,14 @@ def setup_dram_sharded_input(device, tt_inputs, tt_resnet50, mesh_mapper, mesh_c
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_inference(
-    device_mesh, use_program_cache, device_batch_size, act_dtype, weight_dtype, math_fidelity, enable_async
+    device_mesh,
+    use_program_cache,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -112,6 +119,7 @@ def test_run_resnet50_inference(
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
+        model_location_generator=model_location_generator,
     )
 
     test_infra.preprocess_torch_input()
@@ -151,7 +159,14 @@ def test_run_resnet50_inference(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_inference(
-    device_mesh, use_program_cache, device_batch_size, act_dtype, weight_dtype, math_fidelity, enable_async
+    device_mesh,
+    use_program_cache,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -177,6 +192,7 @@ def test_run_resnet50_trace_inference(
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -228,7 +244,14 @@ def test_run_resnet50_trace_inference(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_2cqs_inference(
-    device_mesh, use_program_cache, device_batch_size, act_dtype, weight_dtype, math_fidelity, enable_async
+    device_mesh,
+    use_program_cache,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -253,6 +276,7 @@ def test_run_resnet50_2cqs_inference(
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
@@ -331,6 +355,7 @@ def test_run_resnet50_trace_2cqs_inference(
     weight_dtype,
     math_fidelity,
     enable_async,
+    model_location_generator,
 ):
     if device_batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -355,6 +380,7 @@ def test_run_resnet50_trace_2cqs_inference(
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
+        model_location_generator=model_location_generator,
     )
     test_infra.preprocess_torch_input()
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
