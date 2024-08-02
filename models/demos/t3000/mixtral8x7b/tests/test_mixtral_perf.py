@@ -42,8 +42,14 @@ class Emb(torch.nn.Module):
         (1024, 150, 0.085),
         (2048, 150, 0.085),
     ),
+    ids=[
+        "decode_32",
+        "decode_128",
+        "decode_1k",
+        "decode_2k",
+    ],
 )
-def test_mixtral_model_perf(
+def test_mixtral_model_decode_perf(
     t3k_device_mesh,
     generation_start_pos,
     expected_compile_time,
@@ -98,7 +104,7 @@ def test_mixtral_model_perf(
 
     # Call the function
     if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("Model warmup")
+        signpost("decode warmup")
     profiler.start(f"e2e_decode_compile")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"e2e_decode_compile")
@@ -109,7 +115,7 @@ def test_mixtral_model_perf(
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("Model perf run")
+        signpost("decode perf run")
     profiler.clear()
     profiler.start(f"e2e_decode_inference")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
@@ -153,7 +159,7 @@ def test_mixtral_model_perf(
         # "prefill_32k",  # FIXME out of memory (decode)
     ],
 )
-def test_mixtral_model_with_prefill_perf(
+def test_mixtral_model_prefill_perf(
     t3k_device_mesh,
     prefill_seqlen,
     expected_compile_time,
@@ -252,46 +258,16 @@ def test_mixtral_model_with_prefill_perf(
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
 
-    # profile dump
-    for device_id in t3k_device_mesh.get_device_ids():
-        tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
-
-    # Decode (Run 1 warmup iteration before running 1 perf iteration)
-    generation_start_pos = prefill_seq_len
-    generation_length = 1
-
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("decode warmup")
-    profiler.clear()
-    profiler.start(f"e2e_decode_warmup")
-    run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
-    profiler.end(f"e2e_decode_warmup")
-    profiler.print(units="ms")
-    decode_warmup_time = profiler.get("e2e_decode_warmup")
-
-    # Profiler dump, ready for real run
-    for device_id in t3k_device_mesh.get_device_ids():
-        tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
-
-    if not is_ci_env:  # Enable tracy signpost support in local runs only
-        signpost("decode perf run")
-    profiler.clear()
-    profiler.start(f"e2e_decode_inference_{batch_size}_users")
-    run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
-    profiler.end(f"e2e_decode_inference_{batch_size}_users")
-    profiler.print(units="ms")
-    decode_time = profiler.get("e2e_decode_inference_32_users")
-
-    comment = f"time_to_1st_token_seqlen={prefill_seqlen}_num_layers={model_args.n_layers}"
+    comment = f"prefill_seqlen={prefill_seqlen}_num_layers={model_args.n_layers}"
 
     # Time to first token is measured as 1 user prefill time + 1 decode iteration, since we currently do not generate first token during prefill
-    prefill_time_to_first = prefill_time + decode_time
+    # There is currently a bug that prevents us to measure device perf for prefill+decode in the same run (issue #9028), so we have to measure them separately.
 
     prep_perf_report(
         model_name=f"Mixtral8x7B_prefill_{comment}",
         batch_size=model_args.max_batch_size,
-        inference_and_compile_time=prefill_warmup_time + decode_warmup_time,
-        inference_time=prefill_time_to_first,
+        inference_and_compile_time=prefill_warmup_time,
+        inference_time=prefill_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comment,
