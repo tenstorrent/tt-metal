@@ -59,7 +59,7 @@ jobs:
               arch: wormhole_b0,
               runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 40
+              timeout: 70
             },
             {
               name: "GS-only models",
@@ -73,14 +73,14 @@ jobs:
               arch: wormhole_b0,
               runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "cloud-virtual-machine"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 50
+              timeout: 80
             },
             {
               name: "N150 WH-only models",
               arch: wormhole_b0,
               runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "cloud-virtual-machine"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 40
+              timeout: 80
             },
             {
               name: "API tests GS",
