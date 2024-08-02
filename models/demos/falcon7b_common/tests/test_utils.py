@@ -4,9 +4,9 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconForCausalLM
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor
 
 
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices):
@@ -155,6 +155,14 @@ def get_rand_falcon_inputs(
         # Generate attention input and mask
         if generate_attention_inputs:
             attention_input = (torch.rand(global_batch, q_len, configuration.hidden_size) * 2) - 1
+            tt_attention_input = ttnn.from_torch(
+                attention_input.unsqueeze(1).transpose(0, 2),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
+            )
+
             attention_mask_bool = torch.zeros(global_batch, 1, q_len, kv_len, dtype=bool)
             kv_len_padded = (kv_len + 31) // 32 * 32
             attention_mask_bool_padded = torch.cat(
@@ -164,26 +172,33 @@ def get_rand_falcon_inputs(
                 ),
                 dim=-1,
             )
-            tt_attention_input = ttnn.from_torch(
-                attention_input.unsqueeze(1).transpose(0, 2),
-                dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
-            )
-            tt_attention_mask = ttnn.from_torch(
-                (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+            if model_config["l1_sharded"] == False:
+                attention_mask_bool_padded = (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
                     -1,
                     configuration.num_attention_heads,
                     -1,
                     -1,
                     # -1, 71, -1, -1
-                ),
+                )
+                device_shard_dim = 2
+            else:
+                attention_mask_bool_padded = attention_mask_bool_padded.reshape(global_batch, 1, -1, 32) * -100000
+                device_shard_dim = 0
+            tt_attention_mask = ttnn.from_torch(
+                attention_mask_bool_padded,
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=device_mesh,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=model_config["ATTN_MASK_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=device_shard_dim),
             )
+            if not model_config["l1_sharded"]:
+                # Tilize attn masks
+                tt_attention_mask = ttnn.tilize(
+                    tt_attention_mask,
+                    memory_config=model_config["ATTN_MASK_MEMCFG"],
+                    dtype=model_config["ATTN_MASK_DTYPE"],
+                )
 
         # Generate kvcache for each layer
         layer_past = ()
@@ -230,31 +245,34 @@ def get_rand_falcon_inputs(
         )
 
 
-def concat_device_out_layer_present(num_devices, tt_layer_present, seq_end_idx, end_idx_only=False):
-    for i in range(num_devices):
-        tt_layer_present[i] = (
-            tt2torch_tensor(tt_layer_present[i][0]).squeeze(1),
-            tt2torch_tensor(tt_layer_present[i][1]).squeeze(1),
+def concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx, end_idx_only=False):
+    tt_layer_present = (
+        ttnn.to_torch(
+            tt_layer_present[0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
+        ).squeeze(1),
+        ttnn.to_torch(
+            tt_layer_present[1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
+        ).squeeze(1),
+    )
+    if not end_idx_only:
+        tt_layer_present = (
+            tt_layer_present[0][:, :seq_end_idx, :],
+            tt_layer_present[1][:, :seq_end_idx, :],
         )
-        if not end_idx_only:
-            tt_layer_present[i] = (
-                tt_layer_present[i][0][:, :seq_end_idx, :],
-                tt_layer_present[i][1][:, :seq_end_idx, :],
-            )
-        else:
-            tt_layer_present[i] = (
-                tt_layer_present[i][0][:, seq_end_idx, :],
-                tt_layer_present[i][1][:, seq_end_idx, :],
-            )
-    tt_layer_present = (torch.concat([x[0] for x in tt_layer_present]), torch.concat([x[1] for x in tt_layer_present]))
+    else:
+        tt_layer_present = (
+            tt_layer_present[0][:, seq_end_idx, :],
+            tt_layer_present[1][:, seq_end_idx, :],
+        )
     return tt_layer_present
 
 
-def concat_device_outputs(num_devices, tt_out, llm_mode, tt_layer_present, seq_end_idx):
-    for i in range(num_devices):
-        tt_out[i] = tt2torch_tensor(tt_out[i]).squeeze(1)
-        if llm_mode == "decode":
-            tt_out[i] = tt_out[i].transpose(0, 1)
-    tt_out = torch.concat(tt_out)
-    tt_layer_present = concat_device_out_layer_present(num_devices, tt_layer_present, seq_end_idx)
+def concat_device_outputs(device_mesh, tt_out, llm_mode, tt_layer_present, seq_end_idx):
+    concat_dim = 2 if llm_mode == "decode" else 0
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+    ).squeeze(1)
+    if llm_mode == "decode":
+        tt_out = tt_out.transpose(0, 1)
+    tt_layer_present = concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx)
     return tt_out, tt_layer_present

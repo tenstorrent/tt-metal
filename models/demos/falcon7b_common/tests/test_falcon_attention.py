@@ -129,7 +129,7 @@ def run_test_FalconAttention_inference(
         layer_past_len=kv_cache_len,
         use_cache=use_cache,
     )
-    tt_out, tt_layer_present = concat_device_outputs(num_devices, tt_out, llm_mode, tt_layer_present, kv_len)
+    tt_out, tt_layer_present = concat_device_outputs(device_mesh, tt_out, llm_mode, tt_layer_present, kv_len)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
