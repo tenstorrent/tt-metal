@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
 
     num_rows_per_core = num_rows_per_core_group_1; // Will always find equal split
-    uint32_t num_sin_cos_rows_per_core = max((uint32_t) 1, (uint32_t) (Ht / num_cores));
+    uint32_t num_sin_cos_rows_per_core = std::max((uint32_t) 1, (uint32_t) (Ht / num_cores));
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    uint32_t num_cores_per_sin_cos_row = max((uint32_t) 1, (uint32_t)(num_cores / Ht)); // since sin/cos matrices have Ht rows
+    uint32_t num_cores_per_sin_cos_row = std::max((uint32_t) 1, (uint32_t)(num_cores / Ht)); // since sin/cos matrices have Ht rows
     uint32_t core_idx = 0;
     /*
         Overall loop iterations: # total cores

@@ -235,7 +235,7 @@ void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_
 }
 
 void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
-    ofstream output_stream(file_name, ios::out | ios::binary);
+    std::ofstream output_stream(file_name, std::ios::out | std::ios::binary);
     if (not output_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
@@ -278,7 +278,7 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
 }
 
 MemoryConfig load_memory_config(const std::string& file_name) {
-    ifstream input_stream(file_name, ios::in | ios::binary);
+    std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
     if (not input_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }

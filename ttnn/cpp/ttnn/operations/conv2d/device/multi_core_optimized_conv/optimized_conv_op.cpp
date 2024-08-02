@@ -36,7 +36,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
+std::tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
                                 const Tensor& input,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,

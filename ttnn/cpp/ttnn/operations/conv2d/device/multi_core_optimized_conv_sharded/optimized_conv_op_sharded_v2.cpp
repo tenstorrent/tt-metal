@@ -37,7 +37,7 @@ const uint32_t out0_cb = CB::c_out0;
 const uint32_t temp_sum_cb = CB::c_intermed3;
 
 // TODO: Add namespace for utilities?
-tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
+std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -213,7 +213,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 }
 
 // TODO: Add namespace for utilities?
-tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
+std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -983,7 +983,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
-    tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
+    std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
     if (is_conv1d and is_depthwise_conv) {
         input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,

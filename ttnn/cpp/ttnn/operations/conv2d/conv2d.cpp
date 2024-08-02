@@ -520,7 +520,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     }
-    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, nullopt);
+    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
         auto bias_shape = bias_tensor_.get_shape();
@@ -533,7 +533,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         if (bias_tensor_.get_dtype() != weights_bias_dtype) {
             bias_tensor_ = ttnn::to_dtype(bias_tensor_, weights_bias_dtype);
         }
-        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, nullopt);
+        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};

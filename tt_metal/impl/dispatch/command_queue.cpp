@@ -378,7 +378,7 @@ uint32_t get_max_write_packed_sub_cmds(
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    return min(
+    return std::min(
         max_prefetch_num_packed_cmds,
         is_unicast ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds);
 };
@@ -795,7 +795,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                         cb_config_payload[base_index + 1] = cb_size;
                         cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
                         cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
-                        max_base_index = max(max_base_index, base_index);
+                        max_base_index = std::max(max_base_index, base_index);
                     }
                 }
                 multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
@@ -805,7 +805,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 multicast_cb_config_data.emplace_back(
                     cb_config_payload.data(),
                     (max_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t));
-                max_overall_base_index = max(max_overall_base_index, max_base_index);
+                max_overall_base_index = std::max(max_overall_base_index, max_base_index);
                 i++;
             }
             cb_config_size_bytes =
@@ -1683,7 +1683,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 num_pages_to_read =
                     buffer_page_mapping.value().core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
             } else {
-                num_pages_to_read = min(num_total_pages, max_pages_per_shard);
+                num_pages_to_read = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages_to_read;
             }
             uint32_t bank_base_address = buffer.address();
@@ -1843,7 +1843,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                 dst_page_index = buffer_page_mapping.value().host_page_to_dev_page_mapping_
                                      [buffer_page_mapping.value().core_host_page_indices_[core_id][0]];
             } else {
-                num_pages = min(num_total_pages, max_pages_per_shard);
+                num_pages = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages;
             }
             uint32_t curr_page_idx_in_shard = 0;

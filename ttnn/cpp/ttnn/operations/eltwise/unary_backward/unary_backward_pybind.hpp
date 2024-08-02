@@ -493,7 +493,7 @@ void bind_unary_backward_unary_optional_float(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id, grad_tensor, input_tensor, parameter, memory_config, are_required_outputs, input_grad);
             },
@@ -597,7 +597,7 @@ void bind_unary_backward_unary_optional(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, memory_config, are_required_outputs, input_grad);
             },
             py::arg("grad_tensor"),

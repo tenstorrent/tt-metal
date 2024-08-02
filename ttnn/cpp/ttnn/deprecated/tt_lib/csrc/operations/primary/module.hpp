@@ -508,7 +508,7 @@ void py_module(py::module& m_primary) {
         &moreh_sum_backward,
         py::arg("output_grad").noconvert(),
         py::kw_only(),
-        py::arg("input").noconvert() = nullopt,
+        py::arg("input").noconvert() = std::nullopt,
         py::arg("dim").noconvert() = std::nullopt,
         py::arg("keep_batch_dim").noconvert() = false,
         py::arg("input_grad").noconvert() = std::nullopt,

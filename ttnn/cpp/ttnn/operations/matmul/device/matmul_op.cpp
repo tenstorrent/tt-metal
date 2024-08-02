@@ -133,7 +133,7 @@ namespace bmm_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = _get_prime_factors(Nt);
     auto Mt_fac = _get_prime_factors(Mt);
@@ -289,7 +289,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         .mcast_in0 = mcast_in0};
 }
 
-tuple<uint32_t, uint32_t> get_matmul_subblock_params(
+std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const uint32_t per_core_M,
     const uint32_t per_core_N,
     const bool per_core_M_equals_subblock_h_constraint,
@@ -495,7 +495,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
         input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
 }
 
-tuple<uint32_t, uint32_t> get_subblock_sizes(
+std::tuple<uint32_t, uint32_t> get_subblock_sizes(
     uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
     uint32_t out_subblock_h, out_subblock_w;
     for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {

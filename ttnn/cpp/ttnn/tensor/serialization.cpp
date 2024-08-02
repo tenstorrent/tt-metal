@@ -22,7 +22,7 @@ namespace detail {
 
 static constexpr std::size_t SENTINEL_VALUE = std::numeric_limits<std::size_t>::max();
 
-void dump_owned_storage(ofstream& output_stream, const OwnedStorage& storage) {
+void dump_owned_storage(std::ofstream& output_stream, const OwnedStorage& storage) {
     std::visit(
         [&output_stream]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
             const auto buffer = owned_buffer::get_as<T>(generic_buffer);
@@ -34,7 +34,7 @@ void dump_owned_storage(ofstream& output_stream, const OwnedStorage& storage) {
     );
 }
 
-void dump_borrowed_storage(ofstream& output_stream, const BorrowedStorage& storage) {
+void dump_borrowed_storage(std::ofstream& output_stream, const BorrowedStorage& storage) {
     std::visit(
         [&output_stream]<typename T>(const borrowed_buffer::Buffer<T>& generic_buffer) {
             const auto buffer = borrowed_buffer::get_as<T>(generic_buffer);
@@ -46,7 +46,7 @@ void dump_borrowed_storage(ofstream& output_stream, const BorrowedStorage& stora
     );
 }
 
-void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
+void dump_multi_device_host_storage(std::ofstream& output_stream, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
     std::size_t num_buffers = storage.num_buffers();
     output_stream.write(reinterpret_cast<const char*>(&num_buffers), sizeof(std::size_t));
 
@@ -82,7 +82,7 @@ void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHo
 }
 
 template<typename T>
-OwnedStorage load_owned_storage(ifstream& input_stream) {
+OwnedStorage load_owned_storage(std::ifstream& input_stream) {
     std::size_t size = 0;
     input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
     auto buffer = owned_buffer::create<T>(size);
@@ -92,7 +92,7 @@ OwnedStorage load_owned_storage(ifstream& input_stream) {
 }
 
 template<typename T>
-MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, DeviceMesh* device_mesh) {
+MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, DeviceMesh* device_mesh) {
     std::size_t num_buffers = 0;
     DistributedTensorConfig strategy;
     input_stream.read(reinterpret_cast<char*>(&num_buffers), sizeof(std::size_t));
@@ -136,7 +136,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, De
 }
 
 
-OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
+OwnedStorage load_owned_storage(std::ifstream& input_stream, DataType data_type) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
         return load_owned_storage<T>(input_stream);
@@ -161,7 +161,7 @@ OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
 }
 
 
-MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, DataType data_type, DeviceMesh *device_mesh) {
+MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, DataType data_type, DeviceMesh *device_mesh) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
         return load_multi_device_host_storage<T>(input_stream, device_mesh);
@@ -180,7 +180,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, Da
 }
 
 template <typename T>
-Storage load_storage(ifstream& input_stream, DataType data_type, StorageType storage_type, T device) {
+Storage load_storage(std::ifstream& input_stream, DataType data_type, StorageType storage_type, T device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
         if constexpr (std::is_same_v<T, DeviceMesh*>) {
             return load_multi_device_host_storage(input_stream, data_type, device);
@@ -195,7 +195,7 @@ Storage load_storage(ifstream& input_stream, DataType data_type, StorageType sto
 }  // namespace detail
 
 void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
-    ofstream output_stream(file_name, ios::out | ios::binary);
+    std::ofstream output_stream(file_name, std::ios::out | std::ios::binary);
     if (not output_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
@@ -255,7 +255,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::
 
 template<typename T>
 Tensor load_tensor(const std::string& file_name, T device) {
-    ifstream input_stream(file_name, ios::in | ios::binary);
+    std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
     if (not input_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
@@ -301,7 +301,7 @@ Tensor load_tensor(const std::string& file_name, T device) {
         return tensor;
 
     } else {
-        input_stream.seekg(0, ios::beg); // No sentinel found, assume it's an older format and rewind
+        input_stream.seekg(0, std::ios::beg); // No sentinel found, assume it's an older format and rewind
 
         auto shape = Shape{};
         DataType data_type;

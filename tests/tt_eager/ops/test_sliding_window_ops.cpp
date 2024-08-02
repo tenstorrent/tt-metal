@@ -61,8 +61,8 @@ uint32_t compare_conv_out_with_golden(
 // It is ok to use pad_metadata since its correctness is validated in other test cases.
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::Device *device,
-    const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    const tuple<vector<vector<uint16_t>>, vector<vector<uint16_t>>, vector<vector<uint16_t>>>
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
+    const std::tuple<vector<vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
         &halo_kernel_config,
     const vector<bool> &pad_metadata,
     bool remote_read = false,

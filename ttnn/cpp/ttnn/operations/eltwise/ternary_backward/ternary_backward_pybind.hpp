@@ -183,7 +183,7 @@ void bind_ternary_backward_optional_output(py::module& module, const ternary_bac
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),

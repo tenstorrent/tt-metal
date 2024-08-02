@@ -13,7 +13,6 @@
 #include "tt_metal/common/logger.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-using namespace std;
 
 class bfloat16 {
  private:
@@ -75,7 +74,7 @@ class bfloat16 {
     }
 };
 
-inline ostream& operator<<(ostream& os, const bfloat16& bfp16)
+inline std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16)
 {
     os << bfp16.to_uint16();
     return os;
@@ -140,13 +139,13 @@ inline std::vector<bfloat16> create_random_vector_of_bfloat16_native(uint32_t nu
     return vec;
 }
 
-inline void print_golden_metalium_vectors(vector<bfloat16>& golden_vec, vector<bfloat16>& result_vec) {
-    cout << "-- index -- golden -- metalium --" << endl;
+inline void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vector<bfloat16>& result_vec) {
+    std::cout << "-- index -- golden -- metalium --" << std::endl;
     for (int i = 0; i < result_vec.size(); i++) {
         float a1 = golden_vec[i].to_float();
         float a2 = result_vec[i].to_float();
         if (i % 128 == 0){
-            cout << "-- " << i << " -- " << a1 << " <--> " << a2 << endl;
+            std::cout << "-- " << i << " -- " << a1 << " <--> " << a2 << std::endl;
         }
     }
 }
@@ -218,7 +217,7 @@ inline std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_
 
 
 // TODO(AP): duplication with above
-inline vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_bytes, int seed) {
+inline std::vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_bytes, int seed) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes/sizeof(std::uint32_t), 0);
@@ -237,8 +236,8 @@ inline vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_byt
     return vec;
 }
 
-inline vector<uint16_t> u16_from_u32_vector(const vector<uint32_t>& in) {
-    vector<uint16_t> result(in.size()*2);
+inline std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
+    std::vector<uint16_t> result(in.size()*2);
     for (int i = 0; i < in.size(); i++) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
@@ -248,8 +247,8 @@ inline vector<uint16_t> u16_from_u32_vector(const vector<uint32_t>& in) {
     return result;
 }
 
-inline vector<uint32_t> u32_from_u16_vector(const vector<uint16_t>& in) {
-    vector<uint32_t> result(in.size()/2);
+inline std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
+    std::vector<uint32_t> result(in.size()/2);
     TT_ASSERT(in.size() % 2 == 0);
     for(auto i = 0; i < in.size(); i+=2) {
         auto val1 = bfloat16(in.at(i));
@@ -260,7 +259,7 @@ inline vector<uint32_t> u32_from_u16_vector(const vector<uint16_t>& in) {
     return result;
 }
 
-inline void print_vec_of_uint32_as_packed_bfloat16(std::vector<std::uint32_t> vec, int num_tiles, string name = "", int tile_print_offset = 0) {
+inline void print_vec_of_uint32_as_packed_bfloat16(std::vector<std::uint32_t> vec, int num_tiles, std::string name = "", int tile_print_offset = 0) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
@@ -277,7 +276,7 @@ inline void print_vec_of_uint32_as_packed_bfloat16(std::vector<std::uint32_t> ve
     }
 }
 
-inline void print_vec_of_bfloat16(std::vector<bfloat16> vec, int num_tiles, string name = "", int tile_print_offset = 0) {
+inline void print_vec_of_bfloat16(std::vector<bfloat16> vec, int num_tiles, std::string name = "", int tile_print_offset = 0) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
@@ -292,7 +291,7 @@ inline void print_vec_of_bfloat16(std::vector<bfloat16> vec, int num_tiles, stri
     }
 }
 
-inline void print_vec(std::vector<uint32_t> vec, int num_tiles, string name = "", int tile_print_offset = 0) {
+inline void print_vec(std::vector<uint32_t> vec, int num_tiles, std::string name = "", int tile_print_offset = 0) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
@@ -334,8 +333,8 @@ inline std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
 
 // Equality functions
 inline bool equal_within_n_sig_figs(float a, float b, int n) {
-    string str_a = std::to_string(a);
-    string str_b = std::to_string(b);
+    std::string str_a = std::to_string(a);
+    std::string str_b = std::to_string(b);
 
     // Iterate until no more zeroes
     int i = 0;
@@ -386,7 +385,7 @@ inline bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f) 
 }
 
 inline bool packed_uint32_t_vector_comparison(
-    const vector<uint32_t> &vec_a, const vector<uint32_t> &vec_b,
+    const std::vector<uint32_t> &vec_a, const std::vector<uint32_t> &vec_b,
     std::function<bool(float, float)> comparison_function,
     int* argfail = nullptr
 ) {

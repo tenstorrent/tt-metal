@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
             }
         } else if ((s.rfind("-n=", 0) == 0) || (s.rfind("--num-hw-cqs==", 0) == 0)) {
             string value_str = s.substr(s.find("=") + 1);
-            num_hw_cqs = stoi(value_str.c_str());
+            num_hw_cqs = std::stoi(value_str.c_str());
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
@@ -125,5 +125,5 @@ int main(int argc, char* argv[]) {
 
     // Call dump function with user config.
     dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, num_hw_cqs);
-    cout << "Watcher dump tool finished." << endl;
+    std::cout << "Watcher dump tool finished." << std::endl;
 }

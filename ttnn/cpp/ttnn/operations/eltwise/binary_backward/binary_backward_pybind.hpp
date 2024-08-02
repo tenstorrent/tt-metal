@@ -164,7 +164,7 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, parameter, memory_config, are_required_outputs, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -368,7 +368,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, other_tensor, memory_config, are_required_outputs, input_grad, other_grad);
             },
             py::arg("grad_tensor"),
