@@ -145,6 +145,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     tt::tt_metal::Program program{};
+    // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
+    program.capture_multi_device_dependencies();
     const auto& device = input_tensor.device();
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
