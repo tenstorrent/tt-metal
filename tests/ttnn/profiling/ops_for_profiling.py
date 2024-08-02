@@ -2217,7 +2217,7 @@ all_unary_ops = [
         "name": "ttnn.normalize_hw",
     },
     {
-        "op": normalize_global,
+        "op": ttnn.normalize_global,
         "name": "ttnn.normalize_global",
     },
     {
