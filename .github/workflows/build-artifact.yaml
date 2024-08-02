@@ -46,7 +46,7 @@ jobs:
       SILENT: 0
       VERBOSE: 1
     environment: dev
-    runs-on: 
+    runs-on:
       - build
       - in-service
     steps:
