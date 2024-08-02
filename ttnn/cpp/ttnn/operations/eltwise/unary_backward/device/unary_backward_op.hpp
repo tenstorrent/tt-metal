@@ -8,6 +8,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -28,7 +29,6 @@ enum class UnaryBackwardOpType {
     EQ_BW,
     GT_BW,
     LT_BW,
-    GE_BW,
     LGAMMA_BW,
     FILL_BW,
     HARDSIGMOID_BW,
@@ -141,7 +141,6 @@ std::vector<Tensor> _rpow_bw( const Tensor& grad, const Tensor& input, float exp
 std::vector<Tensor> _div_no_nan_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _polygamma_bw( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _ge_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _remainder_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _fmod_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
@@ -518,13 +517,6 @@ struct OpHandler<UnaryBackwardOpType::LT_BW> {
 };
 
 template <>
-struct OpHandler<UnaryBackwardOpType::GE_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _ge_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
 struct OpHandler<UnaryBackwardOpType::HARDSHRINK_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
         return _hardshrink_bw(grad, input, lambd, output_mem_config);
@@ -745,13 +737,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::PROD_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config ) {
         return _prod_bw(grad, input, all_dimensions, dim, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::ADD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _add_bw(grad, input, alpha, output_mem_config);
     }
 };
 

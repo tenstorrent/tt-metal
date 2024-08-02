@@ -10,6 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -121,7 +122,7 @@ struct ExecuteBackwardMul  {
         const MemoryConfig &memory_config);
 };
 
-struct ExecuteBinaryBackwardBiasGelu {
+struct ExecuteBackwardBiasGelu {
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
@@ -134,6 +135,50 @@ struct ExecuteBinaryBackwardBiasGelu {
         const Tensor &input_tensor_a_arg,
         float scalar,
         string approximate,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
+struct ExecuteBackwardAdd {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        float alpha,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
+struct ExecuteBackwardSub {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 
 };
@@ -177,10 +222,34 @@ constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::bin
 
 constexpr auto bias_gelu_bw = ttnn::register_operation<
     "ttnn::bias_gelu_bw",
-    operations::binary_backward::ExecuteBinaryBackwardBiasGelu>();
+    operations::binary_backward::ExecuteBackwardBiasGelu>();
 
 constexpr auto le_bw = ttnn::register_operation<"ttnn::le_bw",operations::binary_backward::ExecuteBackwardComparison>();
 
 constexpr auto ne_bw = ttnn::register_operation<"ttnn::ne_bw",operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto add_bw = ttnn::register_operation<
+    "ttnn::add_bw",
+    operations::binary_backward::ExecuteBackwardAdd>();
+
+constexpr auto sub_bw = ttnn::register_operation<
+    "ttnn::sub_bw",
+    operations::binary_backward::ExecuteBackwardSub>();
+
+constexpr auto lt_bw = ttnn::register_operation<
+    "ttnn::lt_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto gt_bw = ttnn::register_operation<
+    "ttnn::gt_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto ge_bw = ttnn::register_operation<
+    "ttnn::ge_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto eq_bw = ttnn::register_operation<
+    "ttnn::eq_bw",
+    operations::binary_backward::ExecuteBackwardComparison>();
 
 }  // namespace ttnn
