@@ -1994,10 +1994,10 @@ def reshape(
 @setup_host_and_device
 def split_last_dim_two_chunks_tiled(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.split_last_dim_two_chunks_tiled(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.split(t0, 2, 3, memory_config=output_mem_config)
 
-    output0 = tt2torch_tensor(t1[0])
-    output1 = tt2torch_tensor(t1[1])
+    output0 = ttnn.to_torch(t1[0])
+    output1 = ttnn.to_torch(t1[1])
 
     return [output0, output1]
 

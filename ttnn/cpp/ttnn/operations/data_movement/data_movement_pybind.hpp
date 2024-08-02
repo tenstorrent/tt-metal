@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_pybind.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_pybind.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose_pybind.hpp"
+#include "ttnn/operations/data_movement/split/split_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -68,6 +69,7 @@ void py_module(py::module& module) {
     detail::bind_tilize_with_val_padding(module);
     detail::bind_tilize_with_zero_padding(module);
     detail::bind_transpose(module);
+    detail::bind_split(module);
 }
 
 }  // namespace data_movement
