@@ -67,8 +67,6 @@ std::vector<std::optional<ttnn::Tensor>> _addalpha_bw( uint8_t queue_id, const T
 std::vector<std::optional<ttnn::Tensor>> _add_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
 std::vector<std::optional<ttnn::Tensor>> _eq_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
 
-std::vector<ttnn::Tensor> _add_bw_inter(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
-
 // OpHandler struct template
 template <BinaryBackwardOpType OpType>
 struct OpHandler;

@@ -234,7 +234,7 @@ constexpr auto add_bw = ttnn::register_operation<
 
 constexpr auto sub_bw = ttnn::register_operation<
     "ttnn::sub_bw",
-    operations::binary_backward::ExecuteUnaryBackwardSub>();
+    operations::binary_backward::ExecuteBackwardSub>();
 
 constexpr auto lt_bw = ttnn::register_operation<
     "ttnn::lt_bw",
@@ -242,14 +242,14 @@ constexpr auto lt_bw = ttnn::register_operation<
 
 constexpr auto gt_bw = ttnn::register_operation<
     "ttnn::gt_bw",
-    operations::binary_backward::ExecuteUnaryBackwardComparison>();
+    operations::binary_backward::ExecuteBackwardComparison>();
 
 constexpr auto ge_bw = ttnn::register_operation<
     "ttnn::ge_bw",
-    operations::binary_backward::ExecuteUnaryBackwardComparison>();
+    operations::binary_backward::ExecuteBackwardComparison>();
 
 constexpr auto eq_bw = ttnn::register_operation<
     "ttnn::eq_bw",
-    operations::binary_backward::ExecuteUnaryBackwardComparison>();
+    operations::binary_backward::ExecuteBackwardComparison>();
 
 }  // namespace ttnn
