@@ -802,7 +802,7 @@ def eltwise_fmod(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.binary_fmod(t0, t1, memory_config=output_mem_config)
+    t2 = ttnn.fmod(t0, t1, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -821,7 +821,7 @@ def eltwise_remainder(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.binary_remainder(t0, t1, memory_config=output_mem_config)
+    t2 = ttnn.remainder(t0, t1, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -2332,9 +2332,6 @@ def make_unary_op_optional_output_with_fast_approx(ttl_tensor_unop):
     return unary_op_optional_output_with_fast_approx
 
 
-# mean_global = make_unary_op(ttl.tensor.global_mean)
-# var_global = make_unary_op(ttl.tensor.global_var)
-# std_global = make_unary_op(ttl.tensor.global_std)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op_optional_output(ttnn.cos)
 eltwise_sin = make_unary_op_optional_output(ttnn.sin)
@@ -2388,7 +2385,6 @@ eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
-# eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 eltwise_floor = make_unary_op_optional_output(ttnn.floor)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
 eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)
