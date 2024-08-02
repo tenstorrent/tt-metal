@@ -30,6 +30,7 @@
 
 #include "debug/status.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
 // clang-format on
 
 uint8_t noc_index;
@@ -332,6 +333,7 @@ inline void wait_ncrisc_trisc() {
 }
 
 int main() {
+    DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
 
     disable_lowcache();
@@ -393,6 +395,7 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
                 kernel_init();
+                RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init
                 noc_local_state_init(noc_index);
