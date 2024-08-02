@@ -14,6 +14,7 @@
 #include "debug/fw_debug.h"
 #include "debug/status.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
 #include "circular_buffer.h"
 // clang-format on
 
@@ -74,6 +75,7 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 int main(int argc, char *argv[]) {
+    DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
 
     disable_lowcache();
@@ -117,6 +119,7 @@ int main(int argc, char *argv[]) {
 
         DEBUG_STATUS("R");
         kernel_init();
+        RECORD_STACK_USAGE();
         DEBUG_STATUS("D");
 
         // Signal completion

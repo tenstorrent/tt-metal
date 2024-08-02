@@ -27,6 +27,7 @@
 
 #include "debug/status.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
 
 uint8_t noc_index;
 
@@ -78,7 +79,7 @@ void init_sync_registers() {
 }
 
 int main() {
-
+    DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
@@ -126,6 +127,7 @@ int main() {
                     mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
 
                 kernel_init();
+                RECORD_STACK_USAGE();
             //} else {
                 // This was not initialized in kernel_init
             //    noc_local_state_init(noc_index);
