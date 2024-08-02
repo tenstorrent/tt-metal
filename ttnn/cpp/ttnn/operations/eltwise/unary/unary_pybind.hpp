@@ -447,7 +447,7 @@ void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, con
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               string parameter_b,
+               const std::string& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                const uint8_t& queue_id) {
