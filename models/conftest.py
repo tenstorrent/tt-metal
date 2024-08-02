@@ -44,3 +44,12 @@ def hf_cat_image_sample_input():
     path = "models/sample_data/huggingface_cat_image.jpg"
     im = Image.open(path)
     return im
+
+
+def pytest_addoption(parser):
+    parser.addoption("--num_batches", action="store", default=1, type=int, help="number of batches")
+
+
+@pytest.fixture
+def num_batches(request):
+    return request.config.getoption("--num_batches")
