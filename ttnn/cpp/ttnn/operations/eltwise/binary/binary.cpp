@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -217,6 +218,30 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
 }
 
+
+template <BinaryOpType binary_op_type, bool in_place>
+ComplexTensor BinaryOperation<binary_op_type, in_place>::operator()(
+    const ComplexTensor &input_a,
+    const ComplexTensor &input_b,
+    const ttnn::MemoryConfig &output_mem_config) {
+    if constexpr(binary_op_type == BinaryOpType::MUL) {
+        Tensor re_part = ttnn::subtract(
+            ttnn::multiply(input_a[0],input_b[0],std::nullopt,output_mem_config),
+            ttnn::multiply(input_a[1],input_b[1],std::nullopt,output_mem_config),
+            std::nullopt, output_mem_config);
+
+        Tensor im_part = ttnn::add(
+            ttnn::multiply(input_a[0],input_b[1],std::nullopt,output_mem_config),
+            ttnn::multiply(input_a[1],input_b[0],std::nullopt,output_mem_config),
+            std::nullopt, output_mem_config);
+
+        return ComplexTensor({ re_part, im_part });
+    }else if constexpr(binary_op_type == BinaryOpType::DIV_FAST) {
+        return ttnn::multiply( input_a, ttnn::operations::complex_unary::_reciprocal( input_b , output_mem_config ), output_mem_config ); //TODO: Overload reciprocal
+    }else {
+        TT_THROW("Unsupported operation (expected MUL or DIV_FAST)");
+    }
+}
 
 template <BinaryOpType binary_op_type, bool in_place>
 Tensor RelationalBinary<binary_op_type, in_place>::operator()(
