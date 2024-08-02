@@ -857,4 +857,12 @@ op_map = {
         "tt_op": ttnn_ops.celu_bw,
         "pytorch_op": pytorch_ops.celu_bw,
     },
+    "cosh-bw": {
+        "tt_op": ttnn_ops.cosh_bw,
+        "pytorch_op": pytorch_ops.cosh_bw,
+    },
+    "cos-bw": {
+        "tt_op": ttnn_ops.cos_bw,
+        "pytorch_op": pytorch_ops.cos_bw,
+    },
 }
