@@ -11,7 +11,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     if [[ $ARCH_NAME != "blackhole" ]]; then
         ./build/test/tt_metal/unit_tests
     else
-        ./build/test/tt_metal/unit_tests --gtest_filter=-*.Eth
+        ./build/test/tt_metal/unit_tests --gtest_filter=-*Eth*
     fi
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
@@ -19,7 +19,7 @@ else
     if [[ $ARCH_NAME != "blackhole" ]]; then
         ./build/test/tt_metal/unit_tests_fast_dispatch
     else
-        ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=-*.Eth
+        ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=-*Eth*
     fi
     TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
