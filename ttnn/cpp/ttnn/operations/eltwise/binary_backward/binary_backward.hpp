@@ -183,6 +183,29 @@ struct ExecuteBackwardSub {
 
 };
 
+struct ExecuteBackwardDiv  {
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        string round_mode = "None",
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> operator()(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        string round_mode = "None",
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ComplexTensor> operator()(
+        const ComplexTensor &grad_tensor_arg,
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
+
+};
+
 struct ExecuteBackwardComparison {
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
@@ -251,5 +274,7 @@ constexpr auto ge_bw = ttnn::register_operation<
 constexpr auto eq_bw = ttnn::register_operation<
     "ttnn::eq_bw",
     operations::binary_backward::ExecuteBackwardComparison>();
+
+constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::binary_backward::ExecuteBackwardDiv>();
 
 }  // namespace ttnn
