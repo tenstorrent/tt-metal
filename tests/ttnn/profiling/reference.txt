@@ -63,7 +63,7 @@ tt_lib.tensor.complex_mul,200,0.263,0.272,0.783,0.125
 tt_lib.tensor.complex_recip,200,0.294,0.306,0.814,0.138
 tt_lib.tensor.complex_sub,200,0.034,0.042,0.148,0.015
 tt_lib.tensor.conj,200,0.103,0.109,0.255,0.044
-tt_lib.tensor.conj_bw,200,0.097,0.103,0.265,0.043
+ttnn.conj_bw,200,0.028,0.03,0.102
 tt_lib.tensor.copy,200,0.021,0.022,0.101,0.008
 tt_lib.tensor.fill_ones_rm,200,0.017,0.02,2.028,0.007
 tt_lib.tensor.fill_rm,200,0.018,0.018,2.028,0.006
@@ -76,7 +76,7 @@ tt_lib.tensor.global_sum,200,0.651,0.704,0.69,0.434
 ttnn.glu_dim_2,200,0.09,0.096,0.266,0.043
 ttnn.glu_dim_3,200,0.12,0.128,0.266,0.054
 tt_lib.tensor.imag,200,0.025,0.027,0.058,0.011
-tt_lib.tensor.imag_bw,200,0.133,0.137,0.274,0.076
+ttnn.imag_bw,200,0.918,0.932,0.955
 tt_lib.tensor.lamb_optimizer,80,3.468,3.474,6.687,2.054
 tt_lib.tensor.logical_andi,200,0.022,0.023,0.104,0.009
 tt_lib.tensor.logical_noti,200,0.173,0.179,0.32,0.116
@@ -93,7 +93,7 @@ tt_lib.tensor.polar_binary,200,0.118,0.121,0.751,0.052
 tt_lib.tensor.pow_float,200,0.329,0.342,1.268,0.186
 tt_lib.tensor.pow_int,200,0.025,0.028,0.102,0.01
 tt_lib.tensor.real,200,0.027,0.029,0.06,0.012
-tt_lib.tensor.real_bw,200,0.124,0.127,0.275,0.075
+ttnn.real_bw,200,0.821,0.827,0.847
 ttnn.reglu_dim_2,200,0.102,0.107,0.245,0.045
 ttnn.reglu_dim_3,200,0.105,0.111,0.244,0.045
 tt_lib.tensor.repeat,200,0.025,0.027,0.368,0.009

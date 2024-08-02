@@ -24,10 +24,6 @@ void Halo::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
 }
 
-// const operation::Hash Halo::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-//     return operation::hash_operation<Halo>(this->attribute_values());
-// }
-
 std::vector<tt::tt_metal::Shape> Halo::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
@@ -77,13 +73,14 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
+    bool is_in_tiled = input_tensor.get_layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto pad_metadata = sliding_window::generate_pad_metadata(this->config_);
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(this->config_);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(this->config_, op_trace_metadata);
-    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, this->config_, this->reshard_num_cores_nhw_);
-    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, this->transpose_mcast_, this->remote_read_, device);
+    auto pad_metadata = sliding_window::generate_pad_metadata(config_);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
+    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, reshard_num_cores_nhw_, is_in_tiled || is_out_tiled_);
+    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device);
 
     const auto& pad_config = std::get<0>(kernel_config);
     const auto& local_config = std::get<1>(kernel_config);
@@ -124,14 +121,15 @@ Tensor halo_op(const Tensor& input_tensor,
                 bool remote_read,
                 bool transpose_mcast,
                 uint32_t reshard_num_cores_nhw,
-                MemoryConfig output_memory_config) {
+                MemoryConfig output_memory_config,
+                bool is_out_tiled) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto halo_func = [config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, output_memory_config]
+    auto halo_func = [config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, output_memory_config, is_out_tiled]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         auto input_tensor = input_tensors.at(0);
 
@@ -159,7 +157,8 @@ Tensor halo_op(const Tensor& input_tensor,
                 .transpose_mcast_ = transpose_mcast,
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-                .output_memory_config_ = output_memory_config
+                .output_memory_config_ = output_memory_config,
+                .is_out_tiled_ = is_out_tiled
             },
             {input_tensor});
     };

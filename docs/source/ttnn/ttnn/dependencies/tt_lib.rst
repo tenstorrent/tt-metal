@@ -270,27 +270,7 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.unary_rdiv_trunc
 
-.. autofunction:: tt_lib.tensor.polyval
-
-.. autofunction:: tt_lib.tensor.mac
-
-.. autofunction:: tt_lib.tensor.softshrink
-
-.. autofunction:: tt_lib.tensor.hardshrink
-
-.. autofunction:: tt_lib.tensor.logical_xori
-
-.. autofunction:: tt_lib.tensor.celu
-
-.. autofunction:: tt_lib.tensor.logit
-
-.. autofunction:: tt_lib.tensor.logical_andi
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.logical_ori
-
-.. autofunction:: tt_lib.tensor.frac
 
 .. autofunction:: tt_lib.tensor.rfloor_div
 
@@ -316,23 +296,8 @@ but in general retaining the data.
 Tensor creation operations
 ==========================
 
-.. autofunction:: tt_lib.tensor.arange
-
-.. autofunction:: tt_lib.tensor.full
-
-.. autofunction:: tt_lib.tensor.ones
-
-.. autofunction:: tt_lib.tensor.ones_like
-
-.. autofunction:: tt_lib.tensor.zeros
-
-.. autofunction:: tt_lib.tensor.zeros_like
-
-.. autofunction:: tt_lib.tensor.full_like
-
 .. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
 
-.. autofunction:: tt_lib.tensor.empty
 
 Broadcast and Reduce
 ====================
@@ -348,8 +313,6 @@ Broadcast and Reduce
 .. autofunction:: tt_lib.tensor.global_sum
 
 .. autofunction:: tt_lib.tensor.global_mean
-
-.. autofunction:: tt_lib.tensor.rpow
 
 
 Fallback Operations
@@ -451,39 +414,6 @@ base operations together.
 .. autofunction:: tt_lib.fused_ops.add_and_norm.AddAndNorm
 
 
-Complex Operations
-==================
- We use the following Tensor representation for complex tensors on device; we support complex tensor **x** as  N,H,W,C rank-4 tensor with last dim of size divisible by 64 to represent real and imaginary components
-  * with indices [:,:,:,0:N/2] being real, and
-  * with indices [:,:,:,N/2:N] being imaginary.
-
-The following functions are available,
-
-
-Complex arithmetic can be carried out for multiply, divide, add and subtract as follows:
-
-.. autofunction:: tt_lib.tensor.complex_add
-
-.. autofunction:: tt_lib.tensor.complex_sub
-
-.. autofunction:: tt_lib.tensor.complex_mul
-
-.. autofunction:: tt_lib.tensor.complex_div
-
-and then unary operations for,
-
-.. autofunction:: tt_lib.tensor.real
-
-.. autofunction:: tt_lib.tensor.imag
-
-.. autofunction:: tt_lib.tensor.complex_abs
-
-.. autofunction:: tt_lib.tensor.conj
-
-.. autofunction:: tt_lib.tensor.complex_recip
-
-.. autofunction:: tt_lib.tensor.polar
-
 Complex Operations (Type 2)
 ===========================
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
@@ -493,11 +423,7 @@ the Type 1 contiguous representations.
 Other Operations
 ================
 
-.. autofunction:: tt_lib.tensor.concat
-
 .. autofunction:: tt_lib.tensor.sum
-
-.. autofunction:: tt_lib.tensor.lerp
 
 .. autofunction:: tt_lib.tensor.fill_rm
 
@@ -506,10 +432,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.mean_hw
-
-.. autofunction:: tt_lib.tensor.logical_noti
-
-.. autofunction:: tt_lib.tensor.normalize_global
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 

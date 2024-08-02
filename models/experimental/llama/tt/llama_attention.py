@@ -236,8 +236,8 @@ class TtLlamaAttention(nn.Module):
 
         if past_key_value is not None:
             # reuse k, v, self_attention
-            key_states = tt_lib.tensor.concat([past_key_value[0], key_states], dim=2)
-            value_states = tt_lib.tensor.concat([past_key_value[1], value_states], dim=2)
+            key_states = ttnn.concat([past_key_value[0], key_states], dim=2)
+            value_states = ttnn.concat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
 

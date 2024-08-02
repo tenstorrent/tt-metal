@@ -71,32 +71,41 @@ inline ttnn::Tensor full(
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
-inline ttnn::Tensor zeros(
-    const ttnn::Shape& shape,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full(shape, 0.0f, dtype, layout, device, memory_config);
-}
+namespace detail {
 
-inline ttnn::Tensor ones(
-    const ttnn::Shape& shape,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full(shape, 1.0f, dtype, layout, device, memory_config);
-}
+// Non-type template parameters (NTTPs) disallow floating point values
+// This works around that limitation by using a structural type
+// https://godbolt.org/z/hxKje3MYe
+template <class T>
+struct boxed {
+    T value;
+    consteval boxed(T value) noexcept : value(value) {}
+    consteval auto operator()() const noexcept -> T { return value; }
+};
 
-inline ttnn::Tensor empty(
-    const ttnn::Shape& shape,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full(shape, 0.0f, dtype, layout, device, memory_config);
-}
+} // namespace detail
+
+template <detail::boxed FillValue>
+struct FullWith {
+    static constexpr auto fill_value = FillValue();
+
+    static ttnn::Tensor operator()(
+        const ttnn::Shape& shape,
+        const std::optional<DataType>& dtype = std::nullopt,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        return full(shape, fill_value, dtype, layout, device, memory_config);
+    }
+};
+
+struct Zeros : FullWith<0.0f> {};
+struct Ones : FullWith<1.0f> {};
+struct Empty : FullWith<0.0f> {};
+
+inline constexpr Zeros zeros{};
+inline constexpr Ones ones{};
+inline constexpr Empty empty{};
 
 template <typename T>
 inline ttnn::Tensor full_like(
@@ -125,32 +134,27 @@ inline ttnn::Tensor full_like(
     }
 }
 
-inline ttnn::Tensor zeros_like(
-    const ttnn::Tensor& tensor,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full_like(tensor, 0.0f, dtype, layout, device, memory_config);
-}
+template <detail::boxed FillValue>
+struct FullLikeWith {
+    static constexpr auto fill_value = FillValue();
 
-inline ttnn::Tensor ones_like(
-    const ttnn::Tensor& tensor,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full_like(tensor, 1.0f, dtype, layout, device, memory_config);
-}
+    static ttnn::Tensor operator()(
+        const ttnn::Tensor& tensor,
+        const std::optional<DataType>& dtype = std::nullopt,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        return full_like(tensor, fill_value, dtype, layout, device, memory_config);
+    }
+};
 
-inline ttnn::Tensor empty_like(
-    const ttnn::Tensor& tensor,
-    const std::optional<DataType>& dtype = std::nullopt,
-    const std::optional<Layout>& layout = std::nullopt,
-    const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return full_like(tensor, 0.0f, dtype, layout, device, memory_config);
-}
+struct ZerosLike : FullLikeWith<0.0f> {};
+struct OnesLike : FullLikeWith<1.0f> {};
+struct EmptyLike : FullLikeWith<0.0f> {};
+
+inline constexpr ZerosLike zeros_like{};
+inline constexpr OnesLike ones_like{};
+inline constexpr EmptyLike empty_like{};
 
 struct Full {
     static ttnn::Tensor operator()(
@@ -232,18 +236,22 @@ struct Arange {
 }  // namespace creation
 }  // namespace operations
 
-constexpr auto full = ttnn::register_operation_with_auto_launch_op<"ttnn::full", ttnn::operations::creation::Full>();
-constexpr auto zeros = REGISTER_OPERATION_FROM_FUNCTION("ttnn::zeros", ttnn::operations::creation::zeros);
-constexpr auto ones = REGISTER_OPERATION_FROM_FUNCTION("ttnn::ones", ttnn::operations::creation::ones);
-constexpr auto empty = REGISTER_OPERATION_FROM_FUNCTION("ttnn::empty", ttnn::operations::creation::empty);
+constexpr auto full =
+    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full", ttnn::operations::creation::Full>();
+constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();
+constexpr auto ones = ttnn::decorators::register_operation<"ttnn::ones", ttnn::operations::creation::Ones>();
+constexpr auto empty = ttnn::decorators::register_operation<"ttnn::empty", ttnn::operations::creation::Empty>();
 
-constexpr auto full_like = ttnn::register_operation_with_auto_launch_op<"ttnn::full_like", ttnn::operations::creation::FullLike>();
+constexpr auto full_like =
+    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full_like", ttnn::operations::creation::FullLike>();
 constexpr auto zeros_like =
-    REGISTER_OPERATION_FROM_FUNCTION("ttnn::zeros_like", ttnn::operations::creation::zeros_like);
-constexpr auto ones_like = REGISTER_OPERATION_FROM_FUNCTION("ttnn::ones_like", ttnn::operations::creation::ones_like);
+    ttnn::decorators::register_operation<"ttnn::zeros_like", ttnn::operations::creation::ZerosLike>();
+constexpr auto ones_like =
+    ttnn::decorators::register_operation<"ttnn::ones_like", ttnn::operations::creation::OnesLike>();
 constexpr auto empty_like =
-    REGISTER_OPERATION_FROM_FUNCTION("ttnn::empty_like", ttnn::operations::creation::empty_like);
+    ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
 
-constexpr auto arange = ttnn::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
+constexpr auto arange =
+    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn

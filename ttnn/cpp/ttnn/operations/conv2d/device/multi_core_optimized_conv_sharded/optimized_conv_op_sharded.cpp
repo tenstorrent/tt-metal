@@ -36,7 +36,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
+std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
     tt_metal::Program &program,
     const Tensor& input,
     CoreRange core,

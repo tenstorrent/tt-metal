@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -156,7 +157,7 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::opt
     return result;
 }
 
-Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     if(round_mode == "trunc"){
@@ -168,7 +169,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, std
     return result;
 }
 
-Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     auto arch = input_a.device()->arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -311,7 +312,7 @@ Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::op
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
-    Tensor index_pad = ttnn::pad(0, ttnn::full_like(input_a, 1.0f), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor index_pad = ttnn::pad(0, ttnn::ones_like(input_a), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     Tensor temp_a = ttnn::pad(0, input_a, input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     return ttnn::where(index_pad, temp_a, input_b);
 }

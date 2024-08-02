@@ -97,7 +97,7 @@ class TtTransformer(nn.Module):
         mask: Optional[torch.Tensor] = None
         if input_ids.get_legacy_shape()[-1] > 1:
             seqlen = input_ids.get_legacy_shape()[-1]
-            tensor = tt_lib.tensor.full(
+            tensor = ttnn.full(
                 (1, 1, seqlen, seqlen),
                 fill_value=1.0,
             )

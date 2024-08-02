@@ -129,8 +129,8 @@ class TtRobertaSelfAttention(nn.Module):
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
             dim = 2
-            key_layer = tt_lib.tensor.concat([past_key_value[0], key_layer], dim)
-            value_layer = tt_lib.tensor.concat([past_key_value[1], value_layer], dim)
+            key_layer = ttnn.concat([past_key_value[0], key_layer], dim)
+            value_layer = ttnn.concat([past_key_value[1], value_layer], dim)
         else:
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
@@ -184,7 +184,7 @@ class TtRobertaSelfAttention(nn.Module):
             # back to tt
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
-        div_const = tt_lib.tensor.full(
+        div_const = ttnn.full(
             attention_scores.get_legacy_shape(),
             1.0 / math.sqrt(self.attention_head_size),
         )

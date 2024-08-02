@@ -5,20 +5,15 @@
 #pragma once
 
 #include <optional>
-#include <functional>
-#include <variant>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 
 namespace operations {
 
 namespace ternary {
-
-extern const uint8_t DefaultQueueId;
 
 struct WhereOperation
 {

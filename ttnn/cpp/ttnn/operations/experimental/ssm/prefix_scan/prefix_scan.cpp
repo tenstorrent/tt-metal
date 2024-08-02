@@ -5,10 +5,9 @@
 #include "prefix_scan.hpp"
 
 #include "device/prefix_scan_op.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn::operations::experimental::ssm {
-
-constexpr uint8_t DefaultQueueId = 0;
 
 ttnn::Tensor ExecutePrefixScan::operator()(
     uint8_t queue_id,

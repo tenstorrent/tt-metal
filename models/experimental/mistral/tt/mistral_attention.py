@@ -87,18 +87,18 @@ class TtAttention(nn.Module):
             )
             self.cache_v = torch.empty(args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim)
         else:
-            cache_k = tt_lib.tensor.empty(
+            cache_k = ttnn.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
                 layout=tt_lib.tensor.Layout.ROW_MAJOR,
                 device=self.device,
-                output_mem_config=self.args.out_mem_config,
+                memory_config=self.args.out_mem_config,
             )
             self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
-            cache_v = tt_lib.tensor.empty(
+            cache_v = ttnn.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
                 layout=tt_lib.tensor.Layout.ROW_MAJOR,
                 device=self.device,
-                output_mem_config=self.args.out_mem_config,
+                memory_config=self.args.out_mem_config,
             )
             self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
 
@@ -157,14 +157,10 @@ class TtAttention(nn.Module):
             self.cache_v[:bsz].scatter_(dim=1, index=scatter_pos, src=xv[:, -self.sliding_window :])
         else:
             self.cache_k = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device)
-                )
+                ttnn.scatter(torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device))
             )
             self.cache_v = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device)
-                )
+                ttnn.scatter(torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device))
             )
 
         if positions.shape[0] > 1:
@@ -262,8 +258,8 @@ def apply_rotary_emb(
 
     xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1, mem_config)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1, mem_config)
+    xq_out = ttnn.concat([xq_out.real, xq_out.imag], -1, memory_config=mem_config)
+    xk_out = ttnn.concat([xk_out.real, xk_out.imag], -1, memory_config=mem_config)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
     xq_out.deallocate()

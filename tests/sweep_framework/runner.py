@@ -203,7 +203,7 @@ def run_sweeps(module_name, suite_name, vector_id):
         except ModuleNotFoundError as e:
             print(f"SWEEPS: No module found with name {module_name}")
             exit(1)
-        vector_index = VECTOR_INDEX_PREFIX + sweep_name
+        vector_index = VECTOR_INDEX_PREFIX + module_name
 
         if vector_id:
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]

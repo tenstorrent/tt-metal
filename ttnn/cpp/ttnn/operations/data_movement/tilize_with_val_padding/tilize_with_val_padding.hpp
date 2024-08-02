@@ -7,6 +7,7 @@
 #include "device/tilize_with_val_padding_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -41,14 +42,12 @@ struct ExecuteTilizeWithValPadding {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
-        constexpr uint8_t DefaultQueueId = 0;
         return operator()(
             DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
     }
 };
 
 struct ExecuteTilizeWithZeroPadding {
-    static constexpr uint8_t DefaultQueueId = 0;
 
     static ttnn::Tensor operator()(
         uint8_t queue_id,
@@ -70,7 +69,6 @@ struct ExecuteTilizeWithZeroPadding {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false) {
-        constexpr uint8_t DefaultQueueId = 0;
         return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
     }
 };

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 
 namespace tt {
 namespace tt_metal {

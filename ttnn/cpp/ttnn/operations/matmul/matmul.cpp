@@ -4,9 +4,11 @@
 
 #include "matmul.hpp"
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn {
 
@@ -39,7 +41,7 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     if (!activation.has_value()) {
         return std::nullopt;
     }
-    return ttnn::operations::unary::string_to_unary_with_param(activation.value());
+    return ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
 }
 
 ttnn::Tensor matmul(

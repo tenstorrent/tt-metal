@@ -10,11 +10,41 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("height", [7])
-@pytest.mark.parametrize("width", [3])
-def test_to_and_from_4D(height, width):
-    torch_input_tensor = torch.rand((1, 1, height, width), dtype=torch.bfloat16)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2,),
+        (2, 3),
+        (2, 3, 4),
+        (2, 3, 4, 5),
+        (2, 3, 4, 5, 6),
+        (2, 3, 4, 5, 6, 7),
+        (2, 3, 4, 5, 6, 7, 8),
+        (2, 3, 4, 5, 6, 7, 8, 9),
+    ],
+)
+def test_to_and_from(shape):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_input_tensor)
+    torch_output_tensor = ttnn.to_torch(tensor)
+    assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 3),
+        (2, 3, 4),
+        (2, 3, 4, 5),
+        (2, 3, 4, 5, 6),
+        (2, 3, 4, 5, 6, 7),
+        (2, 3, 4, 5, 6, 7, 8),
+        (2, 3, 4, 5, 6, 7, 8, 9),
+    ],
+)
+def test_to_and_from_using_tile_layout(shape):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
