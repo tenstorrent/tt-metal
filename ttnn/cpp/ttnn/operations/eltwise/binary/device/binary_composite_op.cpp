@@ -238,7 +238,7 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
 }
 
 // Binary remainder will be overloaded by unary remainder in another PR
-Tensor _binary_remainder(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryRemainder::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -251,8 +251,13 @@ Tensor _binary_remainder(const Tensor& input_a, const Tensor& input_b, const std
     return typecast(result, input_dtype);
 }
 
+
+Tensor ExecuteBinaryRemainder::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::unary_remainder(input, scalar);
+}
+
 // Binary FMOD will be overloaded by unary FMOD in another PR
-Tensor _binary_fmod(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryFmod::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -261,6 +266,10 @@ Tensor _binary_fmod(const Tensor& input_a, const Tensor& input_b, const std::opt
     Tensor result = ttnn::subtract(a, ttnn::multiply(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
+}
+
+Tensor ExecuteBinaryFmod::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::unary_fmod(input, scalar);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {

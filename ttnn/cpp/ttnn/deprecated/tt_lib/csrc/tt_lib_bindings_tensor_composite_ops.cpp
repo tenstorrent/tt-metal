@@ -30,21 +30,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             +----------+---------------------------+-----------+------------------------------+----------+
         )doc");
 
-
-        m_tensor.def("logical_not", &logical_not, R"doc(
-            Returns tensor with the logical notof elements of the input tensor ``arg0``.
-
-            Input tensor must have UINT32 data type.
-
-            Output tensor will have UINT32 data type.
-
-            +----------+---------------------------+-----------+------------------------------+----------+
-            | Argument | Description               | Data type | Valid range                  | Required |
-            +==========+===========================+===========+==============================+==========+
-            | arg0     | Tensor logical not        |           |                              |          |
-            |          | '!' is applied to         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-            +----------+---------------------------+-----------+------------------------------+----------+
-        )doc");
 #endif
 
 #if 0
