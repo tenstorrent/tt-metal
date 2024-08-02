@@ -434,7 +434,7 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
                const Tensor& grad_tensor,
                const Tensor& input_tensor_a,
                const float scalar,
-               string round_mode,
+               std::string round_mode,
                const std::optional<MemoryConfig>& memory_config){
                 return self(grad_tensor, input_tensor_a, scalar, round_mode, memory_config);
             },
@@ -451,7 +451,7 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& other_tensor,
-               string round_mode,
+               std::string round_mode,
                const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, other_tensor, round_mode, memory_config);
             },
@@ -684,7 +684,7 @@ void py_module(py::module& module) {
         module,
         ttnn::sub_bw,
         R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
-    
+
     detail::bind_binary_bw_div(
         module,
         ttnn::div_bw,

@@ -23,7 +23,6 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::unary_backward {

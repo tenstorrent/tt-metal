@@ -183,7 +183,7 @@ struct ExecuteBackwardSub {
 
 };
 
-struct ExecuteUnaryBackwardDiv  {
+struct ExecuteBackwardDiv  {
     static std::vector<Tensor> operator()(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -275,6 +275,6 @@ constexpr auto eq_bw = ttnn::register_operation<
     "ttnn::eq_bw",
     operations::binary_backward::ExecuteBackwardComparison>();
 
-constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::binary_backward::ExecuteUnaryBackwardDiv>();
+constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::binary_backward::ExecuteBackwardDiv>();
 
 }  // namespace ttnn
