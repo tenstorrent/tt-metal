@@ -184,7 +184,7 @@ class TtRobertaSelfAttention(nn.Module):
             # back to tt
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
-        div_const = tt_lib.tensor.full(
+        div_const = ttnn.full(
             attention_scores.get_legacy_shape(),
             1.0 / math.sqrt(self.attention_head_size),
         )

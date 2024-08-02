@@ -1151,6 +1151,48 @@ def eltwise_unary_lt(
 
 
 @setup_host_and_device
+def full_like(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.full_like(t0, scalar, memory_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def ones(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t1 = ttnn.ones(
+        x.shape,
+        layout=layout[0],
+        device=device if input_mem_config[0] is not None else None,
+        memory_config=output_mem_config,
+    )
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t1 = ttnn.zeros(
+        x.shape,
+        layout=layout[0],
+        device=device if input_mem_config[0] is not None else None,
+        memory_config=output_mem_config,
+    )
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     diag = kwargs.get("diag", 0)
@@ -1163,6 +1205,41 @@ def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     diag = kwargs.get("diag", 0)
     t1 = ttnn.tril(tx, diagonal=diag, memory_config=output_mem_config)
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t1 = ttnn.empty(
+        x.shape,
+        layout=layout[0],
+        device=device if input_mem_config[0] is not None else None,
+        memory_config=output_mem_config,
+    )
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def full(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t1 = ttnn.full(
+        x.shape,
+        scalar,
+        layout=layout[0],
+        device=device if input_mem_config[0] is not None else None,
+        memory_config=output_mem_config,
+    )
+
     return tt2torch_tensor(t1)
 
 
@@ -1221,6 +1298,31 @@ def fill_ones_rm(
         wOnes,
         t0,
         output_mem_config=output_mem_config,
+    )
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def arange(
+    x,
+    *args,
+    start,
+    end,
+    step=1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t1 = ttnn.arange(
+        start,
+        end,
+        step,
+        device=device if input_mem_config[0] is not None else None,
+        memory_config=output_mem_config,
     )
 
     return tt2torch_tensor(t1)
@@ -2182,6 +2284,8 @@ eltwise_gez = make_unary_op_optional_output(ttnn.gez)
 eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
+zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
+ones_like = make_ttnn_unary_op(ttnn.ones_like)
 # eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 eltwise_floor = make_unary_op_optional_output(ttnn.floor)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)

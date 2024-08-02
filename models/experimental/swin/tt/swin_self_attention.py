@@ -70,7 +70,7 @@ class TtSwinSelfAttention(nn.Module):
         self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], self.device)
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
