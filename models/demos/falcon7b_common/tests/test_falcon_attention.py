@@ -12,7 +12,6 @@ from models.demos.falcon7b_common.tests.test_utils import get_rand_falcon_inputs
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import get_devices_for_t3000
 
 
 class PytorchFalconAttentionModel(torch.nn.Module):
@@ -35,7 +34,7 @@ class PytorchFalconAttentionModel(torch.nn.Module):
 
 
 def run_test_FalconAttention_inference(
-    devices,
+    device_mesh,
     model_version,
     llm_mode,
     batch,
@@ -46,7 +45,7 @@ def run_test_FalconAttention_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    num_devices = len(devices)
+    num_devices = device_mesh.get_num_devices()
     global_batch = batch * num_devices
 
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
@@ -76,7 +75,7 @@ def run_test_FalconAttention_inference(
         seq_len,
         batch,
         kv_cache_len,
-        devices,
+        device_mesh,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -106,7 +105,7 @@ def run_test_FalconAttention_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconAttention_model = ttFalconAttention(
-        devices,
+        device_mesh,
         state_dict,
         # None,
         base_url,
@@ -153,7 +152,8 @@ def run_test_FalconAttention_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("num_devices", (1, 2, 4))
+@pytest.mark.parametrize("device_mesh", (1, 2, 4), indirect=True)
+@pytest.mark.parametrize("async_mode", (False, True))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -168,9 +168,8 @@ def run_test_FalconAttention_inference(
     "model_version, pcc",
     (("tiiuae/falcon-7b-instruct", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 def test_FalconAttention_inference(
-    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -180,9 +179,11 @@ def test_FalconAttention_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    device_mesh,
+    async_mode,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    for device in device_mesh.get_devices():
+        device.enable_async(async_mode)
 
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
@@ -190,7 +191,7 @@ def test_FalconAttention_inference(
     )
 
     run_test_FalconAttention_inference(
-        devices,
+        device_mesh,
         model_version,
         llm_mode,
         batch,

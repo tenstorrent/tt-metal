@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+from ttnn import ShardTensorToMesh
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconForCausalLM
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -68,7 +69,7 @@ def get_rand_falcon_inputs(
     seq_len,
     batch,
     kv_cache_len,
-    devices,
+    device_mesh,
     global_batch,
     head_dim,
     max_position_embeddings,
@@ -87,54 +88,104 @@ def get_rand_falcon_inputs(
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
+        # Generate attention input and mask
         if generate_attention_inputs:
             attention_input = (torch.rand(global_batch, q_len, configuration.hidden_size) * 2) - 1
             attention_mask_bool = torch.ones(global_batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
-        layer_past = None
+            tt_attention_input = ttnn.from_torch(
+                attention_input.unsqueeze(1),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+            )
 
+            if model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [2048, 128, 1024]:
+                attn_masks = create_prefill_attn_mask_for_sharded_softmax(
+                    (attention_mask_bool * -1e5),
+                    configuration.num_attention_heads,
+                    q_len,
+                )
+                tt_attention_mask = [
+                    ttnn.from_torch(
+                        attn_mask,
+                        dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
+                        device=device_mesh,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                    )
+                    for attn_mask in attn_masks
+                ]
+            else:
+                tt_attention_mask = ttnn.from_torch(
+                    (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
+                    dtype=model_config["DEFAULT_DTYPE"],
+                    device=device_mesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                )
+
+        # Generate kvcache for each layer
+        layer_past = None
         tt_layer_past = ()
         for layer in range(num_layers):
-            tt_layer_past_cur = []
-            for i, device in enumerate(devices):
-                # Generate kvcache for each layer and attention mask once
-                if generate_attention_inputs and layer == 0:
-                    attention_input_i = attention_input[batch * i : batch * (i + 1)]
-                    attention_mask_bool_i = attention_mask_bool[batch * i : batch * (i + 1)]
-                    tt_attention_input.append(torch2tt_tensor(attention_input_i.unsqueeze(1), device))
-                    if model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [2048, 128, 1024]:
-                        attn_masks = create_prefill_attn_mask_for_sharded_softmax(
-                            (attention_mask_bool_i * -1e5),
-                            configuration.num_attention_heads,
-                            q_len,
-                        )
-                        tt_attn_masks = [
-                            torch2tt_tensor(attn_mask, device, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B)
-                            for attn_mask in attn_masks
-                        ]
-                        tt_attention_mask.append(tt_attn_masks)
-                    else:
-                        tt_attention_mask.append(
-                            torch2tt_tensor(
-                                (attention_mask_bool_i * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
-                                device,
-                            )
-                        )
-                tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-                tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-                tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
-                tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
-                tt_layer_past_cur.append((tt_k_cache, tt_v_cache))
-            tt_layer_past += (tt_layer_past_cur,)
+            tt_k_cache = torch.zeros(global_batch, max_position_embeddings, head_dim)
+            tt_v_cache = torch.zeros(global_batch, max_position_embeddings, head_dim)
+            tt_k_cache = ttnn.from_torch(
+                tt_k_cache.unsqueeze(1),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+            )
+            tt_v_cache = ttnn.from_torch(
+                tt_v_cache.unsqueeze(1),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+            )
+            tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     elif llm_mode == "decode":
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
 
+        # Generate attention input and mask
         if generate_attention_inputs:
             attention_input = (torch.rand(global_batch, q_len, configuration.hidden_size) * 2) - 1
-            # attention_input = (torch.rand(batch, q_len, 4544) * 2) - 1
             attention_mask_bool = torch.zeros(global_batch, 1, q_len, kv_len, dtype=bool)
+            kv_len_padded = (kv_len + 31) // 32 * 32
+            attention_mask_bool_padded = torch.cat(
+                (
+                    attention_mask_bool,
+                    torch.ones(global_batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
+                ),
+                dim=-1,
+            )
+            tt_attention_input = ttnn.from_torch(
+                attention_input.unsqueeze(1).transpose(0, 2),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
+            )
+            tt_attention_mask = ttnn.from_torch(
+                (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+                    -1,
+                    configuration.num_attention_heads,
+                    -1,
+                    -1,
+                    # -1, 71, -1, -1
+                ),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
+            )
+
+        # Generate kvcache for each layer
         layer_past = ()
         tt_layer_past = ()
         for layer in range(num_layers):
@@ -142,44 +193,25 @@ def get_rand_falcon_inputs(
             v_cache = torch.rand(global_batch, kv_cache_len, head_dim)
             layer_past += ((k_cache.unsqueeze(1), v_cache.unsqueeze(1)),)
 
-            tt_layer_past_cur = []
-            for i, device in enumerate(devices):
-                # Generate kvcache for each layer and attention mask once
-                if generate_attention_inputs and layer == 0:
-                    tt_attention_input.append(
-                        torch2tt_tensor(
-                            attention_input[batch * i : batch * (i + 1)].unsqueeze(1).transpose(0, 2), device
-                        )
-                    )
-
-                    kv_len_padded = (kv_len + 31) // 32 * 32
-                    attention_mask_bool_padded = torch.cat(
-                        (
-                            attention_mask_bool[batch * i : batch * (i + 1)],
-                            torch.ones(batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
-                        ),
-                        dim=-1,
-                    )
-                    tt_attention_mask.append(
-                        torch2tt_tensor(
-                            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
-                                -1,
-                                configuration.num_attention_heads,
-                                -1,
-                                -1,
-                                # -1, 71, -1, -1
-                            ),
-                            device,
-                        )
-                    )
-                tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-                tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-                tt_k_cache[:, :kv_cache_len, :] = k_cache[batch * i : batch * (i + 1)]
-                tt_v_cache[:, :kv_cache_len, :] = v_cache[batch * i : batch * (i + 1)]
-                tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
-                tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
-                tt_layer_past_cur.append((tt_k_cache, tt_v_cache))
-            tt_layer_past += (tt_layer_past_cur,)
+            tt_k_cache = torch.zeros(global_batch, max_position_embeddings, head_dim)
+            tt_v_cache = torch.zeros(global_batch, max_position_embeddings, head_dim)
+            tt_k_cache[:, :kv_cache_len, :] = k_cache
+            tt_v_cache[:, :kv_cache_len, :] = v_cache
+            tt_k_cache = ttnn.from_torch(
+                tt_k_cache.unsqueeze(1),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+            )
+            tt_v_cache = ttnn.from_torch(
+                tt_v_cache.unsqueeze(1),
+                dtype=model_config["DEFAULT_DTYPE"],
+                device=device_mesh,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+            )
+            tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
