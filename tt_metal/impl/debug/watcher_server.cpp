@@ -154,6 +154,20 @@ static const char *get_riscv_name(CoreCoord core, uint32_t type) {
     return nullptr;
 }
 
+uint32_t get_riscv_stack_size(CoreCoord core, uint32_t type) {
+    switch (type) {
+        case DebugBrisc: return MEM_BRISC_STACK_SIZE;
+        case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
+        case DebugErisc: return 0; // Not managed/checked by us.
+        case DebugIErisc: return MEM_BRISC_STACK_SIZE;
+        case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
+        case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
+        case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
+        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
+    }
+    return 0;
+}
+
 static string get_kernel_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type) {
     switch (type) {
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
@@ -555,6 +569,36 @@ static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
     }
 }
 
+static void dump_stack_usage(FILE *f, Device *device, CoreCoord core, const mailboxes_t *mbox) {
+    for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
+        uint16_t stack_usage = mbox->watcher.stack_usage.max_usage[risc_id];
+        uint16_t stack_size = get_riscv_stack_size(core, risc_id);
+        if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
+            fprintf(f, "\n\t%s stack usage: %d/%d", get_riscv_name(core, risc_id), stack_usage, stack_size);
+            fprintf(
+                f,
+                " kernel using most stack: %s",
+                kernel_names[mbox->watcher.stack_usage.watcher_kernel_id[risc_id]].c_str());
+            if (stack_usage >= stack_size) {
+                fprintf(f, " (OVERFLOW)");
+                log_fatal(
+                    "Watcher detected stack overflow on Device {} Core {}: {}! See watcher log for details.",
+                    device->id(),
+                    core.str(),
+                    get_riscv_name(core, risc_id));
+            } else if (stack_usage >= stack_size * 9 / 10) {
+                fprintf(f, " (Close to overflow)");
+                log_warning(
+                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! See watcher log for "
+                    "details.",
+                    device->id(),
+                    core.str(),
+                    get_riscv_name(core, risc_id));
+            }
+        }
+    }
+}
+
 static void validate_kernel_ids(
     FILE *f, std::map<int, bool> &used_kernel_names, chip_id_t device_id, CoreCoord core, const launch_msg_t *launch) {
     if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
@@ -688,8 +732,10 @@ static void dump_core(
             mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
     }
 
-    // Ring buffer at the end because it can print a bunch of data
+    // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
+        if (!tt::llrt::OptionsG.watcher_stack_usage_disabled())
+            dump_stack_usage(f, device, core, mbox_data);
         if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled())
             dump_ring_buffer(f, device, core);
     }
@@ -891,6 +937,13 @@ void watcher_init(Device *device) {
     ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     ring_buf_data->wrapped = 0;
 
+    // Initialize stack high water marker
+    std::vector<uint32_t> stack_usage_init_val(sizeof(debug_stack_usage_t) / sizeof(uint32_t));
+    debug_stack_usage_t *stack_usage_data = reinterpret_cast<debug_stack_usage_t *>(&(stack_usage_init_val[0]));
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
+        stack_usage_data->max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+    }
+
     // Initialize watcher enable flag according to user setting.
     std::vector<uint32_t> watcher_enable_init_val;
     if (tt::llrt::OptionsG.get_watcher_enabled())
@@ -997,6 +1050,8 @@ void watcher_init(Device *device) {
                 device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.assert_status));
             tt::llrt::write_hex_vec_to_core(
                 device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.pause_status));
+            tt::llrt::write_hex_vec_to_core(
+                device->id(), worker_core, stack_usage_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.stack_usage));
             if (debug_delays_val.find(worker_core) != debug_delays_val.end()) {
                 debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[worker_core]));
                 tt::llrt::write_hex_vec_to_core(
@@ -1057,6 +1112,12 @@ void watcher_init(Device *device) {
             debug_pause_init_val,
             is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.pause_status)
                                : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.pause_status));
+        tt::llrt::write_hex_vec_to_core(
+            device->id(),
+            physical_core,
+            stack_usage_init_val,
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.stack_usage)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.stack_usage));
 
         if (debug_delays_val.find(physical_core) != debug_delays_val.end()) {
             debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[physical_core]));
