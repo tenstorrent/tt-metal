@@ -326,7 +326,7 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<Device*> const& 
         bool edge_needs_tunneling = !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
 
-        std::size_t conn = (edge_needs_tunneling ? 0 : 0) + n_edge_visits[edge];
+        std::size_t conn = n_edge_visits[edge];
         std::size_t link = 0;
         std::unordered_map<uint64_t, int> edge_link_idx;
         auto const& active_eth_cores = curr_device->get_active_ethernet_cores(true);
