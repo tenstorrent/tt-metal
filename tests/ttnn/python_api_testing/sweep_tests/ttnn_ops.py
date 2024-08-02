@@ -4192,4 +4192,3 @@ def normalize_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     t1 = ttnn.normalize_hw(t0)
 
     return ttnn_tensor_to_torch(t1)
-
