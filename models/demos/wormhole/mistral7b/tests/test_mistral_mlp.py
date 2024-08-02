@@ -5,9 +5,8 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
-from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
+from models.common.mlp import MLP
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.reference.model import FeedForward
 from models.utility_functions import (
@@ -23,6 +22,7 @@ from models.utility_functions import skip_for_grayskull
     (
         4096,
         128,
+        32,
     ),
 )
 def test_mistral_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
@@ -37,15 +37,15 @@ def test_mistral_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtMistralMLP(
+    tt_model = MLP(
         device=device,
-        args=model_args,
         state_dict=state_dict,
+        state_dict_prefix="layers.0.feed_forward",
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        dtype=dtype,
-        model_config=model_args.get_model_config(),
+        activation=ttnn.UnaryOpType.SILU,
+        w1w3_dtype=ttnn.bfloat4_b,
     )
+
     torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(

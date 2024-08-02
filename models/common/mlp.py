@@ -2,227 +2,283 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import math
 import ttnn
-from models.common.modules import Mode, MultiModeModule
+from models.common.modules import LightweightModule, WeightSetting
+from functools import lru_cache
 
 
-class MLP(MultiModeModule):
+class MLP(LightweightModule):
     def __init__(
         self,
         device,
-        dim,
         state_dict,
-        layer_num,
-        model_config,
-        weight_base_name="layers",
+        state_dict_prefix,
         weight_cache_path=None,
+        activation=ttnn.UnaryOpType.SILU,
+        w1w3_dtype=ttnn.bfloat8_b,  # bfloat4_b is often fine for decode
+        fidelity=ttnn.MathFidelity.LoFi,  # consider HiFi2 if PCC is low
+        output_dtype=ttnn.bfloat16,  # consider bfloat8_b if going into collective op
+        max_rows=1024,
+        per_core_k_at_max_rows="estimate",
+        fp32_dest_acc_en=False,
     ):
-        is_device_mesh = device.__class__.__name__ == "DeviceMesh"
-        self.state_dict = state_dict
-        self.device = device
-        self.num_devices = device.get_num_devices() if is_device_mesh else 1
-        self.model_config = model_config
+        super().__init__(device)
+        self.activation = activation
+        self.output_dtype = output_dtype
+        self.max_rows = max_rows
 
-        self.dim = dim
-
-        if layer_num is None:
-            self.layer_name = ""
-        elif weight_base_name is None:
-            self.layer_name = f"{layer_num}"
+        if per_core_k_at_max_rows == "estimate":
+            self.per_core_k_at_max_rows = {ttnn.bfloat4_b: 4, ttnn.bfloat8_b: 2, ttnn.bfloat16: 1}[w1w3_dtype]
         else:
-            self.layer_name = f"{weight_base_name}.{layer_num}"
-        self.weight_cache_path = weight_cache_path
+            self.per_core_k_at_max_rows = per_core_k_at_max_rows
 
-        self.load_weights()
+        self.weight_settings = {
+            "w1": WeightSetting(
+                state_dict_key=f"{state_dict_prefix}.w1.weight",
+                dtype=w1w3_dtype,
+                conversion_fn=lambda x: x.transpose(-2, -1),
+            ),
+            "w2": WeightSetting(
+                state_dict_key=f"{state_dict_prefix}.w2.weight",
+                dtype=ttnn.bfloat8_b,
+                conversion_fn=lambda x: x.transpose(-2, -1),
+            ),
+            "w3": WeightSetting(
+                state_dict_key=f"{state_dict_prefix}.w3.weight",
+                dtype=w1w3_dtype,
+                conversion_fn=lambda x: x.transpose(-2, -1),
+            ),
+        }
 
-    @property
-    def mode(self):
-        if self.model_config:
-            return {
-                "decode": Mode.DECODE,
-                "prefill": Mode.PREFILL,
-            }[self.model_config["LLM_MODE"]]
+        self.load_weights(state_dict, weight_cache_path)
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=True,
+        )
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        w1 -> gate_proj
+        w2 -> down_proj
+        w3 -> up_proj
+        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        """
+        seq_len = x.shape[-2]
+
+        # Matmul configs are per sequence length, relatively small structs so should be ok
+        if self.max_rows and seq_len > self.max_rows:
+            x = ttnn.reshape(x, [1, seq_len // self.max_rows, self.max_rows, -1])
+            num_rows = self.max_rows
+            pc = lambda w, act: matmul_2d_config(
+                num_rows,
+                w.shape[-2],
+                w.shape[-1],
+                act=act,
+                is_fp32_accumulate=self.compute_kernel_config.fp32_dest_acc_en,
+                override_per_core_k=self.per_core_k_at_max_rows,
+                fuse_batch=False,
+            )
         else:
-            return self._mode
+            num_rows = seq_len
+            pc = lambda w, act: matmul_1d_config(
+                num_rows,
+                w.shape[-2],
+                w.shape[-1],
+                act=act,
+                is_fp32_accumulate=self.compute_kernel_config.fp32_dest_acc_en,
+            )
 
-    @mode.setter
-    def mode(self, value):
-        if self.model_config:
-            raise ValueError('Cannot set mode manually when model_config is used, set model_config["LLM_MODE"] instead')
-        else:
-            self._mode = value
-
-    def set_model_config(self, model_config):
-        self.model_config = model_config
-
-    def load_weights(self):
-        assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
-        assert not hasattr(self, "w3_list"), "w3_list is already an attribute of this object"
-        assert not hasattr(self, "w2_list"), "w2_list is already an attribute of this object"
-
-        w1_str = f"{self.layer_name}.feed_forward.w1.weight"
-        w2_str = f"{self.layer_name}.feed_forward.w2.weight"
-        w3_str = f"{self.layer_name}.feed_forward.w3.weight"
-
-        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard.weight"
-        w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
-
-        w1_dtype = ttnn.bfloat4_b
-        w2_dtype = ttnn.bfloat8_b
-        w3_dtype = ttnn.bfloat4_b
-
-        padded_w1 = None
-        padded_w2 = None
-        padded_w3 = None
-        if self.state_dict:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
-
-        # w1: 8k x 4k. width-sharded on 12 banks, 4224 over 12 banks.
-        d0 = self.device.get_device(0)
-        weight_grid = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(d0.dram_grid_size().x - 1, d0.dram_grid_size().y - 1),
-                )
-            }
+        pc1 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            fuse_batch=False,
         )
 
-        self.w1 = ttnn.as_tensor(
-            padded_w1,
-            dtype=w1_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=3),
-            cache_file_name=self.weight_cache_path / w1_str if self.weight_cache_path else None,
-        )
-
-        w2_shard_shape = (32768, 96)  # Padded cols 1024/12
-        w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
-        w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
-        self.w2 = ttnn.as_tensor(
-            padded_w2,
-            dtype=w2_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=w2_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=3),
-            cache_file_name=self.weight_cache_path / w2_dram_shard_str if self.weight_cache_path else None,
-        )
-
-        w3_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
-        w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
-        w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
-        self.w3 = ttnn.as_tensor(
-            padded_w3,
-            dtype=w3_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=w3_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=3),
-            cache_file_name=self.weight_cache_path / w3_dram_shard_str if self.weight_cache_path else None,
-        )
-
-    def prefill_forward(self, x):
-        # Prefill Reshape fix
-        _, _, seq_len, _ = x.shape
-        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
-        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
-        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.dim))
-
-        w1_out = ttnn.matmul(
+        w1_out = ttnn.linear(
             x,
             self.w1,
-            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc(self.w1, self.activation),
         )
 
-        w3_out = ttnn.matmul(
+        w3_out = ttnn.linear(
             x,
             self.w3,
-            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc(self.w3, None),
         )
-        x.deallocate(True)
-
-        hidden_states = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat8_b, memory_config=self.model_config["DRAM_MEMCFG"])
-        w1_out.deallocate(True)
+        # x.deallocate(True)
+        w2_in = ttnn.multiply(w1_out, w3_out)
         w3_out.deallocate(True)
-
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        )
-
-        hidden_states = ttnn.matmul(
-            hidden_states,
-            self.w2,
-            program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
-        )
-
-        # Prefill Reshape fix (reverse)
-        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, self.dim // self.num_devices))
-
-        return hidden_states
-
-    def decode_forward(self, x):
-        hidden_states = []
-
-        w1_out = ttnn.matmul(
-            x,
-            self.w1,
-            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-        )
-
-        w3_out = ttnn.matmul(
-            x,
-            self.w3,
-            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-        )
-        x.deallocate(True)
-
-        hidden_states = ttnn.mul(
-            w1_out,
-            w3_out,
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            dtype=self.model_config["BFP8_DTYPE"],
-        )
         w1_out.deallocate(True)
-        w3_out.deallocate(True)
 
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            # memory_config=self.model_config["L1_MEMCFG"],
-            memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
-
-        hidden_states = ttnn.matmul(
-            hidden_states,
+        w2_out = ttnn.linear(
+            w2_in,
             self.w2,
-            program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+            dtype=self.output_dtype,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc(self.w2, None),
         )
-        return hidden_states
+        w2_in.deallocate(True)
+
+        if self.max_rows and seq_len > self.max_rows:
+            w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
+
+        return w2_out
+
+
+@lru_cache(maxsize=None)
+def matmul_1d_config(
+    m,
+    k,
+    n,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    override_per_core_k=None,
+    override_subblock_w=None,
+    override_subblock_h=None,
+):
+    tile_width = 32
+    tile_height = 32
+
+    if n // tile_width // grid.num_cores < 1:  # use fewer of cores if we have more tiles (N) than cores
+        # assert (n // tile_width) % grid.x == 0
+        grid_y = n // tile_width // grid.x
+        grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
+
+    per_core_m = m // tile_height
+    per_core_k = math.ceil(k / tile_width / grid.num_cores)
+    per_core_n = math.ceil(n / tile_width / grid.num_cores)
+
+    if is_fp32_accumulate:
+        max_subblock_w_h = 4
+    else:
+        max_subblock_w_h = 8
+
+    # find the largest value between 1 and 8 that is a factor of per_core_n
+    # e.g. if per_core_n is 14, then out_subblock_w = 7
+    out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if per_core_n % i == 0])
+
+    # find the largest value that is a factor of per_core_m such that
+    # out_subblock_w * out_subblock_h <= 8
+    out_subblock_h = max(
+        [i for i in range(1, max_subblock_w_h + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock_w_h]
+    )
+
+    if override_per_core_k is not None:
+        per_core_k = override_per_core_k
+
+    if override_subblock_w is not None:
+        out_subblock_w = override_subblock_w
+
+    if override_subblock_h is not None:
+        out_subblock_h = override_subblock_h
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=per_core_k,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=act,
+        mcast_in0=True,
+    )
+
+
+@lru_cache(maxsize=None)
+def matmul_2d_config(
+    m,
+    k,
+    n,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    transpose_mcast=False,
+    override_per_core_k=None,
+    override_subblock_w=None,
+    override_subblock_h=None,
+    fuse_batch=True,
+):
+    tile_width = 32
+    tile_height = 32
+
+    if transpose_mcast:
+        grid_x = grid.y
+        grid_y = grid.x
+    else:
+        grid_x = grid.x
+        grid_y = grid.y
+
+    assert m % (tile_height * grid_y) == 0, f"m: {m} // 32 not divisible by grid.y: {grid_y}"
+    # assert(k % (tile_height * grid_x) == 0), f"k: {k} // 32 not divisible by grid.x: {grid_x}"
+    # assert(n % (tile_height * grid_x) == 0), f"n: {n} // 32 not divisible by grid.x: {grid_x}"
+
+    per_core_m = m // tile_height // grid_y
+    # per_core_k = k // tile_width // grid_x
+    # per_core_n = n // tile_width // grid_x
+    per_core_k = math.ceil(k / tile_width / grid_x)
+    per_core_n = math.ceil(n / tile_width / grid_x)
+
+    if is_fp32_accumulate:
+        max_subblock_w_h = 4
+    else:
+        max_subblock_w_h = 8
+
+    # find the largest value between 1 and 8 that is a factor of per_core_n
+    # e.g. if per_core_n is 14, then out_subblock_w = 7
+    out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if per_core_n % i == 0])
+
+    # find the largest value that is a factor of per_core_m such that
+    # out_subblock_w * out_subblock_h <= 8
+    out_subblock_h = max(
+        [i for i in range(1, max_subblock_w_h + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock_w_h]
+    )
+
+    if per_core_m * per_core_n >= 512:
+        max_per_core_k = 1
+    elif per_core_m * per_core_n >= 128:
+        max_per_core_k = 8
+    else:
+        max_per_core_k = 16
+
+    if override_per_core_k is not None:
+        per_core_k = override_per_core_k
+    else:
+        per_core_k = min(per_core_k, max_per_core_k)
+
+    if override_subblock_w is not None:
+        out_subblock_w = override_subblock_w
+
+    if override_subblock_h is not None:
+        out_subblock_h = override_subblock_h
+
+    # print(
+    #     f"per_core_m: {per_core_m}, per_core_k: {per_core_k}, per_core_n: {per_core_n}, out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}"
+    # )
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=per_core_k,  # how much inner dim you take each time
+        out_subblock_h=out_subblock_h,  # Must be divisible by per_core_M
+        out_subblock_w=out_subblock_w,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4 for is_fp32_accumulate otherwise <= 8
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=transpose_mcast,
+        fused_activation=act,
+        fuse_batch=fuse_batch,
+    )

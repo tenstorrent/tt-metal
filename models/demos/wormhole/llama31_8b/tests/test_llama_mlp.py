@@ -5,14 +5,14 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_mlp import TtLlamaMLP
+from models.common.mlp import MLP
 from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    profiler,
 )
 from models.utility_functions import skip_for_grayskull
 
@@ -21,9 +21,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        # 4096,
-        # 1024, TODO: OOM L1; chunk?
-        512,
+        4096,
         128,
         32,
     ),
@@ -45,15 +43,14 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     )
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtLlamaMLP(
-        device=device,
-        args=model_args,
-        state_dict=state_dict,
+    tt_model = MLP(
+        device,
+        state_dict,
+        state_dict_prefix="layers.0.feed_forward",
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        dtype=dtype,
-        model_config=model_args.get_model_config(),
+        w1w3_dtype=ttnn.bfloat8_b,
     )
+
     torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
@@ -62,10 +59,14 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
 
     logger.info("Compilation pass for Llama_MLP")
     tt_output = tt_model(tt_input)
+    _ = ttnn.to_torch(tt_output)
 
     logger.info("Performance pass for Llama_MLP")
+    profiler.start("e2e")
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output)
+    profiler.end("e2e")
+    profiler.print()
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

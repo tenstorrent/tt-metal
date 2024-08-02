@@ -5,8 +5,8 @@ import torch
 import ttnn
 from typing import Optional
 from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
+from models.common.mlp import MLP
 
 
 class TtTransformerBlock(torch.nn.Module):
@@ -44,32 +44,26 @@ class TtTransformerBlock(torch.nn.Module):
             rot_mat=rot_mat,
             start_pos=start_pos,
         )
-        self.feed_forward = TtLlamaMLP(
+        self.feed_forward = MLP(
             device=device,
-            args=args,
             state_dict=state_dict,
+            state_dict_prefix=f"layers.{layer_num}.feed_forward",
             weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            dtype=dtype,
-            model_config=self.model_config,
+            w1w3_dtype=ttnn.bfloat8_b,
         )
         self.attention_norm = RMSNorm(
             device=device,
             dim=args.dim,
             state_dict=state_dict,
-            layer_num=layer_num,
+            state_dict_prefix=f"layers.{layer_num}.attention_norm",
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
-            weight_key="attention_norm",
         )
         self.ffn_norm = RMSNorm(
             device=device,
             dim=args.dim,
             state_dict=state_dict,
-            layer_num=layer_num,
+            state_dict_prefix=f"layers.{layer_num}.ffn_norm",
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
-            weight_key="ffn_norm",
         )
 
     def forward(

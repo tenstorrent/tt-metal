@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.common.modules import LightweightModule
+from models.common.modules import LightweightModule, WeightSetting
 
 
 TILE = 32
@@ -20,19 +20,12 @@ class RMSNorm(LightweightModule):
 
     Args:
         device: The device or DeviceMesh on which to perform the computations.
-        state_dict: The state dictionary containing the model parameters.
         dim: Input dimension (e.g. model hidden dimension size).
-        layer_num: The layer number to determine the weight key in the state dictionary.
-        weight_key: The key for retrieving the weight from the state dictionary.
+        state_dict: The state dictionary containing the model parameters.
+        state_dict_prefix: Prefix to the
         weight_cache_path: Optional path for caching the tilized weights.
-        weight_memory_config: Configuration for the weight memory, default is DRAM_MEMORY_CONFIG.
-        weight_dtype: The data type for the tensors, bfp8_b hits >0.999 PCC in the models we tested.
-        model_config: Optional configuration dictionary for the model.
         is_sharded: Sharded version is faster for some models but doesn't support all batch sizes.
         eps (float): Small value to avoid division by zero in normalization, default is 1e-05.
-
-    If model_config is provided, it must specify SHARDED_NORM_INPUT_MEMCFG, SHARDED_NORM_PRGM_CFG
-    and SHARDED_NORM_OUTPUT_MEMCFG. If not provided, default configurations will be generated.
     """
 
     def __init__(
@@ -40,67 +33,46 @@ class RMSNorm(LightweightModule):
         device,
         dim,
         state_dict,
-        weight_key,
-        weight_base="layers",
-        layer_num=None,
+        state_dict_prefix,
         weight_cache_path=None,
-        weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        weight_dtype=ttnn.bfloat8_b,
-        model_config=None,
         is_sharded=False,
-        eps: float = 1e-05,
+        eps=1e-05,
     ):
-        super().__init__()
+        super().__init__(device)
         self.eps = eps
         self.is_sharded = is_sharded
+        self.weight_settings = {
+            "weight": WeightSetting(
+                state_dict_prefix + ".weight",
+                ttnn.bfloat8_b,
+                conversion_fn=lambda t: t.unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim]),
+                mapper=ttnn.ReplicateTensorToMesh(device) if self.is_device_mesh else None,
+            ),
+        }
 
-        if layer_num is None:
-            weight_name = f"{weight_key}.weight"
-        elif weight_base is None:
-            weight_name = f"{layer_num}.{weight_key}.weight"
-        else:
-            weight_name = f"{weight_base}.{layer_num}.{weight_key}.weight"
-
-        torch_weight = state_dict[weight_name].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
-        cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
-
-        is_device_mesh = device.__class__.__name__ == "DeviceMesh"
-        self.weight = ttnn.as_tensor(
-            torch_weight,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=weight_memory_config,
-            cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_device_mesh else None,
-        )
+        self.load_weights(state_dict, weight_cache_path)
 
         if is_sharded:
-            if model_config:
-                self.input_config = model_config["SHARDED_NORM_INPUT_MEMCFG"]
-                self.program_config = model_config["SHARDED_NORM_PRGM_CFG"]
-                self.output_config = model_config["SHARDED_NORM_OUTPUT_MEMCFG"]
-            else:
-                assert (
-                    dim % SHARD_HEIGHT == 0
-                ), f"Input dimension dim ({dim}) must be a multiple of SHARD_HEIGHT ({SHARD_HEIGHT})"
-                shard_width_hidden_dim_across_32_cores = dim // SHARD_HEIGHT
-                core_grid = ttnn.CoreGrid(x=8, y=SHARD_HEIGHT // 8)
-                self.input_config = ttnn.create_sharded_memory_config(
-                    shape=(SHARD_HEIGHT, shard_width_hidden_dim_across_32_cores),
-                    core_grid=core_grid,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                self.program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=[core_grid.x, core_grid.y],
-                    subblock_w=shard_width_hidden_dim_across_32_cores // TILE,
-                    block_h=SHARD_HEIGHT // TILE,
-                    block_w=shard_width_hidden_dim_across_32_cores // TILE,
-                    inplace=False,
-                )
-                self.output_config = self.input_config
+            assert (
+                dim % SHARD_HEIGHT == 0
+            ), f"Input dimension dim ({dim}) must be a multiple of SHARD_HEIGHT ({SHARD_HEIGHT})"
+            shard_width_hidden_dim_across_32_cores = dim // SHARD_HEIGHT
+            core_grid = ttnn.CoreGrid(x=8, y=SHARD_HEIGHT // 8)
+            self.input_config = ttnn.create_sharded_memory_config(
+                shape=(SHARD_HEIGHT, shard_width_hidden_dim_across_32_cores),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[core_grid.x, core_grid.y],
+                subblock_w=shard_width_hidden_dim_across_32_cores // TILE,
+                block_h=SHARD_HEIGHT // TILE,
+                block_w=shard_width_hidden_dim_across_32_cores // TILE,
+                inplace=False,
+            )
+            self.output_config = self.input_config
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
         if self.is_sharded:  # sharded version converts from interleaved inputs and optionally back

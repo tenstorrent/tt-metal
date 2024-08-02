@@ -66,7 +66,6 @@ class RefModel(torch.nn.Module):
 )
 def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds):
     dim = 4096
-    dtype = ttnn.bfloat8_b
 
     reference_model = RefModel(dim=dim)
     state_dict = reference_model.state_dict()
@@ -75,7 +74,7 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
         device=device,
         dim=dim,
         state_dict=state_dict,
-        weight_key="rmsnorm",
+        state_dict_prefix="rmsnorm",
         is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
@@ -84,7 +83,7 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
     tt_input = ttnn.from_torch(
         input,
         device=device,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -110,7 +109,6 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
 )
 def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, reset_seeds):
     dim = 4096
-    dtype = ttnn.bfloat8_b
 
     reference_model = RefModel(dim=dim)
     state_dict = reference_model.state_dict()
@@ -119,7 +117,7 @@ def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, res
         device=t3k_device_mesh,
         dim=dim,
         state_dict=state_dict,
-        weight_key="rmsnorm",
+        state_dict_prefix="rmsnorm",
         is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
@@ -128,7 +126,7 @@ def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, res
     tt_input = ttnn.from_torch(
         input,
         device=t3k_device_mesh,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
     )
