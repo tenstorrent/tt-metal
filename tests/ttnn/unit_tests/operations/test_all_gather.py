@@ -445,7 +445,7 @@ def run_line_all_gather(
         (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
