@@ -293,10 +293,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.copy
 
-Tensor creation operations
-==========================
-
-.. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
 
 
 Broadcast and Reduce

@@ -101,7 +101,7 @@ ttnn.repeat_interleave_dim_0,200,0.039,0.043,0.375,0.01
 ttnn.repeat_interleave_dim_1,80,0.42,0.429,323.298,0.219
 ttnn.repeat_interleave_dim_2,80,0.152,0.154,150.628,0.076
 tt_lib.tensor.rpow,200,0.09,0.094,0.243,0.058
-tt_lib.tensor.split_last_dim_two_chunks_tiled,200,0.017,0.017,0.098,0.009
+ttnn.split,200,0.017,0.017,0.098,0.009
 ttnn.std_hw,200,0.139,0.148,0.463,0.084
 tt_lib.tensor.subalpha,200,0.12,0.135,0.35,0.077
 tt_lib.tensor.sum_dim_0,80,0.44,0.46,1051.11,0.292

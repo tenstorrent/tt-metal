@@ -2034,7 +2034,7 @@ all_unary_ops = [
         "name": "ttnn.full_like",
     },
     {
-        "op": tt_lib.tensor.split_last_dim_two_chunks_tiled,
+        "op": ttnn.split,
         "name": "tt_lib.tensor.split_last_dim_two_chunks_tiled",
     },
     {

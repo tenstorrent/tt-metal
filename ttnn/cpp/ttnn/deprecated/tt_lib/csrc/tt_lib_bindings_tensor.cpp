@@ -17,7 +17,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
@@ -483,39 +482,6 @@ void TensorModule(py::module& m_tensor) {
     )doc");
 
     // TMs
-    m_tensor.def(
-        "split_last_dim_two_chunks_tiled",
-        &split_last_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last dimension in two equal sized chunks. This assumes the last dim is tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-    )doc");
-
-    m_tensor.def(
-        "split_dim_two_chunks_tiled",
-        &split_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last or penultimate dimension in two equal sized chunks. This assumes the last dim is tile sized and penultimate dimension is also tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "dim", "Dimension", "integer", "Dimension to split over can only be 2 or 3", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
     m_tensor.def(
         "convert_conv_weight_tensor_to_tiled_layout",
         &convert_conv_weight_tensor_to_tiled_layout,
