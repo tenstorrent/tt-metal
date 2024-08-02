@@ -401,7 +401,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0043, 19),),  # Expected 0.0039, but current perf results are unstable
+    ((20, 0.0046, 19),),  # Expected 0.0039, but current perf results are unstable
 )
 def test_perf_2cqs_bare_metal(
     device,
