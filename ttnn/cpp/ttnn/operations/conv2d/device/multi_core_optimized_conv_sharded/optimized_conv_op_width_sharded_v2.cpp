@@ -499,7 +499,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
-    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32*total_num_cores);
+    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32*total_num_cores*per_core_num_blocks_act_w);
     TT_ASSERT(input_channels_padded>=(TILE_HEIGHT*total_num_cores));
     TT_ASSERT(input_channels_padded%(TILE_HEIGHT*total_num_cores)==0);
 
@@ -649,6 +649,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "weight_block_h_ntiles: {}", weight_block_h_ntiles);
+        log_debug(LogOp, "weight_block_in_channels_ntiles: {}", weight_block_in_channels_ntiles);
         log_debug(LogOp, "has_bias: {}", has_bias);
         log_debug(LogOp, "bias_dram_addr: {}", bias_dram_addr);
         log_debug(LogOp, "bias_ntiles: {}", bias_ntiles);
@@ -718,8 +719,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         weight_block_num_tiles,                                     //weight_block_num_tiles
         weight_matrix_width_ntiles,                                 //weight_matrix_width_ntiles
         (weight_matrix_width_ntiles * input_channels_padded)/32,    //weight_next_channel_stride_h
-        weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_stride_h
-        total_num_cores*per_core_num_blocks_act_w                   //weights_height_num_blocks
+        weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_this_core_stride_h
+        weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
+        per_core_num_blocks_act_w,
+        total_num_cores,                                            //other_core_weight_height_blocks
+        per_core_num_blocks_act_w                                   //this_core_weight_height_blocks
     };
 
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
