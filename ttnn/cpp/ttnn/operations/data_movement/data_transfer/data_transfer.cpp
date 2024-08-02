@@ -16,7 +16,7 @@ Tensor DataTransferToHostOperation::operator()(const Tensor &input_tensor) {
 }
 
 
-Tensor DataTransferToDeviceOperation::operator()(const Tensor &input_tensor, Device* device, const std::optional<MemoryConfig>& option_memory_config) {
+Tensor DataTransferToDeviceOperation::operator()(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config) {
     TT_FATAL(device != nullptr);
 
     if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
@@ -27,7 +27,6 @@ Tensor DataTransferToDeviceOperation::operator()(const Tensor &input_tensor, Dev
         return {input_tensor};
     }
 
-    const auto memory_config = option_memory_config.value_or(input_tensor.memory_config());
     return input_tensor.to(device, memory_config);
 }
 

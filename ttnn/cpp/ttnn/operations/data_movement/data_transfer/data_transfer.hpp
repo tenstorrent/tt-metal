@@ -14,7 +14,7 @@ struct DataTransferToHostOperation {
 };
 
 struct DataTransferToDeviceOperation {
-    static Tensor operator()(const Tensor &input_tensor, Device* device, const std::optional<MemoryConfig>& mem_config = std::nullopt);
+    static Tensor operator()(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config);
 };
 
 } // operations::data_movement
