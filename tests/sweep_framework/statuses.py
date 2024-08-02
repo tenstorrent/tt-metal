@@ -12,6 +12,7 @@ class TestStatus(Enum):
     NOT_RUN = 3
     FAIL_L1_OUT_OF_MEM = 4
     FAIL_WATCHER = 5
+    FAIL_COMPOSITE_OP_PERF = 6
 
 
 class VectorValidity(Enum):

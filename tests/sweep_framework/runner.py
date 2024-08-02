@@ -9,7 +9,6 @@ import importlib
 import datetime
 import os
 import enlighten
-import tt_lib as ttl
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report, PROFILER_LOGS_DIR
 from multiprocessing import Process, Queue
 from queue import Empty
@@ -37,10 +36,28 @@ def get_username():
     return os.environ["USER"]
 
 
+def gather_single_test_perf(device):
+    import tt_lib as ttl
+
+    ttl.device.DumpDeviceProfiler(device)
+    opPerfData = get_device_data_generate_report(
+        PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
+    )
+    if len(opPerfData) != 1:
+        print("SWEEPS: Composite op detected in device perf measurement. Failing.")
+        return None
+    else:
+        return opPerfData[0]
+
+
 def run(test_module, input_queue, output_queue):
+    import tt_lib as ttl
+
     device = ttnn.open_device(0)
+    tests_executed = 0
     try:
         while True:
+            tests_executed += 1
             test_vector = input_queue.get(block=True, timeout=1)
             test_vector = deserialize_vector(test_vector)
             try:
@@ -54,7 +71,13 @@ def run(test_module, input_queue, output_queue):
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
-            output_queue.put([status, message, e2e_perf])
+            if MEASURE_DEVICE_PERF == "single" and status:
+                perf_result = gather_single_test_perf(device)
+                output_queue.put([status, message, e2e_perf, perf_result])
+            else:
+                output_queue.put([status, message, e2e_perf, None])
+            if tests_executed == 1000 and MEASURE_DEVICE_PERF == "batch":
+                ttl.device.DumpDeviceProfiler(device)
     except Empty as e:
         ttnn.close_device(device)
         exit(0)
@@ -68,21 +91,23 @@ def get_timeout(test_module):
     return timeout
 
 
-def assign_perf_data(results, tests_executed, tests_profiled):
+def assign_batch_device_perf(results):
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
-    assert len(opPerfData) == tests_executed - tests_profiled - len(
-        True for test in results[tests_profiled:] if test["status"] == TestStatus.NOT_RUN
-    ), "SWEEPS: Device perf data length does not match expected tests run."
+    assert len(opPerfData) == len(
+        [True for test in results if test["status"] == TestStatus.PASS]
+    ), "SWEEPS: Device perf data length does not match expected number of tests run. This could be due to composite ops within the suite, or exceptions within the test causing extraneous data."
 
-    for result in results[tests_profiled:]:
-        if result["status"] == TestStatus.NOT_RUN:
+    for result in results:
+        if result["status"] != TestStatus.PASS:
             result["device_perf"] = {}
             continue
         result["device_perf"] = opPerfData.pop(0)
 
-    assert len(opPerfData) == 0, "SWEEPS: Device perf data length does not match expected tests run."
+    assert (
+        len(opPerfData) == 0
+    ), "SWEEPS: Device perf data length does not match expected number of tests run. This could be due to composite ops within the suite, or exceptions within the test causing extraneous data."
 
 
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
@@ -96,7 +121,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
             continue
-        tests_executed += 1
         result = dict()
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -116,8 +140,15 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf = response[0], response[1], response[2]
-                if status:
+                status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
+                if status and MEASURE_DEVICE_PERF == "single" and device_perf is None:
+                    result["status"] = TestStatus.FAIL_COMPOSITE_OP_PERF
+                    result["message"] = message
+                elif status and MEASURE_DEVICE_PERF == "single":
+                    result["status"] = TestStatus.PASS
+                    result["message"] = message
+                    result["device_perf"] = device_perf
+                elif status:
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                 else:
@@ -149,7 +180,8 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
     if p is not None:
         p.join()
-    assign_perf_data(results, tests_executed, tests_profiled)
+    if MEASURE_DEVICE_PERF == "batch":
+        assign_batch_device_perf(results)
 
     suite_pbar.close()
     return results
@@ -281,6 +313,7 @@ def export_test_results(header_info, results):
         result = header_info[i]
         for elem in results[i].keys():
             if elem == "device_perf":
+                result[elem] = results[i][elem]
                 continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
@@ -298,6 +331,18 @@ def disable_watcher():
     print("SWEEPS: Disabling Watcher")
     os.environ.pop("TT_METAL_WATCHER")
     os.environ.pop("TT_METAL_WATCHER_APPEND")
+
+
+def enable_profiler():
+    print("SWEEPS: Enabling Device Profiler")
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+    os.environ["ENABLE_TRACY"] = "1"
+
+
+def disable_profiler():
+    print("SWEEPS: Disabling Device Profiler")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER")
+    os.environ.pop("ENABLE_TRACY")
 
 
 if __name__ == "__main__":
@@ -328,6 +373,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--device-perf",
+        required=False,
+        default="single",
+        choices=["single", "batch"],
+        help="Measure device perf using device profiler. REQUIRES PROFILER BUILD!",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         required=False,
@@ -351,11 +404,17 @@ if __name__ == "__main__":
     global MEASURE_PERF
     MEASURE_PERF = args.perf
 
+    global MEASURE_DEVICE_PERF
+    MEASURE_DEVICE_PERF = args.device_perf
+
     global DRY_RUN
     DRY_RUN = args.dry_run
 
     if args.watcher:
         enable_watcher()
+
+    if MEASURE_DEVICE_PERF:
+        enable_profiler()
 
     from ttnn import *
     from serialize import *
@@ -364,3 +423,6 @@ if __name__ == "__main__":
 
     if args.watcher:
         disable_watcher()
+
+    if MEASURE_DEVICE_PERF:
+        disable_profiler()
