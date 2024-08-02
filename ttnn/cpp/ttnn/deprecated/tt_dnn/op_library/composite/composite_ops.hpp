@@ -27,22 +27,10 @@ using binary_tensor_op_t = Tensor(const Tensor& a, const Tensor& b);
 // Note: inline doesn't allow pybind to work well so we keep few function not inlined.
 
 
-// Function: MAC
-// compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
-// being a scalar or tensor
-Tensor mac(
-    const Tensor& a,
-    const Tensor& b,
-    const Tensor& c,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor mac(
-    const Tensor& a, float b, float c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// compute polyval by Horner's rule
-Tensor polyval(
-    const Tensor& input_tensor,
-    std::vector<float> coeffs,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor celu(
+    const Tensor& x, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 
 Tensor unary_rdiv_trunc(
     float value,
@@ -55,26 +43,112 @@ Tensor rfloor_div(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
-// lerp(input, end, weight) = start + weight * (end - start), weight is float
-Tensor lerp(
-    const Tensor& input_a,
-    const Tensor& input_b,
+
+// cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
+Tensor cbrt(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// on-device tensor creation 0s like @reference_tensor
+Tensor zeros_like(
+    uint8_t queue_id,
+    const Tensor& reference_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+
+Tensor zeros_like(
+    const Tensor& reference_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+
+// on-device tensor creation 1s like @reference_tensor
+Tensor ones_like(
+    const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// on-device tensor creation with value like @reference_tensor
+Tensor full_like(
+    uint8_t queue_id,
+    const Tensor& reference_tensor,
     float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+Tensor full_like(
+    const Tensor& reference_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+
+// on-device tensor creation 0s with shape
+Tensor empty(
+    const Shape shape,
+    DataType data_type = DataType::BFLOAT16,
+    Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// lerp(input, end, weight) = start + weight * (end - start), weight is tensor
-Tensor lerp(
+// on-device tensor creation 0s with shape
+Tensor zeros(
+    const Shape shape,
+    DataType data_type = DataType::BFLOAT16,
+    Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// on-device tensor creation 1s with shape
+Tensor ones(
+    const Shape shape,
+    DataType data_type = DataType::BFLOAT16,
+    Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor arange(
+    int32_t start,
+    int32_t end,
+    int32_t step = 1,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// on-device tensor creation with shape and filled with value
+Tensor full(
+    const Shape shape,
+    float value,
+    DataType data_type = DataType::BFLOAT16,
+    Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// machine epsilon
+Tensor eps(
+    const Shape shape,
+    Layout layout,
+    Device* device,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// logit(input, eps)=log(input / 1 - input)
+Tensor logit(
+    const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor logical_xori(
     const Tensor& input_a,
-    const Tensor& input_b,
-    const Tensor& input_c,
+    float immediate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor scatter(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+/** hyperbolic operations **/
 
-Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// digamma
+Tensor digamma(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// cosh(x) = (exp(x) + exp(-x))/2
+Tensor cosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+/** Inverse hyperbolic operations **/
+// asinh(x) = log(x + sqrt(x^2 + 1))
+Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// acosh(x) = log(x + sqrt(x^2 - 1))
+Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// atanh[x] = 0.5 * ln((1 + x) / (1 - x))
+Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
 }  // namespace tt_metal

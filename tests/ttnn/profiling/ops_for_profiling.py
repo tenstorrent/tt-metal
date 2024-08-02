@@ -2570,8 +2570,8 @@ def linear_shape_func(input_shape):
 
 all_ternary_ops = [
     {
-        "op": tt_lib.tensor.mac,
-        "name": "tt_lib.tensor.mac",
+        "op": ttnn.mac,
+        "name": "ttnn.mac",
     },
     {
         "op": ttnn.where,

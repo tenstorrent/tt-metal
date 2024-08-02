@@ -79,7 +79,7 @@ struct ExecuteBinaryCompositeOpsDiv
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
-        std::string round_mode = "None",
+        const std::string& round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
     }
@@ -87,7 +87,7 @@ struct ExecuteBinaryCompositeOpsDiv
         const Tensor& input_tensor_a,
         float value,
         bool accurate_mode = false,
-        std::string round_mode = "None",
+        const std::string& round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, accurate_mode, round_mode, memory_config);
     }
