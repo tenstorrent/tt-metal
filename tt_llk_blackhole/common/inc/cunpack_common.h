@@ -241,9 +241,17 @@ namespace ckernel::unpacker
                                    ((uint)unpA_dst_format_masked == (uint)DataFormat::Int32) ||
                                    ((uint)unpB_dst_format_masked == (uint)DataFormat::Int32);
 
-      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
+      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK |
+                                       ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
       alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpA_dst_format_masked;
       alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format_masked;
+
+      if ((uint)unpA_src_format == (uint)DataFormat::UInt8) {
+         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
+      }
+      if ((uint)unpB_src_format == (uint)DataFormat::UInt8) {
+         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 1;
+      }
 
       // FP32 accumulation and SFPU to read dest as FP32
       // NOTE: This assumes these config fields are adjacent and in same register!!

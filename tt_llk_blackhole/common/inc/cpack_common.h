@@ -248,6 +248,9 @@ namespace ckernel::packer
                                                       (pack_output_src_format == (uint)DataFormat::Int32) |
                                                       (pack_output_src_format == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
+      if (pack_dst_format == (uint)DataFormat::UInt8) {
+         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
+      }
 
       //Round to 10 bit mantissa from fp32 dest
       if(is_fp32_dest_acc_en && (pack_output_src_format == (uint)DataFormat::Float16)) {
@@ -349,7 +352,7 @@ namespace ckernel::packer
 
       t6_mutex_release(mutex::REG_RMW);
 
-      set_packer_config<is_fp32_dest_acc_en>(pack_output_src_format, pack_output_dst_format, num_faces, partial_face);
+      set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
 
       // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
       // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
