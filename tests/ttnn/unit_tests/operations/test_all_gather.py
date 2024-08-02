@@ -582,8 +582,7 @@ def run_line_all_gather_instances(
         # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        (4, 2, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
@@ -603,10 +602,9 @@ def run_line_all_gather_instances(
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
-def test_line_all_gather_on_t3000_post_commit_instances(
+def test_line_all_gather_on_t3000_post_commit(
     all_devices,
     num_devices,
-    num_instances,
     input_shape,
     dim,
     num_links,
@@ -618,10 +616,9 @@ def test_line_all_gather_on_t3000_post_commit_instances(
     enable_async,
     num_iters=1,
 ):
-    run_line_all_gather_instances(
+    run_line_all_gather(
         all_devices,
         num_devices,
-        num_instances,
         input_shape,
         dim,
         num_links,
