@@ -20,6 +20,11 @@
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/operations/eltwise/complex_binary_backward/device/complex_binary_backward_op.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -293,12 +298,6 @@ std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, co
     return grad_tensor;
 }
 
-std::vector<Tensor> _add_bw(
-    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
 
 std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -1204,7 +1203,8 @@ std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const std
     return grad_tensor;
 }
 
-std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardRecip::operator()(
+    const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = ttnn::full_like(input, std::numeric_limits<float>::infinity());
     Tensor t_nan = ttnn::full_like(input, std::nanf(""));
@@ -1222,6 +1222,48 @@ std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, cons
         output_mem_config));
     return grad_tensor;
 }
+
+std::vector<ComplexTensor> ExecuteUnaryBackwardRecip::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor condition_nan = ttnn::logical_and(ttnn::eqz(input.real(),output_mem_config), ttnn::eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
+    ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
+    ComplexTensor inp_recip = ttnn::operations::complex_unary::_reciprocal(input, output_mem_config);
+    ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config), output_mem_config) ;
+    neg_grad.deallocate();
+    inp_recip.deallocate();
+    Tensor grad_inp_r = where(condition_nan, ttnn::operations::creation::full_like(input.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), grad_inp.real(), output_mem_config);
+    Tensor grad_inp_i = where(condition_nan, ttnn::operations::creation::full_like(input.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), grad_inp.imag(), output_mem_config);
+    condition_nan.deallocate();
+    grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
+    grad_inp_r.deallocate();
+    grad_inp_i.deallocate();
+    grad_tensor.emplace_back(grad_inp);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteUnaryBackwardAbs::operator()(
+    const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteUnaryBackwardAbs::operator()(
+    const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor result = ttnn::operations::complex_unary::_abs(input, output_mem_config);
+    Tensor grad_inp_r = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    Tensor grad_inp_i = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
+    result.deallocate();
+    grad_inp_r.deallocate();
+    grad_inp_i.deallocate();
+    grad_tensor.emplace_back(grad_inp);
+    return grad_tensor;
+}
+
 
 std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
