@@ -319,7 +319,7 @@ def run_conv_with_split(
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 2),
         (256, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 2),
-        # (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8),
+        (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 4),
         # (128, 256, 8, 8, 3, 3, 1, 1, 1, 1),
     ),
 )
@@ -359,11 +359,11 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
-    torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 128
+    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 128
     # torch_input_tensor_nchw = torch.tensor([-1,0,1,0]*(input_channels//4)).reshape([1, input_channels, 1, 1])
     # torch_input_tensor_nchw =  torch.tensor([-1,0,1,0]*((batch_size * input_height * input_width)//4)).reshape([batch_size, 1, input_height, input_width])
 
-    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     # torch_input_tensor_nchw += (
     #     torch.tensor(range(0, batch_size * input_height * input_width))
@@ -410,7 +410,6 @@ def test_conv_ws(
     # ncores = 4
     shard_grid = get_shard_grid_from_num_cores(ncores, device)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-    print(type(shard_grid))
     shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid, (input_height * input_width * batch_size, input_channels // ncores), shard_orientation, False
     )
@@ -505,8 +504,6 @@ def test_conv_ws(
         pcc = 0.998
     pcc = 0.95
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    print(torch_output_tensor)
-    print(torch_out_golden_tensor)
     print("PCC output ", pcc_msg)
     assert passing
 
