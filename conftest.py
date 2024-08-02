@@ -271,36 +271,47 @@ def reset_default_device():
     ttl.device.SetDefaultDevice(device)
 
 
-@pytest.fixture(scope="function")
-def use_program_cache(request):
-    import tt_lib as ttl
-
+def get_devices(request):
     if "device" in request.fixturenames:
-        dev = request.getfixturevalue("device")
-        dev.enable_program_cache()
+        devices = [request.getfixturevalue("device")]
     elif "all_devices" in request.fixturenames:
         devices = request.getfixturevalue("all_devices")
-        for dev in devices:
-            dev.enable_program_cache()
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
-        for dev in devices:
-            dev.enable_program_cache()
     elif "device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("device_mesh").get_devices()
     elif "t3k_device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("t3k_device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("t3k_device_mesh").get_devices()
     elif "pcie_device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("pcie_device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("pcie_device_mesh").get_devices()
     else:
+        devices = []
+    return devices
+
+
+@pytest.fixture(scope="function")
+def use_program_cache(request):
+    devices = get_devices(request)
+    if not devices:
         logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
+    for dev in devices:
+        dev.enable_program_cache()
     yield
+    for dev in devices:
+        dev.disable_and_clear_program_cache()
+
+
+@pytest.fixture(scope="function")
+def enable_async_mode(request):
+    devices = get_devices(request)
+    if not devices:
+        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
+
+    for dev in devices:
+        dev.enable_async(request.param)
+    yield request.param
+    for dev in devices:
+        dev.enable_async(False)
 
 
 @pytest.fixture(scope="function")
