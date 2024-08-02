@@ -7,7 +7,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/operations/upsample/upsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 

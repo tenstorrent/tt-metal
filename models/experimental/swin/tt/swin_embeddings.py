@@ -44,7 +44,7 @@ class TtSwinEmbeddings(nn.Module):
         self.norm = fallback_ops.LayerNorm(gamma, beta, normalized_shape=config.embed_dim, eps=config.layer_norm_eps)
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def forward(
         self,

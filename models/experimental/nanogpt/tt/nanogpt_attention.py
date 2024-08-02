@@ -48,7 +48,7 @@ class TtCausalSelfAttention(nn.Module):
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd
 
-        temp_bias = ttnn.tril(tt_lib.tensor.ones([1, 1, self.block_size, self.block_size]))
+        temp_bias = ttnn.tril(ttnn.ones([1, 1, self.block_size, self.block_size]))
         temp_bias = tt_to_torch_tensor(temp_bias)
         self.register_buffer(
             "bias",
@@ -69,7 +69,7 @@ class TtCausalSelfAttention(nn.Module):
         )
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         (

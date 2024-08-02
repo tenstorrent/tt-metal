@@ -5,6 +5,7 @@
 import torch
 from torch import nn
 import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from typing import List, Optional, Tuple, Dict, OrderedDict
 
@@ -102,7 +103,7 @@ class TtSSD(nn.Module):
 
     def get_in_channels(self, backbone: TtSSDLiteFeatureExtractorMobileNet):
         size = (320, 320)
-        temporary_image = tt_lib.tensor.ones([1, 3, size[1], size[0]], device=self.device)
+        temporary_image = ttnn.ones([1, 3, size[1], size[0]], device=self.device)
         backbone.eval()
         features = backbone(temporary_image)
         out_channels = [tensor.get_legacy_shape()[1] for i, tensor in features.items()]

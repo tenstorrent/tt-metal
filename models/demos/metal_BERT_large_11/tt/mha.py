@@ -138,7 +138,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     def mha_(activation, attention_mask):
         # TODO: Remove hardcoded shape hack
         if reserve_split_heads_shape is not None:
-            temp = tt_lib.tensor.empty(
+            temp = ttnn.empty(
                 reserve_split_heads_shape,
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR,

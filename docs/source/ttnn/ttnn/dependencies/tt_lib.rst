@@ -300,23 +300,8 @@ but in general retaining the data.
 Tensor creation operations
 ==========================
 
-.. autofunction:: tt_lib.tensor.arange
-
-.. autofunction:: tt_lib.tensor.full
-
-.. autofunction:: tt_lib.tensor.ones
-
-.. autofunction:: tt_lib.tensor.ones_like
-
-.. autofunction:: tt_lib.tensor.zeros
-
-.. autofunction:: tt_lib.tensor.zeros_like
-
-.. autofunction:: tt_lib.tensor.full_like
-
 .. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
 
-.. autofunction:: tt_lib.tensor.empty
 
 Broadcast and Reduce
 ====================

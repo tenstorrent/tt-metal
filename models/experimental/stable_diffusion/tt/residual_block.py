@@ -205,7 +205,7 @@ class TtResnetBlock2D(nn.Module):
 
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor
-        output_sc_recip = ttl.tensor.full(input_tensor.get_legacy_shape(), output_sc_recip)
+        output_sc_recip = ttnn.full(input_tensor.get_legacy_shape(), output_sc_recip)
         output_tensor = ttnn.add(input_tensor, hidden_states)
         output_tensor = ttnn.mul(output_tensor, output_sc_recip)
 

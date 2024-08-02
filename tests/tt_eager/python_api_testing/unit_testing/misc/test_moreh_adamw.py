@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 import tt_lib as ttl
+import ttnn
 import pytest
 from models.utility_functions import (
     skip_for_wormhole_b0,
@@ -35,7 +36,7 @@ def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max
         return ret
 
     def create_empty_tensor(x, device):
-        ret = ttl.tensor.empty(x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+        ret = ttnn.empty(x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
         return ret
 
     # input tensors

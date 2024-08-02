@@ -11,16 +11,16 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 namespace ttnn::operations::unary{
 
@@ -70,7 +70,7 @@ Tensor _power(uint8_t queue_id, const Tensor& input, uint32_t exponent, const st
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-   Tensor t_one = ttnn::ones_like(input_a);
+   Tensor t_one = ttnn::full_like(input_a, 1.0f);
    Tensor t_result(input_a);
    {
        Tensor ln_res(input_a);
@@ -281,7 +281,7 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
             {
-                Tensor t_one = ttnn::ones_like(x);
+                Tensor t_one = ttnn::full_like(x, 1.0f);
                 result = ttnn::where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result);
             }
             {
@@ -296,7 +296,7 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
 // log1p 1
 // use transformation y = log(1.0 + x) by broadcast
 Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_one = ttnn::ones_like(x);
+    Tensor t_one = ttnn::full_like(x, 1.0f);
     Tensor x_1 = ttnn::add(t_one, x, std::nullopt, output_mem_config);
     Tensor result_log1p = ttnn::log(x_1, output_mem_config);
     return result_log1p;
@@ -436,7 +436,7 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
 Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
    Tensor a_t = ttnn::full_like(a,value_1);
    Tensor b_t = ttnn::full_like(a,value_2);
-   Tensor a_mac = tt::tt_metal::mac(a, a_t, b_t);  // multiply and add.
+   Tensor a_mac = ttnn::mac(a, a_t, b_t);  // multiply and add.
    Tensor a_clip = relu_max(a_mac, 1.0f);
    return a_clip;
 }

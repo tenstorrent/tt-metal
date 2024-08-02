@@ -186,7 +186,7 @@ class TtCrossAttention(nn.Module):
         #                                 self.scale,
         #                                 self.scale)
 
-        scale_tensor = ttl.tensor.full(temp.get_legacy_shape(), self.scale)
+        scale_tensor = ttnn.full(temp.get_legacy_shape(), self.scale)
         attention_scores = ttnn.mul(scale_tensor, temp)
 
         if attention_mask is not None:

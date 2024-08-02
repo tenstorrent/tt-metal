@@ -22,9 +22,11 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/creation.hpp"
 
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+
 namespace ttnn::operations::binary_backward {
 
 std::vector<ttnn::Tensor> _atan2_bw(
@@ -275,26 +277,18 @@ std::vector<std::optional<Tensor>> _eq_bw(
     std::vector<std::optional<Tensor>> result;
 
     if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, input_grad);
-        } else {
-            input_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
-        }
+        input_grad = ttnn::full_like(input, 0.0f);
         result.emplace_back(input_grad);
     } else {
         result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, other_grad);
-        } else {
-            other_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
-        }
+        other_grad = ttnn::full_like(grad, 0.0f);
         result.emplace_back(other_grad);
     } else {
         result.emplace_back(std::nullopt);
     }
-    return std::move(result);
+    return result;
 }
 
 std::vector<ttnn::Tensor> _eq_bw_inter(

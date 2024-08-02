@@ -67,7 +67,7 @@ class TtGPT(nn.Module):
         assert (
             t <= self.config.block_size
         ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = tt_lib.tensor.arange(0, t, 1)
+        pos = ttnn.arange(0, t, 1)
         pos = tt_to_torch_tensor(pos)
         pos = pos.squeeze(0).squeeze(0)
         pos = pos.to(dtype=torch.int64)

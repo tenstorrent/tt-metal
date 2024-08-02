@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
-
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/run_operation.hpp"
 

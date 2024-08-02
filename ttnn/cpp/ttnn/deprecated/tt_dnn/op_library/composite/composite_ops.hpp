@@ -74,86 +74,8 @@ Tensor scatter(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// on-device tensor creation 0s like @reference_tensor
-Tensor zeros_like(
-    uint8_t queue_id,
-    const Tensor& reference_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor= std::nullopt);
-
-Tensor zeros_like(
-    const Tensor& reference_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor= std::nullopt);
-
-// on-device tensor creation 1s like @reference_tensor
-Tensor ones_like(
-    const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// on-device tensor creation with value like @reference_tensor
-Tensor full_like(
-    uint8_t queue_id,
-    const Tensor& reference_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor= std::nullopt);
-Tensor full_like(
-    const Tensor& reference_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<Tensor> output_tensor= std::nullopt);
-
-// on-device tensor creation 0s with shape
-Tensor empty(
-    const Shape shape,
-    DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// on-device tensor creation 0s with shape
-Tensor zeros(
-    const Shape shape,
-    DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// on-device tensor creation 1s with shape
-Tensor ones(
-    const Shape shape,
-    DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor arange(
-    int32_t start,
-    int32_t end,
-    int32_t step = 1,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// on-device tensor creation with shape and filled with value
-Tensor full(
-    const Shape shape,
-    float value,
-    DataType data_type = DataType::BFLOAT16,
-    Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// machine epsilon
-Tensor eps(
-    const Shape shape,
-    Layout layout,
-    Device* device,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// on-device tensor creation with shape and filled with value
-Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config);
 
 }  // namespace tt_metal
 

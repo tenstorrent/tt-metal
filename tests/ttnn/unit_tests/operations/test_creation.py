@@ -157,7 +157,9 @@ def test_arange(device, start, end, step):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.arange(input_tensor.shape[0], input_tensor.shape[1], input_tensor.shape[2], device)
+    output_tensor = ttnn.arange(
+        input_tensor.shape[0], input_tensor.shape[1], input_tensor.shape[2], ttnn.bfloat16, device
+    )
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
