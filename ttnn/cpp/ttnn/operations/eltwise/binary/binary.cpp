@@ -217,6 +217,14 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
 }
 
+template <BinaryOpType binary_op_type, bool in_place>
+ComplexTensor BinaryOperation<binary_op_type, in_place>::operator()(
+    const ComplexTensor &input_a,
+    const ComplexTensor &input_b,
+    const ttnn::MemoryConfig &output_mem_config) {
+    return ComplexTensor({ ttnn::add(input_a[0], input_b[0], std::nullopt, output_mem_config),
+             ttnn::add(input_a[1], input_b[1], std::nullopt, output_mem_config) });
+}
 
 template <BinaryOpType binary_op_type, bool in_place>
 Tensor RelationalBinary<binary_op_type, in_place>::operator()(

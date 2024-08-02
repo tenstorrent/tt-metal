@@ -58,6 +58,11 @@ struct BinaryOperation {
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static ComplexTensor operator()(
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
 };
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -113,7 +118,7 @@ struct RelationalBinary {
 }  // binary
 }  // operations
 
-constexpr auto add = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add = ttnn::register_operation<
     "ttnn::add",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
