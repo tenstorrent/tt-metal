@@ -80,7 +80,7 @@ uint32_t get_l1_size(tt::ARCH arch);
 
 double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_clock);
 
-tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, uint32_t N, uint32_t K);
+std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, uint32_t N, uint32_t K);
 
 uint32_t get_in0_block_w(
     uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t Kt, uint32_t single_tile_size, uint32_t l1_size);
@@ -88,11 +88,11 @@ uint32_t get_in0_block_w(
 CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
 
-tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
+std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
+std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
-tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
     uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size);
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val);
@@ -711,7 +711,7 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     return rpeak_tflops;
 }
 
-tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, uint32_t N, uint32_t K) {
+std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, uint32_t N, uint32_t K) {
     auto align_to_tile = [](uint32_t value) -> uint32_t {
         return ((value + (constants::TILE_WIDTH - 1)) / constants::TILE_WIDTH) * constants::TILE_WIDTH;
     };
@@ -772,7 +772,7 @@ CoreCoord get_core_range(
     return core_range;
 }
 
-tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
+std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
@@ -787,8 +787,8 @@ tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     return {math_fidelity, fp32_dest_acc_en};
 }
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice = 0) {
-    constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
+std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice = 0) {
+    constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
         {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},
         {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
     }};
@@ -810,7 +810,7 @@ tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t
     return {1, 1};
 }
 
-tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
     uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size) {
     uint32_t num_buffer = 2;  // double buffering
     uint32_t in0_cb_addr = L1_UNRESERVED_BASE;

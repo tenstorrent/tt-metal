@@ -151,9 +151,9 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
 
-    vector<unique_ptr<Buffer>> buffers;
-    vector<vector<uint32_t>> srcs;
-    vector<vector<uint32_t>> dsts;
+    std::vector<std::unique_ptr<Buffer>> buffers;
+    std::vector<std::vector<uint32_t>> srcs;
+    std::vector<std::vector<uint32_t>> dsts;
     while (num_pages_left) {
         uint32_t num_pages = std::min(rand() % (config.max_num_pages_per_buffer) + 1, num_pages_left);
         num_pages_left -= num_pages;
@@ -170,7 +170,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buftype = BufferType::L1;
         }
 
-        unique_ptr<Buffer> buf;
+        std::unique_ptr<Buffer> buf;
         try {
             buf = std::make_unique<Buffer>(device, buf_size, config.page_size, buftype);
         } catch (...) {

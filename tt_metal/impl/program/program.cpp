@@ -580,7 +580,7 @@ void Program::populate_dispatch_data(Device *device) {
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
 
     auto extract_dst_noc_unicast_info =
-        [&device](const set<CoreRange> &ranges, const CoreType core_type) -> vector<pair<transfer_info_cores, uint32_t>> {
+        [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {

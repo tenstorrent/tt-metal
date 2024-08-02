@@ -14,7 +14,6 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "math.hpp"
 
-using namespace std;
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED32_SWIZZLED = 1, // row-major of tiles 32x32, each tile is row-major-swizzled
@@ -172,7 +171,7 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::v
 }
 
 struct TensAddr {
-    vector<std::uint32_t> sh;
+    std::vector<std::uint32_t> sh;
 
     std::uint32_t numel() const {
         std::uint32_t prod = 1;
@@ -181,7 +180,7 @@ struct TensAddr {
         return prod;
     }
 
-    TensAddr(vector<std::uint32_t> shape) : sh(shape) {}
+    TensAddr(std::vector<std::uint32_t> shape) : sh(shape) {}
     int offs(int n, int c, int h, int w) {
         TT_ASSERT(std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] && std::uint32_t(w) < sh[3]);
         return w + sh[3]*h + sh[2]*sh[3]*c + sh[1]*sh[2]*sh[3]*n;
@@ -190,7 +189,7 @@ struct TensAddr {
 
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout(
-    const BufferType<T>& inp, const vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
+    const BufferType<T>& inp, const std::vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
     ZoneScoped;
     switch (inL) {
         case TILED32_SWIZZLED:
@@ -223,5 +222,5 @@ inline std::vector<T> convert_layout(
         default:
             TT_ASSERT(false && "Unsupported conversion");
     }
-    return vector<T>();
+    return std::vector<T>();
 }
