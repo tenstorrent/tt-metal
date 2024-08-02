@@ -699,8 +699,10 @@ all_binary_ops = [
         "name": "ttnn.nextafter",
     },
     {
-        "op": tt_lib.tensor.conj_bw,
-        "name": "tt_lib.tensor.conj_bw",
+        "op": ttnn.conj_bw,
+        "name": "ttnn.conj_bw",
+        "is_complex": [True, True],
+        "need_out_mem_cfg": True,
     },
     {
         "op": unary_add_bw,
@@ -998,12 +1000,16 @@ all_binary_ops = [
         "name": "ttnn.remainder_bw",
     },
     {
-        "op": tt_lib.tensor.imag_bw,
-        "name": "tt_lib.tensor.imag_bw",
+        "op": ttnn.imag_bw,
+        "name": "ttnn.imag_bw",
+        "is_complex": [False, True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": tt_lib.tensor.real_bw,
-        "name": "tt_lib.tensor.real_bw",
+        "op": ttnn.real_bw,
+        "name": "ttnn.real_bw",
+        "is_complex": [False, True],
+        "need_out_mem_cfg": True,
     },
     {
         "op": ttnn.multigammaln_bw,
