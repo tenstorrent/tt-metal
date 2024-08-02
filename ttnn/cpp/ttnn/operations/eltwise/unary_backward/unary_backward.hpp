@@ -513,10 +513,6 @@ constexpr auto hardtanh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
         operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>();
 
-constexpr auto div_bw = ttnn::register_operation<
-    "ttnn::div_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::DIV_BW>>();
 constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
     operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<

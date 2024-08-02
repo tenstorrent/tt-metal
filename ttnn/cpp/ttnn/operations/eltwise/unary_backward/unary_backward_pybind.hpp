@@ -951,17 +951,6 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward_float_string_default(
         module,
-        ttnn::div_bw,
-        "scalar",
-        "Denominator value",
-        "round_mode",
-        "Mode of Rounding",
-        "None",
-        R"doc(Performs backward operations for division on :attr:`input_tensor` and :attr:`scalar` or :attr:`input_tensor_a` and :attr:`input_tensor_b`, with given :attr:`grad_tensor` using given :attr:`round_mode`.
-        :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc");
-
-    detail::bind_unary_backward_float_string_default(
-        module,
         ttnn::rdiv_bw,
         "scalar",
         "divisor",
