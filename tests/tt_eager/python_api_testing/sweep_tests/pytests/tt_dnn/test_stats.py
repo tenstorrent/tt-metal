@@ -14,9 +14,9 @@ import tt_lib as ttl
 import numpy as np
 
 fns = [
-    #    "std_hw",
-    #    "mean_hw",
-    #    "var_hw",
+    "std_hw",
+    "mean_hw",
+    "var_hw",
     "normalize_hw",
     "normalize_global",
 ]  # "std_global","var_global"]
@@ -64,6 +64,11 @@ shapes = [
 class TestStats:
     @pytest.mark.parametrize("fn_kind", fns)
     def test_run_stats_ops(self, input_shapes_and_pcc, fn_kind, device, function_level_defaults):
+        if fn_kind in ["normalize_hw", "normalize_global"]:
+            is_ttnn_op = True
+        else:
+            is_ttnn_op = False
+
         input_shapes, accepted_pcc = input_shapes_and_pcc
         input_shapes = [input_shapes]
         datagen_func = [
@@ -74,7 +79,7 @@ class TestStats:
         accepted_pcc = accepted_pcc[fns.index(fn_kind)]
         comparison_func = partial(comparison_funcs.comp_pcc, pcc=accepted_pcc)
         run_single_pytorch_test(
-            f"stats-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
+            f"stats-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=is_ttnn_op
         )
 
 
