@@ -6,8 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -24,7 +24,7 @@ namespace tt_metal {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return data_transfer_to_device(input, device, mem_config);
+        return ttnn::data_transfer_to_device(input, device, mem_config);
     } else {
         return input;
     }
