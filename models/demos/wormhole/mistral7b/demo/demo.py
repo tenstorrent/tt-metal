@@ -292,6 +292,8 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                             f.write(
                                 f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
                             )
+                        else:
+                            print(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
 
         # In CI only print the final generated output to avoid spamming the logs
         if is_ci_env:
@@ -343,5 +345,5 @@ def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weigh
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
         num_batches=num_batches,
-        print_to_file=True,
+        print_to_file=False,
     )
