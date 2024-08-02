@@ -16,7 +16,7 @@ from ttnn.model_preprocessing import (
 from models.utility_functions import (
     profiler,
     disable_persistent_kernel_cache,
-    skip_for_grayskull,
+    run_for_wormhole_b0,
 )
 
 from models.perf.perf_utils import prep_perf_report
@@ -69,7 +69,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -77,7 +77,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     for iter in range(0, num_measurement_iterations):
         tt_inputs = tt_inputs_host.to(device, input_mem_config)
         outputs.append(ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=False))
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -125,7 +125,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -138,7 +138,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(device, 0, op_event)
         outputs.append(ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=False))
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -178,7 +178,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -187,7 +187,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(tt_output_res, blocking=False))
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -255,7 +255,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -270,7 +270,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(device, 0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -322,7 +322,7 @@ def run_perf_resnet(
         dealloc_input=True,
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG if "trace" in model_version else ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15
@@ -366,9 +366,9 @@ def run_perf_resnet(
     logger.info(f"{model_name} compile time: {compile_time}")
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     ((16, 0.006, 25),),
@@ -393,15 +393,16 @@ def test_perf_bare_metal(
     )
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
+@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, enable_async, expected_inference_time, expected_compile_time",
+    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
         (16, True, 0.005, 25),
         (16, False, 0.0046, 25),
     ),
+    indirect=["enable_async_mode"],
 )
 def test_perf_trace_bare_metal(
     device,
@@ -410,11 +411,10 @@ def test_perf_trace_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
-    device.enable_async(enable_async)
-    mode = "async" if enable_async else "sync"
+    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -424,12 +424,11 @@ def test_perf_trace_bare_metal(
         f"resnet50_trace_{mode}",
         model_location_generator,
     )
-    device.enable_async(False)
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     ((16, 0.0064, 25),),
@@ -454,11 +453,11 @@ def test_perf_2cqs_bare_metal(
     )
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
+@run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1332224}], indirect=True
 )
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     ((16, 0.004, 25),),

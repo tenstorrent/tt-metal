@@ -113,7 +113,7 @@ golden_pcc = {
             ttnn.MathFidelity.LoFi,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
-        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
+        ): 0.988,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
     },
     20: {
         (
@@ -134,6 +134,19 @@ golden_pcc = {
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
 }
+
+golden_pcc = {
+    ttnn.device.Arch.WORMHOLE_B0: golden_pcc,
+    ttnn.device.Arch.GRAYSKULL: golden_pcc,
+}
+
+golden_pcc[ttnn.device.Arch.GRAYSKULL][16][
+    (
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+    )
+] = 0.936
 
 
 class ResNet50TestInfra:
@@ -227,7 +240,9 @@ class ResNet50TestInfra:
 
         valid_pcc = 1.0
         if self.batch_size >= 8:
-            valid_pcc = golden_pcc[self.batch_size][(self.math_fidelity, self.weight_dtype, self.act_dtype)]
+            valid_pcc = golden_pcc[self.device.arch()][self.batch_size][
+                (self.math_fidelity, self.weight_dtype, self.act_dtype)
+            ]
         else:
             if self.act_dtype == ttnn.bfloat8_b:
                 if self.math_fidelity == ttnn.MathFidelity.LoFi:

@@ -25,7 +25,6 @@ except ModuleNotFoundError:
 ttnn.create_event = tt_lib.device.CreateEvent
 ttnn.wait_for_event = tt_lib.device.WaitForEvent
 ttnn.record_event = tt_lib.device.RecordEvent
-ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
 
 
 # TODO: Move these into Resnet model preprocessing/member functions
@@ -249,7 +248,7 @@ def test_run_resnet50_2cqs_inference(
         test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(device, 0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="stop")
     for output in outputs:
@@ -360,7 +359,7 @@ def test_run_resnet50_trace_2cqs_inference(
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
 
-    ttnn.device.synchronize_device(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="stop")
     for output in outputs:
