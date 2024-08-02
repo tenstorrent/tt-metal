@@ -4,36 +4,27 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::experimental {
 
 namespace reduction {
 
-Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _argmin(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-struct ExecuteArgMax {
+struct ArgmaxOperation {
     static Tensor operator()(
         const Tensor& input_tensor,
         int64_t dim,
         bool all,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return _argmax(input_tensor, dim, all, memory_config.value_or(input_tensor.memory_config()));
-    }
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-struct ExecuteArgMin {
+struct ArgminOperation {
     static Tensor operator()(
         const Tensor& input_tensor,
         int64_t dim,
         bool all,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return _argmin(input_tensor, dim, all, memory_config.value_or(input_tensor.memory_config()));
-    }
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace reduction
@@ -43,11 +34,11 @@ namespace experimental {
 
 constexpr auto argmax = ttnn::register_operation_with_auto_launch_op<
   "ttnn::experimental::argmax",
-  ttnn::operations::experimental::reduction::ExecuteArgMax>();
+  ttnn::operations::experimental::reduction::ArgmaxOperation>();
 
 constexpr auto argmin = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::argmin",
-    ttnn::operations::experimental::reduction::ExecuteArgMin>();
+    ttnn::operations::experimental::reduction::ArgminOperation>();
 
 }
 }  // namespace ttnn
