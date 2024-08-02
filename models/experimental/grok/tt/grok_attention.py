@@ -239,11 +239,11 @@ class TtGrokAttention(LightweightModule):
         # Attention
         ###
         # transpose keys
-        keys_1BDP = ttnn.experimental.tensor.transpose(
+        keys_1BDP = ttnn.transpose(
             keys_1BPD,
             -2,
             -1,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         keys_1BPD.deallocate(True)
 
