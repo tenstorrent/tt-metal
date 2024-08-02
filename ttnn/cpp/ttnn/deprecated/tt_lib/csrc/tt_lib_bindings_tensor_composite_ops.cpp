@@ -14,88 +14,6 @@ namespace tt::tt_metal::detail {
 
 void TensorModuleCompositeOPs(py::module& m_tensor) {
 
-
-    m_tensor.def(
-        "outer",
-        &outer,
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Perform a non-batched outer product multiplication ``arg0 x arg1`` with two tensors.
-
-            Both input tensors must have BFLOAT16 data type but shape [1,1,N,1] and [1,1,1,M] respectively
-            or reshapeable with only one major dimension while other 3 being squeezable dimensions.
-
-            Output tensor will have BFLOAT16 data type but of shape [1,1,N,M].
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "First tensor to multiply", "Tensor", "Tensor of shape [1, 1, N, 1]", "Yes"
-                "input_b", "Second tensor to multiply", "Tensor", "Tensor of shape [1, 1, 1, M]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        // *** composite unary ops ***
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "polyval",
-        &polyval,
-        py::arg("coeffs"),
-        R"doc(Returns tensor with the polyval of all of elements of the input tensor ``{0}`` with coefficients ``{1}``.)doc",
-        R"doc("coefficients value with highest degree first", "List of float", "List size > 0")doc");
-
-    m_tensor.def(
-        "lerp",
-        py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
-        py::arg("input").noconvert(),
-        py::arg("end").noconvert(),
-        py::arg("weight"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
-            scalar ``weight`` and returns the resulting out tensor.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor lerp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "end", "End value", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "weight", "Weight value", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "lerp",
-        py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&lerp),
-        py::arg("input").noconvert(),
-        py::arg("end").noconvert(),
-        py::arg("weight").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
-            tensor ``weight`` and returns the resulting out tensor.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor lerp is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "end", "End value", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "weight", "Weight value", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-
-
 #if 0
         m_tensor.def("bitwise_complement", &bitwise_complement, R"doc(
             Returns tensor with the bitwise complement of elements of the input tensor ``arg0``.
@@ -172,7 +90,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             +----------+---------------------------+-----------+------------------------------+----------+
         )doc");
 #endif
-        
+
         m_tensor.def("unary_rdiv_trunc", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&unary_rdiv_trunc),
             py::arg("value").noconvert(), py::arg("input").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using trunc mode. Support provided only for Wormhole_B0.
@@ -206,45 +124,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("mac", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&mac),
-            py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns tensor with the multiply and accumulation of all of elements of the input tensors ``input, tensor1, tensor2``.
-            Output is ``input x tensor1 + tensor2`` elementwise operator.
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor mac is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor1", "Tensor to be multiplied", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor2", "Tensor to be added", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-    m_tensor.def(
-        "mac",
-        py::overload_cast<const Tensor&, float, float, const MemoryConfig&>(&mac),
-        py::arg("input").noconvert(),
-        py::arg("float1"),
-        py::arg("float2"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns tensor with the multiply and accumulation of all of elements of the input tensor ``input11 with``float1, float2``.
-            Output is ``tensor1 x float1 + float2`` elementwise operator.
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor mac is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "float1", "Value to be multiplied", "float", "", "Yes"
-                "float2", "Value to be added", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
 
     m_tensor.def(
         "lamb_optimizer",
@@ -282,7 +161,6 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        detail::bind_binary_op<false, true, false, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
 
     // loss functions
     m_tensor.def(
