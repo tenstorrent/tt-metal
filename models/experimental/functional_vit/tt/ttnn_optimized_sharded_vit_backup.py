@@ -247,7 +247,7 @@ def vit_embeddings(
     # patch_embeddings = ttnn.pad(patch_embeddings, padding=((0, 0), (1, 27), (0, 0)), value=0)
     # embedding_output = ttnn.to_layout(patch_embeddings, layout=ttnn.TILE_LAYOUT)
 
-    embedding_output = ttnn.experimental.tensor.concat([cls_token, patch_embeddings], -2, l1_memory_config)
+    embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)
     embedding_output = ttnn.pad(embedding_output, padding=((0, 0), (0, 27), (0, 0)), value=0)
     # print("out", embedding_output.shape)
     embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)

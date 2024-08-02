@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -48,7 +49,6 @@ struct ExecuteTopK {
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-        constexpr uint8_t DefaultQueueId = 0;
         return operator()(
             DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }

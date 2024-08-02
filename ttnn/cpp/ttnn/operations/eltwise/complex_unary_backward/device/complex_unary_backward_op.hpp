@@ -12,7 +12,6 @@
 
 namespace ttnn::operations::complex_unary_backward {
 
-constexpr uint8_t DefaultQueueId = 0;
 enum class ComplexUnaryBackwardOpType {
     POLAR_BW,
     IMAG_BW,

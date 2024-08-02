@@ -39,6 +39,7 @@ def main(command, output_folder, name_append):
         "profile_this.py is getting deprecated soon. Please use the tracy.py module with -r option to obtain op reports."
     )
     if command:
+        logger.info(f"profile_this.py is running {command}")
         profile_command(command, output_folder, name_append)
 
 

@@ -262,8 +262,8 @@ def apply_rotary_emb(
 
     xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1, mem_config)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1, mem_config)
+    xq_out = ttnn.concat([xq_out.real, xq_out.imag], -1, memory_config=mem_config)
+    xk_out = ttnn.concat([xk_out.real, xk_out.imag], -1, memory_config=mem_config)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
     xq_out.deallocate()

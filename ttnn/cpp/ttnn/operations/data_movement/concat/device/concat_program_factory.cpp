@@ -2,31 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
+using namespace tt;
 
-namespace tt {
-
-namespace tt_metal {
-
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
-};
-
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range;
-};
-
-
-
-
+namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
@@ -124,14 +109,14 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(compile_time_args_0));
 
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
@@ -228,13 +213,13 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_height_sharded_width_concat.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
 
-    std::string kernel_1 = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/writer_height_s2s_width_concat.cpp";
+    std::string kernel_1 = "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/writer_height_s2s_width_concat.cpp";
     if(not writer) {
-        kernel_1 = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp";
+        kernel_1 = "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_height_sharded_width_concat.cpp";
     }
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
@@ -411,13 +396,13 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_s2i_width.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2i_width.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/writer_s2i_width.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/writer_s2i_width.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -654,8 +639,8 @@ operation::ProgramWithCallbacks concat_multi_core(
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout
-            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
+            ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_stick_layout_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, concat_defines));
 
@@ -742,6 +727,4 @@ operation::ProgramWithCallbacks concat_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::data_movement::detail

@@ -6,12 +6,11 @@
 
 #include <optional>
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
-
-constexpr uint8_t DefaultQueueId = 0;
 
 struct ConcatenateHeadsDeviceOperation {
     CoreCoord compute_with_storage_grid_size;

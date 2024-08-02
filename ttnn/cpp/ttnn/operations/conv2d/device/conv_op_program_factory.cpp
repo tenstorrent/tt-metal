@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_metal/tt_stl/reflection.hpp"
-
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
 using namespace tt::constants;
 
 namespace conv_op_utils {

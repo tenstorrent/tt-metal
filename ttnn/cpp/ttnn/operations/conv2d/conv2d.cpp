@@ -8,6 +8,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -48,6 +49,9 @@ ParallelConfig determine_parallel_config(
     T * device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled) {
+
+    log_debug(LogOp, "determine_parallel_config: height_sharding: {}, batch_size: {}, input_channels: {}, output_height: {}, output_width: {}, output_channels: {}, block_shard_orientation: {}, is_out_tiled: {}", height_sharding, batch_size, input_channels, output_height, output_width, output_channels, block_shard_orientation, is_out_tiled);
+
     uint32_t conv_out_2d_matrix_height = batch_size * output_height * output_width;
     // pad height to 32
     conv_out_2d_matrix_height = tt::round_up(conv_out_2d_matrix_height, 32);
@@ -143,9 +147,12 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
     const Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size) {
+
+    log_debug(tt::LogOp, "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}", tensor_shape, parallel_config, tile_size);
     // tensor_shape is [N, H, W, C]
     TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
-    uint32_t channels = tensor_shape[3];
+    // uint32_t channels = tensor_shape[3];
+    uint32_t channels = tensor_shape.with_tile_padding()[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
     auto shard_scheme = parallel_config.shard_scheme;
@@ -550,7 +557,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .fuse_batch = true,
             .mcast_in0 = false};
         if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
         }
         return matmul_config;
     } else {
@@ -564,7 +571,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
             .transpose_mcast = transpose_mcast};
         if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::string_to_unary_with_param(activation);
+            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
         }
         return matmul_config;
     }

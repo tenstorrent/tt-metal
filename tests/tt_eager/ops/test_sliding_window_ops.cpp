@@ -132,6 +132,8 @@ uint32_t validate_generate_functions(
     const owned_buffer::Buffer<bfloat16> &out_golden_tensor_buf,
     uint32_t reshard_num_cores_nhw = 0,
     bool remote_read = false) {
+
+    log_debug(tt::LogTest, "Validating generate functions for config = {}", config);
     owned_buffer::Buffer<bfloat16> conv_tensor_buf;
     uint32_t diff;
     uint32_t failed_tests = 0;

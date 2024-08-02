@@ -4,8 +4,11 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::experimental::reduction {
@@ -81,7 +84,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const std::optiona
                     std::vector<Tensor> combined_tensors;
                     for (int cid = 0; cid < repeat; cid++) combined_tensors.emplace_back(max_val);
                     max_val.deallocate();
-                    Tensor concat_out = concat(combined_tensors, dim, output_memory_config);
+                    Tensor concat_out = ttnn::concat(combined_tensors, dim, output_memory_config);
                     // Needed till `max` stops autoformatting output
                     concat_out = ttnn::reshape(concat_out, input_a.get_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
