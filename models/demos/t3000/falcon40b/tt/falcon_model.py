@@ -222,11 +222,11 @@ class TtFalconModelShared:
                 ),
                 dim=-1,
             )
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = num_max_tokens
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            # attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            # if attention_mask_memconfig.is_sharded():
+            #     attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            #     attn_mask_shard_shape[-1] = num_max_tokens
+            #     attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
             # Push attention mask to device in row major order and then tilize on device (faster than tilizing on CPU)
             tt_attention_mask = ttnn.as_tensor(
@@ -234,22 +234,22 @@ class TtFalconModelShared:
                 dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device_mesh,
-                memory_config=attention_mask_memconfig,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
-                preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(-1, self.config.num_attention_heads, -1, -1),
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(1, 1, -1, -1),
             )
 
             tt_attention_mask = ttnn.tilize(
                 tt_attention_mask,
-                memory_config=attention_mask_memconfig,
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
                 dtype=self.model_config["ATTN_MASK_DTYPE"],
             )
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
-        for layer in self.layers:
-            layer.online_preprocessing(llm_mode, sequence_size)
+        # for layer in self.layers:
+        #     layer.online_preprocessing(llm_mode, sequence_size)
 
         return tt_inputs, tt_attention_mask
 
