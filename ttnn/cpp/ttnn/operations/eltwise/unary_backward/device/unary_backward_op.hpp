@@ -174,7 +174,6 @@ std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float
 
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-std::vector<Tensor> _div_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -674,13 +673,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SOFTPLUS_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
         return _softplus_bw(grad, input, beta, threshold, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::DIV_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _div_bw(grad, input, scalar, round_mode, output_mem_config);
     }
 };
 
