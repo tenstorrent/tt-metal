@@ -543,7 +543,7 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
 void py_module(py::module& module) {
     export_enum<BinaryOpType>(module, "BinaryOpType");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_complex(
         module,
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
