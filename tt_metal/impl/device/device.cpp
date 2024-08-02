@@ -1976,7 +1976,7 @@ bool Device::close() {
     this->hw_command_queues_.clear();
     this->sysmem_manager_.reset();
     this->allocator_.reset();
-
+    this->tunnel_device_dispatch_workers_.clear();
     this->initialized_ = false;
 
     return true;
