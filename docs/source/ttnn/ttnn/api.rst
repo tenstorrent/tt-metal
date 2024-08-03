@@ -292,6 +292,7 @@ Pointwise Binary
    ttnn/logical_and_
    ttnn/logical_or_
    ttnn/logical_xor_
+   ttnn/gcd
    ttnn/pow
    ttnn/rpow
    ttnn/ldexp

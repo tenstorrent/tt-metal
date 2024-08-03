@@ -385,4 +385,13 @@ def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.polyval, golden_function=_golden_function_polyval)
 
 
+def _golden_function_gcd(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.gcd(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.gcd, golden_function=_golden_function_gcd)
+
+
 __all__ = []
