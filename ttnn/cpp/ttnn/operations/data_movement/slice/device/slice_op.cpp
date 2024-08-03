@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks Slice::create_program(
     const auto &input_tensor_a = input_tensors.at(0);
     auto &output_tensor = output_tensors.at(0);
 
-    return slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
+    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
 }
 
 
