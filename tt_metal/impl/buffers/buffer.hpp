@@ -172,7 +172,7 @@ class Buffer {
     Buffer(Buffer &&other);
     Buffer &operator=(Buffer &&other);
 
-    ~Buffer();
+    virtual ~Buffer();
     Device *device() const { return device_; }
 
     uint32_t size() const { return static_cast<uint32_t>(size_); }
