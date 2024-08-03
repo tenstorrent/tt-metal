@@ -201,7 +201,15 @@ struct ExecuteBinaryRemainder
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace binary
+struct ExecuteGCD
+{
+    static Tensor operator()(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+} // namespace binary
 }  // namespace operations
 
 constexpr auto hypot = ttnn::register_operation_with_auto_launch_op<
@@ -264,5 +272,8 @@ constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
+constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gcd",
+    operations::binary::ExecuteGCD>();
 
 }  // namespace ttnn
