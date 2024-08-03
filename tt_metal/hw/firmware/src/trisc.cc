@@ -76,8 +76,6 @@ using namespace ckernel;
 int main(int argc, char *argv[]) {
     DEBUG_STATUS("I");
 
-    disable_lowcache();
-
     uint tt_l1_ptr *local_l1_start_addr =
         (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
