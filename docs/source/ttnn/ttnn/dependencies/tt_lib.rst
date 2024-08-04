@@ -432,10 +432,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.lamb_optimizer
 
 .. autofunction:: tt_lib.tensor.repeat
-
-Loss Functions
-==============
-
-.. autofunction:: tt_lib.tensor.mseloss
-
-.. autofunction:: tt_lib.tensor.maeloss
