@@ -37,6 +37,7 @@
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/loss/loss_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -88,6 +89,9 @@ void py_module(py::module& module) {
 
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
+
+    auto m_loss = module.def_submodule("loss", "loss operations");
+    loss::py_bind_loss_functions(m_loss);
 
     auto m_matmul = module.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
