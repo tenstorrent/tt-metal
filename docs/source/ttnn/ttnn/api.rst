@@ -303,6 +303,7 @@ Pointwise Binary
    ttnn.remainder
    ttnn.fmod
    ttnn/gcd
+   ttnn/lcm
    ttnn.logical_and_
    ttnn.logical_or_
    ttnn.logical_xor_

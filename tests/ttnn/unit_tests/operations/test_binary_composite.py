@@ -864,11 +864,32 @@ def test_nei_ttnn(input_shapes, scalar, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_gcd_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -100, 100, device)
     output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.gcd)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
+def test_binary_lcm_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -100, 100, device)
+    output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])

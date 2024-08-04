@@ -209,6 +209,14 @@ struct ExecuteGCD
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
+struct ExecuteLCM
+{
+    static Tensor operator()(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 } // namespace binary
 }  // namespace operations
 
@@ -275,5 +283,8 @@ constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
 constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
     "ttnn::gcd",
     operations::binary::ExecuteGCD>();
+constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lcm",
+    operations::binary::ExecuteLCM>();
 
 }  // namespace ttnn
