@@ -310,10 +310,6 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, ncores, act_block_w_div",
     (
-        # unique convs in rn50 (complete list)
-        # first conv post folding and input_channels padding to tile width
-        # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
-        # rn50 layer1
         (128, 128, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 2),
@@ -321,7 +317,7 @@ def run_conv_with_split(
         (256, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 2),
         (512, 2048, 10, 10, 3, 3, 1, 1, 0, 0, 8, 8),
         (512, 2048, 18, 18, 3, 3, 1, 1, 0, 0, 8, 8),
-        # (128, 256, 8, 8, 3, 3, 1, 1, 1, 1),
+        (768, 768, 18, 18, 3, 3, 1, 1, 0, 0, 12, 2),
     ),
 )
 def test_conv_ws(

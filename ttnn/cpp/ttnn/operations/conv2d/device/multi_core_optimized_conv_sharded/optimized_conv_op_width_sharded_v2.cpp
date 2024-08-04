@@ -594,6 +594,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (total_num_cores*per_core_num_blocks_act_w);
 
+    CoreRangeSet all_cores = a.memory_config().shard_spec.value().grid;
+
+
     // log info for debugging opts
     {
         log_debug(LogOp, "input_channels_padded: {}", input_channels_padded);
@@ -633,6 +636,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
         log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
         log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
+
         log_debug(LogOp, "conv_act_c_read_bytes: {}",conv_act_c_read_bytes);
         log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
         log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
@@ -662,10 +666,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "math_approx_mode: {}", math_approx_mode);
         log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
+        log_debug(LogOp, "all_cores: {}",all_cores.str());
     }
 
-    std::set<CoreRange> all_cores;
-    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(p_config.num_cores_c-1, 0))); //TODO: Support multiple rows
+
 
     std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/compute_width_sharded.cpp";
     std::string activation_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/activation_reader_width_sharded.cpp";
@@ -683,7 +687,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, 0); //0==INVALID.
 
     CoreCoord act_mcast_start_core_logical(0,0);
-    CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,0);
+    CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,p_config.grid_size.y-1);
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
 
@@ -919,6 +923,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     auto full_core_grid = device->compute_with_storage_grid_size();
     std::vector<uint32_t> act_mcast_noc_y;
     std::vector<uint32_t> act_mcast_noc_x;
+
     for(uint32_t core_index = 0; core_index < full_core_grid.x; core_index++)
     {
         act_mcast_noc_x.push_back(device->worker_core_from_logical_core(CoreCoord(core_index,0)).x);
@@ -926,15 +931,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     for(uint32_t core_index = 0; core_index < full_core_grid.y; core_index++)
     {
         act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0,core_index)).y);
+        std::cout<<"Logical "<<CoreCoord(0,core_index).str()<<" Physical "<<device->worker_core_from_logical_core(CoreCoord(0,core_index)).str()<<std::endl;
     }
+
     for(uint32_t core_index = 0; core_index < total_num_cores; core_index++)
     {
-        uint32_t core_x = core_index % num_cores_x;
-        uint32_t core_y = core_index / num_cores_x;
+        uint32_t core_x = core_index % full_core_grid.x;
+        uint32_t core_y = core_index / full_core_grid.x;
         std::vector<uint32_t> rt_args = {
             core_x,
             core_y,
-            num_cores_x,
+            full_core_grid.x,
         };
         rt_args.insert(
             rt_args.end(),
@@ -961,7 +968,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             };
-    return {.program = std::move(program), .override_runtime_arguments_callback = empty_callback};
+    return {
+        .program = std::move(program), .override_runtime_arguments_callback = empty_callback
+        };
 
 }
 

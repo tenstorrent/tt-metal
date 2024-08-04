@@ -90,7 +90,7 @@ void kernel_main() {
     // uint32_t act_mcast_sender_id        = get_arg_val<uint32_t>(i); i+=1;
     // uint32_t act_mcast_sender_noc_x     = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t act_mcast_sender_id = this_core_x;
+    uint32_t act_mcast_sender_id = this_core_x+(num_cores_x*this_core_y) ;
     // tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
@@ -133,7 +133,6 @@ void kernel_main() {
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
     constexpr uint32_t conv_act_c_bytes = conv_act_c_read_bytes * act_num_blocks_w;
     constexpr uint32_t stride_h_bytes = (conv_act_size_w ) * conv_act_c_bytes;
-    DPRINT<<"Act read bytes "<<conv_act_c_read_bytes<<" CBytes "<<conv_act_c_bytes<<" Stride "<<stride_h_bytes<<ENDL();
 
     // Fully create act matrix and tilize it before mcast
     // set_state uses just x/y from the get_noc_addr, addr is ignored
@@ -170,20 +169,17 @@ void kernel_main() {
         // DPRINT<<"MCast "<<act_w_num_outer<<"  "<<act_mcast_sender_id<<"num cores "<<act_mcast_num_cores<<"\n";
         // Round robin self-mcast and receive tilized act matrix in cb_id_act
         // Compute should function like regular mm
+
         uint32_t act_w_outer_i = 0;
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-            // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": MCast ID "<<act_w_outer_i<<"\n\n";
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             if (act_w_outer_i == act_mcast_sender_id) {
                 // MCAST SENDER: send entire tilized input to other cores in column
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
-
-                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore"<<*act_mcast_sender_semaphore_addr_ptr<<"\n\n";
-                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": Wait for "<<act_mcast_num_cores-1<<"\n\n";
+                // DPRINT<<"Sender Core "<<this_core_x<<","<<this_core_y<<":"<<*(uint32_t *)act_mcast_sender_semaphore_addr_ptr<<"\n\n";
 
                 noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_cores-1);
-
                 noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -196,16 +192,16 @@ void kernel_main() {
 
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // // num_dests will source, since we are copying to a different local CB as well
-                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores , false, false);
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, 16 , false, false);
+
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
                 // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_sender_semaphore_valid_addr"<<*(uint32_t *)act_mcast_sender_semaphore_valid_addr<<"\n\n";
 
                 // // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores , false, false);
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, 16 , false, false);
 
-                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
 
@@ -215,14 +211,14 @@ void kernel_main() {
                 // Set act semaphore value to INVALID
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                uint32_t sender_x = act_mcast_x_lookup[act_w_outer_i];
-                uint32_t sender_y = act_mcast_x_lookup[0];
+                uint32_t sender_x = act_mcast_x_lookup[act_w_outer_i%num_cores_x];
+                uint32_t sender_y = act_mcast_y_lookup[act_w_outer_i/num_cores_x];
+
                 // Atomic increment source core counter
                 uint64_t act_mcast_sender_semaphore_noc_addr = get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
                 noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                // DPRINT<<"Core "<<this_core_x<<","<<this_core_y<<": act_mcast_receiver_semaphore_addr"<<*(uint32_t *)act_mcast_receiver_semaphore_addr<<"\n\n";
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
