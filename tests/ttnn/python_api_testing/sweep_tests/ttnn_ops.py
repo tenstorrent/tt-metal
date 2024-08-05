@@ -4159,6 +4159,23 @@ def cosh_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+def frac(
+    x,  # grad_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.frac(t0, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def cos_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -4268,3 +4285,4 @@ def expm1_bw(
     t2 = ttnn.expm1_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+

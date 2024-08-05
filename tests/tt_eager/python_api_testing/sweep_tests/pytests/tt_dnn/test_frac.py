@@ -51,10 +51,11 @@ class TestFrac:
         comparison_func = comparison_funcs.comp_pcc
 
         run_single_pytorch_test(
-            "eltwise-frac",
+            "frac",
             input_shapes,
             datagen_func,
             comparison_func,
             device,
             test_args,
+            ttnn_op=True,
         )

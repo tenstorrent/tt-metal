@@ -2348,3 +2348,8 @@ def expm1_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def frac(x, *args, **kwargs):
+    return torch.frac(x)
+
