@@ -140,6 +140,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     mem_config,
     use_program_cache,
     function_level_defaults,
+    all_gather_operation,
     num_iters,
     enable_async=False,
 ):
@@ -154,6 +155,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         mem_config,
         use_program_cache,
         function_level_defaults,
+        all_gather_operation,
         num_iters,
         enable_async,
     )
@@ -217,8 +219,9 @@ def test_all_gather_on_t3000_post_commit_looping(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        num_iters,
-        enable_async,
+        all_gather_operation=ttnn.all_gather,
+        num_iters=num_iters,
+        enable_async=enable_async,
     )
 
 
@@ -278,8 +281,9 @@ def test_all_gather_on_t3000_nightly_commit_looping(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        num_iters,
-        enable_async,
+        all_gather_operation=ttnn.all_gather,
+        num_iters=num_iters,
+        enable_async=enable_async,
     )
 
 
@@ -365,6 +369,7 @@ def test_all_gather_on_t3000_post_commit(
         mem_config,
         use_program_cache,
         function_level_defaults,
+        all_gather_operation=ttnn.all_gather,
     )
 
 
