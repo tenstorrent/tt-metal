@@ -553,11 +553,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     Buffer* bias_buffer = nullptr;
     uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
+    bool bias_in_dram = true;
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
         bias_ntiles =
             bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+        bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
     }
 
     auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
@@ -713,7 +715,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)act_block_num_tiles*tt_metal::detail::TileSize(tilized_act_df),
         (uint32_t)total_num_cores
     };
-
     weights_kernel_compile_args = {
         weight_cb,                                                  //cb_id_weight
         act_block_w_ntiles/(weight_size_h*weight_size_w),           //core_in_channels_ntiles
@@ -726,7 +727,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
         per_core_num_blocks_act_w,
         total_num_cores,                                            //other_core_weight_height_blocks
-        per_core_num_blocks_act_w                                   //this_core_weight_height_blocks
+        per_core_num_blocks_act_w,                                  //this_core_weight_height_blocks
+        bias_cb,
+        bias_in_dram
     };
 
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
@@ -848,6 +851,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     auto cb_for_reader_indices_id =
         tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
+   if (has_bias) {
+        uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
+        // bias input
+        uint32_t bias_pagesize = bias_tile_size;
+        CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, bias_df}})
+                                                  .set_page_size(bias_cb, bias_pagesize);
+        auto cb_bias = tt_metal::CreateCircularBuffer(program, all_cores, cb_bias_config);
+
+        log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
+    }
+
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -907,7 +921,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = weights_kernel_compile_args
+            .compile_args = weights_kernel_compile_args,
+            .defines = writer_defines
         }
     );
     auto compute_id = CreateKernel(
@@ -931,9 +946,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     for(uint32_t core_index = 0; core_index < full_core_grid.y; core_index++)
     {
         act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0,core_index)).y);
-        std::cout<<"Logical "<<CoreCoord(0,core_index).str()<<" Physical "<<device->worker_core_from_logical_core(CoreCoord(0,core_index)).str()<<std::endl;
     }
-
+    uint32_t bias_base_address = 0;
+    if(bias)
+    {
+        bias_base_address = bias.value().buffer()->address();
+    }
     for(uint32_t core_index = 0; core_index < total_num_cores; core_index++)
     {
         uint32_t core_x = core_index % full_core_grid.x;
@@ -957,7 +975,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         SetRuntimeArgs(program,act_kernel_id,CoreCoord(core_x,core_y),rt_args);
         SetRuntimeArgs(program,weights_kernel_id,CoreCoord(core_x,core_y),{
             core_index*weight_block_w_ntiles,
-            b.buffer()->address()
+            b.buffer()->address(),
+            bias_base_address
         });
     }
 
