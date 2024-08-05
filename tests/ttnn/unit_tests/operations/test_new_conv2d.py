@@ -320,6 +320,10 @@ def run_conv_with_split(
         (768, 768, 18, 18, 3, 3, 1, 1, 0, 0, 12, 2),
     ),
 )
+@pytest.mark.parametrize(
+    "has_bias",
+    [True, False],
+)
 def test_conv_ws(
     device,
     use_program_cache,
@@ -335,6 +339,7 @@ def test_conv_ws(
     pad_w,
     ncores,
     act_block_w_div,
+    has_bias,
 ):
     batch_size = 2
     weights_dtype = ttnn.bfloat16
@@ -342,7 +347,6 @@ def test_conv_ws(
     output_height = ttnn.get_conv_output_dim(input_height, filter_height, stride_h, pad_h)
     output_width = ttnn.get_conv_output_dim(input_width, filter_width, stride_w, pad_w)
     print(f"Output = {(output_height,output_width,output_channels)}")
-    has_bias = False
     fp32_accum = False
     packer_l1_acc = False
     deallocate_activation = False
@@ -352,7 +356,7 @@ def test_conv_ws(
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
-    # conv_bias_shape = [1, 1, 1, output_channels]
+    conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
@@ -384,10 +388,18 @@ def test_conv_ws(
     #     .float()
     # )
     # torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    tt_bias_tensor = None
+    torch_bias_tensor = None
+    if has_bias:
+        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() * 50
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+        torch_bias_tensor = torch_bias_tensor.reshape(-1)
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
-        bias=None,
+        bias=torch_bias_tensor,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
         groups=groups,
@@ -400,7 +412,6 @@ def test_conv_ws(
     ]
 
     reader_patterns_cache = {}
-    tt_bias_tensor = None
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
@@ -455,7 +466,6 @@ def test_conv_ws(
         reshard_if_not_optimal=False,
         act_block_w_div=act_block_w_div,
     )
-
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -491,6 +501,8 @@ def test_conv_ws(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    # print(torch_output_tensor)
+    # print("Ref = ",torch_out_golden_tensor)
     reader_patterns_cache.clear()
 
     if not fp32_accum:

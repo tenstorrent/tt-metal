@@ -12,6 +12,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
     constexpr uint32_t core_in_channels_ntiles = get_compile_time_arg_val(1);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
+
+    // weight_block_width_ntiles corresponds to the full output width of each core.
     constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(3);
     constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t weight_matrix_width_ntiles = get_compile_time_arg_val(5);
@@ -22,14 +24,28 @@ void kernel_main() {
     constexpr uint32_t this_core_weight_height_blocks = get_compile_time_arg_val(10);
 
 
+    #ifdef FUSE_BIAS
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(12) == 1;
+    constexpr bool has_bias = true;
+    DPRINT<<"Writer Fuse Bias"<<ENDL();
+    #else
+    constexpr bool has_bias = false;
+    DPRINT<<"Writer NO Fuse Bias"<<ENDL();
+
+    #endif
+
+
 
     DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
     weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
     weight_next_block_other_core_stride_h<<"  "<<other_core_weight_height_blocks<<" "<<this_core_weight_height_blocks<<ENDL();
 
     uint32_t i = 0;
-    uint32_t weight_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
+    const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const DataFormat weight_df = get_dataformat(cb_id_weight);
@@ -39,7 +55,21 @@ void kernel_main() {
         .page_size = weight_tile_nbytes,
         .data_format = weight_df
     };
+    #ifdef FUSE_BIAS
 
+    const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    const DataFormat bias_df = get_dataformat(bias_cb_id);
+    const InterleavedAddrGenFast<bias_in_dram> s_bias = {
+        .bank_base_address = bias_addr_dram_base,
+        .page_size = bias_pagesize,
+        .data_format = bias_df
+    };
+
+    #endif
+
+    uint32_t weight_start_tile_id = init_weight_start_tile_id;
+    uint32_t bias_start_tile_id = init_weight_start_tile_id;
+    bool to_load_bias = true;
 
     //Repeat for each weight block along width.
     for(uint32_t this_core_weight_block_index = 0; this_core_weight_block_index < this_core_weight_height_blocks; this_core_weight_block_index++)
@@ -84,5 +114,20 @@ void kernel_main() {
             weight_block_start_tile_id += weight_next_block_other_core_stride_h;
         }
         weight_start_tile_id +=weight_next_block_this_core_stride_h;
+        if(to_load_bias)
+        {
+            #ifdef FUSE_BIAS
+            uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+            for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i)
+            {
+                s_bias.noc_async_read_tile(bias_start_tile_id,bias_l1_addr);
+                bias_l1_addr += bias_pagesize;
+                bias_start_tile_id +=1;
+            }
+            noc_async_read_barrier();
+            cb_push_back(bias_cb_id,weight_block_width_ntiles);
+            #endif
+            to_load_bias = false;
+        }
     }
 }
