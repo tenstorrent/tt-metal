@@ -865,4 +865,12 @@ op_map = {
         "tt_op": ttnn_ops.cos_bw,
         "pytorch_op": pytorch_ops.cos_bw,
     },
+    "stats-normalize_global": {
+        "tt_op": ttnn_ops.normalize_global,
+        "pytorch_op": pytorch_ops.normalize_global,
+    },
+    "stats-normalize_hw": {
+        "tt_op": ttnn_ops.normalize_hw,
+        "pytorch_op": pytorch_ops.normalize_hw,
+    },
 }
