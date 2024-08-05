@@ -392,31 +392,16 @@ class resnet50:
             compute_kernel_config=compute_kernel_config,
         )
 
-        self.max_pool_reader_patterns_cache = {}
-        max_pool_parallel_config_override = {}
-        if is_grayskull() and self.batch_size != 20:
-            max_pool_parallel_config_override["grid_size"] = self.conv1.conv.grid_size
-            max_pool_parallel_config_override["num_cores_nhw"] = self.conv1.conv.sliding_window_op_params.num_cores_nhw
+        # max_pool_parallel_config_override = {}
+        # if is_grayskull() and self.batch_size != 20:
+        #     max_pool_parallel_config_override["grid_size"] = self.conv1.conv.grid_size
+        #     max_pool_parallel_config_override["num_cores_nhw"] = self.conv1.conv.sliding_window_op_params.num_cores_nhw
 
-        self.max_pool = ttnn.MaxPool2d(
-            kernel_size=(3, 3),
-            stride=(2, 2),
-            padding=(1, 1),
-            dilation=(1, 1),
-            dtype=ttnn.bfloat16,
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=112,
-            input_width=112,
-            reader_patterns_cache=self.max_pool_reader_patterns_cache,
-            deallocate_activation=True,
-            parallel_config_override=max_pool_parallel_config_override,
-            channels=out_channels,
-        )
+        self.max_pool2d_channels = out_channels
 
-        # for Wh, batch size 20 run, max pool input sharded memory config != conv1 output sharded memory config
-        if not is_wormhole_b0() or self.batch_size != 20:
-            assert self.max_pool.max_pool.input_sharded_memory_config == self.conv1.conv.output_sharded_memory_config
+        # # for Wh, batch size 20 run, max pool input sharded memory config != conv1 output sharded memory config
+        # if not is_wormhole_b0() or self.batch_size != 20:
+        #     assert self.max_pool.max_pool.input_sharded_memory_config == self.conv1.conv.output_sharded_memory_config
         self.layer1, self.layer1_output_height, self.layer1_output_width = self._make_layer(
             parameters=parameters.layer1,
             planes=64,
@@ -514,7 +499,6 @@ class resnet50:
     def __del__(self):
         # Need to clear global configs for each Resnet run
         self.reader_patterns_cache.clear()
-        self.max_pool_reader_patterns_cache.clear()
 
     def _make_layer(
         self,
@@ -644,8 +628,20 @@ class resnet50:
             # TODO: fix the need to do the reshard here
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
-        x = self.max_pool(x)
+            x = ttnn.to_memory_config(x, self.conv1.conv.output_sharded_memory_config)
+
+        x = ttnn.max_pool2d_new(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=112,
+            input_w=112,
+            channels=self.max_pool2d_channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=self.device,
+        )
 
         x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
         if is_wormhole_b0():

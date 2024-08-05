@@ -13,9 +13,6 @@ from typing import List
 from loguru import logger
 
 
-use_new_maxpool2d = True
-
-
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
@@ -490,27 +487,6 @@ class resnet50:
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
         assert self.conv1_weight_tensor.shape[2] == 4
 
-        self.max_pool_reader_patterns_cache = {}
-        max_pool_parallel_config_override = {}
-
-        if not use_new_maxpool2d:
-            self.max_pool = ttnn.MaxPool2d(
-                kernel_size=(3, 3),
-                stride=(2, 2),
-                padding=(1, 1),
-                dilation=(1, 1),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                batch_size=self.batch_size,
-                input_height=112,
-                input_width=112,
-                reader_patterns_cache=self.max_pool_reader_patterns_cache,
-                deallocate_activation=True,
-                parallel_config_override=max_pool_parallel_config_override,
-                channels=self.conv1_output_channels,
-                mesh_mapper=self.mesh_mapper,
-            )
-
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
             planes=64,
@@ -624,7 +600,6 @@ class resnet50:
     def __del__(self):
         # Need to clear global configs for each Resnet run
         self.conv_op_cache.clear()
-        self.max_pool_reader_patterns_cache.clear()
 
     def _make_layer(
         self,
@@ -703,21 +678,18 @@ class resnet50:
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
 
-        if use_new_maxpool2d:
-            x = ttnn.max_pool2d_new(
-                input_tensor=x,
-                batch_size=self.batch_size,
-                input_h=x_height,
-                input_w=x_width,
-                channels=self.conv1_output_channels,
-                kernel_size=[3, 3],
-                stride=[2, 2],
-                padding=[1, 1],
-                dilation=[1, 1],
-                device=device,
-            )
-        else:
-            x = self.max_pool(x)
+        x = ttnn.max_pool2d_new(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=x_height,
+            input_w=x_width,
+            channels=self.conv1_output_channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=device,
+        )
 
         x_height = 56
         x_width = 56

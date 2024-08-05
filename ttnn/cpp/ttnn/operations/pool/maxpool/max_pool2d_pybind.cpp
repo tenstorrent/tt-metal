@@ -11,7 +11,6 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/types.hpp"
 
-
 namespace ttnn::operations::pool {
 
 void bind_max_pool2d_operation(py::module& module) {
@@ -108,6 +107,10 @@ void bind_max_pool2d_operation(py::module& module) {
                 py::kw_only(),
                 py::arg("device"),
                 py::arg("queue_id") = 0});
+}
+
+void py_module(py::module& module) {
+    bind_max_pool2d_operation(module);
 }
 
 }  // namespace ttnn::operations::pool
