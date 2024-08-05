@@ -244,16 +244,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     const auto input_buffer = input_tensor.buffer();
     const auto output_buffer = output_tensor.buffer();
 
-    int32_t input_shard_size_in_bytes = is_sharded ?
-        (input_tensor_config->get_page_size() * input_buffer->shard_spec().tensor2d_shape[0] * input_buffer->shard_spec().tensor2d_shape[1]) / input_tensor.shard_spec()->num_cores() :
-        -1;
-    int32_t output_shard_size_in_bytes = is_sharded ?
-        (output_tensor_config->get_page_size() * output_buffer->shard_spec().tensor2d_shape[0] * output_buffer->shard_spec().tensor2d_shape[1]) / output_tensor.shard_spec()->num_cores() :
-        -1;
     uint32_t input_page_size = input_tensor_config->get_page_size();
     uint32_t output_page_size = output_tensor_config->get_page_size();
-    std::size_t input_pages_per_shard = input_shard_size_in_bytes / input_page_size;
-    std::size_t output_pages_per_shard = output_shard_size_in_bytes / input_page_size;
     auto const& [input_pages_per_shard_y, input_pages_per_shard_x] = is_sharded ? input_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
     auto const& [output_pages_per_shard_y, output_pages_per_shard_x] = is_sharded ? output_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
     if (is_sharded) {
@@ -265,8 +257,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     }
     const uint32_t max_buffer_per_chunk = tt::round_down(all_gather_config.get_eth_buffer_size(), input_tensor_config->get_page_size());
     const uint32_t max_pages_per_chunk = max_buffer_per_chunk / input_page_size;
-    log_trace(tt::LogOp, "input_shard_size_in_bytes: {}", input_shard_size_in_bytes);
-    log_trace(tt::LogOp, "output_shard_size_in_bytes: {}", output_shard_size_in_bytes);
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
@@ -422,7 +412,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             uint32_t workers_per_link = all_gather_config.get_num_workers_per_link() / all_gather_config.get_num_eth_buffers_per_edm();
 
             // Circular Buffer Setup
-            uint32_t cb_page_size = is_sharded ? input_shard_size_in_bytes : input_page_size;
+            uint32_t cb_page_size = input_page_size;
             log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
             uint32_t cb_num_pages = 2 * max_pages_per_chunk;
             log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);

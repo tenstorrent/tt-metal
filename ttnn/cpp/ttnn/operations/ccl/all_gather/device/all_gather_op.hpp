@@ -22,12 +22,6 @@
 
 namespace ttnn {
 
-enum AllGatherMode {
-    RING_INTERLEAVED,
-    FULL_WORKER_GRID_SHARDED,
-    SINGLE_TILE_HIGH_WIDTH_SHARDED
-};
-
 enum AllGatherBidirectionalMode {
     // Splits the tensor into two and sends each half in opposite directions
     // the full width around the ring
@@ -42,8 +36,6 @@ using ccl::Topology;
 }; // namespace all_gather_op
 
 using ccl::EriscDatamoverBuilder;
-
-AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim);
 
 class AllGatherConfig {
     static AllGatherBidirectionalMode choose_bidirectional_mode(Tensor const& input_tensor);
@@ -90,7 +82,6 @@ class AllGatherConfig {
     bool is_input_dram() const { return input_is_dram; }
     bool is_output_dram() const { return output_is_dram; }
 
-    AllGatherMode get_mode() const { return mode; }
 
     void print() const {
         log_trace(tt::LogOp, "AllGatherConfig: (");
@@ -119,7 +110,6 @@ class AllGatherConfig {
     uint32_t eth_buffers_l1_base_byte_address;
     uint32_t eth_sems_l1_base_byte_address;
     const all_gather_op::Topology topology;
-    AllGatherMode mode;
     AllGatherBidirectionalMode bidirectional_mode;
     bool is_sharded;
     bool enable_bidirectional;

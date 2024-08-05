@@ -19,7 +19,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
-    if (/*input_tensor.is_sharded() ||*/ perf_degradation_from_full_tensor_mode) {
+    if (perf_degradation_from_full_tensor_mode) {
         return AllGatherBidirectionalMode::SPLIT_TENSOR;
     }
     return AllGatherBidirectionalMode::FULL_TENSOR;
@@ -36,8 +36,6 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
 
     input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
     output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
-
-    mode(choose_all_gather_mode(input_tensor, output_tensor, dim)),
 
     // Sharded currently doesn't support FULL_TENSOR bidirectional due to indexers that require updating in order to support this
     // new mode
@@ -79,8 +77,6 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     //     }
     //     log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
 
-    //     // HACK FOR DEVELOPMENT ONLY
-    //     this->num_eth_buffers = 1;
     // }
 
     this->num_workers_per_link = this->num_eth_buffers;
@@ -96,19 +92,6 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
 
 }
 
-AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim) {
-    bool is_sharded = input_tensor.is_sharded();
-
-    if (is_sharded) {
-        if (input_tensor.buffer()->shard_spec().tensor2d_shape[0] > 1) {
-            return AllGatherMode::FULL_WORKER_GRID_SHARDED;
-        } else {
-            return AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED;
-        }
-    } else {
-        return AllGatherMode::RING_INTERLEAVED;
-    }
-}
 
 void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 1);
@@ -166,16 +149,7 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    AllGatherMode all_gather_mode = choose_all_gather_mode(input_tensors.at(0), output_tensors.at(0), dim);
-    switch (all_gather_mode) {
-        case AllGatherMode::RING_INTERLEAVED:
-        case AllGatherMode::FULL_WORKER_GRID_SHARDED:
-        case AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED:
-            return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
-        break;
-        default:
-            TT_THROW("Unsupported AllGatherMode");
-    };
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
 }
 
 namespace operations {

@@ -438,13 +438,8 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
-        int32_t shard_size_in_bytes =
-            is_sharded ? (input_tensor.buffer()->page_size() * input_tensor.buffer()->shard_spec().tensor2d_shape[0] *
-                          input_tensor.buffer()->shard_spec().tensor2d_shape[1]) /
-                             input_tensor.shard_spec()->num_cores()
-                       : -1;
-        this->input_page_size = is_sharded ? shard_size_in_bytes : input_tensor.buffer()->page_size();
-        ;
+        this->input_page_size = input_tensor.buffer()->page_size();
+
         if (row_major) {
             this->num_cols = input_tensor.get_legacy_shape()[-1];
             auto input_shape = input_tensor.get_legacy_shape();
@@ -492,28 +487,23 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 
     virtual void increment(uint32_t num_pages) override {
-        if (is_sharded) {
-            // nothing to do here - is handled by
-        } else {
-            // Only for interleaved
-            if (num_pages /*pages_per_worker*/ > 0) {
-                if (row_major) {
-                    uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
-                    uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
-                    this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_blocks_shifted * row_offset;
-                    this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
-                } else {
-                    uint32_t num_cols_shifted = col_idx + num_pages /*pages_per_worker*/;
-                    uint32_t num_rows_shifted = num_cols_shifted / num_cols;
-                    uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
-                    this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_rows_shifted * col_offset +
-                                                   num_blocks_shifted * row_offset;
-                    this->col_idx = num_cols_shifted % num_cols;
-                    this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
-                }
+        if (num_pages /*pages_per_worker*/ > 0) {
+            if (row_major) {
+                uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
+                uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
+                this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_blocks_shifted * row_offset;
+                this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
+            } else {
+                uint32_t num_cols_shifted = col_idx + num_pages /*pages_per_worker*/;
+                uint32_t num_rows_shifted = num_cols_shifted / num_cols;
+                uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
+                this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_rows_shifted * col_offset +
+                                                num_blocks_shifted * row_offset;
+                this->col_idx = num_cols_shifted % num_cols;
+                this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
             }
-            this->input_start_page_idx += num_pages /*pages_per_worker*/;
         }
+        this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
 
