@@ -135,10 +135,43 @@ std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
 
 static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
     auto const& core_range = shard_spec.grid.bounding_box();
+    log_trace(tt::LogOp, "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}", core_range.start_coord.x, core_range.start_coord.y, core_range.end_coord.x, core_range.end_coord.y);
+    log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
+
     return {core_range.start_coord, core_range.end_coord};
 }
+// non-transposed - always row-major layout
+// vec<logical row -> noc row>, vec<logicacal col -> noc col>
+static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_from_shard_spec(Device *d, const ShardSpec& shard_spec) {
+    TT_ASSERT(d != nullptr);
+    auto const& core_range = shard_spec.grid.bounding_box();
+    std::vector<uint32_t> logical_to_noc_row_map;
+    std::vector<uint32_t> logical_to_noc_col_map;
+    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        logical_to_noc_row_map.push_back(noc_core.y);
+    }
+    for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        logical_to_noc_col_map.push_back(noc_core.x);
+    }
 
-void emit_sharded_tensor_kernel_args(Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
+    return {logical_to_noc_row_map, logical_to_noc_col_map};
+}
+
+void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
+    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
+    args.push_back(row_map.size());
+    for (uint32_t i = 0; i < row_map.size(); i++) {
+        args.push_back(row_map.at(i));
+    }
+    args.push_back(col_map.size());
+    for (uint32_t i = 0; i < col_map.size(); i++) {
+        args.push_back(col_map.at(i));
+    }
+}
+
+void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
     bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     // shard_grid_height (cores)
@@ -153,6 +186,14 @@ void emit_sharded_tensor_kernel_args(Tensor const& tensor, std::vector<uint32_t>
     args.push_back(pages_per_shard);
     // transposed grid
     args.push_back(static_cast<uint32_t>(shard_grid_transposed));
+
+
+    for (std::size_t y = shard_grid_start.y; y <= shard_grid_start.y + shard_grid_end.y; y++) {
+        for (std::size_t x = shard_grid_start.x; x <= shard_grid_start.x + shard_grid_end.x; x++) {
+            auto routing_coord = d->worker_core_from_logical_core(CoreCoord(x, y));
+            log_trace(tt::LogOp, "SHARD CORE: x:{} y:{} -> x:{} y:{}", x, y, routing_coord.x, routing_coord.y);
+        }
+    }
 };
 
 
@@ -646,8 +687,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(ring_size)
                             };
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(input_tensor, worker_reader_sender_ct_args, input_pages_per_shard);
-                                emit_sharded_tensor_kernel_args(output_tensor, worker_reader_sender_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard);
                             };
 
                             log_trace(tt::LogOp, "Worker {} SR args", b);
@@ -758,6 +799,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(input_buffer->address()),
                                 static_cast<uint32_t>(output_buffer->address())
                             };
+                            if (is_sharded) {
+                                emit_sharded_tensor_kernel_rt_args(device, input_tensor, args, input_pages_per_shard);
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, args, output_pages_per_shard);
+                            }
                             return args;
                         }
                     };
@@ -819,7 +864,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(output_tensor, worker_writer_sender_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard);
                             }
                             log_trace(tt::LogOp, "Worker {} SW CT args", b);
                             log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
@@ -935,6 +980,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(sender_eth_buffer_addrs.at(b)),
                                 static_cast<uint32_t>(sender_eth_sem_addrs.at(b))
                             };
+
+                            if (is_sharded) {
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args, output_pages_per_shard);
+                            }
+
                             log_trace(tt::LogOp, "Worker {} SW rt args", b);
                             log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
                             log_trace(tt::LogOp, "\tsender_eth_buffer_addrs: {}", sender_eth_buffer_addrs.at(b));
@@ -1178,7 +1228,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard);
                             }
 
                             log_trace(tt::LogOp, "Worker {} RW ct args", b);
@@ -1271,6 +1321,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(worker_sender_reader.x),
                                 static_cast<uint32_t>(worker_sender_reader.y),
                             };
+
+                            if (is_sharded) {
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args, output_pages_per_shard);
+                            }
 
                             log_trace(tt::LogOp, "Worker {} RW rt args", b);
                             log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());

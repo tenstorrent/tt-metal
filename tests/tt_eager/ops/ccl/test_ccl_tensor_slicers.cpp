@@ -26,7 +26,8 @@ void run_width_sharded_tensor_slice_indexer_get_page_location_test(
 
     const std::size_t global_num_pages = pages_per_shard * shard_grid_width * shard_grid_height;
 
-    auto addrgen = WidthShardedAddressGenerator<WormholeWorkerToNocLookup>(
+    auto addrgen = WidthShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup>(
+        UnharvestedWormholeWorkerToNocLookup(),
         device_shard_spec_t{
             shard_grid_height,
             shard_grid_width,

@@ -9,10 +9,20 @@
 
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t arg_idx = 0;
+    const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
     // Different per worker receiver writer
-    const uint32_t worker_sender_reader_noc_x = get_arg_val<uint32_t>(1);
-    const uint32_t worker_sender_reader_noc_y = get_arg_val<uint32_t>(2);
+    const uint32_t worker_sender_reader_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_sender_reader_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    #ifdef SHARDED
+    uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_nrows;
+    uint32_t output_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_ncols;
+    #endif
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_transfers = get_compile_time_arg_val(1);
@@ -57,7 +67,8 @@ void kernel_main() {
             .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED
             // TODO: type selection based on ct-arg value
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -81,7 +92,8 @@ void kernel_main() {
             .data_format = in0_df
         };
         #elif defined SHARDED
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -111,6 +123,10 @@ void kernel_main() {
         // DPRINT << "rws TRANSFER " << i << "\n";
         if constexpr (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
+
+                #ifdef SHARDED
+                ASSERT(output_page_idx < output_tensor_shard_pages_per_shard * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+                #endif
                 // DPRINT << "rws WRITE FULL CHUNK " << i << "\n";
                 write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size);
                 noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
@@ -118,6 +134,9 @@ void kernel_main() {
         }
         if constexpr (rem_num_pages > 0) {
             // DPRINT << "rws WRITE PARTIAL CHUNK " << i << "\n";
+            #ifdef SHARDED
+            ASSERT(output_page_idx < output_tensor_shard_pages_per_shard * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+            #endif
             write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
             noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
             ASSERT(num_pages == 0 || num_pages > rem_num_pages);

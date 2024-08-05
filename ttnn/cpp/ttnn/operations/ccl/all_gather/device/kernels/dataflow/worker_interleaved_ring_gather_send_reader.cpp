@@ -7,9 +7,27 @@
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
+
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_addr = get_arg_val<uint32_t>(1);
+    uint32_t arg_idx = 0;
+    const uint32_t src_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
+
+    #ifdef SHARDED
+    uint32_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const input_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += input_shard_grid_nrows;
+    uint32_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const input_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += input_shard_grid_ncols;
+
+    uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_nrows;
+    uint32_t output_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_ncols;
+    #endif
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
@@ -64,7 +82,8 @@ void kernel_main() {
         .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED
 
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> s = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> s = {
+                HarvestedWormholeWorkerToNocLookup(input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = input_tensor_shard_grid_height,
                     .shard_grid_width = input_tensor_shard_grid_width,
@@ -77,7 +96,8 @@ void kernel_main() {
                 .page_offset = src_addr
             };
 
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -107,7 +127,8 @@ void kernel_main() {
         };
         #elif defined SHARDED
 
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> s = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> s = {
+                HarvestedWormholeWorkerToNocLookup(input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = input_tensor_shard_grid_height,
                     .shard_grid_width = input_tensor_shard_grid_width,
@@ -120,7 +141,8 @@ void kernel_main() {
                 .page_offset = src_addr
             };
 
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -157,6 +179,8 @@ void kernel_main() {
     }
 
     uint32_t sem_idx = 1;
+
+    DPRINT << "SR DONE READ INPUT TENSOR\n";
 
     // num_transfers = num_devices - 1
     for (uint32_t i = 1; i < num_transfers; ++i) {

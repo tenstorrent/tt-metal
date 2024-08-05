@@ -8,10 +8,19 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 void kernel_main() {
+    uint32_t arg_idx = 0;
+    const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eth_sender_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t eth_sender_l1_base_addr = get_arg_val<uint32_t>(1);
-    const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(2);
+    #ifdef SHARDED
+    uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_nrows;
+    uint32_t output_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t * const output_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    arg_idx += output_shard_grid_ncols;
+    #endif
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_transfers = get_compile_time_arg_val(1);
@@ -51,7 +60,8 @@ void kernel_main() {
         InterleavedAddrGen<dst_is_dram> d = {
             .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -75,7 +85,8 @@ void kernel_main() {
             .data_format = in0_df
         };
         #elif defined SHARDED
-            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
                 .device_shard_spec = {
                     .shard_grid_height = output_tensor_shard_grid_height,
                     .shard_grid_width = output_tensor_shard_grid_width,
@@ -89,6 +100,13 @@ void kernel_main() {
             };
         #endif
     #endif
+
+    for (uint32_t i = 0; i < output_shard_grid_nrows; i++) {
+        DPRINT << "r(logical)=" << i << ", r(noc)=" << output_shard_grid_row_map[i] << "\n";
+    }
+    for (uint32_t i = 0; i < output_shard_grid_ncols; i++) {
+        DPRINT << "c(logical)=" << i << ", c(noc)=" << output_shard_grid_col_map[i] << "\n";
+    }
 
     // Used to wait until eth sender has space available
     volatile tt_l1_ptr uint32_t* writer_send_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_send_sem_addr);

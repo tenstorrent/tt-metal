@@ -11,16 +11,16 @@ using noc_grid_index_t = std::uint8_t;
 
 template <typename ArchSpecificWorkerToNocLookup>
 struct WorkerToNocCoordLookup {
-    static noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) {
+    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
         return ArchSpecificWorkerToNocLookup::get_noc_x_from_worker_x(worker_x);
     }
 
-    static noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) {
+    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
         return ArchSpecificWorkerToNocLookup::get_noc_y_from_worker_y(worker_y);
     }
 };
 
-struct WormholeWorkerToNocLookup : WorkerToNocCoordLookup<WormholeWorkerToNocLookup>{
+struct UnharvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup>{
     static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x = {
         1,2,3,4,6,7,8,9
     };
@@ -28,15 +28,35 @@ struct WormholeWorkerToNocLookup : WorkerToNocCoordLookup<WormholeWorkerToNocLoo
         1,2,3,4,5,7,8,9,10,11
     };
 
-    static noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) {
+    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
         // ASSERT worker_x < worker_to_routing_x_wormhole.size()
         return worker_to_routing_x[worker_x];
     }
 
-    static noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) {
+    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
         // ASSERT worker_y < worker_to_routing_y_wormhole.size()
         return worker_to_routing_y[worker_y];
     }
+};
+
+struct HarvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup>{
+    HarvestedWormholeWorkerToNocLookup(uint32_t nrows, const uint32_t *const row_map, uint32_t ncols, const uint32_t *const col_map) :
+        nrows(nrows), row_map(row_map), ncols(ncols), col_map(col_map) {}
+
+    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
+        // ASSERT worker_x < worker_to_routing_x_wormhole.size()
+        return col_map[worker_x];
+    }
+
+    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
+        // ASSERT worker_y < worker_to_routing_y_wormhole.size()
+        return row_map[worker_y];
+    }
+
+    uint32_t nrows;
+    const uint32_t *const row_map;
+    uint32_t ncols;
+    const uint32_t *const col_map;
 };
 
 
@@ -59,12 +79,13 @@ struct device_shard_spec_t {
 
 template <typename worker_to_noc_lookup_t>
 struct WidthShardedAddressGenerator {
+    worker_to_noc_lookup_t worker_to_noc_lookup;
     device_shard_spec_t tensor_shard_spec;
     uint32_t page_size;
     uint32_t bank_base_address;
 
    public:
-    WidthShardedAddressGenerator(device_shard_spec_t const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, device_shard_spec_t const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
     test_shard_location_t get_page_location(std::size_t global_page_id) const {
         // branchless
@@ -90,8 +111,8 @@ struct WidthShardedAddressGenerator {
         std::size_t worker_x_logical = tensor_shard_spec.shard_grid_start_x_logical + worker_x_offset;
         std::size_t worker_y_logical = tensor_shard_spec.shard_grid_start_y_logical + worker_y_offset;
 
-        noc_grid_index_t noc_x = worker_to_noc_lookup_t::get_noc_x_from_worker_x(worker_x_logical);
-        noc_grid_index_t noc_y = worker_to_noc_lookup_t::get_noc_y_from_worker_y(worker_y_logical);
+        noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
+        noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
         return test_shard_location_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard};
     }
 

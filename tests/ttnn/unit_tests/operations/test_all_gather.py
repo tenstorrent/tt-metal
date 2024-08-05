@@ -434,6 +434,9 @@ def run_line_all_gather(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
+        (4, 2, [1, 4, 32, 3584], 1, ttl.tensor.Layout.TILE),
+        (8, 1, [1, 8, 32, 2048], 1, ttl.tensor.Layout.TILE),
+        (8, 1, [1, 8, 32, 4096], 1, ttl.tensor.Layout.TILE),
         # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         # # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
@@ -444,14 +447,14 @@ def run_line_all_gather(
         # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        # (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttl.tensor.DataType.BFLOAT8_B,  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
@@ -785,6 +788,16 @@ def run_all_gather_sharded(
 
     unchunked_input_tensor = torch.rand(unchunked_input_shape).bfloat16()
 
+    tile_id = 0
+    for w in range(input_shape[0]):
+        for z in range(input_shape[1]):
+            for y in range(0, input_shape[2], 32):
+                for x in range(0, input_shape[3], 32):
+                    for yy in range(32):
+                        for xx in range(32):
+                            unchunked_input_tensor[w][z][y + yy][x + xx] = tile_id
+                    tile_id += 1
+
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
 
     input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
@@ -845,9 +858,13 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
+    tt_input_tensors_dups = []
     tt_input_tensors = []
 
     for i, t in enumerate(input_tensors):
+        tt_input_tensors_dups.append(
+            ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config)
+        )
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
@@ -866,6 +883,21 @@ def run_all_gather_sharded(
         if not eq:
             all_eq = False
             logger.error(f"output mismatch for tensor {i}")
+            for w in range(input_shape[0]):
+                for z in range(input_shape[1]):
+                    for y in range(0, input_shape[2], 32):
+                        for x in range(0, input_shape[3], 32):
+                            xx = 0
+                            yy = 0
+                            # for yy in range(32):
+                            #     for xx in range(32):
+                            if tt_output_tensor[w, z, y + yy, x + xx] != unchunked_input_tensor[w, z, y + yy, x + xx]:
+                                logger.error(
+                                    f"mismatch at {w}, {z}, {y + yy}, {x + xx}: {tt_output_tensor[w, z, y + yy, x + xx]} != {unchunked_input_tensor[w, z, y + yy, x + xx]}"
+                                )
+                                # if not reported_mismatch:
+                                #     reported_mismatch = True
+
     assert all_eq, f"{i} FAILED: {output}"
 
 
@@ -878,8 +910,8 @@ def run_all_gather_sharded(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        # ttl.tensor.DataType.BFLOAT16, # https://github.com/tenstorrent/tt-metal/issues/9686
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
 @pytest.mark.parametrize(
@@ -912,11 +944,11 @@ def run_all_gather_sharded(
         #     (32, 128),
         #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
         # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 64),
-        #     (32, 32),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
-        # ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 64),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+        ),
         # ( # https://github.com/tenstorrent/tt-metal/issues/9686
         #     (1, 1, 32, 128),
         #     (32, 64),

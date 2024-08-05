@@ -65,7 +65,7 @@ class AllGatherConfig {
 
         erisc_handshake_address(tt::round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
         topology(topology),
-        enable_bidirectional(topology == all_gather_op::Topology::Ring),
+        enable_bidirectional(false),//topology == all_gather_op::Topology::Ring),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
@@ -111,6 +111,9 @@ class AllGatherConfig {
                 this->num_eth_buffers = 1;
             }
             log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
+
+            // HACK FOR DEVELOPMENT ONLY
+            this->num_eth_buffers = 1;
         }
 
         this->num_workers_per_link = this->num_eth_buffers;
