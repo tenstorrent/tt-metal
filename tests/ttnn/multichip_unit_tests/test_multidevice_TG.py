@@ -1331,3 +1331,8 @@ def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: in
                 expected = full_tensor[..., row_index * tile_size : (row_index + 1) * tile_size, :]
 
         assert torch.allclose(device_tensor_torch, expected, atol=1e-3)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_visualize_device_mesh(device_mesh):
+    ttnn.visualize_device_mesh(device_mesh)

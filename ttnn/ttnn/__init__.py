@@ -166,6 +166,7 @@ from ttnn.multi_device import (
     MeshToTensor,
     ConcatMeshToTensor,
     ListMeshToTensor,
+    visualize_device_mesh,
 )
 
 from ttnn.core import (

@@ -18,6 +18,40 @@ DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 DeviceMesh.core_grid = property(get_device_mesh_core_grid)
 
 
+def visualize_device_mesh(device_mesh):
+    from rich import box, padding
+    from rich.align import Align
+    from rich.console import Console
+    from rich.table import Table
+
+    # Setup rich table
+    rows, cols = device_mesh.shape
+    mesh_table = Table(
+        title=f"DeviceMesh(rows={rows}, cols={cols}):",
+        show_header=False,
+        show_footer=False,
+        box=box.SQUARE,
+        expand=False,
+        show_lines=True,
+        padding=(0, 0),
+    )
+
+    for _ in range(cols):
+        mesh_table.add_column(justify="center", vertical="middle")
+
+    # Populate table
+    for row_idx in range(rows):
+        row_cells = []
+        for col_idx in range(cols):
+            device = device_mesh.get_device(row_idx, col_idx)
+            cell_content = f"Dev. ID: {device.id()}\n ({row_idx}, {col_idx})" if device else "Empty"
+            cell = padding.Padding(Align(cell_content, "center", vertical="middle"), (0, 0))
+            row_cells.append(cell)
+        mesh_table.add_row(*row_cells)
+
+    Console().print(mesh_table)
+
+
 def get_num_devices() -> List[int]:
     return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
 
