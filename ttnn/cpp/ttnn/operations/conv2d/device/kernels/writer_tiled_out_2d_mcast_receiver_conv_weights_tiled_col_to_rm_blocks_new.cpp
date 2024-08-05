@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -106,14 +106,23 @@ void kernel_main() {
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
+    /*DPRINT << "weight receiver out_num_blocks_w = " << out_num_blocks_w << ENDL();*/
+    /*DPRINT << "weight receiver out_num_blocks_h = " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "weight receiver out_num_blocks_h = " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "weight receiver out_num_blocks_h = " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "weight receiver out_num_blocks_h = " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "weight receiver weight_block_height_num_outer = " << weight_block_height_num_outer << ENDL();*/
+    int temp = 0;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
+        DPRINT << "weight receiver weight_block_height_num_outer = " << weight_block_height_num_outer << ENDL();
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
             // MCAST RECEIVE WEIGHTS
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
+            // weight_block_height_num_outer = 8 for 16*8 outer and inner
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 // Set weights semaphore value to INVALID
@@ -124,7 +133,11 @@ void kernel_main() {
 
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                 noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
-
+                if(temp == 0 && weight_tile_h_outer_i == 4) {
+                    uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
+                    /*print_pages(weight_write_l1_addr, 32*32, weight_block_num_tiles);*/
+                    temp++;
+                }
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
             } // for weight_block_height_num_outer
 
@@ -154,6 +167,7 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     } // out_num_blocks_w
 
+    DPRINT << "SHARDED_OUT = " << SHARDED_OUT << ENDL();
     #ifdef SHARDED_OUT
     #ifdef UNPAD_UNTILIZE_OUT
     DPRINT << "Writing to untilized unpadded out cb" << ENDL();
@@ -183,6 +197,7 @@ void kernel_main() {
                     src_cb_addr += out_block_width_padded_bytes;
                     dst_cb_addr += out_block_width_bytes;
                 }
+                cb_pop_front(untilized_padded_out_cb, out_block_width_ntiles);
             }
         }
     }

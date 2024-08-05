@@ -77,7 +77,7 @@ void copy_sticks_async(
                 uint64_t dst_addr = base_addr + dst_offset;
                 uint32_t src_addr = in_base_l1_addr + src_offset;
                 noc_async_write(src_addr, dst_addr, size);
-                print_pages(src_addr, size/2, 1);
+                /*print_pages(src_addr, size/2, 1);*/
             }
         }
 

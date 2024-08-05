@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -92,6 +92,8 @@ void kernel_main() {
     uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
 
+    DPRINT <<" weights mcast num cores "<< weights_mcast_num_cores << ENDL();
+    DPRINT <<" weights mcast num dests "<< weights_mcast_num_dests << ENDL();
     #ifndef SKIP_MCAST
         // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
         volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
@@ -141,22 +143,37 @@ void kernel_main() {
         .data_format = weight_df
     };
 
+    int temp = 0;
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
+    /*DPRINT << "out_num_blocks_w = " << out_num_blocks_w << ENDL();*/
+    /*DPRINT << "out_num_blocks_h = " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "weight_block_height_num_outer = " << weight_block_height_num_outer << ENDL();*/
+    /*DPRINT << "hil num_blocks_weight_h = " << num_blocks_weight_h << ENDL();*/
+    /*DPRINT << "weight_block_height_ntiles = " << weight_block_height_ntiles << ENDL();*/
+    /*DPRINT << "weight_block_width_ntiles = " << weight_block_width_ntiles << ENDL();*/
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+            /*temp = 0;*/
             // READ WEIGHTS + MCAST SEND WEIGHTS
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
             uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
+            // weight_block_height_num_outer = 8;
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
-                //DPRINT << "Going to reserve " << weight_block_num_tiles << " tiles in cb_id_weight" << ENDL();
+                /*DPRINT << "Going to reserve " << weight_block_num_tiles << " tiles in cb_id_weight" << ENDL();*/
+                /*DPRINT << "weight block height num outer =  " << weight_block_height_num_outer << " tiles in cb_id_weight" << ENDL();*/
+                /*DPRINT << "weight block height num inner =  " << num_blocks_weight_h * weight_block_height_ntiles << " tiles in cb_id_weight" << ENDL();*/
+                /*DPRINT << "weight weight_stride_h h " << weight_stride_h << ENDL();*/
+                /*DPRINT << "weight tile nbytes  = " << weight_tile_nbytes << ENDL();*/
+                /*DPRINT << " num_blocks_weight_h = " << num_blocks_weight_h << ENDL();*/
+                /*DPRINT << "weight_block_height_ntiles = " << weight_block_height_ntiles << ENDL();*/
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 //DPRINT << "Reserved " << weight_block_num_tiles << " tiles in cb_id_weight" << ENDL();
                 uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
@@ -165,6 +182,8 @@ void kernel_main() {
                 uint32_t weights_start_address = weight_write_l1_addr;
                 uint32_t weights_block_size_bytes = 0;
                 // loop over weight block tiles along h
+                // num_blocks_weight_h * weight_block_height_ntiles = 14, 5
+                // weight_stride_h = 16, 8
                 for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h * weight_block_height_ntiles; block_weight_h++) { // TODO: 9
 
                     // mcast args
@@ -181,8 +200,17 @@ void kernel_main() {
                     } // for weight_block_w
                     weight_current_block_start_tile_id += weight_stride_h;
                 }
-                //DPRINT << "Initiated read for weights" << ENDL();
+                DPRINT << "Initiated read for weights" << ENDL();
+                DPRINT << "weight tile nbytes = " << weight_tile_nbytes << ENDL();
                 noc_async_read_barrier();
+                /*while(temp < 14*(int)weight_block_width_ntiles) {*/
+                while(weight_tile_h_outer_i == 2 && temp < 1) {
+                    uint32_t addr = weights_start_address;
+                    /*print_pages(addr, weight_tile_nbytes/2, 5, 0);*/
+                    weights_start_address += weight_tile_nbytes;
+                    DPRINT << ENDL();
+                    temp++;
+                }
                 //DPRINT << "Read weights" << ENDL();
                 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset
@@ -208,11 +236,11 @@ void kernel_main() {
                     noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-                //DPRINT << "Pushed back " << weight_block_num_tiles << " tiles in cb_id_weight" << ENDL();
+                DPRINT << "Pushed back " << weight_block_num_tiles << " tiles in cb_id_weight" << ENDL();
             } // for weight_block_height_num_outer
             //DPRINT << "Done with weights" << ENDL();
-            //DPRINT << "FUSE BIAS: " << FUSE_BIAS << ENDL();
-            //DPRINT << "load bias: " << load_bias << ENDL();
+            DPRINT << "FUSE BIAS: " << FUSE_BIAS << ENDL();
+            //DPRINT << "load bias: " << load_bias << ENDL();*/
             #ifdef FUSE_BIAS
             if (load_bias) {
                 DPRINT << "Reserving " << bias_ntiles << " tiles in cb_id_bias" << ENDL();
@@ -268,6 +296,7 @@ void kernel_main() {
     } // out_num_blocks_w
     #ifdef SHARDED_OUT
     #ifdef UNPAD_UNTILIZE_OUT
+    DPRINT << "########################################################################" << ENDL();
     DPRINT << "Writing to untilized unpadded out cb" << ENDL();
     DPRINT << "untilized_padded_out_cb: " << untilized_padded_out_cb << ENDL();
     DPRINT << "cb_id_out0: " << cb_id_out0 << ENDL();
@@ -281,6 +310,10 @@ void kernel_main() {
     DPRINT << "out_block_height_ntiles: " << out_block_height_num_tiles << ENDL();
     DPRINT << "out_block_width_padded_bytes: " << out_block_width_padded_bytes << ENDL();
     DPRINT << "out_block_width_bytes: " << out_block_width_bytes << ENDL();
+    DPRINT << "out_block_height_num_tiles = " << out_block_height_num_tiles << ENDL();
+    /*print_pages(get_read_ptr(untilized_padded_out_cb), out_block_width_padded_bytes/2, 32*4);*/
+
+    uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
     for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
         for(uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
             for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
@@ -292,9 +325,11 @@ void kernel_main() {
                 for (uint32_t r = 0; r < 32; r++) {
                     noc_async_read(get_noc_addr(src_cb_addr), dst_cb_addr, out_block_width_bytes);
                     noc_async_read_barrier();
+                    /*print_pages(get_noc_addr(src_cb_addr), out_block_width_bytes, 1);*/
                     src_cb_addr += out_block_width_padded_bytes;
                     dst_cb_addr += out_block_width_bytes;
                 }
+                cb_pop_front(untilized_padded_out_cb, out_block_width_ntiles);
             }
         }
     }

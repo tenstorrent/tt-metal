@@ -17,8 +17,18 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
 // #include "debug_macros.h"
 
 // SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
@@ -84,6 +94,7 @@ inline void reblock_and_untilize(
 namespace NAMESPACE {
 void MAIN {
 
+    int temp = 0;
     constexpr uint32_t in0_block_w            = get_compile_time_arg_val(0); // inner block size in tiles
     constexpr uint32_t in0_num_subblocks      = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles    = get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;

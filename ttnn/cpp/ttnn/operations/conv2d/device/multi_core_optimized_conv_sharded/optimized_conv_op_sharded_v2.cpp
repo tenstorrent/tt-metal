@@ -2255,9 +2255,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         bias_cb,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
         num_blocks_weight_h,  // = number of blocks of weight in height dim
-        in1_block_num_tiles,
-        conv_act_c_blocks,
-        weight_block_h_ntiles,
+        in1_block_num_tiles,  // num_blocks_weight_h
+        conv_act_c_blocks,     // weight_block_height_num_outer
+        weight_block_h_ntiles, // weight_block_height_ntiles
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,                          // weight_stride_h
         weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
@@ -2305,8 +2305,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         TT_FATAL(block_sharded, "Need to handle this case for non-sliced weights");
         TT_FATAL(untilize_out, "Cannot support non-tile multiple shard width with tilized output");
         writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles);
-        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles * TILE_WIDTH);
-        writer_compile_time_args.push_back(parallelization_config.per_core_out_matrix_width);
+        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles * TILE_WIDTH * 2);
+        writer_compile_time_args.push_back(parallelization_config.per_core_out_matrix_width * 2);
         writer_compile_time_args.push_back(untilized_padded_out_cb);
         writer_defines["UNPAD_UNTILIZE_OUT"] = 1;
         writer_mcast_sender_defines["UNPAD_UNTILIZE_OUT"] = 1;

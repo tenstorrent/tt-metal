@@ -525,6 +525,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
             weight_tensor_, num_cores_c, weights_bias_dtype);
     }
+    cout << "weight tensor = " << endl;
+    /*weight_tensor_.print();*/
+    auto shape = weight_tensor_.shape();
+    cout << "weight shape = " << shape[0] << ", " << shape[1] << endl;
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, nullopt);
     if (bias_tensor.has_value()) {
         if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
