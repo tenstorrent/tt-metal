@@ -18,7 +18,6 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
-#include "tt_metal/common/core_coord.h"
 
 namespace tt {
 
