@@ -133,6 +133,42 @@ std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
     return worker_sender_num_transfers;
 }
 
+static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
+    auto const& core_range = shard_spec.grid.bounding_box();
+    return {core_range.start_coord, core_range.end_coord};
+}
+
+void emit_sharded_tensor_kernel_args(Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
+    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
+    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    // shard_grid_height (cores)
+    args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
+    // shard_grid_width (cores)
+    args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
+    // shard_grid_start_y
+    args.push_back(shard_grid_start.y);
+    // shard_grid_start_x
+    args.push_back(shard_grid_start.x);
+    // pages_per_shard
+    args.push_back(pages_per_shard);
+    // transposed grid
+    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
+};
+
+
+void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pages_per_shard, std::string const& prefix) {
+    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
+    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR;
+
+    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard: {}", prefix,     pages_per_shard);
+    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
+}
+
+static constexpr bool new_shard_mode = true;
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
@@ -162,23 +198,29 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     const auto input_buffer = input_tensor.buffer();
     const auto output_buffer = output_tensor.buffer();
 
-    int32_t shard_size_in_bytes = is_sharded ?
+    int32_t input_shard_size_in_bytes = is_sharded ?
         (input_tensor_config->get_page_size() * input_buffer->shard_spec().tensor2d_shape[0] * input_buffer->shard_spec().tensor2d_shape[1]) / input_tensor.shard_spec()->num_cores() :
         -1;
-    uint32_t input_page_size = is_sharded ? shard_size_in_bytes : input_tensor_config->get_page_size();
-    uint32_t output_page_size = is_sharded ? shard_size_in_bytes : output_tensor_config->get_page_size();
+    int32_t output_shard_size_in_bytes = is_sharded ?
+        (output_tensor_config->get_page_size() * output_buffer->shard_spec().tensor2d_shape[0] * output_buffer->shard_spec().tensor2d_shape[1]) / output_tensor.shard_spec()->num_cores() :
+        -1;
+    uint32_t input_page_size = (is_sharded && !new_shard_mode) ? input_shard_size_in_bytes : input_tensor_config->get_page_size();
+    uint32_t output_page_size = (is_sharded && !new_shard_mode) ? output_shard_size_in_bytes : output_tensor_config->get_page_size();
+    std::size_t input_pages_per_shard = input_shard_size_in_bytes / input_page_size;
+    std::size_t output_pages_per_shard = output_shard_size_in_bytes / input_page_size;
     if (is_sharded) {
         log_trace(tt::LogOp, "input_buffer->page_size: {}", input_tensor_config->get_page_size());
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[0]: {}", input_buffer->shard_spec().tensor2d_shape[0]);
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[1]: {}", input_buffer->shard_spec().tensor2d_shape[1]);
     }
-    const uint32_t max_buffer_per_chunk = is_sharded ?
-        tt::round_down(all_gather_config.get_eth_buffer_size(), shard_size_in_bytes):
+    const uint32_t max_buffer_per_chunk = (is_sharded && !new_shard_mode) ?
+        tt::round_down(all_gather_config.get_eth_buffer_size(), input_shard_size_in_bytes):
         tt::round_down(all_gather_config.get_eth_buffer_size(), input_tensor_config->get_page_size());
-    const uint32_t max_pages_per_chunk = is_sharded ?
-        max_buffer_per_chunk / shard_size_in_bytes :
+    const uint32_t max_pages_per_chunk = (is_sharded && !new_shard_mode) ?
+        max_buffer_per_chunk / input_shard_size_in_bytes :
         max_buffer_per_chunk / input_page_size;
-    log_trace(tt::LogOp, "shard_size_in_bytes: {}", shard_size_in_bytes);
+    log_trace(tt::LogOp, "input_shard_size_in_bytes: {}", input_shard_size_in_bytes);
+    log_trace(tt::LogOp, "output_shard_size_in_bytes: {}", output_shard_size_in_bytes);
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
@@ -190,9 +232,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
     std::map<string, string> worker_defines;
     if (rm) {
-        worker_defines["RM_INTERLEAVED"] = "1";
+        worker_defines["ROW_MAJOR"] = "1";
     } else {
-        worker_defines["TILE_INTERLEAVED"] = "1";
+        worker_defines["TILED"] = "1";
+    }
+    if (is_sharded) {
+        worker_defines["SHARDED"] = "1";
+    } else {
+        worker_defines["INTERLEAVED"] = "1";
     }
 
     bool full_send_both_directions =
@@ -329,7 +376,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             uint32_t workers_per_link = all_gather_config.get_num_workers_per_link() / all_gather_config.get_num_eth_buffers_per_edm();
 
             // Circular Buffer Setup
-            uint32_t cb_page_size = is_sharded ? shard_size_in_bytes : input_page_size;
+            uint32_t cb_page_size = is_sharded ? input_shard_size_in_bytes : input_page_size;
             log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
             uint32_t cb_num_pages = 2 * max_pages_per_chunk;
             log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
@@ -358,7 +405,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                 pages_per_buffer.push_back((pages_per_link.at(i) / all_gather_config.get_num_eth_buffers_per_edm()));
                 pages_per_eth_l1_buffer.push_back(
-                    is_sharded ? std::min(pages_per_buffer.back(), max_pages_per_eth_l1_sender_buffer)
+                    (is_sharded && !new_shard_mode) ? std::min(pages_per_buffer.back(), max_pages_per_eth_l1_sender_buffer)
                             : max_pages_per_eth_l1_sender_buffer);
                 if (b < pages_per_link.at(i) % all_gather_config.get_num_eth_buffers_per_edm()) {
                     pages_per_buffer.back()++;
@@ -430,7 +477,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     }
                 }
             }
-            if (is_sharded) {
+            if (is_sharded && !new_shard_mode) {
                 for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                     auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
@@ -556,7 +603,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 if (!is_linear || !is_last_chip_in_chain) {
                     //// Send Reader
                     auto build_worker_send_reader_ct_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // # Send Reader (CT)
                             // 1) Shard Type
                             // 2) num_transfers
@@ -598,6 +645,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(cb_num_pages / 2),
                                 static_cast<uint32_t>(ring_size)
                             };
+                            if (new_shard_mode) {
+                                emit_sharded_tensor_kernel_args(input_tensor, worker_reader_sender_ct_args, input_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(output_tensor, worker_reader_sender_ct_args, output_pages_per_shard);
+                            };
 
                             log_trace(tt::LogOp, "Worker {} SR args", b);
                             log_trace(tt::LogOp, "\tall_gather_config.is_input_dram(): {}", all_gather_config.is_input_dram());
@@ -625,6 +676,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_addr: {}", sender_worker_reader_semaphore_addr);
                             log_trace(tt::LogOp, "\tis_clockwise_direction: {}", is_clockwise_direction ? 1 : 0);
 
+                            if (new_shard_mode) {
+                                log_sharded_tensor_kernel_args(input_tensor, input_pages_per_shard, "input");
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                            }
+
                             return worker_reader_sender_ct_args;
                         }
                     };
@@ -633,7 +689,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                     auto build_worker_send_reader_rt_args = [&]() {
                         bool is_clockwise = is_buffer_in_clockwise_direction(b);
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // # Send Reader (RT)
                             // 1) local semaphore address (same as before)
                             // 2) input tensor shard reader
@@ -707,7 +763,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     };
                     std::vector<uint32_t> const& worker_send_reader_rt_args = build_worker_send_reader_rt_args();
 
-                    std::string const& send_reader_kernel_path = is_sharded ?
+                    std::string const& send_reader_kernel_path = (is_sharded && !new_shard_mode) ?
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp" :
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
                     KernelHandle worker_reader_sender_kernel_id = tt::tt_metal::CreateKernel(
@@ -726,7 +782,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                     //// Send Writer
                     auto build_worker_sender_writer_ct_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             std::vector<uint32_t> worker_sender_writer_ct_args = {
                                 static_cast<uint32_t>(sharding_info.get_shard_type())
                             };
@@ -761,6 +817,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
                                 static_cast<uint32_t>(cb_num_pages / 2),
                             };
+
+                            if (new_shard_mode) {
+                                emit_sharded_tensor_kernel_args(output_tensor, worker_writer_sender_ct_args, output_pages_per_shard);
+                            }
                             log_trace(tt::LogOp, "Worker {} SW CT args", b);
                             log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
                             log_trace(tt::LogOp, "\tsender_num_transfers: {}", sender_worker_num_transfers.at(i).at(b));
@@ -784,6 +844,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
                             log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
 
+                            if (new_shard_mode) {
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                            }
                             return worker_writer_sender_ct_args;
                         }
                     };
@@ -791,7 +854,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> const& worker_sender_writer_ct_args = build_worker_sender_writer_ct_args();
 
                     auto build_worker_sender_writer_rt_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // Send Writer Args (RT)
                             // 1) eth_sender_l1_base_addr
                             // 2) eth_sender_l1_sem_addr
@@ -881,7 +944,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     };
                     std::vector<uint32_t> const& worker_sender_writer_rt_args = build_worker_sender_writer_rt_args();
 
-                    std::string const& sender_writer_kernel_path = is_sharded ?
+                    std::string const& sender_writer_kernel_path = (is_sharded && !new_shard_mode) ?
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp" :
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
                     KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -947,7 +1010,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                     //// Receive Reader
                     auto build_worker_receiver_reader_ct_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // Receiver Reader Args (CT)
                             std::vector<uint32_t> worker_receiver_reader_ct_args = {
                                 static_cast<uint32_t>(sharding_info.get_shard_type())
@@ -988,7 +1051,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     std::vector<uint32_t> const& worker_receiver_reader_ct_args = build_worker_receiver_reader_ct_args();
 
                     auto build_worker_receiver_reader_rt_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // Receiver Reader Args (RT)
                             // 1) eth_receiver_noc_x
                             // 2) eth_receiver_noc_y
@@ -1057,7 +1120,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     };
                     std::vector<uint32_t> worker_receiver_reader_rt_args = build_worker_receiver_reader_rt_args();
 
-                    std::string const& receiver_reader_kernel_path = is_sharded ?
+                    std::string const& receiver_reader_kernel_path = (is_sharded && !new_shard_mode) ?
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp" :
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
                     KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -1076,7 +1139,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                     //// Receive Writer
                     auto build_worker_receive_writer_ct_args = [&]() {
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // # Receiver Writer (CT)
                             // 1) Shard Type
                             std::vector<uint32_t> worker_receive_writer_ct_args = {
@@ -1114,6 +1177,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(ring_size)
                             };
 
+                            if (new_shard_mode) {
+                                emit_sharded_tensor_kernel_args(output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard);
+                            }
+
                             log_trace(tt::LogOp, "Worker {} RW ct args", b);
                             log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
                             log_trace(tt::LogOp, "\treceiver_num_transfers: {}", receiver_worker_num_transfers.at(i).at(b));
@@ -1139,6 +1206,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tis_clockwise_direction ? 1 : 0: {}", is_clockwise_direction ? 1 : 0);
                             log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
                             log_trace(tt::LogOp, "\tring_size: {}", ring_size);
+
+                            if (new_shard_mode) {
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                            }
+
                             return worker_writer_receiver_ct_args;
                         }
                     };
@@ -1146,7 +1218,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                     auto build_worker_receive_writer_rt_args = [&]() {
                         auto worker_sender_reader = device->worker_core_from_logical_core(sender_worker_cores.at(b));
-                        if (is_sharded) {
+                        if (is_sharded && !new_shard_mode) {
                             // # Receiver Writer (RT)
                             // 1) Remote sender reader semaphore address
                             // 2) Output tensor Writer shard addr gen
@@ -1209,7 +1281,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     };
                     std::vector<uint32_t> worker_receive_writer_rt_args = build_worker_receive_writer_rt_args();
 
-                    std::string const& receiver_writer_kernel_path = is_sharded ?
+                    std::string const& receiver_writer_kernel_path = (is_sharded && !new_shard_mode) ?
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp" :
                         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
                     KernelHandle worker_receive_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -1265,46 +1337,17 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         const auto& input = input_tensors[0];
         const auto& output = output_tensors[0];
         for (auto const& [kernel_id, core] : receive_writer_kernel_core_list) {
-            if (is_sharded) {
-                auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_writer_receiver_runtime_args.at(10) = output.buffer()->address();
-                log_trace(tt::LogOp, "override worker_writer_receiver_runtime_args:");
-                for (uint32_t j = 0; j < worker_writer_receiver_runtime_args.size(); ++j) {
-                    log_trace(tt::LogOp, "\tworker_writer_receiver_runtime_args[{}]: {}", j, worker_writer_receiver_runtime_args.at(j));
-                }
-            } else {
-                auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_writer_receiver_runtime_args.at(0) = output.buffer()->address();
-            }
+            auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            worker_writer_receiver_runtime_args.at(0) = output.buffer()->address();
         }
         for (auto const& [kernel_id, core] : send_reader_kernel_core_list) {
-            if (is_sharded) {
-                auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_reader_sender_runtime_args.at(7) = input.buffer()->address();
-                uint32_t num_dest_cores = worker_reader_sender_runtime_args.at(12);
-                worker_reader_sender_runtime_args.at(12 + num_dest_cores + 4) = output.buffer()->address();
-                log_trace(tt::LogOp, "override worker_reader_sender_runtime_args:");
-                for (uint32_t j = 0; j < worker_reader_sender_runtime_args.size(); ++j) {
-                    log_trace(tt::LogOp, "\tworker_reader_sender_runtime_args[{}]: {}", j, worker_reader_sender_runtime_args.at(j));
-                }
-            } else {
-                auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_reader_sender_runtime_args.at(0) = input.buffer()->address();
-                worker_reader_sender_runtime_args.at(1) = output.buffer()->address();
-            }
+            auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            worker_reader_sender_runtime_args.at(0) = input.buffer()->address();
+            worker_reader_sender_runtime_args.at(1) = output.buffer()->address();
         }
         for (auto const& [kernel_id, core] : send_writer_kernel_core_list) {
-            if (is_sharded) {
-                auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_writer_sender_runtime_args.at(12) = output.buffer()->address();
-                log_trace(tt::LogOp, "override worker_writer_sender_runtime_args:");
-                for (uint32_t j = 0; j < worker_writer_sender_runtime_args.size(); ++j) {
-                    log_trace(tt::LogOp, "\tworker_writer_sender_runtime_args[{}]: {}", j, worker_writer_sender_runtime_args.at(j));
-                }
-            } else {
-                auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
-                worker_writer_sender_runtime_args.at(0) = output.buffer()->address();
-            }
+            auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            worker_writer_sender_runtime_args.at(0) = output.buffer()->address();
         }
     };
 

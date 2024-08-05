@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -36,29 +37,103 @@ void kernel_main() {
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(24);
     constexpr uint32_t ring_size = get_compile_time_arg_val(25);
+    #ifdef SHARDED
+    constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(26);
+    constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(27);
+    constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(28);
+    constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(29);
+    constexpr uint32_t input_tensor_shard_pages_per_shard = get_compile_time_arg_val(30);
+    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(31) != 0;
+
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(32);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(33);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(34);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(35);
+    constexpr uint32_t output_tensor_shard_pages_per_shard = get_compile_time_arg_val(36);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(37) != 0;
+    #endif
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
 
-    #ifdef RM_INTERLEAVED
+    #ifdef ROW_MAJOR
+        #ifdef INTERLEAVED
     const InterleavedAddrGen<src_is_dram> s = {
         .bank_base_address = src_addr, .page_size = page_size};
     InterleavedAddrGen<dst_is_dram> d = {
         .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
-    #elif defined TILE_INTERLEAVED
-    const DataFormat in0_df = get_dataformat(cb_id_in0);
+        #elif defined SHARDED
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = page_size,
-        .data_format = in0_df
-    };
+            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> s = {
+                .device_shard_spec = {
+                    .shard_grid_height = input_tensor_shard_grid_height,
+                    .shard_grid_width = input_tensor_shard_grid_width,
+                    .shard_grid_start_y_logical = input_tensor_shard_grid_start_y_logical,
+                    .shard_grid_start_x_logical = input_tensor_shard_grid_start_x_logical,
+                    .pages_per_shard = input_tensor_shard_pages_per_shard,
+                    .transposed_grid = input_tensor_shard_grid_transposed
+                },
+                .page_size = output_page_size,
+                .page_offset = src_addr
+            };
 
-    InterleavedAddrGenFast<dst_is_dram> d = {
-        .bank_base_address = dst_addr,
-        .page_size = output_page_size,
-        .data_format = in0_df
-    };
+            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+                .device_shard_spec = {
+                    .shard_grid_height = output_tensor_shard_grid_height,
+                    .shard_grid_width = output_tensor_shard_grid_width,
+                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
+                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
+                    .pages_per_shard = output_tensor_shard_pages_per_shard,
+                    .transposed_grid = output_tensor_shard_grid_transposed
+                },
+                .page_size = output_page_size,
+                .page_offset = dst_addr
+            };
+        #endif
+    #elif defined TILED
+        #ifdef INTERLEAVED
+        const DataFormat in0_df = get_dataformat(cb_id_in0);
+
+        const InterleavedAddrGenFast<src_is_dram> s = {
+            .bank_base_address = src_addr,
+            .page_size = page_size,
+            .data_format = in0_df
+        };
+
+        InterleavedAddrGenFast<dst_is_dram> d = {
+            .bank_base_address = dst_addr,
+            .page_size = output_page_size,
+            .data_format = in0_df
+        };
+        #elif defined SHARDED
+
+            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> s = {
+                .device_shard_spec = {
+                    .shard_grid_height = input_tensor_shard_grid_height,
+                    .shard_grid_width = input_tensor_shard_grid_width,
+                    .shard_grid_start_y_logical = input_tensor_shard_grid_start_y_logical,
+                    .shard_grid_start_x_logical = input_tensor_shard_grid_start_x_logical,
+                    .pages_per_shard = input_tensor_shard_pages_per_shard,
+                    .transposed_grid = input_tensor_shard_grid_transposed
+                },
+                .page_size = output_page_size,
+                .page_offset = src_addr
+            };
+
+            WidthShardedAddressGenerator<WormholeWorkerToNocLookup> d = {
+                .device_shard_spec = {
+                    .shard_grid_height = output_tensor_shard_grid_height,
+                    .shard_grid_width = output_tensor_shard_grid_width,
+                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
+                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
+                    .pages_per_shard = output_tensor_shard_pages_per_shard,
+                    .transposed_grid = output_tensor_shard_grid_transposed
+                },
+                .page_size = output_page_size,
+                .page_offset = dst_addr
+            };
+
+        #endif
     #endif
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 

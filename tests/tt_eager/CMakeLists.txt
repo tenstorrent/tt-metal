@@ -6,6 +6,7 @@ set(TT_EAGER_TESTS_OPS
     ops/ccl/test_all_gather_utils.cpp
     ops/ccl/test_all_gather_sharded_indexing_helpers.cpp
     ops/ccl/test_ccl_helpers.cpp
+    ops/ccl/test_ccl_tensor_slicers.cpp
     ops/test_average_pool.cpp
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp
