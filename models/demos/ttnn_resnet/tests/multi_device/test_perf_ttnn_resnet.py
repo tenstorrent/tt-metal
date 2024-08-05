@@ -4,7 +4,6 @@
 
 import torch
 from loguru import logger
-import torchvision
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
@@ -21,7 +20,7 @@ from models.utility_functions import (
 
 from models.perf.perf_utils import prep_perf_report
 
-from models.demos.ttnn_resnet.tests.test_ttnn_resnet50_performant import (
+from models.demos.ttnn_resnet.tests.multi_device.test_ttnn_resnet50_performant import (
     setup_l1_sharded_input,
     setup_dram_sharded_input,
 )
@@ -36,11 +35,54 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
+
+def create_event(device):
+    event = []
+    if isinstance(device, ttnn.Device):
+        event.append(tt_lib.device.CreateEvent())
+    else:
+        for dev in device.get_device_ids():
+            event.append(tt_lib.device.CreateEvent())
+    return event
+
+
+def wait_for_event(device, cq_id, event):
+    if isinstance(device, ttnn.Device):
+        tt_lib.device.WaitForEvent(device, cq_id, event)
+    else:
+        for dev, eve in zip(device.get_device_ids(), event):
+            tt_lib.device.WaitForEvent(device.get_device(dev), cq_id, eve)
+
+
+def record_event(device, cq_id, event):
+    if isinstance(device, ttnn.Device):
+        tt_lib.device.RecordEvent(device, cq_id, event)
+    else:
+        for dev, eve in zip(device.get_device_ids(), event):
+            tt_lib.device.RecordEvent(device.get_device(dev), cq_id, eve)
+
+
+def buffer_address(tensor):
+    addr = []
+    for ten in ttnn.get_device_tensors(tensor):
+        addr.append(ten.buffer_address())
+    return addr
+
+
+def dump_device_profiler(device):
+    if isinstance(device, ttnn.Device):
+        tt_lib.device.DumpDeviceProfiler(device)
+    else:
+        for dev in device.get_device_ids():
+            tt_lib.device.DumpDeviceProfiler(device.get_device(dev))
+
+
 # TODO: Create ttnn apis for these
-ttnn.create_event = tt_lib.device.CreateEvent
-ttnn.wait_for_event = tt_lib.device.WaitForEvent
-ttnn.record_event = tt_lib.device.RecordEvent
-ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
+ttnn.create_event = create_event
+ttnn.wait_for_event = wait_for_event
+ttnn.record_event = record_event
+ttnn.buffer_address = buffer_address
+ttnn.dump_device_profiler = dump_device_profiler
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -49,9 +91,13 @@ model_config = {
 }
 
 
-def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
+def run_model(
+    device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
+):
     ops_parallel_config = {}
-    tt_inputs_host, input_mem_config = setup_l1_sharded_input(device, tt_inputs, tt_resnet50)
+    tt_inputs_host, input_mem_config = setup_l1_sharded_input(
+        device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer
+    )
     profiler.start("compile")
     tt_inputs = tt_inputs_host.to(device, input_mem_config)
     _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
@@ -69,7 +115,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -77,19 +123,23 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     for iter in range(0, num_measurement_iterations):
         tt_inputs = tt_inputs_host.to(device, input_mem_config)
         outputs.append(ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=False))
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
-def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
+def run_2cq_model(
+    device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
+):
     ops_parallel_config = {}
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(device, tt_inputs, tt_resnet50)
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
+        device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer
+    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
     ttnn.record_event(device, 0, op_event)
 
@@ -125,7 +175,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -138,16 +188,20 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(device, 0, op_event)
         outputs.append(ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=False))
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
-def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
+def run_trace_model(
+    device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
+):
     ops_parallel_config = {}
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(device, tt_inputs, tt_resnet50)
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
+        device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer
+    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
     # Compile
     profiler.start("compile")
@@ -178,7 +232,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -187,20 +241,24 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(tt_output_res, blocking=False))
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
 
-def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
+def run_trace_2cq_model(
+    device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
+):
     ops_parallel_config = {}
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(device, tt_inputs, tt_resnet50)
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
+        device, tt_inputs, tt_resnet50, mesh_mapper, mesh_composer
+    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
     ttnn.record_event(device, 0, op_event)
 
@@ -221,7 +279,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.record_event(device, 1, write_event)
     ttnn.wait_for_event(device, 0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = reshard_out.buffer_address()
+    first_out_addr = ttnn.buffer_address(reshard_out)
     ttnn.record_event(device, 0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
@@ -242,7 +300,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, input_mem_config
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert first_out_addr == reshard_out.buffer_address()
+    assert first_out_addr == ttnn.buffer_address(reshard_out)
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
@@ -255,7 +313,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -270,7 +328,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(device, 0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -278,7 +336,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
 
 
 def run_perf_resnet(
-    batch_size,
+    device_batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
@@ -288,8 +346,10 @@ def run_perf_resnet(
 ):
     profiler.clear()
     disable_persistent_kernel_cache()
-    if batch_size <= 2:
+    if device_batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+    num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+    batch_size = device_batch_size * num_devices
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
     cpu_key = f"ref_key_batchsize{batch_size}"
@@ -306,23 +366,30 @@ def run_perf_resnet(
     for i in range(batch_size - 1):
         inputs = torch.cat((inputs, inputs1), dim=0)
 
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+
     torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_resnet50, custom_preprocessor=create_custom_mesh_preprocessor(None), device=None
+        initialize_model=lambda: torch_resnet50,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     torch_resnet50.to(torch.bfloat16)
 
     tt_resnet50 = resnet50(
         device=device,
         parameters=parameters,
-        batch_size=batch_size,
+        batch_size=device_batch_size,
         model_config=model_config,
         dealloc_input=True,
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG if "trace" in model_version else ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=weights_mesh_mapper,
     )
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_devices(device)
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15
@@ -332,15 +399,47 @@ def run_perf_resnet(
         logits = torch_resnet50(inputs)
         profiler.end(cpu_key)
 
-        tt_inputs = tt_resnet50.preprocessing(inputs)
+        tt_inputs = tt_resnet50.preprocessing(inputs, inputs_mesh_mapper)
         if "resnet50_trace_2cqs" in model_version:
-            run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations)
+            run_trace_2cq_model(
+                device,
+                tt_inputs,
+                tt_resnet50,
+                inputs_mesh_mapper,
+                output_mesh_composer,
+                num_warmup_iterations,
+                num_measurement_iterations,
+            )
         elif "resnet50_2cqs" in model_version:
-            run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations)
+            run_2cq_model(
+                device,
+                tt_inputs,
+                tt_resnet50,
+                inputs_mesh_mapper,
+                output_mesh_composer,
+                num_warmup_iterations,
+                num_measurement_iterations,
+            )
         elif "resnet50_trace" in model_version:
-            run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations)
+            run_trace_model(
+                device,
+                tt_inputs,
+                tt_resnet50,
+                inputs_mesh_mapper,
+                output_mesh_composer,
+                num_warmup_iterations,
+                num_measurement_iterations,
+            )
         elif "resnet50" in model_version:
-            run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations)
+            run_model(
+                device,
+                tt_inputs,
+                tt_resnet50,
+                inputs_mesh_mapper,
+                output_mesh_composer,
+                num_warmup_iterations,
+                num_measurement_iterations,
+            )
         else:
             assert False, f"Model version to run {model_version} not found"
 
@@ -367,47 +466,20 @@ def run_perf_resnet(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
+@pytest.mark.model_perf_t3000
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.006, 25),),
-)
-def test_perf_bare_metal(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
+    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
-        (16, True, 0.005, 25),
-        (16, False, 0.0046, 25),
+        (16, True, 0.0094, 60),
+        (16, False, 0.0230, 60),
     ),
     indirect=["enable_async_mode"],
 )
-def test_perf_trace_bare_metal(
-    device,
+def test_perf_t3000(
+    device_mesh,
     use_program_cache,
-    batch_size,
+    device_batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
@@ -416,67 +488,112 @@ def test_perf_trace_bare_metal(
 ):
     mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
-        batch_size,
+        device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device,
+        device_mesh,
+        f"resnet50_{mode}",
+        model_location_generator,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.model_perf_t3000
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
+@pytest.mark.parametrize(
+    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
+    (
+        (16, True, 0.0068, 60),
+        (16, False, 0.0111, 60),
+    ),
+    indirect=["enable_async_mode"],
+)
+def test_perf_trace_t3000(
+    device_mesh,
+    use_program_cache,
+    device_batch_size,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    enable_async_mode,
+    model_location_generator,
+):
+    mode = "async" if enable_async_mode else "sync"
+    run_perf_resnet(
+        device_batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device_mesh,
         f"resnet50_trace_{mode}",
         model_location_generator,
     )
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.model_perf_t3000
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0064, 25),),
+    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
+    (
+        (16, True, 0.0105, 60),
+        (16, False, 0.0220, 60),
+    ),
+    indirect=["enable_async_mode"],
 )
-def test_perf_2cqs_bare_metal(
-    device,
+def test_perf_2cqs_t3000(
+    device_mesh,
     use_program_cache,
-    batch_size,
+    device_batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    enable_async_mode,
     model_location_generator,
 ):
+    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
-        batch_size,
+        device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device,
-        "resnet50_2cqs",
+        device_mesh,
+        f"resnet50_2cqs_{mode}",
         model_location_generator,
     )
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
+@pytest.mark.model_perf_t3000
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1332224}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1332224}], indirect=True
 )
 @pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.004, 25),),
+    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
+    (
+        (16, True, 0.0043, 60),
+        (16, False, 0.009, 60),
+    ),
+    indirect=["enable_async_mode"],
 )
-def test_perf_trace_2cqs_bare_metal(
-    device,
+def test_perf_trace_2cqs_t3000(
+    device_mesh,
     use_program_cache,
-    batch_size,
+    device_batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    enable_async_mode,
     model_location_generator,
 ):
+    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
-        batch_size,
+        device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device,
-        "resnet50_trace_2cqs",
+        device_mesh,
+        f"resnet50_trace_2cqs_{mode}",
         model_location_generator,
     )
