@@ -311,6 +311,7 @@ Pointwise Binary
    ttnn/gt
    ttnn/ge
    ttnn/lt
+   ttnn/lt_
    ttnn/le
    ttnn/eq
    ttnn/ne
