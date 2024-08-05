@@ -44,8 +44,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
-    bool untilize_out,
-    bool enable_stagger);
+    bool untilize_out);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -76,8 +75,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out,
-    bool enable_stagger);
+    bool untilize_out);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -92,8 +90,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
-    bool untilize_out,
-    bool enable_stagger);
+    bool untilize_out);
 
 }  // namespace tt_metal
 
@@ -170,8 +167,6 @@ struct Matmul {
     const bool user_run_batched = false;
     const bool transpose_a = false;
     const bool transpose_b = false;
-
-    static const bool enable_stagger;
 
     void validate(
         const std::vector<Tensor> &input_tensors,
@@ -365,6 +360,6 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
     const std::optional<const CoreCoord> user_core_coord = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, const bool enable_stagger, std::map<string, string>& mm_kernel_defines);
+void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
 
 }  // namespace bmm_op_utils
