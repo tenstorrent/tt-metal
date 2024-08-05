@@ -7,7 +7,12 @@ on:
     - cron: "0 1,6 * * *"
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   frequent-slow-dispatch:
@@ -27,12 +32,13 @@ jobs:
     runs-on: model-runner-${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/load-docker-image
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local
           ls -al /mnt/MLPerf/bit_error_tests
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
@@ -40,11 +46,8 @@ jobs:
           name: TTMetal_build_${{ matrix.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run frequent reg tests scripts
         timeout-minutes: 210
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode slow
+          ./scripts/docker/run_docker_cmd.sh -- ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode slow

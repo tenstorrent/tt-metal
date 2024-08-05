@@ -1,0 +1,24 @@
+name: "Load Docker Image"
+description: "Downloads and loads Docker image artifact"
+inputs:
+  artifact-name:
+    description: 'The name of the Docker image artifact to download.'
+    required: true
+    default: 'docker_image.tar.gz'
+  path:
+    description: 'The path where the Docker image artifact will be downloaded.'
+    required: true
+    default: '/tmp'
+runs:
+  using: "composite"
+  steps:
+    - name: Download Docker image
+      uses: actions/download-artifact@v2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.path }}
+
+    - name: Load Docker image
+      shell: bash
+      run: |
+        gunzip -c ${{ inputs.path }}/${{ inputs.artifact-name }} | docker load

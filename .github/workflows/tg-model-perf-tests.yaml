@@ -6,7 +6,12 @@ on:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '["wormhole_b0"]'
@@ -59,14 +64,11 @@ jobs:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run model perf regression tests
         timeout-minutes: 60
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+          ./scripts/docker/run_docker_cmd.sh -- ${{ matrix.test-group.cmd }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}

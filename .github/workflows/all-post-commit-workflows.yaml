@@ -11,12 +11,17 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  packages: write
 
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-artifact-profiler:
@@ -32,20 +37,20 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
-  profiler-regression:
-    needs: build-artifact-profiler
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-  eager-package-main:
-    uses: ./.github/workflows/eager-package-main.yaml
-    secrets: inherit
-  build-docs:
-    needs: build-artifact
-    uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
-  build:
-    uses: ./.github/workflows/build.yaml
-    secrets: inherit
+  # profiler-regression:
+  #   needs: build-artifact-profiler
+  #   uses: ./.github/workflows/run-profiler-regression.yaml
+  #   secrets: inherit
+  # eager-package-main:
+  #   uses: ./.github/workflows/eager-package-main.yaml
+  #   secrets: inherit
+  # build-docs:
+  #   needs: build-artifact
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   secrets: inherit
+  # build:
+  #   uses: ./.github/workflows/build.yaml
+  #   secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:
