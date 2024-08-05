@@ -94,6 +94,8 @@ run_device_perf_ops() {
     local test_marker=$1
 
     env pytest tests/tt_eager/ops_device_perf/run_op_profiling.py -m $test_marker
+
+    env pytest tests/device_perf_tests/matmul_stagger/test_matmul_stagger.py -m $test_marker
 }
 
 main() {
