@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t worker_sender_reader_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_sender_reader_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    #ifdef SHARDED
+    #ifdef SHARDED_MEM_LAYOUT
     uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t * const output_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
     arg_idx += output_shard_grid_nrows;
@@ -51,26 +51,29 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(23);
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
-    #ifdef SHARDED
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(24);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(25);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(26);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(27);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(28);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(29);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(30) != 0;
+    #ifdef SHARDED_MEM_LAYOUT
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(24));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(25);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(26);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(27);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(28);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(29);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(30);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(31) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
-    #ifdef ROW_MAJOR
-        #ifdef INTERLEAVED
+    #ifdef ROW_MAJOR_LAYOUT
+        #ifdef INTERLEAVED_MEM_LAYOUT
         InterleavedAddrGen<dst_is_dram> d = {
             .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
-        #elif defined SHARDED
+        #elif defined SHARDED_MEM_LAYOUT
             // TODO: type selection based on ct-arg value
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
-                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                DeviceWidthShardSpec(
+            // tt::tt_metal::address_generators::WidthShardedAddressGenerator<tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup, tt::tt_metal::address_generators::DeviceWidthShardSpec>
+            auto d =
+                tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
+                tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
+                tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
                     output_tensor_shard_pages_per_shard_y,
                     output_tensor_shard_pages_per_shard_x,
                     output_tensor_shard_grid_height,
@@ -79,13 +82,13 @@ void kernel_main() {
                     output_tensor_shard_grid_start_x_logical,
                     output_tensor_shard_grid_transposed
                 ),
-                .page_size = output_page_size,
-                .page_offset = dst_addr
-            };
+                output_page_size,
+                dst_addr
+            );
             ASSERT(false);
         #endif
-    #elif defined TILED
-        #ifdef INTERLEAVED
+    #elif defined TILED_LAYOUT
+        #ifdef INTERLEAVED_MEM_LAYOUT
         const DataFormat in0_df = get_dataformat(cb_id_in0);
 
         InterleavedAddrGenFast<dst_is_dram> d = {
@@ -93,10 +96,12 @@ void kernel_main() {
             .page_size = output_page_size,
             .data_format = in0_df
         };
-        #elif defined SHARDED
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
-                HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                DeviceWidthShardSpec(
+        #elif defined SHARDED_MEM_LAYOUT
+            // tt::tt_metal::address_generators::WidthShardedAddressGenerator<tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup, tt::tt_metal::address_generators::DeviceWidthShardSpec>
+            auto d =
+                tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
+                tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
+                tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
                     output_tensor_shard_pages_per_shard_y,
                     output_tensor_shard_pages_per_shard_x,
                     output_tensor_shard_grid_height,
@@ -105,13 +110,13 @@ void kernel_main() {
                     output_tensor_shard_grid_start_x_logical,
                     output_tensor_shard_grid_transposed
                 ),
-                .page_size = output_page_size,
-                .page_offset = dst_addr
-            };
+                output_page_size,
+                dst_addr
+            );
         #endif
     #endif
 
-    #ifdef SHARDED
+    #ifdef SHARDED_MEM_LAYOUT
     DPRINT << "d.pages_per_shard_y " << (uint32_t)d.tensor_shard_spec.pages_per_shard_y << "\n";
     DPRINT << "d.pages_per_shard_x " << (uint32_t)d.tensor_shard_spec.pages_per_shard_x << "\n";
     DPRINT << "d.shard_grid_height " << (uint32_t)d.tensor_shard_spec.shard_grid_height << "\n";
@@ -136,7 +141,7 @@ void kernel_main() {
         if constexpr (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
 
-                #ifdef SHARDED
+                #ifdef SHARDED_MEM_LAYOUT
                 ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
                 #endif
                 // DPRINT << "rws WRITE FULL CHUNK " << i << "\n";
@@ -146,7 +151,7 @@ void kernel_main() {
         }
         if constexpr (rem_num_pages > 0) {
             // DPRINT << "rws WRITE PARTIAL CHUNK " << i << "\n";
-            #ifdef SHARDED
+            #ifdef SHARDED_MEM_LAYOUT
             ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
             #endif
             write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);

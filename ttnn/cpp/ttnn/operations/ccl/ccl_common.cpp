@@ -12,6 +12,85 @@
 namespace ttnn {
 namespace ccl {
 
+RingTopology::RingTopology(
+    Device const* device,
+    Topology topology,
+    std::optional<uint32_t> sender_device_id,
+    std::optional<uint32_t> receiver_device_id,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index) :
+    num_links(num_links), ring_size(ring_size), ring_index(ring_index), is_linear(topology == Topology::Linear) {
+    eth_sender_cores.reserve(num_links);
+    eth_receiver_cores.reserve(num_links);
+
+    uint32_t sender_socket_idx = 0;
+    uint32_t receiver_socket_idx = 0;
+    if (receiver_device_id == sender_device_id) {
+        if (ring_index == 0) {
+            receiver_socket_idx = 1;
+        } else {
+            sender_socket_idx = 1;
+        }
+    }
+
+    for (uint32_t l = 0; l < num_links; ++l) {
+        // Get the cores for the sender and receiver worker cores
+        if (!is_linear || ring_index != ring_size - 1) {
+            uint32_t receiver_device = receiver_device_id.value();
+            auto const& sockets = device->get_ethernet_sockets(receiver_device);
+            auto eth_sender_core = sockets.at(sender_socket_idx);
+            eth_sender_cores.push_back(eth_sender_core);
+            log_trace(
+                tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
+        }
+        if (!is_linear || ring_index != 0) {
+            uint32_t sender_device = sender_device_id.value();
+            auto const& sockets = device->get_ethernet_sockets(sender_device);
+            auto eth_receiver_core = sockets.at(receiver_socket_idx);
+            eth_receiver_cores.push_back(eth_receiver_core);
+            log_trace(
+                tt::LogOp,
+                "\teth_receiver_core on link {}: (x={},y={})",
+                l,
+                eth_receiver_core.x,
+                eth_receiver_core.y);
+        }
+
+        if (receiver_device_id == sender_device_id) {
+            receiver_socket_idx += 2;
+            sender_socket_idx += 2;
+        } else {
+            receiver_socket_idx += 1;
+            sender_socket_idx += 1;
+        }
+    }
+}
+
+
+CclOpTensorConfig::CclOpTensorConfig(Tensor const& tensor) :
+    buffer_start_address(tensor.buffer()->address()),
+    df(tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype())) {
+    if (tensor.get_layout() == Layout::TILE) {
+        this->page_size =tt::tt_metal::detail::TileSize(this->df);
+    } else {
+        this->page_size = tensor.buffer()->page_size();
+    }
+}
+uint32_t CclOpTensorConfig::get_page_size() const { return this->page_size; }
+
+uint32_t CclOpTensorConfig::get_buffer_start_address() const { return this->buffer_start_address; }
+
+
+CclOpInterleavedTensorConfig::CclOpInterleavedTensorConfig(Tensor const& input_tensor) : CclOpTensorConfig(input_tensor) {}
+
+
+CclOpShardedTensorConfig::CclOpShardedTensorConfig(Tensor const& tensor) :
+    CclOpTensorConfig(tensor), shard_spec(tensor.shard_spec().value()) {}
+
+ShardSpec const& CclOpShardedTensorConfig::get_shard_spec() const { return this->shard_spec; }
+
+
 std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
     if (tensor.is_sharded()) {
         return std::make_unique<CclOpShardedTensorConfig>(tensor);
@@ -19,6 +98,69 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
         return std::make_unique<CclOpInterleavedTensorConfig>(tensor);
     }
 }
+
+/*
+
+std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
+    std::vector<uint32_t> args;
+    TT_ASSERT(t.is_sharded());
+    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages()
+        auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
+    bool shard_grid_transposed = shard_grid_is_transposed(t);
+    TT_FATAL(
+        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+    );
+    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));
+    // shard_grid_height (cores)
+    args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
+    // shard_grid_width (cores)
+    args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
+    // shard_grid_start_y
+    args.push_back(shard_grid_start.y);
+    // shard_grid_start_x
+    args.push_back(shard_grid_start.x);
+    // pages_per_shard_y
+    args.push_back(pages_per_shard_y);
+    // pages_per_shard_x
+    args.push_back(pages_per_shard_x);
+    // transposed grid
+    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
+
+    return args;
+}
+
+bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
+    TT_FATAL(
+        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+    );
+    bool shard_grid_transposed =
+        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+          t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
+         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+          t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
+    return shard_grid_transposed;
+}
+
+std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device *d, Tensor const& t) {
+    std::vector<uint32_t> args;
+    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
+    args.push_back(row_map.size());
+    for (uint32_t i = 0; i < row_map.size(); i++) {
+        args.push_back(row_map.at(i));
+    }
+    args.push_back(col_map.size());
+    for (uint32_t i = 0; i < col_map.size(); i++) {
+        args.push_back(col_map.at(i));
+    }
+
+    return args;
+}
+*/
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,

@@ -35,11 +35,11 @@ FORCE_INLINE void write_and_send_chunk(
     noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
     // TODO: do eth semaphore inc here
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
@@ -51,10 +51,10 @@ FORCE_INLINE void write_and_send_chunk(
             row_idx = 0;
             output_page_idx += row_offset;
         }
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(output_page_idx, d, l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
@@ -105,11 +105,11 @@ FORCE_INLINE void write_chunk(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
@@ -121,10 +121,10 @@ FORCE_INLINE void write_chunk(
             row_idx = 0;
             output_page_idx += row_offset;
         }
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(output_page_idx, d, l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
 
@@ -173,14 +173,14 @@ FORCE_INLINE void read_chunk_from_input_tensor(
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (; input_page_idx < end_read_idx; ++input_page_idx) {
-#ifdef ROW_MAJOR
-    // #ifdef INTERLEAVED || defined SHARDED
+#ifdef ROW_MAJOR_LAYOUT
+    // #ifdef INTERLEAVED_MEM_LAYOUT || defined SHARDED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -221,11 +221,11 @@ FORCE_INLINE void read_chunk_from_output_tensor(
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -238,10 +238,10 @@ FORCE_INLINE void read_chunk_from_output_tensor(
             row_idx = 0;
             input_page_idx += row_offset;
         }
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -292,19 +292,19 @@ FORCE_INLINE void read_chunk_from_output_tensor_v2(
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
         ASSERT(false);  // unimplemented
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
     #endif
 
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(curr_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -349,18 +349,18 @@ FORCE_INLINE void write_chunk_v2(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         ASSERT(false);  // unimplemented
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
     #endif
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(curr_page_idx, d, l1_read_addr);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(curr_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
@@ -410,19 +410,19 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-  #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+  #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
     #endif
     ASSERT(false);  // unimplemented
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
         // common with `write_chunk_v2`
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(curr_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -466,20 +466,20 @@ FORCE_INLINE void write_wrapped_chunk(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR
-    #ifdef INTERLEAVED
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         ASSERT(false);  // unimplemented
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
     #endif
 
-#elif defined TILED
-    #ifdef INTERLEAVED
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(curr_page_idx, d, l1_read_addr);
         // Common with `read_chunk_from_output_tensor_v2`
-    #elif defined SHARDED
+    #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(curr_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);

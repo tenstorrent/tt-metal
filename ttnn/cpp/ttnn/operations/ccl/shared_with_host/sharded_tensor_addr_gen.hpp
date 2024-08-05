@@ -5,9 +5,13 @@
 #include <cstdint>
 #include <array>
 
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
+
 using noc_grid_index_t = std::uint8_t;
 
-
+namespace tt {
+namespace tt_metal {
+namespace address_generators {
 
 template <typename ArchSpecificWorkerToNocLookup>
 struct WorkerToNocCoordLookup {
@@ -20,26 +24,8 @@ struct WorkerToNocCoordLookup {
     }
 };
 
-struct UnharvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup>{
-    static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x = {
-        1,2,3,4,6,7,8,9
-    };
-    static constexpr std::array<noc_grid_index_t, 10> worker_to_routing_y = {
-        1,2,3,4,5,7,8,9,10,11
-    };
 
-    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
-        // ASSERT worker_x < worker_to_routing_x_wormhole.size()
-        return worker_to_routing_x[worker_x];
-    }
-
-    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
-        // ASSERT worker_y < worker_to_routing_y_wormhole.size()
-        return worker_to_routing_y[worker_y];
-    }
-};
-
-struct HarvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup>{
+struct HarvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<HarvestedWormholeWorkerToNocLookup>{
     HarvestedWormholeWorkerToNocLookup(uint32_t nrows, const uint32_t *const row_map, uint32_t ncols, const uint32_t *const col_map) :
         nrows(nrows), row_map(row_map), ncols(ncols), col_map(col_map) {}
 
@@ -391,9 +377,61 @@ struct BlockShardedAddressGenerator {
     // }
 };
 
-
-
 template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 inline std::uint64_t get_noc_addr(const uint32_t id, const WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>& s, uint32_t offset = 0) {
     return s.get_noc_addr(id, offset);
 }
+
+template <TensorMemoryLayout layout, typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
+using sharded_addrgen_builder_t = std::conditional_t<
+    layout == TensorMemoryLayout::WIDTH_SHARDED,
+    WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>,
+    std::conditional_t<
+        layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        HeightShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>,
+        BlockShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>>>;
+
+// TODO: make variadic so we can use with interleaved too!!!
+template <TensorMemoryLayout layout, typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
+constexpr auto build_sharded_addr_gen(
+    worker_to_noc_lookup_t const& workler_to_noc_lookup,
+    DEVICE_SHARD_SPEC_T const& device_shard_spec,
+    uint32_t page_size,
+    uint32_t base_address) -> sharded_addrgen_builder_t<layout, worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T> {
+    if constexpr (layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        return WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
+            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+
+    } else if constexpr (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        return HeightShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
+            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+    } else {
+        static_assert(layout == TensorMemoryLayout::BLOCK_SHARDED);
+        return BlockShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
+            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+    }
+}
+
+template <TensorMemoryLayout layout>
+struct DeviceShardSpecTypeGetter {
+    using type = nullptr_t;
+};
+template <>
+struct DeviceShardSpecTypeGetter<TensorMemoryLayout::WIDTH_SHARDED> {
+    using type = DeviceWidthShardSpec;
+};
+template <>
+struct DeviceShardSpecTypeGetter<TensorMemoryLayout::HEIGHT_SHARDED> {
+    using type = DeviceHeightShardSpec;
+};
+template <>
+struct DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED> {
+    using type = DeviceBlockShardSpec;
+};
+
+
+
+
+}  // namespace address_generators
+}  // namespace tt_metal
+}  // namespace tt

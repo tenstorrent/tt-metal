@@ -160,6 +160,8 @@ static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_fr
 }
 
 static void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args) {
+    // auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
+    // std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
     args.push_back(row_map.size());
     for (uint32_t i = 0; i < row_map.size(); i++) {
@@ -171,11 +173,34 @@ static void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, 
     }
 }
 
-static void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
+static bool shard_grid_is_transposed(Tensor const& t) {
+    TT_FATAL(
+        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+    );
+    bool shard_grid_transposed =
+        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+          t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
+         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+          t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
+    return shard_grid_transposed;
+}
+
+static void emit_sharded_tensor_kernel_ct_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
+    // auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
+    // std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
     TT_ASSERT(pages_per_shard_y > 0);
     TT_ASSERT(pages_per_shard_x > 0);
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR;
+    bool shard_grid_transposed = shard_grid_is_transposed(tensor);
+    TT_FATAL(
+        tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+    );
+    args.push_back(static_cast<uint32_t>(tensor.memory_config().memory_layout));
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
     // shard_grid_width (cores)
@@ -191,19 +216,12 @@ static void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std
     // transposed grid
     args.push_back(static_cast<uint32_t>(shard_grid_transposed));
 
-
-    for (std::size_t y = shard_grid_start.y; y <= shard_grid_start.y + shard_grid_end.y; y++) {
-        for (std::size_t x = shard_grid_start.x; x <= shard_grid_start.x + shard_grid_end.x; x++) {
-            auto routing_coord = d->worker_core_from_logical_core(CoreCoord(x, y));
-            log_trace(tt::LogOp, "SHARD CORE: x:{} y:{} -> x:{} y:{}", x, y, routing_coord.x, routing_coord.y);
-        }
-    }
 };
 
 
 static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x, std::string const& prefix) {
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR;
+    bool shard_grid_transposed = shard_grid_is_transposed(tensor);
 
     TT_ASSERT(pages_per_shard_y > 0);
     TT_ASSERT(pages_per_shard_x > 0);
@@ -251,11 +269,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     if (is_sharded) {
         TT_ASSERT(input_pages_per_shard_y > 0 && input_pages_per_shard_x > 0);
         TT_ASSERT(output_pages_per_shard_y > 0 && output_pages_per_shard_x > 0);
-        log_trace(tt::LogOp, "input_buffer->page_size: {}", input_tensor_config->get_page_size());
+        log_trace(tt::LogOp, "input_buffer->page_size: {}", input_page_size);
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[0]: {}", input_buffer->shard_spec().tensor2d_shape[0]);
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[1]: {}", input_buffer->shard_spec().tensor2d_shape[1]);
     }
-    const uint32_t max_buffer_per_chunk = tt::round_down(all_gather_config.get_eth_buffer_size(), input_tensor_config->get_page_size());
+    const uint32_t max_buffer_per_chunk = tt::round_down(all_gather_config.get_eth_buffer_size(), input_page_size);
     const uint32_t max_pages_per_chunk = max_buffer_per_chunk / input_page_size;
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
@@ -268,14 +286,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
     std::map<string, string> worker_defines;
     if (rm) {
-        worker_defines["ROW_MAJOR"] = "1";
+        worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {
-        worker_defines["TILED"] = "1";
+        worker_defines["TILED_LAYOUT"] = "1";
     }
     if (is_sharded) {
-        worker_defines["SHARDED"] = "1";
+        worker_defines["SHARDED_MEM_LAYOUT"] = "1";
     } else {
-        worker_defines["INTERLEAVED"] = "1";
+        worker_defines["INTERLEAVED_MEM_LAYOUT"] = "1";
     }
 
     bool full_send_both_directions =
@@ -638,8 +656,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             static_cast<uint32_t>(ring_size)
                         };
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
-                            emit_sharded_tensor_kernel_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_ct_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                         };
 
                         log_trace(tt::LogOp, "Worker {} SR args", b);
@@ -738,7 +756,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         };
 
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                         }
                         log_trace(tt::LogOp, "Worker {} SW CT args", b);
                         log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
@@ -939,7 +957,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         };
 
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW ct args", b);

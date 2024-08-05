@@ -16,6 +16,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/allocator/allocator_types.hpp"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
@@ -34,18 +35,6 @@ enum class BufferType {
     TRACE,
 };
 
-enum class TensorMemoryLayout {
-    INTERLEAVED,
-    SINGLE_BANK,
-    HEIGHT_SHARDED,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
-};
-
-enum class ShardOrientation {
-    ROW_MAJOR,
-    COL_MAJOR,
-};
 
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */

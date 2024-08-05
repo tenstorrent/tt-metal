@@ -931,11 +931,6 @@ def run_all_gather_sharded(
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 4096),
-            (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 2048),
             (32, 64),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
@@ -948,6 +943,174 @@ def run_all_gather_sharded(
     ),
 )
 def test_all_gather_sharded_post_commit(
+    all_devices,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_gather_sharded(
+        all_devices,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_operation=ttnn.all_gather,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+# @pytest.mark.parametrize("num_cores", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 1024, 32),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 4096, 32),
+            (128, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 4096, 32),
+            (128, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 2048, 32),
+            (64, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 1792, 32),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
+    ),
+)
+def test_all_gather_height_sharded_post_commit(
+    all_devices,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_gather_sharded(
+        all_devices,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_operation=ttnn.all_gather,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+# @pytest.mark.parametrize("num_cores", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 128, 256),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 512, 32),
+        #     (128, 32),
+        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        # ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 512, 256),
+            (128, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 512, 512),
+            (128, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+def test_all_gather_block_sharded_post_commit(
     all_devices,
     num_devices,
     input_shape,

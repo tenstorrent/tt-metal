@@ -37,8 +37,6 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
     output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
 
-    // Sharded currently doesn't support FULL_TENSOR bidirectional due to indexers that require updating in order to support this
-    // new mode
     bidirectional_mode(choose_bidirectional_mode(input_tensor))
 {
     TT_ASSERT(erisc_handshake_address >= eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
@@ -67,17 +65,6 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     if (bidirectional_mode == AllGatherBidirectionalMode::FULL_TENSOR) {
         this->num_eth_buffers = std::min(this->num_eth_buffers, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS / num_duplicate_directions);
     }
-
-    // if (this->is_sharded) {
-    //     this->num_eth_buffers = std::min(this->num_eth_buffers, input_tensor.shard_spec()->num_cores());
-    //     if ((input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) % (ring_size) != 0 &&
-    //         (ring_size % (input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) != 0)) {
-    //         // Currently don't support misalignment here
-    //         this->num_eth_buffers = 1;
-    //     }
-    //     log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
-
-    // }
 
     this->num_workers_per_link = this->num_eth_buffers;
     this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16 * 3;//16;
@@ -118,6 +105,7 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
 
     // Sharding Config checks
