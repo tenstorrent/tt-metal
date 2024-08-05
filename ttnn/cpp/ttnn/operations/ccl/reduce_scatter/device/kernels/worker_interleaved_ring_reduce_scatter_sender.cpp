@@ -17,7 +17,7 @@ void kernel_main() {
 
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout =
         static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(2));
-#ifdef SHARDED_MEM_LAYOUT
+    #ifdef SHARDED_MEM_LAYOUT
     constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(3);
     constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(4);
     constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(5);
@@ -81,7 +81,7 @@ void kernel_main() {
                     output_tensor_shard_grid_start_x_logical,
                     output_tensor_shard_grid_transposed
                 ),
-                output_page_size,
+                page_size,
                 dst_addr
             );
             ASSSERT(false); // unimplemented and untested
@@ -102,7 +102,7 @@ void kernel_main() {
             output_tensor_shard_grid_start_x_logical,
             output_tensor_shard_grid_transposed
         ),
-        output_page_size,
+        page_size,
         dst_addr
     );
     #endif

@@ -2,16 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <cstdint>
 #include <array>
-
+#include <bit>
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 
 using noc_grid_index_t = std::uint8_t;
 
 namespace tt {
 namespace tt_metal {
+
+
 namespace address_generators {
+
 
 template <typename ArchSpecificWorkerToNocLookup>
 struct WorkerToNocCoordLookup {
@@ -62,7 +66,7 @@ struct test_shard_location_t {
  * This is the base class, to be inherited by each shard strategy */
 template <typename shard_type_device_shard_spec_t>
 struct device_shard_spec_t {
-    device_shard_spec_t(
+    constexpr device_shard_spec_t(
         uint8_t shard_grid_height,
         uint8_t shard_grid_width,
         uint8_t shard_grid_start_y_logical,
@@ -80,23 +84,23 @@ struct device_shard_spec_t {
     uint8_t shard_grid_start_x_logical;
     bool transposed_grid;
 
-    uint32_t get_pages_per_shard() const {
+    constexpr uint32_t get_pages_per_shard() const {
         return shard_type_device_shard_spec_t::get_pages_per_shard_x() * shard_type_device_shard_spec_t::get_pages_per_shard_y();
     }
-    uint16_t get_shard_grid_num_cores() const {
+    constexpr uint16_t get_shard_grid_num_cores() const {
         return shard_grid_height * shard_grid_width;
     }
 
-    uint16_t get_shard_grid_width() const {
+    constexpr uint16_t get_shard_grid_width() const {
         return shard_grid_width;
     }
-    uint16_t get_shard_grid_height() const {
+    constexpr uint16_t get_shard_grid_height() const {
         return shard_grid_height;
     }
 };
 
 struct DeviceWidthShardSpec : public device_shard_spec_t<DeviceWidthShardSpec> {
-    DeviceWidthShardSpec(
+    constexpr DeviceWidthShardSpec(
         uint16_t pages_per_shard_y,
         uint16_t pages_per_shard_x,
         uint8_t shard_grid_height,
@@ -116,29 +120,29 @@ struct DeviceWidthShardSpec : public device_shard_spec_t<DeviceWidthShardSpec> {
     uint16_t pages_per_shard_y;
     uint16_t pages_per_shard_x;
 
-    uint32_t get_pages_per_shard_x() const {
+    constexpr uint32_t get_pages_per_shard_x() const {
         return pages_per_shard_x;
     }
-    uint32_t get_pages_per_shard_y() const {
+    constexpr uint32_t get_pages_per_shard_y() const {
         return pages_per_shard_y;
     }
-    uint32_t get_pages_per_tensor_x() const {
+    constexpr uint32_t get_pages_per_tensor_x() const {
         return pages_per_shard_x * get_shard_grid_num_cores();
     }
-    uint32_t get_pages_per_tensor_y() const {
+    constexpr uint32_t get_pages_per_tensor_y() const {
         return pages_per_shard_y;
     }
 
-    uint32_t get_shard_grid_inner_dim() const {
+    constexpr uint32_t get_shard_grid_inner_dim() const {
         return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
     }
-    uint32_t get_shard_grid_outer_dim() const {
+    constexpr uint32_t get_shard_grid_outer_dim() const {
         return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
     }
 };
 
 template <typename T>
-std::pair<T,T> flat_index_to_2d(std::size_t index, T inner_dim_size) {
+constexpr std::pair<T,T> flat_index_to_2d(std::size_t index, T inner_dim_size) {
     std::size_t outer_dim_index = index / inner_dim_size;
     std::size_t inner_dim_index = index - (outer_dim_index * inner_dim_size);
 
@@ -154,7 +158,7 @@ struct WidthShardedAddressGenerator {
     uint32_t bank_base_address;
 
    public:
-    WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
     test_shard_location_t get_page_location(std::size_t global_page_id) const {
         // With width sharding, the tensor is fractured along width, but can be mapped onto a 2D grid, in such a case
@@ -196,7 +200,7 @@ struct WidthShardedAddressGenerator {
 };
 
 struct DeviceHeightShardSpec : public device_shard_spec_t<DeviceHeightShardSpec> {
-    DeviceHeightShardSpec(
+    constexpr DeviceHeightShardSpec(
         uint16_t pages_per_shard_y,
         uint16_t pages_per_shard_x,
         uint8_t shard_grid_height,
@@ -216,22 +220,22 @@ struct DeviceHeightShardSpec : public device_shard_spec_t<DeviceHeightShardSpec>
     uint16_t pages_per_shard_y;
     uint16_t pages_per_shard_x;
 
-    uint32_t get_pages_per_shard_x() const {
+    constexpr uint32_t get_pages_per_shard_x() const {
         return pages_per_shard_x;
     }
-    uint32_t get_pages_per_shard_y() const {
+    constexpr uint32_t get_pages_per_shard_y() const {
         return pages_per_shard_y;
     }
-    uint32_t get_pages_per_tensor_x() const {
+    constexpr uint32_t get_pages_per_tensor_x() const {
         return pages_per_shard_x;
     }
-    uint32_t get_pages_per_tensor_y() const {
+    constexpr uint32_t get_pages_per_tensor_y() const {
         return pages_per_shard_y * get_shard_grid_num_cores();
     }
-    uint32_t get_shard_grid_inner_dim() const {
+    constexpr uint32_t get_shard_grid_inner_dim() const {
         return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
     }
-    uint32_t get_shard_grid_outer_dim() const {
+    constexpr uint32_t get_shard_grid_outer_dim() const {
         return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
     }
 };
@@ -246,7 +250,7 @@ struct HeightShardedAddressGenerator {
     uint32_t bank_base_address;
 
    public:
-    HeightShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr HeightShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
     test_shard_location_t get_page_location(std::size_t global_page_id) const {
         // With height sharding, the tensor is fractured along height, but can be mapped onto a 2D grid, in such a case
@@ -285,7 +289,7 @@ struct HeightShardedAddressGenerator {
 
 
 struct DeviceBlockShardSpec : public device_shard_spec_t<DeviceBlockShardSpec> {
-    DeviceBlockShardSpec(
+    constexpr DeviceBlockShardSpec(
         uint16_t pages_per_shard_y,
         uint16_t pages_per_shard_x,
         uint8_t shard_grid_height,
@@ -305,22 +309,22 @@ struct DeviceBlockShardSpec : public device_shard_spec_t<DeviceBlockShardSpec> {
     uint16_t pages_per_shard_y;
     uint16_t pages_per_shard_x;
 
-    uint32_t get_pages_per_shard_x() const {
+    constexpr uint32_t get_pages_per_shard_x() const {
         return pages_per_shard_x;
     }
-    uint32_t get_pages_per_shard_y() const {
+    constexpr uint32_t get_pages_per_shard_y() const {
         return pages_per_shard_y;
     }
-    uint32_t get_pages_per_tensor_x() const {
+    constexpr uint32_t get_pages_per_tensor_x() const {
         return pages_per_shard_x * get_shard_grid_width();
     }
-    uint32_t get_pages_per_tensor_y() const {
+    constexpr uint32_t get_pages_per_tensor_y() const {
         return pages_per_shard_y * get_shard_grid_height();
     }
-    uint32_t get_shard_grid_inner_dim() const {
+    constexpr uint32_t get_shard_grid_inner_dim() const {
         return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
     }
-    uint32_t get_shard_grid_outer_dim() const {
+    constexpr uint32_t get_shard_grid_outer_dim() const {
         return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
     }
 };
@@ -334,7 +338,7 @@ struct BlockShardedAddressGenerator {
     uint32_t bank_base_address;
 
    public:
-    BlockShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr BlockShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
     test_shard_location_t get_page_location(std::size_t global_page_id) const {
         // With block sharding, the tensor is fractured along height and width.
@@ -381,6 +385,11 @@ template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 inline std::uint64_t get_noc_addr(const uint32_t id, const WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>& s, uint32_t offset = 0) {
     return s.get_noc_addr(id, offset);
 }
+
+template <TensorMemoryLayout layout> struct is_sharded_layout { static constexpr bool value = false; };
+template <> struct is_sharded_layout<TensorMemoryLayout::BLOCK_SHARDED> { static constexpr bool value = true; };
+template <> struct is_sharded_layout<TensorMemoryLayout::WIDTH_SHARDED> { static constexpr bool value = true; };
+template <> struct is_sharded_layout<TensorMemoryLayout::HEIGHT_SHARDED> { static constexpr bool value = true; };
 
 template <TensorMemoryLayout layout, typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 using sharded_addrgen_builder_t = std::conditional_t<
@@ -430,6 +439,9 @@ struct DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED> {
 };
 
 
+using DefaultWidthShardedAddressGenerator = WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec>;
+using DefaultHeightShardedAddressGenerator = HeightShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
+using DefaultBlockShardedAddressGenerator = BlockShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
 
 
 }  // namespace address_generators

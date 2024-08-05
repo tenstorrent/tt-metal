@@ -35,12 +35,8 @@ std::vector<tt::tt_metal::Shape> ReduceScatter::compute_output_shapes(const std:
 
 std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(false, "Sharded output is not supported for ReduceScatter");
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
-    }
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks ReduceScatter::create_program(

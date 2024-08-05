@@ -197,3 +197,338 @@ def test_reduce_scatter_post_commit(
         num_iters=num_iters,
         enable_async=enable_async,
     )
+
+
+def run_reduce_scatter_sharded_test(
+    all_devices,
+    num_devices,
+    per_chip_output_shape,
+    output_shard_shape,
+    scatter_dim,
+    num_links,
+    math_op,
+    shard_grid,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    num_iters=1,
+):
+    if len(all_devices) != 8:
+        pytest.skip("Not T3000!")
+
+    debug = False
+
+    devices = get_devices_for_t3000(all_devices, num_devices)
+
+    # Generate input tensors
+    input_shard_shape = list(output_shard_shape)
+    if scatter_dim == 3:
+        input_shard_shape[1] *= num_devices
+    else:
+        input_shard_shape[0] *= num_devices
+    tt_input_tensors = []
+
+    input_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        tuple(input_shard_shape),
+        orientation,
+        False,
+    )
+
+    output_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        output_shard_shape,
+        orientation,
+        False,
+    )
+    input_mem_config = ttl.tensor.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=input_shard_spec
+    )
+    output_mem_config = ttl.tensor.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=output_shard_spec
+    )
+
+    canonical_input_shape = list(per_chip_output_shape)
+    canonical_input_shape[scatter_dim] *= num_devices
+
+    numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
+    input_tensors = [
+        # torch.rand(canonical_input_shape).bfloat16() if not debug else torch.arange(numel).reshape(canonical_input_shape).bfloat16()
+        torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
+        for _ in range(num_devices)
+    ]
+    if debug:
+        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
+    for i, canonical_input_tensor in enumerate(input_tensors):
+        tt_input_tensors.append(
+            ttl.tensor.Tensor(canonical_input_tensor, input_dtype).to(tensor_layout).to(devices[i], input_mem_config)
+        )
+
+    # Run the op
+    # for i in range(num_iters):
+    tt_out_tensors = ttnn.reduce_scatter(
+        tt_input_tensors,
+        scatter_dim=scatter_dim,
+        math_op=math_op,
+        num_links=num_links,
+        memory_config=output_mem_config,
+    )
+
+    for d in devices:
+        ttl.device.Synchronize(d)
+    logger.info(f"Done iteration {i}")
+
+    # Compute golden
+    # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
+    golden_canonical_out_tensor = torch.zeros(canonical_input_shape).bfloat16()
+    for i, t in enumerate(input_tensors):
+        golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t).bfloat16()
+
+    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, scatter_dim)
+
+    logger.info(f"Compare")
+    # Compare
+    assert len(golden_output_tensors) == len(tt_out_tensors)
+    mismatch = False
+    for i, t in enumerate(tt_out_tensors):
+        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
+        mismatch = mismatch or not eq
+        if not eq:
+            logger.error(f"output mismatch for tensor {i}")
+        else:
+            logger.info(f"output match for tensor {i}")
+    assert not mismatch, f"{i} FAILED: {output}"
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        # (4, 1),
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape,output_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+def test_width_sharded_reduce_scatter_post_commit(
+    all_devices,
+    num_devices,
+    per_chip_output_shape,
+    output_shard_shape,
+    dim,
+    num_links,
+    math_op,
+    shard_grid,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    num_iters=1,
+):
+    run_reduce_scatter_sharded_test(
+        all_devices,
+        num_devices,
+        per_chip_output_shape,
+        output_shard_shape,
+        dim,
+        num_links,
+        math_op,
+        shard_grid,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        use_program_cache=use_program_cache,
+        function_level_defaults=function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
+@pytest.skip("Hangs")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.COL_MAJOR])  # Hangs with ROW_MAJOR
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape,output_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 1024, 32),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+def test_height_sharded_reduce_scatter_post_commit(
+    all_devices,
+    num_devices,
+    per_chip_output_shape,
+    output_shard_shape,
+    dim,
+    num_links,
+    math_op,
+    shard_grid,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    num_iters=1,
+):
+    run_reduce_scatter_sharded_test(
+        all_devices,
+        num_devices,
+        per_chip_output_shape,
+        output_shard_shape,
+        dim,
+        num_links,
+        math_op,
+        shard_grid,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        use_program_cache=use_program_cache,
+        function_level_defaults=function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape,output_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 256, 512),
+            (64, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+def test_block_sharded_reduce_scatter_post_commit(
+    all_devices,
+    num_devices,
+    per_chip_output_shape,
+    output_shard_shape,
+    dim,
+    num_links,
+    math_op,
+    shard_grid,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    num_iters=1,
+):
+    run_reduce_scatter_sharded_test(
+        all_devices,
+        num_devices,
+        per_chip_output_shape,
+        output_shard_shape,
+        dim,
+        num_links,
+        math_op,
+        shard_grid,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        use_program_cache=use_program_cache,
+        function_level_defaults=function_level_defaults,
+        num_iters=num_iters,
+    )
