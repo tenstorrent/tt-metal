@@ -184,6 +184,26 @@ struct debug_pause_msg_t {
     volatile uint8_t pad[8 - DebugNumUniqueRiscs];
 };
 
+constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
+constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
+struct debug_ring_buf_msg_t {
+    int16_t current_ptr;
+    uint16_t wrapped;
+    uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
+};
+
+constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
+#else
+constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
+#endif
+
+struct dprint_buf_msg_t {
+    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
+    uint32_t pad; // to 1024 bytes
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -201,6 +221,8 @@ struct mailboxes_t {
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_insert_delays_msg_t debug_insert_delays;
+    struct debug_ring_buf_msg_t debug_ring_buf;
+    struct dprint_buf_msg_t dprint_buf;
 };
 
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
