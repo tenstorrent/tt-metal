@@ -67,13 +67,9 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
@@ -81,7 +77,7 @@ jobs:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e CONFIG=${{ env.CONFIG }} 
+            -e CONFIG=${{ env.CONFIG }}
             -e ARCH_NAME=${{ matrix.runner-info.arch }}
             -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
             -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
@@ -94,7 +90,7 @@ jobs:
             cd $TT_METAL_HOME
             export PYTHONPATH=$TT_METAL_HOME
             ${{ matrix.test-group.cmd }}
-            
+
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
