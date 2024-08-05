@@ -5,9 +5,10 @@
 
 
 #include <cxxabi.h>
+#include <memory>
 #include <typeindex>
 
-const string demangle(const char* name) {
+const std::string demangle(const char* name) {
 
     int status = -4;
 
@@ -21,7 +22,10 @@ const string demangle(const char* name) {
 
     return ret_val;
 }
-
+template<class V>
+std::type_info const& var_type(V const& v){
+  return std::visit( [](auto&&x)->decltype(auto){ return typeid(x); }, v );
+}
 namespace tt::stl::json {
 
 /*
@@ -47,13 +51,7 @@ struct to_json_t<ttnn::GraphProcessor::Vertex> {
 }
 namespace ttnn {
     GraphProcessor::GraphProcessor() {
-        graph.push_back(Vertex{
-            .counter = 0,
-            .name = "application_start",
-            .param = 0,
-            .connections = {}
-        });
-        current_op_id.push(0);
+        begin_capture();
         begin_op_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] = [ptr = this]  (const std::any& val) mutable {ptr->begin_op_process_ref_vector(val);};
         begin_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_vector_optional(val);};
         begin_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_vector_optional_const(val);};
@@ -63,10 +61,10 @@ namespace ttnn {
         begin_op_any_map[typeid(std::reference_wrapper<std::optional<Tensor> const>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_optional_tensor_const(val);};
         begin_op_any_map[typeid(std::reference_wrapper<std::optional<const Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->begin_op_process_ref_optional_const_tensor(val);};
 
-        end_op_any_map[typeid(std::vector<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector(val);};
-        end_op_any_map[typeid(std::vector<std::optional<Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional(val);};
-        end_op_any_map[typeid(std::vector<std::optional<const Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional_const(val);};
-        end_op_any_map[typeid(Tensor)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_tensor(val);};
+        end_op_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector(val);};
+        end_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional(val);};
+        end_op_any_map[typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_vector_optional_const(val);};
+        end_op_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->end_op_process_tensor(val);};
 
     }
     void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
@@ -89,15 +87,14 @@ namespace ttnn {
 
     void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         const std::lock_guard<std::mutex> lock(mutex);
-        auto alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
         auto counter = graph.size();
-        TT_ASSERT(id_to_counter.count(alloc_id));
+        auto buffer_idx = add_buffer(buffer);
         {
             graph.push_back(Vertex{
                 .counter = counter,
                 .name = "buffer_deallocate",
                 .param = buffer->size(),
-                .connections = {id_to_counter[alloc_id]}
+                .connections = {buffer_idx}
             });
             graph[current_op_id.top()].connections.push_back(counter);
         }
@@ -194,7 +191,8 @@ namespace ttnn {
     }
 
     int GraphProcessor::add_tensor(const Tensor& t) {
-        auto alloc_id = reinterpret_cast<std::uintptr_t>(t.tensor_attributes.get());
+        auto& storage = t.get_storage();
+        auto alloc_id = reinterpret_cast<std::uintptr_t>(&storage);
         tt::log_info("Tensor ID: {}, used: {}", alloc_id, tensors_used);
         auto tensor_counter = id_to_counter.count(alloc_id) > 0 ? id_to_counter[alloc_id] : graph.size();
         if (id_to_counter.count(alloc_id) == 0) {
@@ -216,11 +214,13 @@ namespace ttnn {
                 return nullptr;
             }
         },
-        t.get_storage());
+        storage);
 
         if (buffer) {
             auto buffer_idx = add_buffer(buffer);
             graph[buffer_idx].connections.push_back(tensor_counter);
+        } else {
+            tt::log_info("Tensor doesn't have buffer, but storage is {}",demangle(var_type(t.get_storage()).name()));
         }
         return tensor_counter;
     }
@@ -303,7 +303,7 @@ namespace ttnn {
         }
     }
     void GraphProcessor::end_op_process_vector(const std::any& any_val) {
-        const auto& tensor_vec = std::any_cast<std::vector<Tensor>>(any_val);
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<Tensor>>>(any_val).get();
         for (int j = 0; auto& it : tensor_vec) {
             int tensor_id = add_tensor(it);
             graph[last_finished_op_id].connections.push_back(tensor_id);
@@ -311,7 +311,7 @@ namespace ttnn {
         }
     }
     void GraphProcessor::end_op_process_vector_optional(const std::any& any_val) {
-        const auto& tensor_vec = std::any_cast<std::vector<std::optional<Tensor>>>(any_val);
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(any_val).get();
         for (int j = 0; auto& it : tensor_vec) {
             if (it.has_value()) {
                 int tensor_id = add_tensor(it.value());
@@ -321,7 +321,7 @@ namespace ttnn {
         }
     }
     void GraphProcessor::end_op_process_vector_optional_const(const std::any& any_val) {
-        const auto& tensor_vec = std::any_cast<std::vector<std::optional<const Tensor>>>(any_val);
+        const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(any_val).get();
         for (int j = 0; auto& it : tensor_vec) {
             if (it.has_value()) {
                 int tensor_id = add_tensor(it.value());
@@ -330,21 +330,61 @@ namespace ttnn {
         }
     }
     void GraphProcessor::end_op_process_tensor(const std::any& any_val) {
-        const auto& tensor = std::any_cast<Tensor>(any_val);
+        const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(any_val).get();
         int tensor_id = add_tensor(tensor);
         graph[last_finished_op_id].connections.push_back(tensor_id);
     }
     void GraphProcessor::end_op_process_optional_tensor(const std::any& any_val) {
-        const auto& tensor = std::any_cast<std::optional<Tensor>>(any_val);
+        const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(any_val).get();
         if (tensor.has_value()) {
             int tensor_id = add_tensor(tensor.value());
             graph[last_finished_op_id].connections.push_back(tensor_id);
         }
     }
 
-    GraphProcessor::~GraphProcessor() {
-        auto json_object = tt::stl::json::to_json(graph);
-        std::ofstream output_file_stream("test_graph.json");
-        output_file_stream << json_object << std::endl;
+    void GraphProcessor::begin_capture() {
+        graph.clear();
+        id_to_counter.clear();
+        graph.push_back(Vertex{
+            .counter = 0,
+            .name = "capture_start",
+            .param = 0,
+            .connections = {}
+        });
+        hooks = std::make_shared<ProcessorHooks>();
+        tt::tt_metal::GraphTracker::instance().add_hook(hooks);
+        hooks->set_block(true);
+        current_op_id.push(0);
     }
+    std::string GraphProcessor::end_capture() {
+        auto json_object = tt::stl::json::to_json(graph);
+        return json_object.dump();
+    }
+
+
+    GraphProcessor::~GraphProcessor() {
+    }
+
+    void GraphProcessor::begin_graph_capture() {
+        auto _ = tt::tt_metal::GraphTracker::instance().add_processor(std::make_shared<GraphProcessor>());
+
+    }
+    std::string GraphProcessor::end_graph_capture() {
+         auto res = tt::tt_metal::GraphTracker::instance().get_processors().back()->end_capture();
+         tt::tt_metal::GraphTracker::instance().clean();
+         return res;
+    }
+
+    bool ProcessorHooks::hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
+        return do_block;
+    }
+
+    bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) {
+        return do_block;
+    }
+
+    bool ProcessorHooks::block_run_program() {
+        return do_block;
+    }
+
 }

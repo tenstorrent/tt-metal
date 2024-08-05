@@ -13,8 +13,12 @@ size_t GraphTracker::add_processor(const std::shared_ptr<IGraphProcessor>& new_p
     return processors.size();
 }
 
-void GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
+bool GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
+    if (hook) {
+        return false;
+    }
     hook = new_hook;
+    return true;
 }
 
 void GraphTracker::track_allocate(Buffer* buffer, bool bottom_up) {
@@ -70,4 +74,17 @@ bool GraphTracker::block_run_program() {
         return false;
     }
     return hook->block_run_program();
+}
+
+const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processors() const {
+    return processors;
+}
+
+const std::shared_ptr<IGraphHooks>& GraphTracker::get_hooks() const {
+    return hook;
+}
+
+void GraphTracker::clean() {
+    processors.clear();
+    hook = nullptr;
 }

@@ -18,9 +18,9 @@ namespace tt::tt_metal {
     public:
         IGraphProcessor() = default;
 
-        virtual void track_allocate(Buffer* buffer, bool bottom_up) {};
+        virtual void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {};
 
-        virtual void track_deallocate(Buffer* buffer) {};
+        virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
 
         virtual void track_allocate_cb(const CoreRange &core_range, uint64_t addr, uint64_t size) {};
 
@@ -30,6 +30,10 @@ namespace tt::tt_metal {
 
         virtual void track_end_op(const std::any& output_tensors) {};
 
+
+        virtual void begin_capture() {};
+        virtual std::string end_capture() {return "";};
+
         virtual ~IGraphProcessor() = default;
 
     };
@@ -37,9 +41,9 @@ namespace tt::tt_metal {
     class IGraphHooks {
     public:
         IGraphHooks() = default;
-        virtual bool hook_allocate(Buffer* buffer, bool bottom_up) = 0;
+        virtual bool hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) = 0;
 
-        virtual bool hook_deallocate(Buffer* buffer) = 0;
+        virtual bool hook_deallocate(tt::tt_metal::Buffer* buffer) = 0;
 
         virtual bool block_run_program() = 0;
 
@@ -59,7 +63,7 @@ namespace tt::tt_metal {
 
         size_t add_processor(const std::shared_ptr<IGraphProcessor>& processor);
 
-        void add_hook(const std::shared_ptr<IGraphHooks>& hook);
+        bool add_hook(const std::shared_ptr<IGraphHooks>& hook);
 
         void track_allocate(Buffer* buffer, bool bottom_up);
 
@@ -86,7 +90,7 @@ namespace tt::tt_metal {
                 return;
             }
             for (auto& it : processors) {
-                it->track_end_op({output_tensors});
+                it->track_end_op(std::ref(output_tensors));
             }
         }
 
@@ -95,6 +99,12 @@ namespace tt::tt_metal {
         bool hook_deallocate(Buffer* buffer);
 
         bool block_run_program();
+
+        const std::vector<std::shared_ptr<IGraphProcessor>>& get_processors() const;
+
+        const std::shared_ptr<IGraphHooks>& get_hooks() const;
+
+        void clean();
 
     private:
         GraphTracker() = default;
