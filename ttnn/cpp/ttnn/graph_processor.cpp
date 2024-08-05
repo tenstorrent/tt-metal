@@ -101,7 +101,7 @@ namespace ttnn {
 
     }
 
-    void GraphProcessor::track_allocate_cb(const CoreRange &core_range, uint64_t addr, uint64_t size) {
+    void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
         const std::lock_guard<std::mutex> lock(mutex);
         auto counter = graph.size();
         {
@@ -232,7 +232,7 @@ namespace ttnn {
             graph.push_back(Vertex{
                 .counter = counter,
                 .name = "buffer",
-                .param = 0,
+                .param = buffer->size(),
                 .connections = {}
             });
             graph[current_op_id.top()].connections.push_back(counter);

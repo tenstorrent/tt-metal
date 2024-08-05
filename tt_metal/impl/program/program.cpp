@@ -373,6 +373,7 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
 
     this->circular_buffers_.push_back(circular_buffer);
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
+    GraphTracker::instance().track_allocate_cb(core_range_set, 0, circular_buffer->size());
     return circular_buffer->id();
 }
 
@@ -457,7 +458,6 @@ void Program::allocate_circular_buffers() {
                         // `core_range` but also intersecting `cb_allocator.core_range`
                         continue;
                     }
-                    GraphTracker::instance().track_allocate_cb(core_range, computed_addr, circular_buffer->size());
                     cb_allocator.mark_address(computed_addr, circular_buffer->size());
                 }
             }

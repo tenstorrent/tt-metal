@@ -22,7 +22,7 @@ namespace tt::tt_metal {
 
         virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
 
-        virtual void track_allocate_cb(const CoreRange &core_range, uint64_t addr, uint64_t size) {};
+        virtual void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {};
 
         virtual void track_deallocate_cb() {};
 
@@ -69,7 +69,7 @@ namespace tt::tt_metal {
 
         void track_deallocate(Buffer* buffer);
 
-        void track_allocate_cb(const CoreRange &core_range, uint64_t addr, uint64_t size);
+        void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size);
 
         void track_deallocate_cb();
 
