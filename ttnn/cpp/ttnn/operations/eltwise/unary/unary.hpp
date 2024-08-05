@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -27,6 +28,10 @@ struct ExecuteUnary {
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor operator()(
+        const ComplexTensor& input_tensor,
+        const MemoryConfig& memory_config);
 };
 
 template <UnaryOpType unary_op_type>

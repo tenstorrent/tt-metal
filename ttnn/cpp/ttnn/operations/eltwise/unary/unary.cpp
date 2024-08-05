@@ -9,6 +9,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -55,6 +57,13 @@ Tensor ExecuteUnary<unary_op_types...>::operator()(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
+}
+
+template <>
+Tensor ExecuteUnary<UnaryOpType::ABS>::operator()(
+    const ComplexTensor& input_tensor,
+    const MemoryConfig& output_mem_config) {
+    return ttnn::hypot(input_tensor[0],input_tensor[1],output_mem_config);
 }
 
 template struct ExecuteUnary<UnaryOpType::ABS>;

@@ -33,10 +33,6 @@ Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_confi
     return ttnn::eqz( input[1], output_mem_config);
 }
 
-Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::hypot(input[0],input[1],output_mem_config);
-}
-
 ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return ComplexTensor({input[0], ttnn::neg(input[1],output_mem_config)});
 }
