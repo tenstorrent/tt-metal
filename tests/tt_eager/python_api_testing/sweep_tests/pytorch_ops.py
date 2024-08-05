@@ -2353,3 +2353,7 @@ def expm1_bw(x, y, *args, **kwargs):
 def frac(x, *args, **kwargs):
     return torch.frac(x)
 
+
+def trunc(x, *args, **kwargs):
+    return torch.trunc(x)
+
