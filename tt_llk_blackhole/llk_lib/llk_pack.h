@@ -70,7 +70,7 @@ inline void _llk_pack_configure_addrmod_() {
             .z_src = { .incr = 1 },
             .z_dst = { .incr = 0 }
         }.set(ADDR_MOD_2);
-    
+
     } else {
 
         addr_mod_pack_t{
@@ -109,8 +109,8 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         const uint MOP_OUTER_LOOP = (tile_c_dim < TILE_C_DIM) ? num_faces : (num_faces >> 1);
 
         ckernel::ckernel_template tmp(
-            MOP_OUTER_LOOP, 
-            MOP_INNER_LOOP, 
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
             TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0)
         );
 
@@ -121,7 +121,7 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
             TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_2, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1)
         );
         tmp.program(instrn_buffer);
-        
+
     } else if constexpr(tilize && !untilize) {
 
         const uint PACK_INTF_SEL_0 = 0b0101;
@@ -131,7 +131,7 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         const uint replay_buf_len = 16;
 
         //This replay buffer finishes 2 faces
-        load_replay_buf(0, replay_buf_len, false, 
+        load_replay_buf(0, replay_buf_len, false,
             // Lambda function to set up replay buffer
             [] {
                 //Face 0 -> mask rows 1010
@@ -162,16 +162,23 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         // tmp.set_last_outer_loop_instr(TTI_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, PACK_INTF_SEL_1, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0));
 
         ckernel::ckernel_template tmp(
-            MOP_OUTER_LOOP, 
-            MOP_INNER_LOOP, 
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
             TT_OP_REPLAY(0, replay_buf_len, 0, 0)
         );
 
-        tmp.set_end_op(
-            TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100)); //ch0_z = 0, ch1_z = 2;
+        if constexpr (write_tile_header) {
+            tmp.set_end_ops(
+                TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100), //ch0_z = 0, ch1_z = 2;
+                TT_OP_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR)); // write tile header to L1
+        }
+        else {
+            tmp.set_end_op(
+                TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100)); //ch0_z = 0, ch1_z = 2;
+        }
 
         tmp.program(instrn_buffer);
-    
+
     } else {
 
         const uint PACK_INTF_SEL = face_r_dim == 1 ? p_pacr::SINGLE_INTF_ACTIVE : (face_r_dim == 2 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE);
