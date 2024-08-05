@@ -31,7 +31,8 @@ CCLOpConfig::CCLOpConfig(
                                                 input_tensors.at(0).shard_spec()->num_cores())
                                             : std::nullopt),
     shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
-    topology(topology) {
+    topology(topology),
+    is_row_major(input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
     TT_ASSERT(!this->is_input_sharded() || input_shard_size_bytes.has_value());
     TT_ASSERT(!this->is_output_sharded() || output_shard_size_bytes.has_value());
 }

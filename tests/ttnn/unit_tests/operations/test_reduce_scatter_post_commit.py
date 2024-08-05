@@ -200,7 +200,7 @@ def test_reduce_scatter_post_commit(
 
 
 def run_reduce_scatter_sharded_test(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -214,14 +214,16 @@ def run_reduce_scatter_sharded_test(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
+    enable_async=False,
     num_iters=1,
 ):
-    if len(all_devices) != 8:
+    if len(t3k_device_mesh.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
 
     debug = False
 
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    for device_id in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device_id).enable_async(enable_async)
 
     # Generate input tensors
     input_shard_shape = list(output_shard_shape)
@@ -264,21 +266,28 @@ def run_reduce_scatter_sharded_test(
         input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
     for i, canonical_input_tensor in enumerate(input_tensors):
         tt_input_tensors.append(
-            ttl.tensor.Tensor(canonical_input_tensor, input_dtype).to(tensor_layout).to(devices[i], input_mem_config)
+            ttl.tensor.Tensor(canonical_input_tensor, input_dtype)
+            .to(tensor_layout)
+            .to(t3k_device_mesh.get_device(t3k_device_mesh.get_device_ids()[i]), input_mem_config)
         )
 
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # Run the op
-    # for i in range(num_iters):
-    tt_out_tensors = ttnn.reduce_scatter(
-        tt_input_tensors,
-        scatter_dim=scatter_dim,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-    )
+    for i in range(num_iters):
+        output_tensor_mesh = ttnn.reduce_scatter(
+            input_tensor_mesh,
+            scatter_dim=scatter_dim,
+            math_op=math_op,
+            num_links=num_links,
+            memory_config=output_mem_config,
+        )
 
-    for d in devices:
-        ttl.device.Synchronize(d)
+        for device_id in t3k_device_mesh.get_device_ids():
+            ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
+        logger.info(f"Done iteration {i}")
+
+        for device_id in t3k_device_mesh.get_device_ids():
+            ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
     logger.info(f"Done iteration {i}")
 
     # Compute golden
@@ -289,6 +298,7 @@ def run_reduce_scatter_sharded_test(
 
     golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, scatter_dim)
 
+    tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
     # Compare
     assert len(golden_output_tensors) == len(tt_out_tensors)
@@ -357,8 +367,9 @@ def run_reduce_scatter_sharded_test(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -372,10 +383,11 @@ def test_width_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
+    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        all_devices,
+        t3k_device_mesh,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,
@@ -389,11 +401,12 @@ def test_width_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
+        enable_async=enable_async,
         num_iters=num_iters,
     )
 
 
-@pytest.skip("Hangs")
+@pytest.mark.skip("Hangs")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -428,8 +441,9 @@ def test_width_sharded_reduce_scatter_post_commit(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("enable_async", [True])
 def test_height_sharded_reduce_scatter_post_commit(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -443,10 +457,11 @@ def test_height_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
+    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        all_devices,
+        t3k_device_mesh,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,
@@ -460,6 +475,7 @@ def test_height_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
+        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -498,8 +514,9 @@ def test_height_sharded_reduce_scatter_post_commit(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("enable_async", [True])
 def test_block_sharded_reduce_scatter_post_commit(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -513,10 +530,11 @@ def test_block_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
+    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        all_devices,
+        t3k_device_mesh,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,
@@ -530,5 +548,6 @@ def test_block_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
+        enable_async=enable_async,
         num_iters=num_iters,
     )
