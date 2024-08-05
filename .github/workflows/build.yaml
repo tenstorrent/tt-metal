@@ -10,7 +10,7 @@ jobs:
       matrix:
         build: [
           {type: Debug, runs-on: ubuntu-20.04},
-          {type: RelWithDebInfo, runs-on: build}
+          {type: RelWithDebInfo, runs-on: ["build" , "in-service"]}
         ]
         arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]

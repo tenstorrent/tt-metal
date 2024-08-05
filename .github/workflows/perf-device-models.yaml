@@ -20,8 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal", timeout: 30},
+          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset", "in-service"], machine-type: "bare_metal", timeout: 40},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset", "in-service"], machine-type: "bare_metal", timeout: 30},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:

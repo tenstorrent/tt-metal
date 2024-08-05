@@ -20,11 +20,11 @@ jobs:
       matrix:
         runner-info: [
           # E150
-          {arch: grayskull, runs-on: ["grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["in-service", "cloud-virtual-machine", "E150"], machine-type: "virtual_machine"},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["in-service", "cloud-virtual-machine", "N150"], machine-type: "virtual_machine"},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["in-service", "cloud-virtual-machine", "N300"], machine-type: "virtual_machine"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
