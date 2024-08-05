@@ -13,6 +13,89 @@
 
 namespace ttnn {
 
+
+AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor) {
+    std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
+    // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
+    bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
+    if (/*input_tensor.is_sharded() ||*/ perf_degradation_from_full_tensor_mode) {
+        return AllGatherBidirectionalMode::SPLIT_TENSOR;
+    }
+    return AllGatherBidirectionalMode::FULL_TENSOR;
+}
+
+AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology) :
+    num_links(num_links),
+    semaphore_size(32),
+    ring_size(ring_size),
+
+    erisc_handshake_address(tt::round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
+    topology(topology),
+    enable_bidirectional(topology == all_gather_op::Topology::Ring),
+
+    input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
+    output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
+
+    mode(choose_all_gather_mode(input_tensor, output_tensor, dim)),
+
+    // Sharded currently doesn't support FULL_TENSOR bidirectional due to indexers that require updating in order to support this
+    // new mode
+    bidirectional_mode(choose_bidirectional_mode(input_tensor))
+{
+    TT_ASSERT(erisc_handshake_address >= eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    TT_ASSERT(erisc_handshake_address < eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16);
+    TT_ASSERT((erisc_handshake_address & (16-1)) == 0);
+    if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
+        // See issue #6448
+        int outer_dims_size = 1;
+        for (std::size_t i = 0; i < dim; i++) {
+            outer_dims_size *= input_tensor.get_legacy_shape()[i];
+        }
+        if (outer_dims_size > 1) {
+            this->enable_bidirectional = false;
+        }
+    }
+
+    // "duplicate" directions are a short hand to enable linear/mesh all-gather topologies with
+    // less code-changes. Ideally a new concept is added amongst "num_eth_buffers", "num_workers_per_link", etc.
+    uint32_t num_duplicate_directions = (topology == all_gather_op::Topology::Ring && bidirectional_mode != AllGatherBidirectionalMode::FULL_TENSOR) ? 1 : 2;
+
+    constexpr uint32_t total_l1_buffer_space = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+
+    this->is_sharded = input_tensor.is_sharded();
+    this->num_eth_buffers = (this->enable_bidirectional ? 8 /*1*/ : (this->is_sharded && topology != all_gather_op::Topology::Linear ? 8 : 4));
+
+    if (bidirectional_mode == AllGatherBidirectionalMode::FULL_TENSOR) {
+        this->num_eth_buffers = std::min(this->num_eth_buffers, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS / num_duplicate_directions);
+    }
+
+    // if (this->is_sharded) {
+    //     this->num_eth_buffers = std::min(this->num_eth_buffers, input_tensor.shard_spec()->num_cores());
+    //     if ((input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) % (ring_size) != 0 &&
+    //         (ring_size % (input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) != 0)) {
+    //         // Currently don't support misalignment here
+    //         this->num_eth_buffers = 1;
+    //     }
+    //     log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
+
+    //     // HACK FOR DEVELOPMENT ONLY
+    //     this->num_eth_buffers = 1;
+    // }
+
+    this->num_workers_per_link = this->num_eth_buffers;
+    this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16 * 3;//16;
+    this->semaphore_offset = this->semaphore_size * this->num_eth_buffers * num_duplicate_directions; // TODO: Remove this once dedicated semaphore space for user kernels are added
+    this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
+
+    uint32_t const page_size = input_tensor.buffer()->page_size();
+    this->eth_buffer_size = tt::round_down((total_l1_buffer_space - this->semaphore_offset) / (this->num_eth_buffers * num_duplicate_directions), page_size);
+
+    TT_FATAL(eth_buffer_size == 0 or (this->num_eth_buffers * num_duplicate_directions) <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
+    TT_FATAL(this->eth_buffer_size * (this->num_eth_buffers * num_duplicate_directions) + this->semaphore_offset <= total_l1_buffer_space);
+
+}
+
 AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim) {
     bool is_sharded = input_tensor.is_sharded();
 
