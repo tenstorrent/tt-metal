@@ -769,18 +769,19 @@ def run_all_gather_sharded(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    all_gather_operation,
 ):
     if len(all_devices) != 8:
         pytest.skip("Not T3000!")
 
-    if input_shard_shape[0] > 32 and num_devices == 8:
-        pytest.skip("Don't want to exercise yet")
+    # if input_shard_shape[0] > 32 and num_devices == 8:
+    #     pytest.skip("Don't want to exercise yet")
 
-    if input_shard_shape[0] > 32 and num_devices == 8:
-        pytest.skip("Don't want to exercise yet")
+    # if input_shard_shape[0] > 32 and num_devices == 8:
+    #     pytest.skip("Don't want to exercise yet")
 
-    if input_shard_shape[0] == 32 and num_devices == 4:
-        pytest.skip("Don't want to exercise yet")
+    # if input_shard_shape[0] == 32 and num_devices == 4:
+    #     pytest.skip("Don't want to exercise yet")
 
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
@@ -868,7 +869,7 @@ def run_all_gather_sharded(
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-    tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
+    tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
     for d in devices:
         ttl.device.Synchronize(d)
     torch.set_printoptions(sci_mode=False)
@@ -922,77 +923,288 @@ def run_all_gather_sharded(
         # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize(
-    "orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR]
-)  # , ttl.tensor.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
     (
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 32),
-        #     (32, 32),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 64),
-        #     (32, 64),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 128),
-        #     (32, 128),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        # ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 64),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
-        ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 128),
-        #     (32, 64),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 256),
-        #     (32, 32),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 512),
-        #     (32, 64),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
-        # ),
         # LLama
         (
             (1, 1, 32, 1024),
             (32, 32),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
         ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 4096),
-        #     (32, 128),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 4096),
-        #     (32, 128),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 2048),
-        #     (32, 64),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        # ),
-        # ( # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 1792),
-        #     (32, 32),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
-        # ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
     ),
 )
 def test_all_gather_sharded_post_commit(
+    all_devices,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_gather_sharded(
+        all_devices,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_operation=ttnn.all_gather,
+    )
+
+
+# @pytest.mark.parametrize("num_devices", [4, 8])
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+# @pytest.mark.parametrize("num_cores", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
+    ),
+)
+def test_line_all_gather_sharded_post_commit(
+    all_devices,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_gather_sharded(
+        all_devices,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_operation=ttnn.line_all_gather,
+    )
+
+
+# @pytest.mark.parametrize("num_devices", [4, 8])
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+# @pytest.mark.parametrize("num_cores", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 128),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 256),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 64, 128),
+            (64, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 64, 256),
+            (64, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 64),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 128),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 64),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 128),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+        ),
+        (
+            (1, 1, 32, 128),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+        ),
+        (
+            (1, 1, 64, 128),
+            (64, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+        ),
+        (
+            (1, 1, 32, 256),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+        ),
+        (
+            (1, 1, 64, 256),
+            (64, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 256),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 512),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+        ),
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
+    ),
+)
+def test_sharded_all_gather_nightly(
     all_devices,
     num_devices,
     input_shape,

@@ -60,15 +60,17 @@ void kernel_main() {
     constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(27);
     constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(28);
     constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(29);
-    constexpr uint32_t input_tensor_shard_pages_per_shard = get_compile_time_arg_val(30);
-    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(31) != 0;
+    constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(30);
+    constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(31);
+    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(32) != 0;
 
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(32);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(33);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(34);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(35);
-    constexpr uint32_t output_tensor_shard_pages_per_shard = get_compile_time_arg_val(36);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(37) != 0;
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(33);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(34);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(35);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(36);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(37);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(38);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(39) != 0;
     #endif
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
@@ -82,30 +84,32 @@ void kernel_main() {
         .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED
 
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> s = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> s = {
                 HarvestedWormholeWorkerToNocLookup(input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = input_tensor_shard_grid_height,
-                    .shard_grid_width = input_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = input_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = input_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = input_tensor_shard_pages_per_shard,
-                    .transposed_grid = input_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    input_tensor_shard_pages_per_shard_y,
+                    input_tensor_shard_pages_per_shard_x,
+                    input_tensor_shard_grid_height,
+                    input_tensor_shard_grid_width,
+                    input_tensor_shard_grid_start_y_logical,
+                    input_tensor_shard_grid_start_x_logical,
+                    input_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = src_addr
             };
 
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
                 HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = output_tensor_shard_grid_height,
-                    .shard_grid_width = output_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = output_tensor_shard_pages_per_shard,
-                    .transposed_grid = output_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    output_tensor_shard_pages_per_shard_y,
+                    output_tensor_shard_pages_per_shard_x,
+                    output_tensor_shard_grid_height,
+                    output_tensor_shard_grid_width,
+                    output_tensor_shard_grid_start_y_logical,
+                    output_tensor_shard_grid_start_x_logical,
+                    output_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = dst_addr
             };
@@ -127,30 +131,32 @@ void kernel_main() {
         };
         #elif defined SHARDED
 
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> s = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> s = {
                 HarvestedWormholeWorkerToNocLookup(input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = input_tensor_shard_grid_height,
-                    .shard_grid_width = input_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = input_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = input_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = input_tensor_shard_pages_per_shard,
-                    .transposed_grid = input_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    input_tensor_shard_pages_per_shard_y,
+                    input_tensor_shard_pages_per_shard_x,
+                    input_tensor_shard_grid_height,
+                    input_tensor_shard_grid_width,
+                    input_tensor_shard_grid_start_y_logical,
+                    input_tensor_shard_grid_start_x_logical,
+                    input_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = src_addr
             };
 
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
                 HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = output_tensor_shard_grid_height,
-                    .shard_grid_width = output_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = output_tensor_shard_pages_per_shard,
-                    .transposed_grid = output_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    output_tensor_shard_pages_per_shard_y,
+                    output_tensor_shard_pages_per_shard_x,
+                    output_tensor_shard_grid_height,
+                    output_tensor_shard_grid_width,
+                    output_tensor_shard_grid_start_y_logical,
+                    output_tensor_shard_grid_start_x_logical,
+                    output_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = dst_addr
             };

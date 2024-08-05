@@ -159,7 +159,7 @@ static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_fr
     return {logical_to_noc_row_map, logical_to_noc_col_map};
 }
 
-void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
+void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args) {
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
     args.push_back(row_map.size());
     for (uint32_t i = 0; i < row_map.size(); i++) {
@@ -171,9 +171,11 @@ void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::ve
     }
 }
 
-void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard) {
+void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
+    TT_ASSERT(pages_per_shard_y > 0);
+    TT_ASSERT(pages_per_shard_x > 0);
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR;
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
     // shard_grid_width (cores)
@@ -182,8 +184,10 @@ void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vecto
     args.push_back(shard_grid_start.y);
     // shard_grid_start_x
     args.push_back(shard_grid_start.x);
-    // pages_per_shard
-    args.push_back(pages_per_shard);
+    // pages_per_shard_y
+    args.push_back(pages_per_shard_y);
+    // pages_per_shard_x
+    args.push_back(pages_per_shard_x);
     // transposed grid
     args.push_back(static_cast<uint32_t>(shard_grid_transposed));
 
@@ -197,19 +201,32 @@ void emit_sharded_tensor_kernel_args(Device *d, Tensor const& tensor, std::vecto
 };
 
 
-void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pages_per_shard, std::string const& prefix) {
+void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x, std::string const& prefix) {
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
     bool shard_grid_transposed = tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR;
 
+    TT_ASSERT(pages_per_shard_y > 0);
+    TT_ASSERT(pages_per_shard_x > 0);
     log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
     log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
     log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
     log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard: {}", prefix,     pages_per_shard);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix,     pages_per_shard_y);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix,     pages_per_shard_x);
     log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
 }
 
 static constexpr bool new_shard_mode = true;
+
+tt_xy_pair get_tensor_pages_per_shard_2d(Tensor const& t, std::size_t shard_size_in_pages) {
+    auto const& bb_grid_size = t.buffer()->shard_spec().grid().bounding_box().grid_size();
+    log_trace(tt::LogOp, "bb_grid_size: x:{} y:{}", bb_grid_size.x, bb_grid_size.y);
+    auto const& shape_in_pages = t.buffer()->shard_spec().shape_in_pages();
+    log_trace(tt::LogOp, "shape_in_pages: x:{} y:{}", shape_in_pages.at(0), shape_in_pages.at(1));
+
+    log_trace(tt::LogOp, "shard_size_in_pages: x={}, y={}", shape_in_pages.at(1) / bb_grid_size.x, shape_in_pages.at(0) / bb_grid_size.y);
+    return {shape_in_pages.at(1) / bb_grid_size.x, shape_in_pages.at(0) / bb_grid_size.y};
+}
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
@@ -229,7 +246,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     auto const& sharding_info = ShardedAllGatherConfig(input_tensor, output_tensor, dim);
-    bool enable_print = false; // ring_index == 0
+    bool enable_print = false;
     all_gather_config.print();
 
     bool is_sharded = input_tensor.is_sharded();
@@ -249,7 +266,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     uint32_t output_page_size = (is_sharded && !new_shard_mode) ? output_shard_size_in_bytes : output_tensor_config->get_page_size();
     std::size_t input_pages_per_shard = input_shard_size_in_bytes / input_page_size;
     std::size_t output_pages_per_shard = output_shard_size_in_bytes / input_page_size;
+    auto const& [input_pages_per_shard_y, input_pages_per_shard_x] = is_sharded ? input_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
+    auto const& [output_pages_per_shard_y, output_pages_per_shard_x] = is_sharded ? output_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
     if (is_sharded) {
+        TT_ASSERT(input_pages_per_shard_y > 0 && input_pages_per_shard_x > 0);
+        TT_ASSERT(output_pages_per_shard_y > 0 && output_pages_per_shard_x > 0);
         log_trace(tt::LogOp, "input_buffer->page_size: {}", input_tensor_config->get_page_size());
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[0]: {}", input_buffer->shard_spec().tensor2d_shape[0]);
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[1]: {}", input_buffer->shard_spec().tensor2d_shape[1]);
@@ -687,8 +708,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(ring_size)
                             };
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard);
-                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                             };
 
                             log_trace(tt::LogOp, "Worker {} SR args", b);
@@ -718,8 +739,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tis_clockwise_direction: {}", is_clockwise_direction ? 1 : 0);
 
                             if (new_shard_mode) {
-                                log_sharded_tensor_kernel_args(input_tensor, input_pages_per_shard, "input");
-                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                                log_sharded_tensor_kernel_args(input_tensor, input_pages_per_shard_y, input_pages_per_shard_x, "input");
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
                             }
 
                             return worker_reader_sender_ct_args;
@@ -800,8 +821,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(output_buffer->address())
                             };
                             if (is_sharded) {
-                                emit_sharded_tensor_kernel_rt_args(device, input_tensor, args, input_pages_per_shard);
-                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_rt_args(device, input_tensor, args);
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, args);
                             }
                             return args;
                         }
@@ -864,7 +885,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                             }
                             log_trace(tt::LogOp, "Worker {} SW CT args", b);
                             log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
@@ -890,7 +911,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
 
                             if (new_shard_mode) {
-                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
                             }
                             return worker_writer_sender_ct_args;
                         }
@@ -982,7 +1003,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (is_sharded) {
-                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args);
                             }
 
                             log_trace(tt::LogOp, "Worker {} SW rt args", b);
@@ -1228,7 +1249,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (new_shard_mode) {
-                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                             }
 
                             log_trace(tt::LogOp, "Worker {} RW ct args", b);
@@ -1258,7 +1279,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tring_size: {}", ring_size);
 
                             if (new_shard_mode) {
-                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard, "output");
+                                log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
                             }
 
                             return worker_writer_receiver_ct_args;
@@ -1323,7 +1344,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             };
 
                             if (is_sharded) {
-                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args, output_pages_per_shard);
+                                emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
                             }
 
                             log_trace(tt::LogOp, "Worker {} RW rt args", b);

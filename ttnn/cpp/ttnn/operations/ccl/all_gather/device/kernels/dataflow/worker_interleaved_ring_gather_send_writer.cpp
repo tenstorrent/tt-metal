@@ -50,8 +50,9 @@ void kernel_main() {
     constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(22);
     constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(23);
     constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(24);
-    constexpr uint32_t output_tensor_shard_pages_per_shard = get_compile_time_arg_val(25);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(26) != 0;
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(25);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(26);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(27) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -60,16 +61,17 @@ void kernel_main() {
         InterleavedAddrGen<dst_is_dram> d = {
             .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
                 HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = output_tensor_shard_grid_height,
-                    .shard_grid_width = output_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = output_tensor_shard_pages_per_shard,
-                    .transposed_grid = output_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    output_tensor_shard_pages_per_shard_y,
+                    output_tensor_shard_pages_per_shard_x,
+                    output_tensor_shard_grid_height,
+                    output_tensor_shard_grid_width,
+                    output_tensor_shard_grid_start_y_logical,
+                    output_tensor_shard_grid_start_x_logical,
+                    output_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = dst_addr
             };
@@ -85,21 +87,31 @@ void kernel_main() {
             .data_format = in0_df
         };
         #elif defined SHARDED
-            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup> d = {
+            WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec> d = {
                 HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                .device_shard_spec = {
-                    .shard_grid_height = output_tensor_shard_grid_height,
-                    .shard_grid_width = output_tensor_shard_grid_width,
-                    .shard_grid_start_y_logical = output_tensor_shard_grid_start_y_logical,
-                    .shard_grid_start_x_logical = output_tensor_shard_grid_start_x_logical,
-                    .pages_per_shard = output_tensor_shard_pages_per_shard,
-                    .transposed_grid = output_tensor_shard_grid_transposed
-                },
+                DeviceWidthShardSpec(
+                    output_tensor_shard_pages_per_shard_y,
+                    output_tensor_shard_pages_per_shard_x,
+                    output_tensor_shard_grid_height,
+                    output_tensor_shard_grid_width,
+                    output_tensor_shard_grid_start_y_logical,
+                    output_tensor_shard_grid_start_x_logical,
+                    output_tensor_shard_grid_transposed
+                ),
                 .page_size = output_page_size,
                 .page_offset = dst_addr
             };
         #endif
     #endif
+
+    #if defined SHARDED
+    DPRINT << "d.pages_per_shard_y " << (uint32_t)d.tensor_shard_spec.pages_per_shard_y << "\n";
+    DPRINT << "d.pages_per_shard_x " << (uint32_t)d.tensor_shard_spec.pages_per_shard_x << "\n";
+    DPRINT << "d.shard_grid_height " << (uint32_t)d.tensor_shard_spec.shard_grid_height << "\n";
+    DPRINT << "d.shard_grid_width " << (uint32_t)d.tensor_shard_spec.shard_grid_width << "\n";
+    DPRINT << "d.shard_grid_start_y_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_y_logical << "\n";
+    DPRINT << "d.shard_grid_start_x_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_x_logical << "\n";
+    DPRINT << "d.transposed_grid " << (uint32_t)d.tensor_shard_spec.transposed_grid << "\n";
 
     for (uint32_t i = 0; i < output_shard_grid_nrows; i++) {
         DPRINT << "r(logical)=" << i << ", r(noc)=" << output_shard_grid_row_map[i] << "\n";
@@ -107,6 +119,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < output_shard_grid_ncols; i++) {
         DPRINT << "c(logical)=" << i << ", c(noc)=" << output_shard_grid_col_map[i] << "\n";
     }
+    #endif
 
     // Used to wait until eth sender has space available
     volatile tt_l1_ptr uint32_t* writer_send_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_send_sem_addr);

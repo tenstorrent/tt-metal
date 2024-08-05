@@ -448,15 +448,15 @@ FORCE_INLINE void write_chunk(
         uint32_t local_address = d.bank_base_address + (page_offset * d.page_size) + 0;
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), local_address);
         ASSERT(((dst_noc_addr >> 32) & 0xF) == 0);
-        // DPRINT << "output_page_idx: " << (uint32_t)output_page_idx <<
-        //     " noc_yx.x: " << (uint32_t)noc_yx.noc_x <<
-        //     " noc_yx.y: " << (uint32_t)noc_yx.noc_y <<
-        //     " d.page_size: " << d.page_size <<
-        //     " page_offset: " << page_offset <<
-        //     " d.bank_base_address " << (uint32_t)d.bank_base_address <<
-        //     " dst_noc_addr.addr " << (uint32_t)(dst_noc_addr & 0xFFFFFFFF) <<
-        //     " dst_noc_addr.upper " << (uint32_t)(dst_noc_addr >> 32) <<
-        //     "\n";
+        DPRINT << "output_page_idx: " << (uint32_t)output_page_idx <<
+            " noc_yx.x: " << (uint32_t)noc_yx.noc_x <<
+            " noc_yx.y: " << (uint32_t)noc_yx.noc_y <<
+            " d.page_size: " << d.page_size <<
+            " page_offset: " << page_offset <<
+            " d.bank_base_address " << (uint32_t)d.bank_base_address <<
+            " dst_noc_addr.addr " << (uint32_t)(dst_noc_addr & 0xFFFFFFFF) <<
+            " dst_noc_addr.upper " << (uint32_t)(dst_noc_addr >> 32) <<
+            "\n";
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         // DPRINT << "Done write: \n";
     #endif
@@ -595,17 +595,15 @@ FORCE_INLINE void read_chunk_from_output_tensor(
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
-        if (noc_yx.noc_y > 4|| ((src_noc_addr & 0xFFFFFFFF) + page_size) > MEM_L1_SIZE) {
-            DPRINT << "SR input_page_idx: " << (uint32_t)input_page_idx <<
-                " noc_yx.x: " << (uint32_t)noc_yx.noc_x <<
-                " noc_yx.y: " << (uint32_t)noc_yx.noc_y <<
-                " d.page_size: " << s.page_size <<
-                " page_offset: " << page_offset <<
-                " d.bank_base_address " << (uint32_t)s.bank_base_address <<
-                " src_noc_addr.addr " << (uint32_t)(src_noc_addr & 0xFFFFFFFF) <<
-                " src_noc_addr.upper " << (uint32_t)(src_noc_addr >> 32) <<
-                "\n";
-        }
+        DPRINT << "SR input_page_idx: " << (uint32_t)input_page_idx <<
+            " noc_yx.x: " << (uint32_t)noc_yx.noc_x <<
+            " noc_yx.y: " << (uint32_t)noc_yx.noc_y <<
+            " d.page_size: " << s.page_size <<
+            " page_offset: " << page_offset <<
+            " d.bank_base_address " << (uint32_t)s.bank_base_address <<
+            " src_noc_addr.addr " << (uint32_t)(src_noc_addr & 0xFFFFFFFF) <<
+            " src_noc_addr.upper " << (uint32_t)(src_noc_addr >> 32) <<
+            "\n";
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
     #endif
         input_page_idx++;

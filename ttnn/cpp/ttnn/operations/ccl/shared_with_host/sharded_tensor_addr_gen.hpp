@@ -68,51 +68,136 @@ struct test_shard_location_t {
     device_core_location_t core_location;
     std::uint32_t page_offset;
 };
+
+template <typename shard_type_device_shard_spec_t>
 struct device_shard_spec_t {
+    device_shard_spec_t(
+        uint8_t shard_grid_height,
+        uint8_t shard_grid_width,
+        uint8_t shard_grid_start_y_logical,
+        uint8_t shard_grid_start_x_logical,
+        bool transposed_grid) :
+        shard_grid_height(shard_grid_height),
+        shard_grid_width(shard_grid_width),
+        shard_grid_start_y_logical(shard_grid_start_y_logical),
+        shard_grid_start_x_logical(shard_grid_start_x_logical),
+        transposed_grid(transposed_grid) {}
+
     uint8_t shard_grid_height;
     uint8_t shard_grid_width;
     uint8_t shard_grid_start_y_logical;
     uint8_t shard_grid_start_x_logical;
-    uint8_t pages_per_shard;
     bool transposed_grid;
+
+    // uint8_t get_pages_per_shard_x() const {
+    //     shard_type_device_shard_spec_t::get_pages_per_shard_x();
+    // }
+    // uint8_t get_pages_per_shard_y() const {
+    //     shard_type_device_shard_spec_t::get_pages_per_shard_y();
+    // }
+    // uint8_t get_pages_per_tensor_x() const {
+    //     shard_type_device_shard_spec_t::get_pages_per_tensor_x();
+    // }
+    // uint8_t get_pages_per_tensor_y() const {
+    //     shard_type_device_shard_spec_t::get_pages_per_tensor_y();
+    // }
+    uint32_t get_pages_per_shard() const {
+        return shard_type_device_shard_spec_t::get_pages_per_shard_x() * shard_type_device_shard_spec_t::get_pages_per_shard_y();
+    }
+    uint16_t get_shard_grid_num_cores() const {
+        return shard_grid_height * shard_grid_width;
+    }
+    uint32_t get_shard_grid_inner_dim() const {
+        return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
+    }
+    uint32_t get_shard_grid_outer_dim() const {
+        return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
+    }
+
+    uint16_t get_shard_grid_width() const {
+        return shard_grid_width;
+    }
+    uint16_t get_shard_grid_height() const {
+        return shard_grid_height;
+    }
 };
 
-template <typename worker_to_noc_lookup_t>
+struct DeviceWidthShardSpec : public device_shard_spec_t<DeviceWidthShardSpec> {
+    DeviceWidthShardSpec(
+        uint16_t pages_per_shard_y,
+        uint16_t pages_per_shard_x,
+        uint8_t shard_grid_height,
+        uint8_t shard_grid_width,
+        uint8_t shard_grid_start_y_logical,
+        uint8_t shard_grid_start_x_logical,
+        bool transposed_grid) :
+        device_shard_spec_t<DeviceWidthShardSpec>(
+            shard_grid_height,
+            shard_grid_width,
+            shard_grid_start_y_logical,
+            shard_grid_start_x_logical,
+            transposed_grid),
+        pages_per_shard_y(pages_per_shard_y),
+        pages_per_shard_x(pages_per_shard_x) {}
+
+    uint16_t pages_per_shard_y;
+    uint16_t pages_per_shard_x;
+
+    uint32_t get_pages_per_shard_x() const {
+        return pages_per_shard_x;
+    }
+    uint32_t get_pages_per_shard_y() const {
+        return pages_per_shard_y;
+    }
+    uint32_t get_pages_per_tensor_x() const {
+        return pages_per_shard_x * get_shard_grid_num_cores();
+    }
+    uint32_t get_pages_per_tensor_y() const {
+        return pages_per_shard_y;
+    }
+};
+
+template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 struct WidthShardedAddressGenerator {
     worker_to_noc_lookup_t worker_to_noc_lookup;
-    device_shard_spec_t tensor_shard_spec;
+    DEVICE_SHARD_SPEC_T tensor_shard_spec;
     uint32_t page_size;
     uint32_t bank_base_address;
 
    public:
-    WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, device_shard_spec_t const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
     test_shard_location_t get_page_location(std::size_t global_page_id) const {
-        // branchless
-        std::size_t inner_shard_grid_dim_size =
-            ((tensor_shard_spec.transposed_grid * tensor_shard_spec.shard_grid_height) +
-             (!tensor_shard_spec.transposed_grid * tensor_shard_spec.shard_grid_width));
-        // branchless
-        std::size_t outer_shard_grid_dim_size =
-            ((!tensor_shard_spec.transposed_grid * tensor_shard_spec.shard_grid_height) +
-             (tensor_shard_spec.transposed_grid * tensor_shard_spec.shard_grid_width));
+        // With width sharding, the tensor is fractured along width, but can be mapped onto a 2D grid, in such a case
+        // the logical tensor is still fractured only along 1 dimension but the placement/allocation snakes through the
+        // grid.
+        std::size_t total_shard_grid_size = tensor_shard_spec.get_shard_grid_num_cores();
+        std::size_t global_pages_per_row_logical = tensor_shard_spec.get_pages_per_tensor_x();
 
-        std::size_t pages_per_shard_grid_inner_dim =tensor_shard_spec.pages_per_shard * inner_shard_grid_dim_size;
+        std::size_t page_global_outer_dim = global_page_id / global_pages_per_row_logical;
+        std::size_t page_global_inner_dim = global_page_id - (page_global_outer_dim * global_pages_per_row_logical);
 
-        // Sorry for the division... but for now lets get something out the door. We can easily optimize this for power of 2
-        // grid sizes (which are probably common)
-        std::size_t shard_index_outer_dim = global_page_id / pages_per_shard_grid_inner_dim;
-        std::size_t shard_index_inner_dim = (global_page_id - (shard_index_outer_dim * pages_per_shard_grid_inner_dim)) / tensor_shard_spec.pages_per_shard;
-        std::size_t page_offset_in_shard = global_page_id - ((shard_index_outer_dim * pages_per_shard_grid_inner_dim) + (shard_index_inner_dim * tensor_shard_spec.pages_per_shard));
+        // might be able to save on some divides here if we can multiply out the pages per shard_x and shards per row
+        // ... think about it
+        // likewise maybe we can also take it a step further and do the same sort of thing above too to get away with a
+        // single divide for the full function
+        std::size_t global_shard_index = page_global_inner_dim / tensor_shard_spec.get_pages_per_shard_x();
+        std::size_t shard_grid_outer_dim_index = global_shard_index / tensor_shard_spec.get_shard_grid_inner_dim();
+        std::size_t shard_grid_inner_dim_index = global_shard_index - (shard_grid_outer_dim_index * tensor_shard_spec.get_shard_grid_inner_dim());
 
-        std::size_t worker_x_offset = (!tensor_shard_spec.transposed_grid * shard_index_inner_dim) + (tensor_shard_spec.transposed_grid * shard_index_outer_dim);
-        std::size_t worker_y_offset = (!tensor_shard_spec.transposed_grid * shard_index_outer_dim) + (tensor_shard_spec.transposed_grid * shard_index_inner_dim);
+        std::size_t worker_y_offset = (!tensor_shard_spec.transposed_grid * shard_grid_outer_dim_index) + (tensor_shard_spec.transposed_grid * shard_grid_inner_dim_index);
+        std::size_t worker_x_offset = (!tensor_shard_spec.transposed_grid * shard_grid_inner_dim_index) + (tensor_shard_spec.transposed_grid * shard_grid_outer_dim_index);
+
+        std::size_t page_in_shard_x = page_global_inner_dim - (global_shard_index * tensor_shard_spec.get_pages_per_shard_x());
+        std::size_t page_in_shard_y = page_global_outer_dim;
+        std::size_t page_offset_in_shard = (page_global_outer_dim * tensor_shard_spec.get_pages_per_shard_x()) + page_in_shard_x;
 
         std::size_t worker_x_logical = tensor_shard_spec.shard_grid_start_x_logical + worker_x_offset;
         std::size_t worker_y_logical = tensor_shard_spec.shard_grid_start_y_logical + worker_y_offset;
 
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
+
         return test_shard_location_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard};
     }
 
@@ -122,8 +207,8 @@ struct WidthShardedAddressGenerator {
     // }
 };
 
-template <typename worker_to_noc_lookup_t>
-inline std::uint64_t get_noc_addr(const uint32_t id, const WidthShardedAddressGenerator<worker_to_noc_lookup_t>& s, uint32_t offset = 0) {
+template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
+inline std::uint64_t get_noc_addr(const uint32_t id, const WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>& s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size can be arbitrary size. Use
