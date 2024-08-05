@@ -20,7 +20,7 @@ RingTopology::RingTopology(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index) :
-    num_links(num_links), ring_size(ring_size), ring_index(ring_index), is_linear(topology == Topology::Linear) {
+    device(device), num_links(num_links), ring_size(ring_size), ring_index(ring_index), is_linear(topology == Topology::Linear) {
     eth_sender_cores.reserve(num_links);
     eth_receiver_cores.reserve(num_links);
 
@@ -99,13 +99,19 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
     }
 }
 
-/*
+static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
+    auto const& core_range = shard_spec.grid.bounding_box();
+    log_trace(tt::LogOp, "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}", core_range.start_coord.x, core_range.start_coord.y, core_range.end_coord.x, core_range.end_coord.y);
+    log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
+
+    return {core_range.start_coord, core_range.end_coord};
+}
 
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages()
-        auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
+    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
@@ -146,9 +152,45 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     return shard_grid_transposed;
 }
 
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device *d, Tensor const& t) {
+void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
+
+    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
+    bool shard_grid_transposed = shard_grid_is_transposed(t);
+
+    TT_ASSERT(pages_per_shard_y > 0);
+    TT_ASSERT(pages_per_shard_x > 0);
+    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix,     pages_per_shard_y);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix,     pages_per_shard_x);
+    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
+}
+
+// non-transposed - always row-major layout
+// vec<logical row -> noc row>, vec<logicacal col -> noc col>
+static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_from_shard_spec(Device const* d, const ShardSpec& shard_spec) {
+    TT_ASSERT(d != nullptr);
+    auto const& core_range = shard_spec.grid.bounding_box();
+    std::vector<uint32_t> logical_to_noc_row_map;
+    std::vector<uint32_t> logical_to_noc_col_map;
+    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        logical_to_noc_row_map.push_back(noc_core.y);
+    }
+    for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        logical_to_noc_col_map.push_back(noc_core.x);
+    }
+
+    return {logical_to_noc_row_map, logical_to_noc_col_map};
+}
+
+std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device const* d, Tensor const& t) {
     std::vector<uint32_t> args;
-    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
+    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
     args.push_back(row_map.size());
     for (uint32_t i = 0; i < row_map.size(); i++) {
         args.push_back(row_map.at(i));
@@ -160,7 +202,6 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device *d, Tensor c
 
     return args;
 }
-*/
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,

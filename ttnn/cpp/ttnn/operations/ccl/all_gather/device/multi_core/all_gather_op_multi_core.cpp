@@ -133,44 +133,21 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
     return worker_sender_num_transfers;
 }
 
-static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
-    auto const& core_range = shard_spec.grid.bounding_box();
-    log_trace(tt::LogOp, "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}", core_range.start_coord.x, core_range.start_coord.y, core_range.end_coord.x, core_range.end_coord.y);
-    log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
 
-    return {core_range.start_coord, core_range.end_coord};
-}
-// non-transposed - always row-major layout
-// vec<logical row -> noc row>, vec<logicacal col -> noc col>
-static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_from_shard_spec(Device *d, const ShardSpec& shard_spec) {
-    TT_ASSERT(d != nullptr);
-    auto const& core_range = shard_spec.grid.bounding_box();
-    std::vector<uint32_t> logical_to_noc_row_map;
-    std::vector<uint32_t> logical_to_noc_col_map;
-    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
-        logical_to_noc_row_map.push_back(noc_core.y);
-    }
-    for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
-        logical_to_noc_col_map.push_back(noc_core.x);
-    }
 
-    return {logical_to_noc_row_map, logical_to_noc_col_map};
-}
 
 static void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args) {
-    // auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
-    // std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
-    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
-    args.push_back(row_map.size());
-    for (uint32_t i = 0; i < row_map.size(); i++) {
-        args.push_back(row_map.at(i));
-    }
-    args.push_back(col_map.size());
-    for (uint32_t i = 0; i < col_map.size(); i++) {
-        args.push_back(col_map.at(i));
-    }
+    auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
+    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+    // auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
+    // args.push_back(row_map.size());
+    // for (uint32_t i = 0; i < row_map.size(); i++) {
+    //     args.push_back(row_map.at(i));
+    // }
+    // args.push_back(col_map.size());
+    // for (uint32_t i = 0; i < col_map.size(); i++) {
+    //     args.push_back(col_map.at(i));
+    // }
 }
 
 static bool shard_grid_is_transposed(Tensor const& t) {
@@ -189,49 +166,38 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 }
 
 static void emit_sharded_tensor_kernel_ct_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
-    // auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
-    // std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
-    TT_ASSERT(pages_per_shard_y > 0);
-    TT_ASSERT(pages_per_shard_x > 0);
-    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    bool shard_grid_transposed = shard_grid_is_transposed(tensor);
-    TT_FATAL(
-        tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
-    );
-    args.push_back(static_cast<uint32_t>(tensor.memory_config().memory_layout));
-    // shard_grid_height (cores)
-    args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
-    // shard_grid_width (cores)
-    args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
-    // shard_grid_start_y
-    args.push_back(shard_grid_start.y);
-    // shard_grid_start_x
-    args.push_back(shard_grid_start.x);
-    // pages_per_shard_y
-    args.push_back(pages_per_shard_y);
-    // pages_per_shard_x
-    args.push_back(pages_per_shard_x);
-    // transposed grid
-    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
+    auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
+    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+    // TT_ASSERT(pages_per_shard_y > 0);
+    // TT_ASSERT(pages_per_shard_x > 0);
+    // auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
+    // bool shard_grid_transposed = shard_grid_is_transposed(tensor);
+    // TT_FATAL(
+    //     tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+    //     tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+    //     tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+    // );
+    // args.push_back(static_cast<uint32_t>(tensor.memory_config().memory_layout));
+    // // shard_grid_height (cores)
+    // args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
+    // // shard_grid_width (cores)
+    // args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
+    // // shard_grid_start_y
+    // args.push_back(shard_grid_start.y);
+    // // shard_grid_start_x
+    // args.push_back(shard_grid_start.x);
+    // // pages_per_shard_y
+    // args.push_back(pages_per_shard_y);
+    // // pages_per_shard_x
+    // args.push_back(pages_per_shard_x);
+    // // transposed grid
+    // args.push_back(static_cast<uint32_t>(shard_grid_transposed));
 
 };
 
 
 static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x, std::string const& prefix) {
-    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    bool shard_grid_transposed = shard_grid_is_transposed(tensor);
-
-    TT_ASSERT(pages_per_shard_y > 0);
-    TT_ASSERT(pages_per_shard_x > 0);
-    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix,     pages_per_shard_y);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix,     pages_per_shard_x);
-    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
+    ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(tensor, prefix);
 }
 
 

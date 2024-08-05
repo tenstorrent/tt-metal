@@ -7,10 +7,13 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
+#include "impl/buffers/buffer_constants.hpp"
 #include "tensix_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 using ttnn::ccl::coord_t;
 using ttnn::ccl::WorkerXY;
@@ -69,50 +72,148 @@ struct reduce_scatter_reader_common_args_t {
     coord_t worker_slice_offset;
     uint32_t total_eltwise_kernel_num_pages;
 };
-#ifdef RM_INTERLEAVED
-constexpr bool rm_interleaved_addr_gen_mode = true;
+#ifdef ROW_MAJOR_LAYOUT
+constexpr bool row_major_layout = true;
 #else
-constexpr bool rm_interleaved_addr_gen_mode = false;
+constexpr bool row_major_layout = false;
 #endif
 
-template <bool dram, bool row_major>
-struct interleaved_addr_gen_t {
+template <bool dram, bool row_major, tt::tt_metal::TensorMemoryLayout tensor_memory_layout>
+struct addr_gen_t {
     using type = InterleavedAddrGen<dram>;
+    static auto build() -> type {
+        return InterleavedAddrGen<dram>{};
+    }
 };
 template <>
-struct interleaved_addr_gen_t<false, true> {
+struct addr_gen_t<false, true, tt::tt_metal::TensorMemoryLayout::INTERLEAVED> {
     using type = InterleavedAddrGen<false>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return InterleavedAddrGen<false>{args...};
+    }
 };
 template <>
-struct interleaved_addr_gen_t<true, true> {
+struct addr_gen_t<true, true, tt::tt_metal::TensorMemoryLayout::INTERLEAVED> {
     using type = InterleavedAddrGen<true>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return InterleavedAddrGen<true>{args...};
+    }
 };
 template <>
-struct interleaved_addr_gen_t<false, false> {
+struct addr_gen_t<false, false, tt::tt_metal::TensorMemoryLayout::INTERLEAVED> {
     using type = InterleavedAddrGenFast<false>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return InterleavedAddrGenFast<false>{args...};
+    }
 };
 template <>
-struct interleaved_addr_gen_t<true, false> {
+struct addr_gen_t<true, false, tt::tt_metal::TensorMemoryLayout::INTERLEAVED> {
     using type = InterleavedAddrGenFast<true>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return InterleavedAddrGenFast<true>{args...};
+    }
+
 };
 
-template <bool is_sharded, bool src_is_dram>
+template <>
+struct addr_gen_t<false, false, tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED> {
+    using type = tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return tt::tt_metal::address_generators::build_sharded_addr_gen<tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED>(args...);
+    }
+};
+
+template <>
+struct addr_gen_t<false, false, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED> {
+    using type = tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return tt::tt_metal::address_generators::build_sharded_addr_gen<tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED>(args...);
+    }
+};
+
+template <>
+struct addr_gen_t<false, false, tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED> {
+    using type = tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED>;
+    template<typename ... ARGS>
+    static auto build(ARGS && ... args) -> type {
+        return tt::tt_metal::address_generators::build_sharded_addr_gen<tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED>(args...);
+    }
+};
+
+constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
+
+// Currently meaningless when `is_sharded=true`
+constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
+static constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout =
+    static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(2));
+
+template <bool src_is_dram, tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout>
 struct reduce_scatter_reader_unique_args_t : public reduce_scatter_reader_common_args_t {
-    using src_addr_gen_t = typename interleaved_addr_gen_t<src_is_dram, rm_interleaved_addr_gen_mode>::type;
+    #ifdef SHARDED_MEM_LAYOUT
+    static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(3);
+    static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(4);
+    static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(5);
+    static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(6);
+    static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(7);
+    static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(8);
+    static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(9) != 0;
+    #else
+    static constexpr uint32_t input_tensor_shard_grid_height = 0;
+    static constexpr uint32_t input_tensor_shard_grid_width = 0;
+    static constexpr uint32_t input_tensor_shard_grid_start_y_logical = 0;
+    static constexpr uint32_t input_tensor_shard_grid_start_x_logical = 0;
+    static constexpr uint32_t input_tensor_shard_pages_per_shard_y = 0;
+    static constexpr uint32_t input_tensor_shard_pages_per_shard_x = 0;
+    static constexpr bool input_tensor_shard_grid_transposed = 0;
+    #endif
+
+    using src_addr_gen_t = addr_gen_t<src_is_dram, row_major_layout, input_tensor_memory_layout>;
+
 
     reduce_scatter_reader_unique_args_t(uint32_t& arg_idx, const DataFormat in0_df) :
         reduce_scatter_reader_common_args_t(arg_idx) {
-        this->s = {
-            .bank_base_address = this->src_addr,
-            .page_size = page_size
-#if defined TILE_INTERLEAVED
-            ,
-            .data_format = in0_df
-#endif
-        };
+        if constexpr (input_tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+            if constexpr (row_major_layout) {
+                this->s = src_addr_gen_t::build(this->src_addr, page_size);
+            } else {
+                this->s = src_addr_gen_t::build(this->src_addr, page_size, in0_df);
+            }
+        } else if constexpr (
+            input_tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+            uint32_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t* const input_shard_grid_row_map =
+                reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
+            arg_idx += input_shard_grid_nrows;
+            uint32_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t* const input_shard_grid_col_map =
+                reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
+            arg_idx += input_shard_grid_ncols;
+
+            this->s = src_addr_gen_t::build(
+                tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
+                    input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
+                tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<input_tensor_memory_layout>::type(
+                    input_tensor_shard_pages_per_shard_y,
+                    input_tensor_shard_pages_per_shard_x,
+                    input_tensor_shard_grid_height,
+                    input_tensor_shard_grid_width,
+                    input_tensor_shard_grid_start_y_logical,
+                    input_tensor_shard_grid_start_x_logical,
+                    input_tensor_shard_grid_transposed),
+                this->page_size,
+                src_addr);
+        }
     }
 
-    src_addr_gen_t s;
+    typename src_addr_gen_t::type s;
 
     void dprint() const {
         DPRINT << "RSR args:"
@@ -125,23 +226,6 @@ struct reduce_scatter_reader_unique_args_t : public reduce_scatter_reader_common
                << "\n\tedm_core_semaphore_address=" << edm_core_semaphore_address
                << "\n\tedm_core_buffer_address=" << edm_core_buffer_address << "\n";
     }
-};
-
-template <bool src_is_dram>
-struct reduce_scatter_reader_unique_args_t<true, src_is_dram> : public reduce_scatter_reader_common_args_t {
-    reduce_scatter_reader_unique_args_t(uint32_t& arg_idx, const DataFormat in0_df) :
-        reduce_scatter_reader_common_args_t(arg_idx),
-        shard_num_pages(get_arg_val<uint32_t>(arg_idx++)),
-        num_l1_cores(get_arg_val<uint32_t>(arg_idx++)),
-        l1_cores_ptr(reinterpret_cast<WorkerXY*>(get_arg_addr(arg_idx))) {
-        arg_idx += this->num_l1_cores;
-    }
-
-    const uint32_t shard_num_pages;
-    const uint32_t num_l1_cores;
-    const WorkerXY* const l1_cores_ptr;
-
-    void dprint() const {}
 };
 
 using advance_to_next_transfer_slice_result_t = std::tuple<
@@ -193,10 +277,7 @@ advance_to_next_transfer_slice_result_t advance_to_next_transfer_slice(
 }
 
 void kernel_main() {
-    constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
 
-    // Currently meaningless when `is_sharded=true`
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
 
     uint32_t arg_idx = 0;
 
@@ -204,7 +285,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
     const DataFormat in0_df = get_dataformat(cb_id_in0);
-    auto args = reduce_scatter_reader_unique_args_t<is_sharded, src_is_dram>(arg_idx, in0_df);
+    auto args = reduce_scatter_reader_unique_args_t<src_is_dram, input_tensor_memory_layout>(arg_idx, in0_df);
+
 
     ASSERT(args.half_cb_n_pages >= args.full_chunk_num_pages);
 

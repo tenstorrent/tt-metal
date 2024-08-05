@@ -28,6 +28,8 @@ struct RingTopology {
         uint32_t ring_size,
         uint32_t ring_index);
 
+    const Device *device;
+
     std::vector<CoreCoord> eth_sender_cores;
     std::vector<CoreCoord> eth_receiver_cores;
 
@@ -425,14 +427,14 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 };
 
-/*
 struct ShardedAddrGenArgBuilder {
     static bool shard_grid_is_transposed(Tensor const& t);
     static std::vector<uint32_t> emit_ct_args(Tensor const& t);
-    static std::vector<uint32_t> emit_rt_args(Tensor const& t);
+    static std::vector<uint32_t> emit_rt_args(Device const* d, Tensor const& t);
+    static void log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix);
 };
 
-*/
+
 
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
