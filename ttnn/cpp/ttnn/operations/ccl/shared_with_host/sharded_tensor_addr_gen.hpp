@@ -69,6 +69,11 @@ struct test_shard_location_t {
     std::uint32_t page_offset;
 };
 
+/* Similar to interleaved address generators found in dataflow API, this acts
+ * as a somewhat standardized interface to generate addresses for sharded tensors
+ * to go from global tile IDs to concrete noc addresses.
+ *
+ * This is the base class, to be inherited by each shard strategy */
 template <typename shard_type_device_shard_spec_t>
 struct device_shard_spec_t {
     device_shard_spec_t(
@@ -89,18 +94,6 @@ struct device_shard_spec_t {
     uint8_t shard_grid_start_x_logical;
     bool transposed_grid;
 
-    // uint8_t get_pages_per_shard_x() const {
-    //     shard_type_device_shard_spec_t::get_pages_per_shard_x();
-    // }
-    // uint8_t get_pages_per_shard_y() const {
-    //     shard_type_device_shard_spec_t::get_pages_per_shard_y();
-    // }
-    // uint8_t get_pages_per_tensor_x() const {
-    //     shard_type_device_shard_spec_t::get_pages_per_tensor_x();
-    // }
-    // uint8_t get_pages_per_tensor_y() const {
-    //     shard_type_device_shard_spec_t::get_pages_per_tensor_y();
-    // }
     uint32_t get_pages_per_shard() const {
         return shard_type_device_shard_spec_t::get_pages_per_shard_x() * shard_type_device_shard_spec_t::get_pages_per_shard_y();
     }

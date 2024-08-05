@@ -221,7 +221,7 @@ FORCE_INLINE void read_chunk_from_output_tensor(
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MJAOR
+#ifdef ROW_MAJOR
     #ifdef INTERLEAVED
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);

@@ -75,6 +75,7 @@ def run_all_gather_on_t3000_impl(
     mem_config,
     use_program_cache,
     function_level_defaults,
+    all_gather_operation,
     num_iters=1,
     enable_async=False,
 ):
@@ -111,7 +112,7 @@ def run_all_gather_on_t3000_impl(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
-        tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
         for d in devices:
             ttl.device.Synchronize(d)
@@ -397,8 +398,6 @@ def run_line_all_gather(
         pytest.skip(f"Skipping unsupported case {message}.")
 
     devices = get_devices_for_t3000(all_devices, num_devices)
-    # for device in devices:
-    #    device.disable_and_clear_program_cache()
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -774,30 +773,23 @@ def run_all_gather_sharded(
     if len(all_devices) != 8:
         pytest.skip("Not T3000!")
 
-    # if input_shard_shape[0] > 32 and num_devices == 8:
-    #     pytest.skip("Don't want to exercise yet")
-
-    # if input_shard_shape[0] > 32 and num_devices == 8:
-    #     pytest.skip("Don't want to exercise yet")
-
-    # if input_shard_shape[0] == 32 and num_devices == 4:
-    #     pytest.skip("Don't want to exercise yet")
-
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
     unchunked_input_shape[dim] *= num_devices
 
     unchunked_input_tensor = torch.rand(unchunked_input_shape).bfloat16()
 
-    tile_id = 0
-    for w in range(input_shape[0]):
-        for z in range(input_shape[1]):
-            for y in range(0, input_shape[2], 32):
-                for x in range(0, input_shape[3], 32):
-                    for yy in range(32):
-                        for xx in range(32):
-                            unchunked_input_tensor[w][z][y + yy][x + xx] = tile_id
-                    tile_id += 1
+    debug = False
+    if debug:
+        tile_id = 0
+        for w in range(unchunked_input_shape[0]):
+            for z in range(unchunked_input_shape[1]):
+                for y in range(0, unchunked_input_shape[2], 32):
+                    for x in range(0, unchunked_input_shape[3], 32):
+                        for yy in range(32):
+                            for xx in range(32):
+                                unchunked_input_tensor[w][z][y + yy][x + xx] = tile_id
+                        tile_id += 1
 
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
 
@@ -819,11 +811,6 @@ def run_all_gather_sharded(
     # logger.info(f"num_cores: {num_cores}")
     logger.info(f"shard_grid: {shard_grid}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
-
-    # TODO: Figure out better shard spec
-    # all_cores_.size() == 1
-    # this->num_cores() == 8
-    # shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
 
     input_shard_spec = ttl.tensor.ShardSpec(
         shard_grid,
@@ -869,9 +856,13 @@ def run_all_gather_sharded(
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+    ## Run the actual allgather operation
     tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
+    ## Wait for completion
     for d in devices:
         ttl.device.Synchronize(d)
+
     torch.set_printoptions(sci_mode=False)
     all_eq = True
     reported_mismatch = False
@@ -1204,6 +1195,7 @@ def test_line_all_gather_sharded_post_commit(
         ),
     ),
 )
+@pytest.mark.parametrize("all_gather_operation", [ttnn.all_gather, ttnn.line_all_gather])
 def test_sharded_all_gather_nightly(
     all_devices,
     num_devices,
@@ -1219,6 +1211,7 @@ def test_sharded_all_gather_nightly(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    all_gather_operation,
 ):
     run_all_gather_sharded(
         all_devices,
@@ -1235,130 +1228,7 @@ def test_sharded_all_gather_nightly(
         # num_cores,
         use_program_cache,
         function_level_defaults,
-    )
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
-# @pytest.mark.parametrize("num_cores", [1])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
-    ],
-)
-@pytest.mark.parametrize(
-    "tensor_mem_layout",
-    [
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-    ],
-)
-@pytest.mark.parametrize(
-    "orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR]
-)  # , ttl.tensor.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "input_shape, input_shard_shape,shard_grid",
-    (
-        (
-            (1, 1, 32, 32),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        ),
-        (
-            (1, 1, 32, 64),
-            (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        ),
-        (
-            (1, 1, 32, 128),
-            (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
-        ),
-        (
-            (1, 1, 32, 64),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
-        ),
-        (
-            (1, 1, 32, 128),
-            (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
-        ),
-        (
-            (1, 1, 32, 256),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
-        ),
-        (
-            (1, 1, 32, 512),
-            (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
-        ),
-        # LLama
-        (
-            (1, 1, 32, 1024),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        ),
-        (
-            (1, 1, 32, 4096),
-            (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        ),
-        (
-            (1, 1, 32, 4096),
-            (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        ),
-        (
-            (1, 1, 32, 2048),
-            (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
-        ),
-        (
-            (1, 1, 32, 1792),
-            (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
-        ),
-    ),
-)
-def test_all_gather_sharded_nightly(
-    all_devices,
-    num_devices,
-    input_shape,
-    input_shard_shape,
-    shard_grid,
-    dim,
-    num_links,
-    orientation,
-    input_dtype,
-    tensor_layout,
-    tensor_mem_layout,
-    # num_cores,
-    use_program_cache,
-    function_level_defaults,
-):
-    run_all_gather_sharded(
-        all_devices,
-        num_devices,
-        input_shape,
-        input_shard_shape,
-        shard_grid,
-        dim,
-        num_links,
-        orientation,
-        input_dtype,
-        tensor_layout,
-        tensor_mem_layout,
-        # num_cores,
-        use_program_cache,
-        function_level_defaults,
+        all_gather_operation=all_gather_operation,
     )
 
 
