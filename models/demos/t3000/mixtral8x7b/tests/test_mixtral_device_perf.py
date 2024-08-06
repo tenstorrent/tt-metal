@@ -17,7 +17,7 @@ from tt_metal.tools.profiler.process_model_log import run_device_profiler
         ["decode_2k", 23],
         ["prefill_128", 1000],
         ["prefill_1k", 2550],
-        ["prefill_2k", 2714],
+        ["prefill_2k", 2700],
     ],
     ids=[
         "decode_32",
