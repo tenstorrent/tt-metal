@@ -197,7 +197,7 @@ void py_module(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -212,7 +212,7 @@ void py_module(py::module& module) {
             py::arg("act_block_h_override") = 0,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
-            py::arg("height_sharding") = true,
+            py::arg("shard_layout") = true,
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
@@ -233,7 +233,7 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override);
         py_conv_config.def_readwrite("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal);
         py_conv_config.def_readwrite("override_sharding_config", &Conv2dConfig::override_sharding_config);
-        py_conv_config.def_readwrite("height_sharding", &Conv2dConfig::height_sharding);
+        py_conv_config.def_readwrite("shard_layout", &Conv2dConfig::shard_layout);
         py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
