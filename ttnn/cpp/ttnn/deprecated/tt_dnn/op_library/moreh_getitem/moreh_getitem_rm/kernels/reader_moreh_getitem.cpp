@@ -12,14 +12,17 @@ void kernel_main() {
     uint32_t index1_addr = get_arg_val<uint32_t>(i++);
     uint32_t index2_addr = get_arg_val<uint32_t>(i++);
     uint32_t index3_addr = get_arg_val<uint32_t>(i++);
+    uint32_t index4_addr = get_arg_val<uint32_t>(i++);
 
     // input
     uint32_t input_stick_idx_stride_n = get_arg_val<uint32_t>(i++);
     uint32_t input_stick_idx_stride_c = get_arg_val<uint32_t>(i++);
+    uint32_t input_stick_idx_stride_d = get_arg_val<uint32_t>(i++);
     uint32_t input_stick_idx_stride_h = get_arg_val<uint32_t>(i++);
 
     uint32_t input_size_n = get_arg_val<uint32_t>(i++);
     uint32_t input_size_c = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_d = get_arg_val<uint32_t>(i++);
     uint32_t input_size_h = get_arg_val<uint32_t>(i++);
     uint32_t input_size_w = get_arg_val<uint32_t>(i++);
 
@@ -28,10 +31,12 @@ void kernel_main() {
     uint32_t index1_is_defined = get_arg_val<uint32_t>(i++);
     uint32_t index2_is_defined = get_arg_val<uint32_t>(i++);
     uint32_t index3_is_defined = get_arg_val<uint32_t>(i++);
+    uint32_t index4_is_defined = get_arg_val<uint32_t>(i++);
     uint32_t index0_stick_size = get_arg_val<uint32_t>(i++);
     uint32_t index1_stick_size = get_arg_val<uint32_t>(i++);
     uint32_t index2_stick_size = get_arg_val<uint32_t>(i++);
     uint32_t index3_stick_size = get_arg_val<uint32_t>(i++);
+    uint32_t index4_stick_size = get_arg_val<uint32_t>(i++);
     uint32_t index_size = get_arg_val<uint32_t>(i++);
     int32_t index_start_dim = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
     int32_t index_end_dim = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
@@ -39,6 +44,7 @@ void kernel_main() {
     // output
     uint32_t output_size_n = get_arg_val<uint32_t>(i++);
     uint32_t output_size_c = get_arg_val<uint32_t>(i++);
+    uint32_t output_size_d = get_arg_val<uint32_t>(i++);
     uint32_t output_size_h = get_arg_val<uint32_t>(i++);
     uint32_t output_size_w = get_arg_val<uint32_t>(i++);
 
@@ -47,18 +53,19 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(i++);
     uint32_t stick_size = get_arg_val<uint32_t>(i++);
 
-
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_in1 = tt::CB::c_in1;
     constexpr auto cb_in2 = tt::CB::c_in2;
     constexpr auto cb_in3 = tt::CB::c_in3;
     constexpr auto cb_in4 = tt::CB::c_in4;
+    constexpr auto cb_in5 = tt::CB::c_in5;
 
     constexpr bool in_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool index0_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool index1_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr bool index2_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr bool index3_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr bool index4_is_dram = get_compile_time_arg_val(5) == 1;
 
     const InterleavedAddrGen<in_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
 
@@ -70,46 +77,54 @@ void kernel_main() {
         .bank_base_address = index2_addr, .page_size = index2_stick_size};
     const InterleavedAddrGen<index3_is_dram> index3 = {
         .bank_base_address = index3_addr, .page_size = index3_stick_size};
+    const InterleavedAddrGen<index4_is_dram> index4 = {
+        .bank_base_address = index4_addr, .page_size = index4_stick_size};
 
-    uint32_t index_is_defined[4] = {
+    uint32_t index_is_defined[5] = {
         index0_is_defined,
         index1_is_defined,
         index2_is_defined,
         index3_is_defined,
+        index4_is_defined,
     };
 
-    tt::CB index_cbs[4] = {
+    tt::CB index_cbs[5] = {
         cb_in1,
         cb_in2,
         cb_in3,
         cb_in4,
+        cb_in5,
     };
 
-    uint32_t input_size_list[4] = {
+    uint32_t input_size_list[5] = {
         input_size_n,
         input_size_c,
+        input_size_d,
         input_size_h,
         input_size_w,
     };
 
-    uint32_t output_size_list[4] = {
+    uint32_t output_size_list[5] = {
         output_size_n,
         output_size_c,
+        output_size_d,
         output_size_h,
         output_size_w,
     };
 
-    uint32_t input_stick_idx_strides[3] = {
+    uint32_t input_stick_idx_strides[4] = {
         input_stick_idx_stride_n,
         input_stick_idx_stride_c,
+        input_stick_idx_stride_d,
         input_stick_idx_stride_h,
     };
 
-    uint32_t index_stick_sizes[4] = {
+    uint32_t index_stick_sizes[5] = {
         index0_stick_size,
         index1_stick_size,
         index2_stick_size,
         index3_stick_size,
+        index4_stick_size,
     };
 
     uint32_t end_id = start_id + num_sticks;
@@ -119,8 +134,8 @@ void kernel_main() {
         uint32_t output_stick_idx = i;
         uint32_t index_index = 0;
         bool is_first_index = true;
-        int32_t output_dim = 2;
-        for (int32_t dim = 2; dim >= 0; dim--) {
+        int32_t output_dim = 3;
+        for (int32_t dim = 3; dim >= 0; dim--) {
 
             uint32_t input_stick_idx_stride = input_stick_idx_strides[dim];
             auto output_size = output_size_list[output_dim];
@@ -145,6 +160,9 @@ void kernel_main() {
                 }
                 if (dim == 2) {
                     index_noc_addr = get_noc_addr(0, index2);
+                }
+                if (dim == 3) {
+                    index_noc_addr = get_noc_addr(0, index3);
                 }
                 noc_async_read(index_noc_addr, index_l1_addr, index_stick_sizes[dim]);
                 noc_async_read_barrier();
