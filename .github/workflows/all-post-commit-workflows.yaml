@@ -47,9 +47,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150-32GB },
+          { arch: wormhole_b0, runner-label: N150-32GB },
+          { arch: wormhole_b0, runner-label: N300-32GB },
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
@@ -63,9 +63,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150-32GB },
+          { arch: wormhole_b0, runner-label: N150-32GB },
+          { arch: wormhole_b0, runner-label: N300-32GB },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
@@ -79,9 +79,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150-32GB },
+          { arch: wormhole_b0, runner-label: N150-32GB },
+          { arch: wormhole_b0, runner-label: N300-32GB },
         ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -95,9 +95,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150-32GB },
+          { arch: wormhole_b0, runner-label: N150-32GB },
+          { arch: wormhole_b0, runner-label: N300-32GB },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
@@ -111,9 +111,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150-32GB },
+          { arch: wormhole_b0, runner-label: N150-32GB },
+          { arch: wormhole_b0, runner-label: N300-32GB },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
