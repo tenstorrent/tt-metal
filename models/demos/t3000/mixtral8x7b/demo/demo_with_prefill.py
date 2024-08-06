@@ -402,7 +402,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     logger.info(f"Time to first token: {round(measurements['prefill_time_to_token'], 4) * 1000}ms")
     logger.info(f"Average tokens/sec/user: {round(measurements['decode_t/s/u'], 2)}")
 
-    target_prefill_ts = 2300
+    target_prefill_ts = 5000  # TODO update target
     target_decode_ts = 1056
     decode_tsu = 33
     targets = {"prefill_t/s": target_prefill_ts, "decode_t/s": target_decode_ts, "decode_t/s/u": decode_tsu}
