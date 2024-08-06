@@ -51,8 +51,7 @@ BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "docker_image",
     "device_hostname",
     "device_ip",
-    "device_type",
-    "device_memory_size",
+    "device_info",
 )
 
 
