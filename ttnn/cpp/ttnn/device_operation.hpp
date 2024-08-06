@@ -267,7 +267,7 @@ typename device_operation_t::tensor_return_value_t run(
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
 
     // TODO: support the case when tensor args are empty? Or add an overload for that case?
-    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).get().device();
+    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
     auto& program_cache = device->program_cache;
 
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
