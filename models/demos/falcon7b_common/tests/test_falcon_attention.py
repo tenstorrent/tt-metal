@@ -152,7 +152,7 @@ def run_test_FalconAttention_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("device_mesh", (1, 2, 4), indirect=True)
+@pytest.mark.parametrize("device_mesh", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
 @pytest.mark.parametrize("async_mode", (False, True))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
