@@ -237,13 +237,8 @@ struct mailboxes_t {
     struct dprint_buf_msg_t dprint_buf;
 };
 
-// All watcher structs need to be 32b-divisible, since we need to write them from host using write_hex_vec_to_core().
-static_assert(sizeof(debug_status_msg_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(debug_assert_msg_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(debug_stack_usage_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(debug_insert_delays_msg_t) % sizeof(uint32_t) == 0);
+// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
+static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE

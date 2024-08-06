@@ -894,64 +894,46 @@ static void watcher_loop(int sleep_usecs) {
 }  // namespace watcher
 
 void watcher_init(Device *device) {
+    std::vector<uint32_t> watcher_init_val;
+    watcher_init_val.resize(sizeof(watcher_msg_t) / sizeof(uint32_t), 0);
+    watcher_msg_t *data = reinterpret_cast<watcher_msg_t *>(&(watcher_init_val[0]));
+
+    // Initialize watcher enable flag according to user setting.
+    data->enable = (tt::llrt::OptionsG.get_watcher_enabled())? WatcherEnabled : WatcherDisabled;
+
     // Initialize debug status values to "unknown"
-    std::vector<uint32_t> debug_status_init_val = {'X', 'X', 'X', 'X', 'X'};
+    for (int idx = 0; idx < num_riscv_per_core; idx++)
+        data->debug_status[idx].status[0] = 'X';
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-    std::vector<uint32_t> debug_sanity_init_val;
-    debug_sanity_init_val.resize(NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t) / sizeof(uint32_t));
-    static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-    debug_sanitize_noc_addr_msg_t *data =
-        reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&(debug_sanity_init_val[0]));
     for (int i = 0; i < NUM_NOCS; i++) {
-        data[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
-        data[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data[i].multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data[i].invalid = DebugSanitizeNocInvalidOK;
+        data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
+        data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
+        data->sanitize_noc[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
+        data->sanitize_noc[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->sanitize_noc[i].multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->sanitize_noc[i].invalid = DebugSanitizeNocInvalidOK;
     }
 
     // Initialize debug asserts to not tripped.
-    std::vector<uint32_t> debug_assert_init_val;
-    debug_assert_init_val.resize(sizeof(debug_assert_msg_t) / sizeof(uint32_t));
-    static_assert(sizeof(debug_assert_msg_t) % sizeof(uint32_t) == 0);
-    debug_assert_msg_t *assert_data = reinterpret_cast<debug_assert_msg_t *>(&(debug_assert_init_val[0]));
-    assert_data->line_num = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-    assert_data->tripped = DebugAssertOK;
-    assert_data->which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+    data->assert_status.line_num = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+    data->assert_status.tripped = DebugAssertOK;
+    data->assert_status.which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
     // Initialize pause flags to 0
-    std::vector<uint32_t> debug_pause_init_val;
-    debug_pause_init_val.resize(sizeof(debug_pause_msg_t) / sizeof(uint32_t));
-    static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
-    debug_pause_msg_t *pause_data = reinterpret_cast<debug_pause_msg_t *>(&(debug_pause_init_val[0]));
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        pause_data->flags[idx] = 0;
-    }
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++)
+        data->pause_status.flags[idx] = 0;
+
+    // Initialize stack usage data to unset
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++)
+        data->stack_usage.max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
     std::vector<uint32_t> debug_ring_buf_init_val(sizeof(debug_ring_buf_msg_t) / sizeof(uint32_t), 0);
     debug_ring_buf_msg_t *ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t *>(&(debug_ring_buf_init_val[0]));
-    ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
-    ring_buf_data->wrapped = 0;
-
-    // Initialize stack high water marker
-    std::vector<uint32_t> stack_usage_init_val(sizeof(debug_stack_usage_t) / sizeof(uint32_t));
-    debug_stack_usage_t *stack_usage_data = reinterpret_cast<debug_stack_usage_t *>(&(stack_usage_init_val[0]));
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        stack_usage_data->max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-    }
-
-    // Initialize watcher enable flag according to user setting.
-    std::vector<uint32_t> watcher_enable_init_val;
-    if (tt::llrt::OptionsG.get_watcher_enabled())
-        watcher_enable_init_val.push_back(WatcherEnabled);
-    else
-        watcher_enable_init_val.push_back(WatcherDisabled);
-
-    CoreCoord grid_size = device->logical_grid_size();
+    data->debug_ring_buf.current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+    data->debug_ring_buf.wrapped = 0;
 
     // Initialize Debug Delay feature
     std::map<CoreCoord, debug_insert_delays_msg_t> debug_delays_val;
@@ -1029,44 +1011,20 @@ void watcher_init(Device *device) {
             );
     }
 
-    std::vector<uint32_t>
-        debug_insert_delays_init_val_zero;  // Cores that are not involved get this value (0 for both masks)
-    debug_insert_delays_init_val_zero.resize(sizeof(debug_insert_delays_msg_t) / sizeof(uint32_t));
-    std::vector<uint32_t> debug_insert_delays_init_val;
-    debug_insert_delays_init_val.resize(sizeof(debug_insert_delays_msg_t) / sizeof(uint32_t));
+    debug_insert_delays_msg_t debug_delays_val_zero = {0, 0, 0, 0};
 
     // Initialize worker cores debug values
+    CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, watcher_enable_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.enable));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.debug_status));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.assert_status));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.pause_status));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, stack_usage_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.stack_usage));
             if (debug_delays_val.find(worker_core) != debug_delays_val.end()) {
-                debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[worker_core]));
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(),
-                    worker_core,
-                    debug_insert_delays_init_val,
-                    GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
+                data->debug_insert_delays = debug_delays_val[worker_core];
             } else {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(),
-                    worker_core,
-                    debug_insert_delays_init_val_zero,
-                    GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
+                data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, watcher_init_val, GET_MAILBOX_ADDRESS_HOST(watcher));
         }
     }
 
@@ -1082,63 +1040,16 @@ void watcher_init(Device *device) {
             continue;
         }
         CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            watcher_enable_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.enable)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.enable));
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            debug_status_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_status));
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            debug_sanity_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc));
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            debug_assert_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.assert_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.assert_status));
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            debug_pause_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.pause_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.pause_status));
-        tt::llrt::write_hex_vec_to_core(
-            device->id(),
-            physical_core,
-            stack_usage_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.stack_usage)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.stack_usage));
-
         if (debug_delays_val.find(physical_core) != debug_delays_val.end()) {
-            debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[physical_core]));
-            tt::llrt::write_hex_vec_to_core(
-                device->id(),
-                physical_core,
-                debug_insert_delays_init_val,
-                GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
+            data->debug_insert_delays = debug_delays_val[physical_core];
         } else {
-            tt::llrt::write_hex_vec_to_core(
-                device->id(),
-                physical_core,
-                debug_insert_delays_init_val_zero,
-                GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
+            data->debug_insert_delays = debug_delays_val_zero;
         }
-
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
-            debug_ring_buf_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf) : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf));
+            watcher_init_val,
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher) : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher));
     }
 
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
