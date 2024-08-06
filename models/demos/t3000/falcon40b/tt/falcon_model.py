@@ -222,11 +222,6 @@ class TtFalconModelShared:
                 ),
                 dim=-1,
             )
-            # attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            # if attention_mask_memconfig.is_sharded():
-            #     attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            #     attn_mask_shard_shape[-1] = num_max_tokens
-            #     attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
             # Push attention mask to device in row major order and then tilize on device (faster than tilizing on CPU)
             tt_attention_mask = ttnn.as_tensor(
@@ -247,9 +242,6 @@ class TtFalconModelShared:
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-
-        # for layer in self.layers:
-        #     layer.online_preprocessing(llm_mode, sequence_size)
 
         return tt_inputs, tt_attention_mask
 

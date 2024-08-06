@@ -245,22 +245,6 @@ class TtFalconAttention:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-        # self.init_preprocessing(self.model_config["LLM_MODE"], self.max_position_embeddings)
-
-    # def init_preprocessing(self, llm_mode, max_sequence_size):
-    #     if llm_mode == "prefill":
-    #         self.attn_output = ttnn.as_tensor(
-    #             torch.zeros([1, self.num_heads_per_device, max_sequence_size, self.head_dim]),
-    #             dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-    #             layout=ttnn.TILE_LAYOUT,
-    #             device=self.device_mesh,
-    #             memory_config=self.model_config["DRAM_MEMCFG"],
-    #             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-    #         )
-
-    # def online_preprocessing(self, llm_mode, sequence_size):
-    #     if llm_mode == "prefill":
-    #         self.sliced_attn_output = self.attn_output[:, :, :sequence_size, :]
 
     def __call__(
         self,
