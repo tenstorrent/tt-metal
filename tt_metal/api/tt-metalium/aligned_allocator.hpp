@@ -43,7 +43,7 @@ public:
         return static_cast<T*>(p);
     }
 
-    void deallocate(T* p, std::size_t size) const noexcept { ::operator delete[](p, size * sizeof(T), alignment); }
+    void deallocate(T* p, std::size_t) const noexcept { ::operator delete[](p, alignment); }
 
     [[nodiscard]] size_type max_size() const noexcept { return std::numeric_limits<size_type>::max() / sizeof(T); }
 };
