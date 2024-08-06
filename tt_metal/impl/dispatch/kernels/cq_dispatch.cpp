@@ -127,15 +127,15 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     DEBUG_STATUS("QRBD");
 }
 
+// This fn expects NOC coords to be preprogrammed
+// Note that this fn does not increment any counters
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
-    uint64_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
-    uint64_t pcie_address = pcie_noc_xy | completion_queue_write_ptr_addr;  // For now, we are writing to host hugepages at offset
+    uint32_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
-    noc_async_write_one_packet(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
-    block_noc_writes_to_clear[rd_block_idx]++;
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(CQ_COMPLETION_WRITE_PTR, completion_queue_write_ptr_addr, 4);
 }
 
 FORCE_INLINE
@@ -164,6 +164,7 @@ void process_write_host_h() {
     uint32_t length = cmd->write_linear_host.length;
     DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
+    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
     while (length != 0) {
         // Get a page if needed
         if (cb_fence == data_ptr) {
@@ -195,28 +196,34 @@ void process_write_host_h() {
         uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
         completion_queue_reserve_back(npages);
         uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
-        uint64_t host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
         // completion_queue_write_addr will never be equal to completion_queue_end_addr due to completion_queue_push_back
         // wrap logic so we don't need to handle this case explicitly to avoid 0 sized transactions
         if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
             uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
-            noc_async_write(data_ptr, host_completion_queue_write_addr, last_chunk_size);
+            cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
             completion_queue_write_addr = completion_queue_base_addr;
             data_ptr += last_chunk_size;
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
-            host_completion_queue_write_addr = pcie_noc_xy | completion_queue_write_addr;
-            block_noc_writes_to_clear[rd_block_idx]+= div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
+            uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
+            noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
+            noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+            block_noc_writes_to_clear[rd_block_idx] += num_noc_packets_written;
         }
-        noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);
+        cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
+
         // This will update the write ptr on device and host
         // We flush to ensure the ptr has been read out of l1 before we update it again
         completion_queue_push_back(npages);
-        noc_async_writes_flushed();
-        block_noc_writes_to_clear[rd_block_idx] += div_up(xfer_size, NOC_MAX_BURST_SIZE);
+        // completion_queue_push_back will do a write to host, so we add 1 to the number of data packets written
+        uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
+        noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
+        noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+        block_noc_writes_to_clear[rd_block_idx] += num_noc_packets_written;
 
         length -= xfer_size;
         data_ptr += xfer_size;
+        noc_async_writes_flushed();
     }
     cmd_ptr = data_ptr;
 }
