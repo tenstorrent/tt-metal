@@ -207,14 +207,14 @@ static void log_waypoint(CoreCoord core, const launch_msg_t *launch_msg, const d
 }
 
 static string get_ring_buffer(Device *device, CoreCoord phys_core) {
-    uint64_t buf_addr = GET_MAILBOX_ADDRESS_HOST(debug_ring_buf);
+    uint64_t buf_addr = GET_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
     if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
         // Eth pcores have a different address, but only active ones.
         CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
         if (device->is_active_ethernet_core(logical_core)) {
-            buf_addr = GET_ETH_MAILBOX_ADDRESS_HOST(debug_ring_buf);
+            buf_addr = GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
         } else {
-            buf_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(debug_ring_buf);
+            buf_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
         }
     }
     auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, buf_addr, sizeof(debug_ring_buf_msg_t));
@@ -631,12 +631,12 @@ static void dump_core(
     validate_kernel_ids(f, used_kernel_names, device->id(), core, &mbox_data->launch);
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    bool enabled = (mbox_data->watcher_enable == WatcherEnabled);
+    bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
         if (!tt::llrt::OptionsG.watcher_status_disabled())
-            dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
+            dump_debug_status(f, core, &mbox_data->launch, mbox_data->watcher.debug_status);
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core)
@@ -650,15 +650,15 @@ static void dump_core(
                     core_str,
                     &mbox_data->launch,
                     noc,
-                    &mbox_data->sanitize_noc[noc],
-                    mbox_data->debug_status);
+                    &mbox_data->watcher.sanitize_noc[noc],
+                    mbox_data->watcher.debug_status);
             }
         }
         if (!tt::llrt::OptionsG.watcher_assert_disabled())
             dump_assert_status(
-                f, device, core, core_str, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
+                f, device, core, core_str, &mbox_data->launch, &mbox_data->watcher.assert_status, mbox_data->watcher.debug_status);
         if (!tt::llrt::OptionsG.watcher_pause_disabled())
-            dump_pause_status(core, &mbox_data->pause_status, paused_cores);
+            dump_pause_status(core, &mbox_data->watcher.pause_status, paused_cores);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -757,13 +757,13 @@ static void __attribute__((noinline)) dump(FILE *f) {
                 riscv_id_t risc_id = core_and_risc.second;
 
                 // Address depends on core type
-                uint64_t addr = GET_MAILBOX_ADDRESS_HOST(pause_status);
+                uint64_t addr = GET_MAILBOX_ADDRESS_HOST(watcher.pause_status);
                 if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
                     CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
                     if (device->is_active_ethernet_core(logical_core))
-                        addr = GET_ETH_MAILBOX_ADDRESS_HOST(pause_status);
+                        addr = GET_ETH_MAILBOX_ADDRESS_HOST(watcher.pause_status);
                     else
-                        addr = GET_IERISC_MAILBOX_ADDRESS_HOST(pause_status);
+                        addr = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.pause_status);
                 }
 
                 // Clear only the one flag that we saved, in case another one was raised on device
@@ -988,30 +988,30 @@ void watcher_init(Device *device) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
             tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, watcher_enable_init_val, GET_MAILBOX_ADDRESS_HOST(watcher_enable));
+                device->id(), worker_core, watcher_enable_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.enable));
             tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
+                device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.debug_status));
             tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
+                device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc));
             tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(assert_status));
+                device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.assert_status));
             tt::llrt::write_hex_vec_to_core(
-                device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(pause_status));
+                device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.pause_status));
             if (debug_delays_val.find(worker_core) != debug_delays_val.end()) {
                 debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[worker_core]));
                 tt::llrt::write_hex_vec_to_core(
                     device->id(),
                     worker_core,
                     debug_insert_delays_init_val,
-                    GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
+                    GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
             } else {
                 tt::llrt::write_hex_vec_to_core(
                     device->id(),
                     worker_core,
                     debug_insert_delays_init_val_zero,
-                    GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
+                    GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
             }
-            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, GET_MAILBOX_ADDRESS_HOST(debug_ring_buf));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, GET_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf));
         }
     }
 
@@ -1031,32 +1031,32 @@ void watcher_init(Device *device) {
             device->id(),
             physical_core,
             watcher_enable_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher_enable)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher_enable));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.enable)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.enable));
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
             debug_status_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(debug_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(debug_status));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_status)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_status));
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
             debug_sanity_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(sanitize_noc)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(sanitize_noc));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.sanitize_noc));
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
             debug_assert_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(assert_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(assert_status));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.assert_status)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.assert_status));
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
             debug_pause_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(pause_status)
-                               : GET_IERISC_MAILBOX_ADDRESS_HOST(pause_status));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.pause_status)
+                               : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.pause_status));
 
         if (debug_delays_val.find(physical_core) != debug_delays_val.end()) {
             debug_insert_delays_init_val[0] = *((uint32_t *)(&debug_delays_val[physical_core]));
@@ -1064,20 +1064,20 @@ void watcher_init(Device *device) {
                 device->id(),
                 physical_core,
                 debug_insert_delays_init_val,
-                GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
+                GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
         } else {
             tt::llrt::write_hex_vec_to_core(
                 device->id(),
                 physical_core,
                 debug_insert_delays_init_val_zero,
-                GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
+                GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays));
         }
 
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
             debug_ring_buf_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(debug_ring_buf) : GET_IERISC_MAILBOX_ADDRESS_HOST(debug_ring_buf));
+            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf) : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf));
     }
 
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
