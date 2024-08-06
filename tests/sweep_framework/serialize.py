@@ -7,9 +7,14 @@ import tt_lib
 from statuses import VectorValidity
 
 
-def serialize(object):
+def serialize(object, warnings=[]):
     if "to_json" in dir(object):
         return {"type": str(type(object)).split("'")[1], "data": object.to_json()}
+    elif "pybind" in str(type(type(object))) and type(object) and type(object) not in warnings:
+        print(
+            f"SWEEPS: Warning: pybinded ttnn class detected without a to_json method. Your type may need to pybind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
+        )
+        warnings.append(type(object))
     else:
         return str(object)
 
