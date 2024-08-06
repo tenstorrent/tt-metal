@@ -37,6 +37,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool numeric_stable
 ) {
 
+    std::cout << "scale mask softmax multi core" << std::endl;
+
     const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
@@ -82,13 +84,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
 
-    tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
-    tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
-    tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
-    tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_info("in0_cb_data_format: {}", in0_cb_data_format);
+    tt::log_info("out0_cb_data_format: {}", out0_cb_data_format);
+    tt::log_info("mask_cb_data_format: {}", mask_cb_data_format);
+    tt::log_info("im_cb_data_format: {}", im_cb_data_format);
+    tt::log_info("math_fidelity: {}", math_fidelity);
+    tt::log_info("math_approx_mode: {}", math_approx_mode);
+    tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_info("causal mask {}", causal_mask);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -153,6 +156,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
     }
+
+    // TODO(pjanevski): finished here
+
     auto reader_kernels_id = CreateKernel(
         program, "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(
@@ -193,6 +199,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto cb_out0_id = CreateCircularBuffer( program, all_device_cores, c_out0_config );
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CB::c_intermed1, im_cb_data_format}}).set_page_size(tt::CB::c_intermed1, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
+
+    // TODO(pjanevski): continue from here
+
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CB::c_in2, scalar_cb_data_format}}).set_page_size(tt::CB::c_in2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer( program, all_device_cores, c_in2_config );
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{tt::CB::c_intermed0, im_cb_data_format}}).set_page_size(tt::CB::c_intermed0, im_tile_size);
