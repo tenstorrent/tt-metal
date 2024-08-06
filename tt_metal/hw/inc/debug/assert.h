@@ -10,7 +10,7 @@
 
 void assert_and_hang(uint32_t line_num) {
     // Write the line number into the memory mailbox for host to read.
-    debug_assert_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(assert_status);
+    debug_assert_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = DebugAssertTripped;

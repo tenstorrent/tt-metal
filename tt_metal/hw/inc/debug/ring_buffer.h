@@ -16,7 +16,7 @@ constexpr static int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER)
 
 void push_to_ring_buffer(uint32_t val) {
-    auto buf = GET_MAILBOX_ADDRESS_DEV(debug_ring_buf);
+    auto buf = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     volatile tt_l1_ptr int16_t* curr_ptr = &buf->current_ptr;
     volatile tt_l1_ptr uint16_t* wrapped = &buf->wrapped;
     uint32_t* data = buf->data;

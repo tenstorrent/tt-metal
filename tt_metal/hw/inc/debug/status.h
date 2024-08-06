@@ -49,7 +49,7 @@ inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status) {
 #endif
 
 #define DEBUG_STATUS_MAILBOX \
-    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(debug_status))[DEBUG_STATUS_MAILBOX_OFFSET])
+    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_status))[DEBUG_STATUS_MAILBOX_OFFSET])
 
 #define DEBUG_STATUS(x) write_debug_status<helper(x)>(DEBUG_STATUS_MAILBOX)
 
