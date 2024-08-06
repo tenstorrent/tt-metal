@@ -25,6 +25,7 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_pybind.hpp"
 
+#include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -50,6 +51,7 @@ void py_module(py::module& module) {
     bind_non_zero_indices(module);
     bind_fill_rm(module);
     py_bind_repeat(module);
+    detail::bind_indexed_fill(module);
 }
 
 }  // namespace data_movement
