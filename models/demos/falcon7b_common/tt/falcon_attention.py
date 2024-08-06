@@ -237,7 +237,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
+        ttnn.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -284,7 +284,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### V CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
+        ttnn.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -367,7 +367,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
+        ttnn.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -456,7 +456,7 @@ class TtFalconAttentionPrefill(nn.Module):
             slices.deallocate(True)
 
         # V cache update
-        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
+        ttnn.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -610,7 +610,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(layer_past[0], key_layer, layer_past_len)
+        ttnn.update_cache(layer_past[0], key_layer, layer_past_len)
         key_layer.deallocate(True)
 
         # key and value layers will have kv_seq_len padded to nearest 32
@@ -743,7 +743,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
+        ttnn.update_cache(layer_past[1], value_layer, layer_past_len)
 
         value_layer = ttnn.slice(
             layer_past[1],
