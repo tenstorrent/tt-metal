@@ -186,8 +186,6 @@ void kernel_main() {
 
     uint32_t sem_idx = 1;
 
-    DPRINT << "SR DONE READ INPUT TENSOR\n";
-
     // num_transfers = num_devices - 1
     for (uint32_t i = 1; i < num_transfers; ++i) {
         if (is_clockwise_direction) {

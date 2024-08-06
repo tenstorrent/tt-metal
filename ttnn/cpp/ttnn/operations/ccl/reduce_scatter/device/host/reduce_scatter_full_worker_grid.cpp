@@ -223,8 +223,6 @@ struct ReduceScatterWorkerArgBuilder {
         if (local_input_tensor.is_sharded()) {
             auto const& shard_rt_args = ShardedAddrGenArgBuilder::emit_rt_args(device, local_input_tensor);
             std::copy(shard_rt_args.begin(), shard_rt_args.end(), std::back_inserter(args));
-        // } else {
-        //     args.push_back(static_cast<uint32_t>(local_input_tensor.memory_config().memory_layout));
         }
         return args;
     }
@@ -235,7 +233,6 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
             static_cast<uint32_t>(
                 this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0)};
-
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Sender Worker CT Args:");
@@ -290,7 +287,6 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
 
             total_num_math_pages};
-
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Sender Worker RT Args:");

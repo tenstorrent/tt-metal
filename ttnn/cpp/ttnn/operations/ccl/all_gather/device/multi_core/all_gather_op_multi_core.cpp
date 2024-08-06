@@ -139,15 +139,6 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
 static void emit_sharded_tensor_kernel_rt_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args) {
     auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
-    // auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, tensor.shard_spec().value());
-    // args.push_back(row_map.size());
-    // for (uint32_t i = 0; i < row_map.size(); i++) {
-    //     args.push_back(row_map.at(i));
-    // }
-    // args.push_back(col_map.size());
-    // for (uint32_t i = 0; i < col_map.size(); i++) {
-    //     args.push_back(col_map.at(i));
-    // }
 }
 
 static bool shard_grid_is_transposed(Tensor const& t) {
@@ -168,31 +159,6 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 static void emit_sharded_tensor_kernel_ct_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
     auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
-    // TT_ASSERT(pages_per_shard_y > 0);
-    // TT_ASSERT(pages_per_shard_x > 0);
-    // auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(tensor.shard_spec().value());
-    // bool shard_grid_transposed = shard_grid_is_transposed(tensor);
-    // TT_FATAL(
-    //     tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-    //     tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-    //     tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
-    // );
-    // args.push_back(static_cast<uint32_t>(tensor.memory_config().memory_layout));
-    // // shard_grid_height (cores)
-    // args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
-    // // shard_grid_width (cores)
-    // args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
-    // // shard_grid_start_y
-    // args.push_back(shard_grid_start.y);
-    // // shard_grid_start_x
-    // args.push_back(shard_grid_start.x);
-    // // pages_per_shard_y
-    // args.push_back(pages_per_shard_y);
-    // // pages_per_shard_x
-    // args.push_back(pages_per_shard_x);
-    // // transposed grid
-    // args.push_back(static_cast<uint32_t>(shard_grid_transposed));
-
 };
 
 

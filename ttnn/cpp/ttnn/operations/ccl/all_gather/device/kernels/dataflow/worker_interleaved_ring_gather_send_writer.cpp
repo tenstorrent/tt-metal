@@ -105,23 +105,6 @@ void kernel_main() {
         #endif
     #endif
 
-    #if defined SHARDED_MEM_LAYOUT
-    DPRINT << "d.pages_per_shard_y " << (uint32_t)d.tensor_shard_spec.pages_per_shard_y << "\n";
-    DPRINT << "d.pages_per_shard_x " << (uint32_t)d.tensor_shard_spec.pages_per_shard_x << "\n";
-    DPRINT << "d.shard_grid_height " << (uint32_t)d.tensor_shard_spec.shard_grid_height << "\n";
-    DPRINT << "d.shard_grid_width " << (uint32_t)d.tensor_shard_spec.shard_grid_width << "\n";
-    DPRINT << "d.shard_grid_start_y_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_y_logical << "\n";
-    DPRINT << "d.shard_grid_start_x_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_x_logical << "\n";
-    DPRINT << "d.transposed_grid " << (uint32_t)d.tensor_shard_spec.transposed_grid << "\n";
-
-    for (uint32_t i = 0; i < output_shard_grid_nrows; i++) {
-        DPRINT << "r(logical)=" << i << ", r(noc)=" << output_shard_grid_row_map[i] << "\n";
-    }
-    for (uint32_t i = 0; i < output_shard_grid_ncols; i++) {
-        DPRINT << "c(logical)=" << i << ", c(noc)=" << output_shard_grid_col_map[i] << "\n";
-    }
-    #endif
-
     // Used to wait until eth sender has space available
     volatile tt_l1_ptr uint32_t* writer_send_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_send_sem_addr);
 
@@ -139,7 +122,6 @@ void kernel_main() {
         for (uint32_t c = 0; c < num_full_chunks; ++c) {
             noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
             noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-            // TODO: Might be better to split this?
             write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size, eth_l1_sender_base_noc_addr, eth_l1_sender_semaphore_addr);
         }
     }

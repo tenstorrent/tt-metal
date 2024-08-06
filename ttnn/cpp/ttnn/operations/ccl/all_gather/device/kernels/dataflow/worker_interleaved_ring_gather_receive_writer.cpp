@@ -68,8 +68,6 @@ void kernel_main() {
         InterleavedAddrGen<dst_is_dram> d = {
             .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
         #elif defined SHARDED_MEM_LAYOUT
-            // TODO: type selection based on ct-arg value
-            // tt::tt_metal::address_generators::WidthShardedAddressGenerator<tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup, tt::tt_metal::address_generators::DeviceWidthShardSpec>
             auto d =
                 tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
                 tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
@@ -97,7 +95,6 @@ void kernel_main() {
             .data_format = in0_df
         };
         #elif defined SHARDED_MEM_LAYOUT
-            // tt::tt_metal::address_generators::WidthShardedAddressGenerator<tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup, tt::tt_metal::address_generators::DeviceWidthShardSpec>
             auto d =
                 tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
                 tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
@@ -116,15 +113,6 @@ void kernel_main() {
         #endif
     #endif
 
-    #ifdef SHARDED_MEM_LAYOUT
-    DPRINT << "d.pages_per_shard_y " << (uint32_t)d.tensor_shard_spec.pages_per_shard_y << "\n";
-    DPRINT << "d.pages_per_shard_x " << (uint32_t)d.tensor_shard_spec.pages_per_shard_x << "\n";
-    DPRINT << "d.shard_grid_height " << (uint32_t)d.tensor_shard_spec.shard_grid_height << "\n";
-    DPRINT << "d.shard_grid_width " << (uint32_t)d.tensor_shard_spec.shard_grid_width << "\n";
-    DPRINT << "d.shard_grid_start_y_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_y_logical << "\n";
-    DPRINT << "d.shard_grid_start_x_logical " << (uint32_t)d.tensor_shard_spec.shard_grid_start_x_logical << "\n";
-    DPRINT << "d.transposed_grid " << (uint32_t)d.tensor_shard_spec.transposed_grid << "\n";
-    #endif
     // Each worker receiver writer matches with a specific worker sender reader
     // Used to signal that data has been committed to memory and can be read
     const uint64_t worker_send_reader_semaphore_noc_addr = get_noc_addr(worker_sender_reader_noc_x, worker_sender_reader_noc_y, sem_addr);
@@ -135,22 +123,18 @@ void kernel_main() {
     uint32_t col_idx = col_start_idx;
     uint32_t row_idx = row_start_idx;
 
-    // DPRINT << "rws START\n";
     for (uint32_t i = 0; i < num_transfers; ++i) {
-        // DPRINT << "rws TRANSFER " << i << "\n";
         if constexpr (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
 
                 #ifdef SHARDED_MEM_LAYOUT
                 ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
                 #endif
-                // DPRINT << "rws WRITE FULL CHUNK " << i << "\n";
                 write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size);
                 noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
             }
         }
         if constexpr (rem_num_pages > 0) {
-            // DPRINT << "rws WRITE PARTIAL CHUNK " << i << "\n";
             #ifdef SHARDED_MEM_LAYOUT
             ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
             #endif
