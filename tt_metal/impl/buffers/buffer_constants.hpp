@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class TensorMemoryLayout: uint8_t {
+enum class TensorMemoryLayout {
     INTERLEAVED = 0,
     SINGLE_BANK,
     HEIGHT_SHARDED,
@@ -18,7 +18,7 @@ enum class TensorMemoryLayout: uint8_t {
     BLOCK_SHARDED,
 };
 
-enum class ShardOrientation: uint8_t {
+enum class ShardOrientation {
     ROW_MAJOR = 0,
     COL_MAJOR,
 };
