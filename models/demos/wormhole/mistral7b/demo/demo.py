@@ -177,12 +177,13 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
         )
 
-        # set kv cache to zeros if not first batch
+        # set kv cache to zeros if not first batch, to avoid context leaking
         if batch_idx != 0:
             for layer in tt_model.layers:
                 k_cache, v_cache = layer.attention.layer_past_list[0]
                 k_cache = k_cache * 0
                 v_cache = v_cache * 0
+                layer.attention.layer_past_list[0] = [k_cache, v_cache]
 
         # Keep track of generated outputs to print out every iteration
         all_outputs = [[] for _ in range(batch_size)]
@@ -283,7 +284,10 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                 with open(output_filename, "a") as f:
                     for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                         text = tokenizer.decode(output)
-                        split_text = text.split(prompt, 1)
+                        if instruct_mode:
+                            split_text = text.split("[/INST]", 1)
+                        else:
+                            split_text = text.split(prompt, 1)
                         if len(split_text) > 1:
                             text_after_prompt = split_text[1]
                         else:
