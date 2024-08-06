@@ -4,22 +4,17 @@
 
 #include <algorithm>
 
-#include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-using namespace tt::constants;
-
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::data_movement {
 
 operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor & input_b, const Tensor &output) {
-    tt_metal::Program program{};
+    tt::tt_metal::Program program{};
     Device *device = input_a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -39,27 +34,27 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     uint32_t cb_index = 0;
     uint32_t batch_cb_index = 1;
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
 
     uint32_t page_size = input_a.get_legacy_shape()[-1] * input_a.element_size();
     uint32_t rounded_page_size = round_up_to_mul32(page_size);
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(2* rounded_page_size, {{cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(2* rounded_page_size, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, rounded_page_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    tt::DataFormat batch_cb_data_format = tt_metal::datatype_to_dataformat_converter(batch_ids.get_dtype());
+    tt::DataFormat batch_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(batch_ids.get_dtype());
     uint32_t batch_page_size = round_up_to_mul32(b*sizeof(uint32_t));
-    tt_metal::CircularBufferConfig batch_cb_config =
-        tt_metal::CircularBufferConfig(2* batch_page_size, {{batch_cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig batch_cb_config =
+        tt::tt_metal::CircularBufferConfig(2* batch_page_size, {{batch_cb_index, cb_data_format}})
             .set_page_size(batch_cb_index, batch_page_size);
-    auto batch_cb = tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
+    auto batch_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
 
 
-    bool in0_is_dram = input_a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = input_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = input_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in1_is_dram = input_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
 
@@ -75,11 +70,11 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
         (std::uint32_t)log2_stick_size
     };
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/indexed_fill/kernels/dataflow/indexed_fill_reader.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_reader.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
+        tt::tt_metal::ReaderDataMovementConfig(
             reader_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -88,11 +83,11 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
         (std::uint32_t)stick_size_is_power_of_two,
         (std::uint32_t)log2_stick_size};
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto cores = grid_to_cores(num_cores_x*num_cores_y, num_cores_x, num_cores_y, false);
 
@@ -112,14 +107,14 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
                                                     local_batch_size_in_sticks,
                                                     i
         };
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         std::vector<uint32_t> writer_runtime_args = {
                                                     output.buffer()->address(),
                                                     page_size,
                                                     local_batch_size_in_sticks,
                                                     i*local_batch_size_in_sticks
         };
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
     }
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores,  page_size](
@@ -149,7 +144,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
                                                     local_batch_size_in_sticks,
                                                     core_id
             };
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
             std::vector<uint32_t> writer_runtime_args = {
                                                     output.buffer()->address(),
@@ -158,7 +153,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
                                                     core_id*local_batch_size_in_sticks
             };
 
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
             core_id++;
 
         }
@@ -167,6 +162,4 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::data_movement

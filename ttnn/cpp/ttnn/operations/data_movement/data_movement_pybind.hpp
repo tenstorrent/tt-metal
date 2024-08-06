@@ -25,6 +25,7 @@
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 
+#include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -80,6 +81,7 @@ void py_module(py::module& module) {
     detail::bind_untilize_with_halo_v2(module);
     bind_non_zero_indices(module);
     bind_fill_rm(module);
+    detail::bind_indexed_fill(module);
 }
 
 }  // namespace data_movement

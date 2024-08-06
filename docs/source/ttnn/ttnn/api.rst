@@ -393,6 +393,7 @@ Data Movement
    ttnn/tilize_with_val_padding
    ttnn/fill_rm
    ttnn/fill_ones_rm
+   ttnn/indexed_fill
 
 Normalization
 =============
