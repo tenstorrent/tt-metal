@@ -33,10 +33,12 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
     return results
 
 
-def run_device_profiler(command, output_logs_subdir):
+def run_device_profiler(command, output_logs_subdir, env_vars=None):
     output_logs_dir = PROFILER_OUTPUT_DIR / output_logs_subdir
+    print(output_logs_dir)
     profiler_cmd = f"python -m tracy -p -r -o {output_logs_dir} -t 5000 -m {command}"
-    subprocess.run([profiler_cmd], shell=True, check=True)
+    subprocess.run([profiler_cmd], shell=True, check=True, env=env_vars)
+    return output_logs_dir
 
 
 def get_samples_per_s(time_ns, num_samples):
