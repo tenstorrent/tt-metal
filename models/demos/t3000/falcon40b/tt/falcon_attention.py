@@ -336,14 +336,14 @@ class TtFalconAttention:
         key_layer = self.rotary_embedding(key_layer)
 
         # K Cache update
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[0],
             ttnn.experimental.typecast(
                 key_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             ),
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[1],
             ttnn.experimental.typecast(
                 value_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -480,7 +480,7 @@ class TtFalconAttention:
             kv_cache_shard_shape[0] = layer_past[0].get_legacy_shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[0],
             key_layer,
             layer_past_len,
@@ -545,7 +545,7 @@ class TtFalconAttention:
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[1],
             value_layer,
             layer_past_len,

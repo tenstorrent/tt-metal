@@ -587,12 +587,12 @@ class TtMistralAttention(nn.Module):
             v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
                 v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
             )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             keys_BKSD,
             k_fill,
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             values_BKSD,
             v_fill,
             user_id,

@@ -13,7 +13,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
@@ -361,22 +360,6 @@ void TensorModule(py::module& m_tensor) {
         R"doc(
             Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
         )doc");
-
-    m_tensor.def("fill_cache", &fill_cache,
-         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), R"doc(
-        "Fills the cache tensor in place with the values from input at the specified batch_idx.
-    )doc");
-    m_tensor.def(
-        "update_cache",
-        &update_cache,
-        py::arg("cache").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("update_idx"),
-        py::arg("batch_offset") = 0,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
-    )doc");
 
     // TMs
     m_tensor.def(

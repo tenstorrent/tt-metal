@@ -9,9 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::kv_cache {
 
 enum class UpdateCacheOpParallelizationStrategy {
     MULTI_CORE
@@ -34,7 +32,7 @@ struct UpdateCache {
     UpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(
         const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors) const;
@@ -48,7 +46,7 @@ struct UpdateCache {
         const std::vector<Tensor> &input_tensors) const;
 };
 
-inline Tensor fill_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx) {
+inline Tensor fill_cache_impl(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({cache_tensor, input_tensor}))};
     operation::launch_op(
         [batch_idx] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -57,7 +55,7 @@ inline Tensor fill_cache(const Tensor& cache_tensor, const Tensor& input_tensor,
     return cache_tensor;
 }
 
-inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+inline Tensor update_cache_impl(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({cache_tensor, input_tensor}))};
     operation::launch_op(
         [update_idx, batch_offset, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -69,6 +67,4 @@ inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tenso
     return cache_tensor;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::kv_cache

@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
+#include "ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
+
+namespace ttnn::operations::kv_cache {
+
 using namespace tt::constants;
-
-namespace tt {
-
-namespace tt_metal {
-
 
 void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& cache_tensor = input_tensors.at(0);
@@ -67,7 +65,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<Shape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
@@ -102,6 +100,4 @@ const operation::Hash UpdateCache::compute_program_hash(
     return operation::hash_operation<UpdateCache>(this->op_type, input_tensors);
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::kv_cache
