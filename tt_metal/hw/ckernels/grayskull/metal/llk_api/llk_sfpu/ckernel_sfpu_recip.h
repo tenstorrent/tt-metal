@@ -24,10 +24,10 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
     return _sfpu_reciprocal_<save_reg, max_iter>(in);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=4, bool SAVE_REG = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS=4, bool SAVE_REG = false, bool is_fp32_dest_acc_en = false>
 inline void calculate_reciprocal()
 {
-    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, SAVE_REG>();
+    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, SAVE_REG, is_fp32_dest_acc_en>();
 }
 
 } // namespace sfpu
