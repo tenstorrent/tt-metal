@@ -327,6 +327,13 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
+    device_info = json.dumps(
+        {
+            "device_type": device_type,
+            "device_memory_size": device_memory_size,
+        }
+    )
+
     benchmark_environment_row = {
         "git_repo_name": git_repo_name,
         "git_commit_hash": git_commit_hash,
@@ -337,8 +344,7 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
         "docker_image": docker_image,
         "device_hostname": device_hostname,
         "device_ip": device_ip,
-        "device_type": device_type,
-        "device_memory_size": device_memory_size,
+        "device_info": device_info,
     }
 
     create_csv(github_benchmark_environment_csv_filename, BENCHMARK_ENVIRONMENT_CSV_FIELDS, [benchmark_environment_row])
