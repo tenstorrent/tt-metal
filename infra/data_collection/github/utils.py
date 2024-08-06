@@ -143,9 +143,8 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return unknown location and host_name")
-        location = "unknown"
-        host_name = "unknown"
+        location = None
+        host_name = None
     elif "GitHub Actions " in host_name:
         location = "github"
     else:
@@ -165,7 +164,7 @@ def get_job_row_from_github_job(github_job):
         logger.warning("Assuming ubuntu-20.04 for tt cloud, but may not be the case soon")
         ubuntu_version = "ubuntu-20.04"
     else:
-        ubuntu_version = "unknown"
+        ubuntu_version = None
 
     os = ubuntu_version
 
@@ -181,7 +180,7 @@ def get_job_row_from_github_job(github_job):
     elif "wormhole_b0" in labels:
         card_type = "wormhole_b0"
     else:
-        card_type = "unknown"
+        card_type = None
 
     job_submission_ts = github_job["created_at"]
 
