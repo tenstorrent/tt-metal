@@ -16,6 +16,11 @@ uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
 }
 
 FORCE_INLINE
+uint32_t div_up(uint32_t n, uint32_t d) {
+    return (n + d - 1) / d;
+}
+
+FORCE_INLINE
 uint32_t wrap_ge(uint32_t a, uint32_t b) {
 
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
@@ -108,6 +113,19 @@ void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_index);
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+}
+
+// More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config (dst_noc,
+// VC..) have been specified.
+FORCE_INLINE
+void cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    while(size > NOC_MAX_BURST_SIZE) {
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
+        src_addr += NOC_MAX_BURST_SIZE;
+        dst_addr += NOC_MAX_BURST_SIZE;
+        size -= NOC_MAX_BURST_SIZE;
+    }
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
 }
 
 template<enum CQNocFlags flags, bool mcast = false>
