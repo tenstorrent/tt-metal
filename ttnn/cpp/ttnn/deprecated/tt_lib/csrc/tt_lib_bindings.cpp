@@ -62,7 +62,8 @@ void DeviceModule(py::module &m_device) {
             "num_program_cache_entries",
             &Device::num_program_cache_entries,
             "Number of entries in the program cache for this device")
-        .def("enable_async", &Device::enable_async);
+        .def("enable_async", &Device::enable_async)
+        .def("clear_device", &Device::clear_device, "Clear device state");
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;

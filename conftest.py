@@ -83,12 +83,23 @@ def get_tt_cache_path():
     return get_tt_cache_path_
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def device_params(request):
     return getattr(request, "param", {})
 
 
 @pytest.fixture(scope="function")
+def device_cleanup(device):
+    yield device
+    import tt_lib as ttl
+
+    ttl.device.DumpDeviceProfiler(device)
+
+    ttl.device.Synchronize(device)
+    ttl.device.clear_device()
+
+
+@pytest.fixture(scope="session")
 def device(request, device_params):
     import tt_lib as ttl
 
@@ -101,14 +112,20 @@ def device(request, device_params):
     ttl.device.SetDefaultDevice(device)
 
     yield device
-
-    ttl.device.DumpDeviceProfiler(device)
-
-    ttl.device.Synchronize(device)
     ttl.device.CloseDevice(device)
 
 
 @pytest.fixture(scope="function")
+def pcie_device_cleanup(pcie_devices):
+    yield pcie_devices
+    import tt_lib as ttl
+
+    for device in pcie_devices:
+        ttl.device.DumpDeviceProfiler(device)
+        ttl.device.clear_device()
+
+
+@pytest.fixture(scope="session")
 def pcie_devices(request, device_params):
     import tt_lib as ttl
 
@@ -121,13 +138,20 @@ def pcie_devices(request, device_params):
 
     yield [devices[i] for i in range(num_devices)]
 
-    for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device)
-
     ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
+def all_devices_cleanup(all_devices):
+    yield all_devices
+    import tt_lib as ttl
+
+    for device in all_devices:
+        ttl.device.DumpDeviceProfiler(device)
+        ttl.device.clear_device()
+
+
+@pytest.fixture(scope="session")
 def all_devices(request, device_params):
     import tt_lib as ttl
 
@@ -140,13 +164,20 @@ def all_devices(request, device_params):
 
     yield [devices[i] for i in range(num_devices)]
 
-    for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device)
-
     ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
+def device_mesh_cleanup(device_mesh):
+    yield device_mesh
+    import tt_lib as ttl
+
+    for device in device_mesh.get_devices():
+        ttl.device.DumpDeviceProfiler(device)
+        ttl.device.clear_device()
+
+
+@pytest.fixture(scope="session")
 def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
@@ -191,14 +222,21 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
 
-    for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
-
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
 
 
 @pytest.fixture(scope="function")
+def pcie_device_mesh_cleanup(pcie_device_mesh):
+    yield pcie_device_mesh
+    import tt_lib as ttl
+
+    for device in pcie_device_mesh.get_devices():
+        ttl.device.DumpDeviceProfiler(device)
+        ttl.device.clear_device()
+
+
+@pytest.fixture(scope="session")
 def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
     import tt_lib as ttl
@@ -217,9 +255,6 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
-
-    for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
 
     ttnn.close_device_mesh(device_mesh)
     del device_mesh

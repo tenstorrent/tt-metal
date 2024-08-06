@@ -233,6 +233,7 @@ class Device {
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
 
     // Puts device into reset
+    void clear_device();
     bool close();
     friend bool CloseDevice(Device *device);
 

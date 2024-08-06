@@ -1895,6 +1895,32 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     return true;
 }
 
+void Device::clear_device(){
+    log_info(tt::LogMetal, "Clearing device {}", this->id_);
+
+    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    this->trace_buffer_pool_.clear();
+    this->deallocate_buffers();
+
+    // std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
+    // std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
+    // this->get_associated_dispatch_phys_cores(not_done_dispatch_cores, cores_to_skip);
+
+    // auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
+    // std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
+
+    // llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
+
+    tt::Cluster::instance().l1_barrier(id_);
+    allocator::clear(*this->allocator_);
+    // After device close, no buffers on this device should be used
+    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
+        if (std::get<0>(buf_attr) == this->id()) {
+            DeallocateBuffer(*buf);
+        }
+    }
+}
+
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
@@ -1908,12 +1934,12 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
     this->work_executor.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    // tt_metal::detail::DumpDeviceProfileResults(this, true);
 
-    this->trace_buffer_pool_.clear();
+    // this->trace_buffer_pool_.clear();
     detail::EnableAllocs(this);
 
-    this->deallocate_buffers();
+    // this->deallocate_buffers();
 
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
@@ -1926,6 +1952,8 @@ bool Device::close() {
 
     DprintServerDetach(this);
     watcher_detach(this);
+
+    clear_device();
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
@@ -1958,14 +1986,14 @@ bool Device::close() {
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
 
-    tt::Cluster::instance().l1_barrier(id_);
-    allocator::clear(*this->allocator_);
-    // After device close, no buffers on this device should be used
-    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
-        if (std::get<0>(buf_attr) == this->id()) {
-            DeallocateBuffer(*buf);
-        }
-    }
+    // tt::Cluster::instance().l1_barrier(id_);
+    // allocator::clear(*this->allocator_);
+    // // After device close, no buffers on this device should be used
+    // for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
+    //     if (std::get<0>(buf_attr) == this->id()) {
+    //         DeallocateBuffer(*buf);
+    //     }
+    // }
 
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
