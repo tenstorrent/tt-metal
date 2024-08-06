@@ -65,6 +65,8 @@ struct ExecuteSoftmaxInPlace {
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
         auto input_shape = input_tensor.get_shape();
 
+        std::cout << "here here here" << std::endl;
+
         auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         auto output_tensor =
             ttnn::operations::normalization::softmax_in_place(input_tensor_4D, program_config, compute_kernel_config);
