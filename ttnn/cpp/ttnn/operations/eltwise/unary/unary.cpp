@@ -7,7 +7,7 @@
 #include "ttnn/common/constants.hpp"
 #include "device/unary_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
+#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::unary {

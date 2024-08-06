@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "downsample_pybind.hpp"
-
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include "downsample.hpp"
+
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;

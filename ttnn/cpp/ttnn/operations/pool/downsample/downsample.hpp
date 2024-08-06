@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations {
