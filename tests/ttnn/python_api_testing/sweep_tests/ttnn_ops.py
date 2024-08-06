@@ -4159,6 +4159,32 @@ def cosh_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+def concat_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    dim = -1
+    for i in range(0, len(x.size())):
+        if x.size(i) == y.size(i) + z.size(i):
+            dim = i
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[1], dtype[2])
+
+    t3 = ttnn.concat_bw(t0, t1, t2, dim=dim, memory_config=output_mem_config)
+
+    return torch.stack([ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])])
+
+
 def cos_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -4302,3 +4328,4 @@ def eltwise_bitwise_or(
     t1 = ttnn.bitwise_or(t0, value, memory_config=output_mem_config, queue_id=0)
 
     return ttnn_tensor_to_torch(t1)
+
