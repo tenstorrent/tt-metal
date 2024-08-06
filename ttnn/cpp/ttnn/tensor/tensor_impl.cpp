@@ -1256,6 +1256,18 @@ Tensor pad<bfloat4_b>(
     return pad_bfloat4_b(tensor, output_shape, input_tensor_start, pad_value);
 }
 
+
+int closest_number(int n, int m)
+{
+    int q = n / m;
+    int n1 = m * q;
+    int n2 = (m * (q + 1));
+    if (abs(n - n1) < abs(n - n2))
+        return (n1 > 0 ? n1 : m);
+
+    return n2;
+}
+
 template <typename T>
 Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
     const auto input_shape = tensor.get_legacy_shape();
@@ -1263,6 +1275,7 @@ Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape
 
     // Validate inputs and compute output shape
     std::vector<uint32_t> output_shape{};
+    output_shape.reserve(input_shape.rank());
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] < input_shape[i]);
@@ -1270,8 +1283,23 @@ Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape
         // Check if start shape is <= end shape
         TT_ASSERT(output_tensor_start[i] <= output_tensor_end[i]);
         // Figure out output tensor shape
-        output_shape.push_back(output_tensor_end[i] - output_tensor_start[i] + 1);
+        if(tensor.get_shape()[i] == tensor.get_legacy_shape()[i]) {
+            output_shape.push_back(output_tensor_end[i] - output_tensor_start[i] + 1);
+        }
+        else {
+            auto unpadded_size = output_tensor_end[i] - output_tensor_start[i] + 1;
+            if(i == input_shape.rank() - 2) {
+                output_shape.push_back(closest_number(unpadded_size, constants::TILE_HEIGHT));
+            }
+            else if (i == input_shape.rank() - 1) {
+                output_shape.push_back(closest_number(unpadded_size, constants::TILE_WIDTH));
+            }
+            else {
+                output_shape.push_back(unpadded_size);
+            }
+        }
     }
+
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const auto& input_buffer) {
