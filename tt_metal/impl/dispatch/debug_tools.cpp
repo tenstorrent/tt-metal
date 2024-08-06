@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
+
 namespace internal {
 
 using namespace tt::tt_metal;

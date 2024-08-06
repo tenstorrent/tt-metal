@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <list>
 #include "common/core_descriptor.hpp"
 
 namespace tt::tt_metal {
