@@ -53,6 +53,7 @@ void kernel_main() {
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
@@ -142,7 +143,9 @@ void kernel_main() {
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
 
             reader_idx++;
         }

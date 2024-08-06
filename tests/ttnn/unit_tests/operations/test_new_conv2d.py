@@ -86,8 +86,8 @@ def run_conv(
     #     for j in range(0, input_channels):
     #         for k in range(0, filter_height):
     #             for l in range(0, filter_width):
-    #                 torch_weight_tensor[i, j, k, l] = k * filter_width + l
-    torch_bias_tensor = torch.zeros(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    #                 torch_weight_tensor[i, j, k, l] = 1
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
@@ -171,14 +171,7 @@ def run_conv(
     print(torch_output_tensor[0, 0, 0:10, :])
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-    target = (torch_output_tensor == 512).nonzero(as_tuple=False)
-    print("target = ", target)
 
-    print("output_tensor")
-    print(torch_output_tensor[0, 0, 0:2, :])
-    print("golden output")
-    print(torch_out_golden_tensor[0, 0, 0:2, :])
-    # breakpoint()
     reader_patterns_cache.clear()
 
     if not fp32_accum:
@@ -844,7 +837,7 @@ def test_sd_conv(
         # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
         # # sd convs with HxW=64x64 with batch size=2
         # (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
-        (2, 8 * 48, 8 * 64, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        (2, 8 * 48, 8 * 48, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         # (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
         # (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         # (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
