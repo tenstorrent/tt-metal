@@ -160,6 +160,8 @@ inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, co
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_pack_get_tile_(std::uint32_t tile_index, std::uint32_t *p_tile) {
+    constexpr uint32_t wait_sem = (mail2math && mail2pack) ? (2) : (1);
+    while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) < wait_sem);
     if constexpr (mail2pack) {
        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
     } else {

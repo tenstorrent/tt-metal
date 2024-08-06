@@ -87,6 +87,8 @@ inline void _llk_math_pack_sync_init_() {
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_math_get_tile_(std::uint32_t tile_index, std::uint32_t* p_tile) {
+    constexpr uint32_t wait_sem = (mail2math && mail2pack) ? (2) : (1);
+    while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) < wait_sem);
     if constexpr (mail2math) {
        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
     } else {
