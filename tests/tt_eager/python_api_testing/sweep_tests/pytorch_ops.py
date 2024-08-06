@@ -2097,7 +2097,7 @@ def concat_bw(x, y, z, *args, **kwargs):
     pyt_y = torch.concat([in_data, other_data], dim)
     pyt_y.backward(gradient=grad_data)
 
-    return torch.stack([in_data.grad, other_data.grad])
+    return [in_data.grad, other_data.grad]
 
 
 def global_avg_pool2d(x, *args, **kwargs):

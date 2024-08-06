@@ -4182,7 +4182,7 @@ def concat_bw(
 
     t3 = ttnn.concat_bw(t0, t1, t2, dim=dim, memory_config=output_mem_config)
 
-    return torch.stack([ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])])
+    return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
 
 
 def cos_bw(
