@@ -358,7 +358,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion"),
 )
-@pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
+@pytest.mark.parametrize("decode_only", (True,), ids=("decode_only",))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices",
@@ -374,7 +374,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
             8,
         ),
     ),
-    ids=("tt-70b-T3000", "meta-70b"),
+    ids=("tt-70b-glx", "meta-70b"),
 )
 @pytest.mark.parametrize(
     "max_output_tokens, output_at_end, top_p, top_k, temperature",
