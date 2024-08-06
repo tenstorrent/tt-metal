@@ -54,7 +54,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "i0": torch.i0,
             "identity": torch.clone,
             "isfinite": torch.isfinite,
-            "isinf": torch.inf,
+            "isinf": torch.isinf,
             "isnan": torch.isnan,
             "isneginf": torch.isneginf,
             "isposinf": torch.isposinf,
