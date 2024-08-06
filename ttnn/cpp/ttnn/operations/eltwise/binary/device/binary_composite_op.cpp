@@ -392,4 +392,12 @@ Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const s
     return final_tensor;
 }
 
+Tensor ExecuteBinaryGE::operator()(const Tensor& input_a, const Tensor& input_b) {
+    return ttnn::ge(input_a, input_b, std::nullopt, std::nullopt, input_a);
+}
+
+Tensor ExecuteBinaryGE::operator()(const Tensor& input, float scalar) {
+    return ttnn::ge(input, scalar, std::nullopt, std::nullopt, input);
+}
+
 } // namespace ttnn::operations::binary

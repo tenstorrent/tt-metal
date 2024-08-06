@@ -310,6 +310,7 @@ Pointwise Binary
    ttnn/eqz
    ttnn/gt
    ttnn/ge
+   ttnn/ge_
    ttnn/lt
    ttnn/le
    ttnn/eq
