@@ -540,7 +540,7 @@ def conv2d(
     parallel_config = None
     if conv_config.reshard_if_not_optimal or needs_reshard:
         optimal_parallel_config = determine_parallel_config(
-            True if conv_config.height_sharding is None else conv_config.height_sharding,
+            conv_config.is_height_sharded(),
             batch_size,
             in_channels,
             output_height,
@@ -549,25 +549,22 @@ def conv2d(
             device,
         )
     if needs_reshard:
-        if conv_config.height_sharding is None:
-            # default shard scheme is height sharding
-            conv_config.height_sharding = True
+        if conv_config.shard_layout is None:
+            conv_config.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         if conv_config.core_grid is None:
             parallel_config = optimal_parallel_config
         else:
             assert config_shard_grid is not None
             grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
-                conv_config.core_grid, conv_config.height_sharding
+                conv_config.core_grid, conv_config.conv_config.is_height_sharded()
             )
-            shard_scheme = (
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if conv_config.height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            )
+
             shard_orientation = (
                 ttnn.ShardOrientation.ROW_MAJOR if conv_config.height_sharding else ttnn.ShardOrientation.COL_MAJOR
             )
-            parallel_config = ParallelConfig(grid_size.y, grid_size.x, num_cores_nhw, shard_scheme, shard_orientation)
+            parallel_config = ParallelConfig(
+                grid_size.y, grid_size.x, num_cores_nhw, conv_config.shard_layout, shard_orientation
+            )
     else:
         assert ttnn.is_sharded(input_tensor)
         grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
@@ -673,8 +670,8 @@ def conv2d(
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
                 math_approx_mode=conv_config.math_approx_mode_enabled,
-                fp32_dest_acc_en=conv_config.fp32_dest_acc_en_enabled,
-                packer_l1_acc=conv_config.packer_l1_acc_enabled,
+                fp32_dest_acc_en=conv_config.fp32_dest_acc_enabled,
+                packer_l1_acc=conv_config.packer_l1_accum_enabled,
             )
         else:
             assert False, f"Unsupported device: {device}"

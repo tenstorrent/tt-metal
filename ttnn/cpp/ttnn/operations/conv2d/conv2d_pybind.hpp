@@ -212,7 +212,7 @@ void py_module(py::module& module) {
             py::arg("act_block_h_override") = 0,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
-            py::arg("shard_layout") = true,
+            py::arg("shard_layout") = TensorMemoryLayout::HEIGHT_SHARDED,
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
@@ -241,6 +241,9 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
+        py_conv_config.def("is_height_sharded", &Conv2dConfig::is_height_sharded);
+        py_conv_config.def("is_width_sharded", &Conv2dConfig::is_width_sharded);
+        py_conv_config.def("is_block_sharded", &Conv2dConfig::is_block_sharded);
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(
             py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
