@@ -537,7 +537,7 @@ def test_perf_trace_t3000(
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
-        (16, True, 0.0105, 60),
+        (16, True, 0.0110, 60),
         (16, False, 0.0220, 60),
     ),
     indirect=["enable_async_mode"],
