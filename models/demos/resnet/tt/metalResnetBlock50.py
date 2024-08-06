@@ -27,7 +27,7 @@ from ttnn.operations.conv.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from ttnn.operations.pool import TTPyMaxPool
+from ttnn import max_pool2d_new
 
 from models.utility_functions import (
     _nearest_32,
@@ -1639,21 +1639,22 @@ class ResNet(nn.Module):
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.max_pool_reader_patterns_cache = {}
         if sharded:
-            max_pool_op_params = SlidingWindowOpParamsWithParallelConfig(
-                stride_h=2,
-                stride_w=2,
-                pad_h=1,
-                pad_w=1,
-                window_h=3,
-                window_w=3,
-                batch_size=batch_size,
-                input_h=self.conv1_output_shape[1],
-                input_w=self.conv1_output_shape[2],
-                num_cores_h=grid_size[1],
-                num_cores_w=grid_size[0],
-                num_cores_nhw=self.first_conv_num_cores_nhw,
-            )
-            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, self.max_pool_reader_patterns_cache)
+            pass
+            # max_pool_op_params = SlidingWindowOpParamsWithParallelConfig(
+            #     stride_h=2,
+            #     stride_w=2,
+            #     pad_h=1,
+            #     pad_w=1,
+            #     window_h=3,
+            #     window_w=3,
+            #     batch_size=batch_size,
+            #     input_h=self.conv1_output_shape[1],
+            #     input_w=self.conv1_output_shape[2],
+            #     num_cores_h=grid_size[1],
+            #     num_cores_w=grid_size[0],
+            #     num_cores_nhw=self.first_conv_num_cores_nhw,
+            # )
+            # self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, self.max_pool_reader_patterns_cache)
         else:
             self.maxpool = TtMaxPool(
                 self.device,
@@ -2179,7 +2180,20 @@ class ResNet(nn.Module):
                 self.conv1_output_shape[2],
                 self.conv1_output_shape[3],
             )
-        x = self.maxpool(x)
+        # x = self.maxpool(x)
+
+        x = max_pool2d_new(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=self.conv1_output_shape[1],
+            input_w=self.conv1_output_shape[2],
+            channels=self.conv1_output_shape[3],
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=self.device,
+        )
 
         x = x.reshape(
             1,
