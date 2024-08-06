@@ -87,13 +87,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
 
-    tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
-    tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
-    tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
-    tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_info("in0_cb_data_format: {}", in0_cb_data_format);
+    tt::log_info("out0_cb_data_format: {}", out0_cb_data_format);
+    tt::log_info("mask_cb_data_format: {}", mask_cb_data_format);
+    tt::log_info("im_cb_data_format: {}", im_cb_data_format);
+    tt::log_info("math_fidelity: {}", math_fidelity);
+    tt::log_info("math_approx_mode: {}", math_approx_mode);
+    tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_info("causal mask {}", causal_mask);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -171,6 +172,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
     }
+
+    // TODO(pjanevski): finished here
+
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp",
