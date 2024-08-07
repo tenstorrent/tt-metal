@@ -31,7 +31,8 @@ struct Reduce {
         const Tensor& input_tensor_arg,
         const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
         const bool keepdim,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
         if (not keepdim) {
             TT_THROW("keepdim=False is not supported");
         }
@@ -86,11 +87,11 @@ struct Reduce {
             if constexpr (reduce_type == ReduceType::Mean) {
                 output_tensor = tt::tt_metal::global_mean(input_tensor, memory_config);
             } else if constexpr (reduce_type == ReduceType::Sum) {
-                output_tensor = tt::tt_metal::global_sum(input_tensor, memory_config);
+                output_tensor = tt::tt_metal::global_sum(input_tensor, memory_config, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Max) {
-                output_tensor = tt::tt_metal::global_max(input_tensor, memory_config);
+                output_tensor = tt::tt_metal::global_max(input_tensor, memory_config, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Min) {
-                output_tensor = tt::tt_metal::global_min(input_tensor, memory_config);
+                output_tensor = tt::tt_metal::global_min(input_tensor, memory_config, compute_kernel_config);
             } else {
                 TT_THROW("Unsupported reduction operation");
             }
@@ -113,25 +114,25 @@ struct Reduce {
 
             if constexpr (reduce_type == ReduceType::Sum) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0, memory_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Mean) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Max) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, 1.0, memory_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Min) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, 1.0, memory_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Var or reduce_type == ReduceType::Std) {
                 auto mean_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
                 auto mean_square_tensor = tt::tt_metal::reduce(
                     ttnn::pow(input_tensor, 2.0f, memory_config),
                     tt::tt_metal::ReduceOpMath::SUM,
                     reduce_op_dim,
                     1.0 / reduced_volume,
-                    memory_config);
+                    memory_config, std::nullopt, compute_kernel_config);
                 output_tensor = ttnn::subtract(
                     mean_square_tensor,
                     ttnn::pow(mean_tensor, 2.0f, memory_config),

@@ -14,11 +14,14 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, float scaler) {
+operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, const DeviceComputeKernelConfig& compute_kernel_config, float scaler) {
 
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
-    uint32_t HW = H*W;
+    uint32_t HW = H * W;
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
@@ -98,14 +101,12 @@ operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& o
         Wt, // Wt
         NC, // NC
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
 
     auto reduce_compute_kernel_id = tt_metal::CreateKernel(
         program,
          "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)}
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)}
     );
 
     tt_metal::SetRuntimeArgs(
