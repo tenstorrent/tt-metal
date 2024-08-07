@@ -578,26 +578,31 @@ static void dump_stack_usage(FILE *f, Device *device, CoreCoord core, const mail
         uint16_t stack_usage = mbox->watcher.stack_usage.max_usage[risc_id];
         uint16_t stack_size = get_riscv_stack_size(core, risc_id);
         if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            fprintf(f, "\n\t%s stack usage: %d/%d", get_riscv_name(core, risc_id), stack_usage, stack_size);
-            fprintf(
-                f,
-                " kernel using most stack: %s",
-                kernel_names[mbox->watcher.stack_usage.watcher_kernel_id[risc_id]].c_str());
+            const string &kernel_name = kernel_names[mbox->watcher.stack_usage.watcher_kernel_id[risc_id]];
+            const char *riscv_name = get_riscv_name(core, risc_id);
+            fprintf(f, "\n\t%s stack usage: %d/%d", riscv_name, stack_usage, stack_size);
+            fprintf(f, " kernel using most stack: %s", kernel_name.c_str());
             if (stack_usage >= stack_size) {
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
-                    "Watcher detected stack overflow on Device {} Core {}: {}! See watcher log for details.",
+                    "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
                     device->id(),
                     core.str(),
-                    get_riscv_name(core, risc_id));
+                    riscv_name,
+                    kernel_name,
+                    stack_usage,
+                    stack_size);
             } else if (stack_usage >= stack_size * 9 / 10) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
-                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! See watcher log for "
-                    "details.",
+                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses {}/{} of "
+                    "the stack.",
                     device->id(),
                     core.str(),
-                    get_riscv_name(core, risc_id));
+                    riscv_name,
+                    kernel_name,
+                    stack_usage,
+                    stack_size);
             }
         }
     }
