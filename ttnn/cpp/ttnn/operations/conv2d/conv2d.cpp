@@ -891,18 +891,11 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_);
 
+bool Conv2dConfig::is_height_sharded() const { return shard_layout == TensorMemoryLayout::HEIGHT_SHARDED; }
 
-    bool Conv2dConfig::is_height_sharded() const {
-        return shard_layout==TensorMemoryLayout::HEIGHT_SHARDED;
-    }
+bool Conv2dConfig::is_width_sharded() const { return shard_layout == TensorMemoryLayout::WIDTH_SHARDED; }
 
-    bool Conv2dConfig::is_width_sharded() const {
-        return shard_layout==TensorMemoryLayout::WIDTH_SHARDED;
-    }
-
-    bool Conv2dConfig::is_block_sharded() const {
-        return shard_layout==TensorMemoryLayout::BLOCK_SHARDED;
-    }
+bool Conv2dConfig::is_block_sharded() const { return shard_layout == TensorMemoryLayout::BLOCK_SHARDED; }
 
 }  // namespace conv2d
 }  // namespace operations
