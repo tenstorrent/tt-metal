@@ -78,9 +78,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool
 namespace stress_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
-    if (this->device_->arch() == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP(); // TODO (abhullar): Revisit because passes on some machines
-    }
+    // if (this->device_->arch() == tt::ARCH::BLACKHOLE) {
+    //     GTEST_SKIP(); // TODO (abhullar): Revisit because passes on some machines
+    // }
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
