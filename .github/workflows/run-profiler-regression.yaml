@@ -1,8 +1,5 @@
 name: "[internal] metal - Run profiler regression impl"
 
-<<<<<<< HEAD
-on:
-=======
 # https://github.com/actions/runner/issues/3146 
 # On trying to get both workflow dispatch and call to work, 
 # https://github.com/actions/runner/discussions/1884
@@ -16,7 +13,6 @@ on:
         type: boolean
         required: false
         default: true
->>>>>>> caa64686ca ( #8082: Build tt-metal and tests in build-artifacts.yaml with docker)
   workflow_call:
     inputs:
       build_docker:
