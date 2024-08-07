@@ -2215,7 +2215,7 @@ def gen_bitwise_and_args(
     on_device,
     low=-1,
     high=10,
-    dtype=torch.bfloat16,
+    dtype=torch.int32,
     do_sanitize_args=True,
     coregrid=[],
 ):
