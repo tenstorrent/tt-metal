@@ -301,7 +301,6 @@ OutputTensors run(
     uint8_t cq_id) {
     auto device = detail::get_device(input_tensors, optional_input_tensors);
 #ifdef DEBUG
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     detail::validate_op_launch(device);
 #endif
     return detail::decorate_device_operation(detail::run_device_operation<OutputTensors>)(

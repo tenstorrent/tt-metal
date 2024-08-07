@@ -240,7 +240,6 @@ class Device {
     // APIs to access this device's work executor
 
     void push_work(std::function<void()>&& work, bool blocking = false);
-    void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);

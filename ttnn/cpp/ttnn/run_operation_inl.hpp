@@ -242,7 +242,7 @@ void launch_op(
             });
 
         for (auto target_device : workers) {
-            target_device->work_executor_v2.push_work(
+            target_device->push_work(
                 [target_device, work_lambda]() mutable { (*work_lambda)(target_device); });
         }
     }

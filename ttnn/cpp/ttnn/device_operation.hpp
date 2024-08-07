@@ -265,7 +265,7 @@ inline void log_operation(
 
 template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
-    device->work_executor_v2.push_work(
+    device->push_work(
         [cq_id, operation_id, operation_attributes, tensor_args, tensor_return_value, device]() mutable {
             ZoneScopedN("TT_DNN_DEVICE_OP");
             tt::stl::reflection::visit_object_of_type<Tensor>(allocate_device_buffer, tensor_return_value);
