@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 

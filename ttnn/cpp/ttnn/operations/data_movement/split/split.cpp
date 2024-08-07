@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "device/split_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -13,7 +13,6 @@
 
 namespace ttnn::operations::data_movement {
 
-constexpr uint8_t SplitDefaultQueueID = 0;
 
 namespace detail {
 
@@ -82,11 +81,11 @@ std::vector<ttnn::Tensor> SplitOperation::operator()(
     int64_t& num_splits,
     int64_t& dim,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(SplitDefaultQueueID, input_tensor, num_splits, dim, memory_config);
+    return operator()(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
 }
 
 std::vector<ttnn::Tensor> SplitOperation::operator()(const ttnn::Tensor& input_tensor, int64_t& num_splits,  int64_t& dim) {
-    return operator()(SplitDefaultQueueID, input_tensor, num_splits, dim, std::nullopt);
+    return operator()(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace
