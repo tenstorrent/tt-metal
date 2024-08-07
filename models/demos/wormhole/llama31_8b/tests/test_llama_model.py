@@ -63,7 +63,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     if instruct:
         encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
     else:
-        encoded_prompts = tokenizer.encode(prompts, bos=True, eos=False)[:seq_len]
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
