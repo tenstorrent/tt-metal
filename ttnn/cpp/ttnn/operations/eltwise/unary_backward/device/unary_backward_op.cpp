@@ -1203,7 +1203,7 @@ std::vector<ComplexTensor> ExecuteUnaryBackwardRecip::operator()(
     std::vector<ComplexTensor> grad_tensor;
     Tensor condition_nan = ttnn::logical_and(ttnn::eqz(input.real(),output_mem_config), ttnn::eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
-    ComplexTensor inp_recip = ttnn::operations::complex_unary::_reciprocal(input, output_mem_config);
+    ComplexTensor inp_recip = ttnn::reciprocal(input, output_mem_config);
     ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config), output_mem_config) ;
     neg_grad.deallocate();
     inp_recip.deallocate();
@@ -1228,7 +1228,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAbs::operator()(
 std::vector<ComplexTensor> ExecuteUnaryBackwardAbs::operator()(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor result = ttnn::operations::complex_unary::_abs(input, output_mem_config);
+    Tensor result = ttnn::abs(input, output_mem_config);
     Tensor grad_inp_r = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     Tensor grad_inp_i = where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
