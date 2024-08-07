@@ -133,13 +133,15 @@ inline auto& create_or_get_program_from_cache(
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
                 using cached_program_t =
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+
+                auto cached_program_factory = CachedProgramFactory{
+                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
+                        program_factory_index};
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 program_cache.insert(
                     program_hash,
-                    CachedProgramFactory{
-                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
-                        program_factory_index});
-                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
-                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
+                    std::move(cached_program_factory)
+                    );
                 return cached_program.program;
             },
             program_factory);
