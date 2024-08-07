@@ -307,6 +307,8 @@ Pointwise Binary
    ttnn/lt_
    ttnn/ge_
    ttnn/le_
+   ttnn/eq_
+   ttnn/ne_
    ttnn/ge
    ttnn/lt
    ttnn/le

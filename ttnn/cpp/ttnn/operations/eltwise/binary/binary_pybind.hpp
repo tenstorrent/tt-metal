@@ -552,7 +552,6 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
 
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
 
             Example::
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -948,6 +947,18 @@ void py_module(py::module& module) {
         ttnn::le_,
         R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
         .. math:: \mathrm{{input\_a}}_i <= \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::eq_,
+        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i = \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::ne_,
+        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i != \mathrm{{input\_b}}_i)doc");
 
 }
 
