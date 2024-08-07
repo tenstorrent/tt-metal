@@ -17,6 +17,7 @@ import multiprocess
 import signal
 import time
 import psutil
+import itertools
 from datetime import datetime
 
 from loguru import logger
@@ -177,8 +178,10 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
-        device_grid = ttnn.DeviceGrid(*grid_dims)
         num_devices_requested = grid_dims[0] * grid_dims[1]
+        if num_devices_requested > len(device_ids):
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        device_grid = ttnn.DeviceGrid(*grid_dims)
         assert num_devices_requested <= len(device_ids), "Requested more devices than available."
     else:
         num_devices_requested = min(param, len(device_ids))
