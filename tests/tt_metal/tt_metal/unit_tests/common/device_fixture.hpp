@@ -98,7 +98,7 @@ class GalaxyFixture : public ::testing::Test {
         {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        this->device_ids_to_devices_ = tt::tt_metal::detail::CreateDevices(ids);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 
@@ -110,14 +110,15 @@ class GalaxyFixture : public ::testing::Test {
 
     void TearDown() override
     {
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-        for (Device* device : this->devices_)
-        {
-            tt::tt_metal::CloseDevice(device);
-        }
+        tt::tt_metal::detail::CloseDevices(this->device_ids_to_devices_);
+        this->device_ids_to_devices_.clear();
+        this->devices_.clear();
     }
 
     std::vector<tt::tt_metal::Device*> devices_;
+
+   private:
+    std::map<chip_id_t, Device*> device_ids_to_devices_;
 };
 
 class TGFixture : public GalaxyFixture
