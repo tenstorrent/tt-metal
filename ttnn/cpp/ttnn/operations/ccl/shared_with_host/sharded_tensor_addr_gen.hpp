@@ -449,21 +449,21 @@ using sharded_addrgen_builder_t = std::conditional_t<
 
 template <TensorMemoryLayout layout, typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 constexpr auto build_sharded_addr_gen(
-    worker_to_noc_lookup_t const& workler_to_noc_lookup,
+    worker_to_noc_lookup_t const& worker_to_noc_lookup,
     DEVICE_SHARD_SPEC_T const& device_shard_spec,
     uint32_t page_size,
     uint32_t base_address) -> sharded_addrgen_builder_t<layout, worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T> {
     if constexpr (layout == TensorMemoryLayout::WIDTH_SHARDED) {
         return WidthShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
-            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+            worker_to_noc_lookup, device_shard_spec, page_size, base_address);
 
     } else if constexpr (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         return HeightShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
-            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+            worker_to_noc_lookup, device_shard_spec, page_size, base_address);
     } else {
         static_assert(layout == TensorMemoryLayout::BLOCK_SHARDED);
         return BlockShardedAddressGenerator<worker_to_noc_lookup_t, DEVICE_SHARD_SPEC_T>(
-            workler_to_noc_lookup, device_shard_spec, page_size, base_address);
+            worker_to_noc_lookup, device_shard_spec, page_size, base_address);
     }
 }
 
