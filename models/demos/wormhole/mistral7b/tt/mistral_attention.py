@@ -302,12 +302,12 @@ class TtMistralAttention(nn.Module):
                 q_heads_pre_rot,  # [seqlen, n_heads, bsz, head_dim]
                 k_heads_pre_rot,  # [seqlen, n_kv_heads, bsz, head_dim]
                 v_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
-            ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            ) = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv_fused,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
                 transpose_k_heads=False,
-                output_mem_config=self.model_config["QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["QKV_HEADS_OUTPUT_MEMCFG"],
             )
 
             ttnn.deallocate(xqkv_fused)
@@ -547,12 +547,12 @@ class TtMistralAttention(nn.Module):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         xqkv_fused.deallocate(True)

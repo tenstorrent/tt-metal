@@ -324,12 +324,12 @@ class TtMixtralAttention(LightweightModule):
             q_heads_14SD_pre_rot,
             k_heads_11SD_pre_rot,
             v_heads_11SD,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         xqkv_fused.deallocate(True)

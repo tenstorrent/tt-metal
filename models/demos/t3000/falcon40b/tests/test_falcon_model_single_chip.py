@@ -528,13 +528,13 @@ def test_sharded_nlp_create_qkv_heads_test(
         ttnn.experimental.tensor.BufferType.L1,
         out_shard_spec,
     )
-    q, k, v = ttnn.experimental.tensor.nlp_create_qkv_heads(
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
         in1_t if read_from_input_tensor_kv else None,
         num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=False,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
     )
 
     assert list(q.get_legacy_shape()) == [seq_len, num_q_heads, batch, head_dim]

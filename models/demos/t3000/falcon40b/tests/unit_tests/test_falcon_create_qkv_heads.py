@@ -62,12 +62,12 @@ class TtFalconCreateQKVHeads:
         self.num_kv_heads = num_kv_heads
 
     def __call__(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
-        q_layer, k_layer, v_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        q_layer, k_layer, v_layer = ttnn.experimental.nlp_create_qkv_heads(
             x,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
 
         return q_layer, k_layer, v_layer

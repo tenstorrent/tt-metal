@@ -9,6 +9,7 @@ import tt_lib as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
 from models.utility_functions import is_grayskull
 import torch
+import ttnn
 
 
 """
@@ -155,13 +156,13 @@ def run_nlp_create_qkv_heads_test(
         A = torch.randn(in0_shape)
         in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
 
-    q, k, v = ttl.tensor.nlp_create_qkv_heads(
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
         in1_t if read_from_input_tensor_kv else None,
         num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=transpose_k_heads,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
     )
 
     # Check memory of inputs and outputs
@@ -377,13 +378,13 @@ def run_sharded_nlp_create_qkv_heads_test(
     out_mem_config = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, out_shard_spec
     )
-    q, k, v = ttl.tensor.nlp_create_qkv_heads(
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
         in1_t if read_from_input_tensor_kv else None,
         num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=False,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
     )
 
     assert list(q.get_legacy_shape()) == [seq_len, num_q_heads, batch, head_dim]
