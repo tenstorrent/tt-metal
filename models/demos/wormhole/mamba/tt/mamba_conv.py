@@ -55,7 +55,6 @@ class MambaConv:
             dtype=self.config.output_dtype,
             weights_dtype=self.config.weights_dtype,
             math_fidelity=self.config.math_fidelity,
-            height_sharding=True,
             input_channels_alignment=32,
             deallocate_activation=True,
         )

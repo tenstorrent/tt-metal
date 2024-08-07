@@ -308,10 +308,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 {
                     needs_shard_or_reshard = true;
                 }
-                // bool input_tensor_height_sharded = input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
-                // if (conv_config.is_height_sharded() != input_tensor_height_sharded) {
-                //     needs_shard_or_reshard = true;
-                // }
                 bool input_transpose_shards = input_shard_orientation == ShardOrientation::COL_MAJOR;
                 if (!conv_config.is_height_sharded() && conv_config.transpose_shards != input_transpose_shards) {
                     needs_shard_or_reshard = true;
@@ -896,16 +892,15 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     std::optional<const Conv2dConfig> conv_config_);
 
 
-    bool Conv2dConfig::is_height_sharded() const
-    {
+    bool Conv2dConfig::is_height_sharded() const {
         return shard_layout==TensorMemoryLayout::HEIGHT_SHARDED;
     }
-    bool Conv2dConfig::is_width_sharded() const
-    {
+
+    bool Conv2dConfig::is_width_sharded() const {
         return shard_layout==TensorMemoryLayout::WIDTH_SHARDED;
     }
-    bool Conv2dConfig::is_block_sharded() const
-    {
+
+    bool Conv2dConfig::is_block_sharded() const {
         return shard_layout==TensorMemoryLayout::BLOCK_SHARDED;
     }
 
