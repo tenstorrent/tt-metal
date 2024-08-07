@@ -4283,6 +4283,27 @@ def erfc_bw(
     return ttnn_tensor_to_torch(t2)
 
 
+def topk(
+    x,
+    *args,
+    k,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1_values, t1_indices = ttnn.topk(t0, k, dim=-1, largest=True, sorted=True)
+    t1_values = ttnn_tensor_to_torch(t1_values)
+    t1_indices = ttnn_tensor_to_torch(t1_indices).to(torch.int64)
+
+    t1_indices_gather = torch.gather(x, -1, t1_indices)
+
+    return [t1_values, t1_indices_gather]
+
+
 def erfinv_bw(
     x,  # grad_tensor
     y,  # input_tensor

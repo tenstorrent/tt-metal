@@ -2206,3 +2206,13 @@ def gen_matmul_coregrid_args(
         ycoregrid,
         do_sanitize_args,
     )
+
+
+def gen_topk_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            k = 32
+            input_info.update({"k": k})
+            yield input_info

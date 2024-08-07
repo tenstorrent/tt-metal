@@ -901,4 +901,8 @@ op_map = {
         "tt_op": ttnn_ops.ceil,
         "pytorch_op": pytorch_ops.ceil,
     },
+    "topk": {
+        "tt_op": ttnn_ops.topk,
+        "pytorch_op": pytorch_ops.topk,
+    },
 }
