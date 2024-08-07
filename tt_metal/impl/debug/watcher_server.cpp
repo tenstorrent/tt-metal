@@ -14,7 +14,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include "dev_mem_map.h"
+#include "llrt/hal.hpp"
 #include "dev_msgs.h"
 #include "llrt/llrt.hpp"
 #include "llrt/rtoptions.hpp"
@@ -24,6 +24,18 @@
 
 namespace tt {
 namespace watcher {
+
+#define GET_WATCHER_DEV_ADDR_FOR_CORE(dev, core, sub_type)              \
+    (dev->get_dev_addr(core, HalMemAddrType::WATCHER) + offsetof(watcher_msg_t, sub_type))
+
+#define GET_WATCHER_TENSIX_DEV_ADDR()                                   \
+    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::WATCHER)
+
+#define GET_WATCHER_ERISC_DEV_ADDR()                                    \
+    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::WATCHER)
+
+#define GET_WATCHER_IERISC_DEV_ADDR()                                   \
+    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalMemAddrType::WATCHER)
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
@@ -187,7 +199,7 @@ static string get_kernel_name(CoreCoord core, const launch_msg_t *launch_msg, ui
 static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
     string out;
 
-    for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
+    for (int cpu = 0; cpu < MAX_RISCV_PER_CORE; cpu++) {
         string risc_status;
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
             char v = ((char *)&debug_status[cpu])[byte];
@@ -206,7 +218,7 @@ static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, c
         // Pad risc status to 4 chars for alignment
         string pad(4 - risc_status.length(), ' ');
         out += (pad + risc_status);
-        if (cpu != num_riscv_per_core - 1)
+        if (cpu != MAX_RISCV_PER_CORE - 1)
             out += ',';
     }
 
@@ -221,16 +233,8 @@ static void log_waypoint(CoreCoord core, const launch_msg_t *launch_msg, const d
 }
 
 static string get_ring_buffer(Device *device, CoreCoord phys_core) {
-    uint64_t buf_addr = GET_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
-    if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
-        // Eth pcores have a different address, but only active ones.
-        CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
-        if (device->is_active_ethernet_core(logical_core)) {
-            buf_addr = GET_ETH_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
-        } else {
-            buf_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.debug_ring_buf);
-        }
-    }
+    DeviceAddr buf_addr = GET_WATCHER_DEV_ADDR_FOR_CORE(device, phys_core, debug_ring_buf);
+
     auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, buf_addr, sizeof(debug_ring_buf_msg_t));
     debug_ring_buf_msg_t *ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t *>(&(from_dev[0]));
     if (ring_buf_data->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX)
@@ -802,15 +806,7 @@ static void __attribute__((noinline)) dump(FILE *f) {
                 const CoreCoord &phys_core = core_and_risc.first;
                 riscv_id_t risc_id = core_and_risc.second;
 
-                // Address depends on core type
-                uint64_t addr = GET_MAILBOX_ADDRESS_HOST(watcher.pause_status);
-                if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
-                    CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
-                    if (device->is_active_ethernet_core(logical_core))
-                        addr = GET_ETH_MAILBOX_ADDRESS_HOST(watcher.pause_status);
-                    else
-                        addr = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher.pause_status);
-                }
+                uint64_t addr = GET_WATCHER_DEV_ADDR_FOR_CORE(device, phys_core, pause_status);
 
                 // Clear only the one flag that we saved, in case another one was raised on device
                 auto pause_data =
@@ -902,7 +898,7 @@ void watcher_init(Device *device) {
     data->enable = (tt::llrt::OptionsG.get_watcher_enabled())? WatcherEnabled : WatcherDisabled;
 
     // Initialize debug status values to "unknown"
-    for (int idx = 0; idx < num_riscv_per_core; idx++)
+    for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++)
         data->debug_status[idx].status[0] = 'X';
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
@@ -1013,6 +1009,9 @@ void watcher_init(Device *device) {
 
     debug_insert_delays_msg_t debug_delays_val_zero = {0, 0, 0, 0};
 
+    // TODO: hal needs more work as of 8/6/24, but eventually loop over dispatch_core_types and get
+    // cores from that to consolidate the loops below
+
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -1024,7 +1023,7 @@ void watcher_init(Device *device) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, watcher_init_val, GET_MAILBOX_ADDRESS_HOST(watcher));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, watcher_init_val, GET_WATCHER_TENSIX_DEV_ADDR());
         }
     }
 
@@ -1049,7 +1048,7 @@ void watcher_init(Device *device) {
             device->id(),
             physical_core,
             watcher_init_val,
-            is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(watcher) : GET_IERISC_MAILBOX_ADDRESS_HOST(watcher));
+            is_active_eth_core ? GET_WATCHER_ERISC_DEV_ADDR() : GET_WATCHER_IERISC_DEV_ADDR());
     }
 
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
