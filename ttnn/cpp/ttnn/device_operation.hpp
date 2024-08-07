@@ -218,11 +218,17 @@ inline void log_operation(
         tt::log_debug(tt::LogOp, "Attributes:");
         reflect::for_each(
             [&operation_attributes](auto I) {
-                tt::log_debug(
-                    tt::LogOp,
-                    "\t{} = {}",
-                    reflect::member_name<I>(operation_attributes),
-                    reflect::get<I>(operation_attributes));
+                // this didnt resolve all issues
+                using MemberType = std::decay_t<decltype(reflect::get<I>(operation_attributes))>;
+                if constexpr (std::is_same_v<MemberType, CoreRangeSet>) {
+                    tt::log_debug(tt::LogOp, "\t{} [excluded]", reflect::member_name<I>(operation_attributes));
+                } else {
+                    tt::log_debug(
+                        tt::LogOp,
+                        "\t{} = {}",
+                        reflect::member_name<I>(operation_attributes),
+                        reflect::get<I>(operation_attributes));
+                }
             },
             operation_attributes);
     }
@@ -273,7 +279,9 @@ typename device_operation_t::tensor_return_value_t run(
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
     auto program_cache_hit = program_cache.contains(program_hash);
 
-    log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
+    // reflect:87:38: error: no matching constructor for initialization of 'CoreRangeSet'
+    //    87 | template<class T> extern const T ext{};
+    // log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
 
     if (program_cache_hit) {
         ZoneScopedN("Validate on Program Cache Hit");

@@ -9,6 +9,7 @@ set(TT_EAGER_TESTS_OPS
     ops/test_average_pool
     ops/test_eltwise_binary_op
     ops/test_eltwise_unary_op
+    ops/test_generic_op
     ops/test_softmax_op
     ops/test_layernorm_op
     # ops/test_moreh_adam_op                  # <- not called in run_tt_eager.py
