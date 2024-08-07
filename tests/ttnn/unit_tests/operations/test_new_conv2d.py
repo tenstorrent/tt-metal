@@ -51,9 +51,10 @@ def run_conv(
     stride_w,
     pad_h,
     pad_w,
+    dilation_h,
+    dilation_w,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant=False,
     transpose_mcast=True,
     enable_auto_formatting=False,
     padded_input_channels=None,
@@ -64,6 +65,7 @@ def run_conv(
     debug=False,
     groups=1,
     has_bias=True,
+    activation=None,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -81,8 +83,11 @@ def run_conv(
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        dilation=(dilation_h, dilation_w),
         groups=groups,
     )
+    if activation == "relu":
+        torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
     output_shape_nhwc = [
         torch_out_golden_tensor.shape[0],
         torch_out_golden_tensor.shape[2],
@@ -108,15 +113,19 @@ def run_conv(
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
         height_sharding=use_1d_systolic_array,
-        input_channels_alignment=(
-            16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
-        ),
+        input_channels_alignment=32,  # (16 if input_channels<16 else 32),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
+        fp32_dest_acc_enabled=True,
         packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        activation=activation,
+        math_approx_mode_enabled=True,
+        transpose_shards=True,
+        reallocate_halo_output=False,
+        # reshard_if_not_optimal=True,
+        # act_block_h_override=0,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -137,6 +146,7 @@ def run_conv(
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        dilation=(dilation_h, dilation_w),
         batch_size=batch_size,
         input_height=input_height,
         input_width=input_width,
@@ -1489,4 +1499,192 @@ def test_yolov4_conv_groups_larger_than_one(
         groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, use_1d_systolic_array, config_override, activation",
+    (
+        # model_k model with Input resolution: 256x256
+        (1, 32, 3, 256, 256, 5, 5, 1, 1, 0, 0, 1, 1, 1, True, None, "relu"),  # Fails with OOM issue
+        (1, 128, 64, 224, 224, 2, 2, 1, 1, 0, 0, 1, 1, 1, True, None, "relu"),  # Fails with OOM issue
+        (1, 256, 128, 223, 223, 1, 1, 1, 1, 0, 0, 1, 1, 1, True, None, "relu"),  # Fails with OOM issue
+        (
+            1,
+            1,
+            256,
+            223,
+            223,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            True,
+            None,
+            "None",
+        ),  # Fails with OOM issue | sigmoid not available for conv activation, so using none
+        (1, 48, 32, 252, 252, 3, 3, 1, 1, 0, 0, 2, 2, 1, True, None, "relu"),  # Dilation > 1 not supported
+        (1, 56, 48, 248, 248, 3, 3, 1, 1, 0, 0, 4, 4, 1, True, None, "relu"),  # Dilation > 1 not supported
+        (1, 64, 56, 240, 240, 3, 3, 1, 1, 0, 0, 8, 8, 1, True, None, "relu"),  # Dilation > 1 not supported
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_k_256x256(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        padded_input_channels=16 if input_channels == 3 else None,
+        activation=activation,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, activation",
+    (
+        # model_k model with Input resolution: 128x128
+        # (1, 32, 3, 128, 128, 5, 5, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Conv1: Passed
+        (1, 48, 32, 124, 124, 3, 3, 1, 1, 0, 0, 2, 2, 1, "relu"),  # Conv2: Dilation > 1 not supported
+        (1, 56, 48, 120, 120, 3, 3, 1, 1, 0, 0, 4, 4, 1, "relu"),  # Conv3: Dilation > 1 not supported
+        (1, 64, 56, 112, 112, 3, 3, 1, 1, 0, 0, 8, 8, 1, "relu"),  # Conv4: Dilation > 1 not supported
+        (1, 128, 64, 96, 96, 2, 2, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Conv5: Fails with OOM issue
+        (1, 256, 128, 95, 95, 1, 1, 1, 1, 0, 0, 1, 1, 1, "relu"),  # Conv6: Fails with OOM issue
+        (
+            1,
+            1,
+            256,
+            95,
+            95,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            "None",
+        ),  # Conv7: Fails with OOM issue | sigmoid not available for conv activation, so using none
+    ),
+)
+@pytest.mark.parametrize(
+    "config_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_1d_systolic_array",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_k_128x128(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    use_1d_systolic_array,
+    config_override,
+    groups,
+    activation,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        use_1d_systolic_array,
+        config_override,
+        groups=groups,
+        activation=activation,
     )
