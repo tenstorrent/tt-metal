@@ -270,7 +270,6 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         );
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
-
     if (program_cache_hit) {
         ZoneScopedN("Validate on Program Cache Hit");
         device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
