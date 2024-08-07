@@ -885,4 +885,8 @@ op_map = {
         "tt_op": ttnn_ops.erfinv_bw,
         "pytorch_op": pytorch_ops.erfinv_bw,
     },
+    "expm1-bw": {
+        "tt_op": ttnn_ops.expm1_bw,
+        "pytorch_op": pytorch_ops.expm1_bw,
+    },
 }
