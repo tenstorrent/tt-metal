@@ -220,17 +220,9 @@ inline void log_operation(
     tt::log_debug(
         tt::LogOp, "Launching Operation: \"{}\" ({})", tt::stl::get_type_name<device_operation_t>(), OPERATION_TYPE);
 
-    if (reflect::size(operation_attributes) > 0) {
-        tt::log_debug(tt::LogOp, "Attributes:");
-        reflect::for_each(
-            [&operation_attributes](auto I) {
-                tt::log_debug(
-                    tt::LogOp,
-                    "\t{} = {}",
-                    reflect::member_name<I>(operation_attributes),
-                    reflect::get<I>(operation_attributes));
-            },
-            operation_attributes);
+    tt::log_debug(tt::LogOp, "Attributes:");
+    for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+        tt::log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
     tt::log_debug(tt::LogOp, "Tensors Args:");
@@ -339,6 +331,42 @@ typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t ind
 // TODO: support all output types
 static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
     return create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
+}
+
+static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
+    auto& first_shard = output_shards[0];
+
+    std::vector<Tensor> output;
+    output.reserve(first_shard.size());
+
+    for (auto index = 0; index < first_shard.size(); index++) {
+        std::vector<Tensor> tensors;
+        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
+            tensors.push_back(output_shards[shard_index][index]);
+        }
+        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
+    }
+    return output;
+}
+
+static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(auto& old_storage, std::vector<std::vector<std::optional<Tensor>>>& output_shards) {
+    auto& first_shard = output_shards[0];
+
+    std::vector<std::optional<Tensor>> output;
+    output.reserve(first_shard.size());
+
+    for (auto index = 0; index < first_shard.size(); index++) {
+        if (not first_shard[index].has_value()) {
+            output.push_back(std::nullopt);
+            continue;
+        }
+        std::vector<Tensor> tensors;
+        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
+            tensors.push_back(output_shards[shard_index][index].value());
+        }
+        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
+    }
+    return output;
 }
 
 template <DeviceOperationConcept device_operation_t>

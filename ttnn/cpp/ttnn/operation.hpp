@@ -370,11 +370,6 @@ constexpr bool is_device_operation() {
     return implements_create_program<T>() or implements_create_program_with_optional_input_tensors<T>();
 }
 
-template <class T>
-constexpr bool is_host_operation() {
-    return not is_device_operation<T>();
-}
-
 template <class T, class... Args>
 using has_get_parallelization_strategy_t =
     decltype(std::declval<T>().get_parallelization_strategy(std::declval<Args>()...));
@@ -385,68 +380,6 @@ constexpr bool implements_get_parallelization_strategy() {
 }
 
 }  // namespace detail
-
-template <class OutputTensorsT = Tensors>
-struct HostOperation final {
-    using storage_t = std::array<std::byte, 512>;
-    using OutputTensors = OutputTensorsT;
-
-    // Methods
-    const std::function<const std::string()> get_type_name;
-    const std::function<void(const Tensors&)> validate;
-    const std::function<const std::vector<Shape>(const Tensors&)> compute_output_shapes;
-    const std::function<const OutputTensors(const Tensors&)> compute_output_tensors;
-    const std::function<const ProfilerInfo(const Tensors& input_tensors)> create_profiler_info;
-    const std::function<const tt::stl::reflection::Attributes()> attributes;
-
-    template <typename T>
-    explicit HostOperation(T&& operation) :
-
-        pointer{new(&type_erased_storage) std::decay_t<T>{std::forward<T>(operation)}},
-
-        delete_storage{[](storage_t& self) {
-            using Type = std::decay_t<T>;
-            reinterpret_cast<Type*>(&self)->~Type();
-        }},
-
-        // Initialize methods
-        get_type_name{[]() -> const std::string { return std::string(tt::stl::get_type_name<T>()); }},
-        validate{[this](const Tensors& input_tensors) {
-            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
-            operation.validate(input_tensors);
-        }},
-        compute_output_shapes{[this](const Tensors& input_tensors) {
-            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
-            return operation.compute_output_shapes(input_tensors);
-        }},
-        compute_output_tensors{[this](const Tensors& input_tensors) {
-            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
-            return operation.compute_output_tensors(input_tensors);
-        }},
-        create_profiler_info{[this](const Tensors& input_tensors) -> ProfilerInfo {
-            std::optional<std::string> preferred_name = this->get_type_name();
-            std::optional<std::string> parallelization_strategy = std::nullopt;
-            return {.preferred_name = preferred_name, .parallelization_strategy = parallelization_strategy};
-        }},
-        attributes{[this] {
-            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
-            return tt::stl::reflection::get_attributes(operation);
-        }} {
-        static_assert(sizeof(T) <= sizeof(storage_t));
-    }
-
-    HostOperation(const HostOperation&) = delete;
-    HostOperation& operator=(const HostOperation&) = delete;
-
-    HostOperation(HostOperation&&) = delete;
-    HostOperation& operator=(HostOperation&&) = delete;
-
-   private:
-    alignas(32) void* pointer = nullptr;
-    alignas(32) storage_t type_erased_storage;
-
-    void (*delete_storage)(storage_t&) = nullptr;
-};
 
 template <class OutputTensorsT = Tensors>
 struct DeviceOperation final {
@@ -863,8 +796,6 @@ using ProgramWithCallbacks = CacheableProgram<Tensors>;
 using ProgramWithOptionalOutputTensors = CacheableProgram<OptionalTensors>;
 
 using Operation = std::variant<
-    HostOperation<Tensors>,
-    HostOperation<OptionalTensors>,
     DeviceOperation<Tensors>,
     DeviceOperation<OptionalTensors>,
     ExternalOperation>;

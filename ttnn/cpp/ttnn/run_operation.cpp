@@ -14,6 +14,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/config.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace tt::tt_metal {
     std::atomic<uint32_t> operation_id_atomic_count = 0;
@@ -97,189 +98,119 @@ template void override_addresses<OptionalTensors>(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& output_tensors);
 
-template <typename Function>
-constexpr auto decorate_host_operation(const Function& function) {
-    return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
-        log_operation(operation, args...);
-        auto output_tensors = function(operation, args...);
-        return output_tensors;
+
+
+template<typename OutputTensors>
+struct OldInfraDeviceOperation {
+
+    using operation_attributes_t = operation::DeviceOperation<OutputTensors>;
+
+    struct tensor_args_t {
+        const operation::Tensors input_tensors;
+        const operation::OptionalConstTensors optional_input_tensors;
+        const operation::OptionalTensors optional_output_tensors;
     };
-}
 
-template <typename Function>
-constexpr auto decorate_device_operation(const Function& function) {
-    return [function]<typename Operation, typename... Tensors>(
-               std::reference_wrapper<CommandQueue> queue,
-               Operation&& operation,
-               Tensors&&... tensors) {
-        log_operation(operation, tensors...);
-        auto output_tensors = function(queue, std::move(operation), tensors...);
-        return output_tensors;
-    };
-}
+    using shape_return_value_t = std::vector<tt::tt_metal::Shape>;
 
-template <typename OutputTensors>
-OutputTensors run_host_operation(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
-    ZoneScopedN("TT_DNN_HOST_OP");
-    uint32_t op_id = assign_operation_id();
+    using tensor_return_value_t = OutputTensors;
 
-    operation.validate(input_tensors);
-    auto output_tensors = operation.compute_output_tensors(input_tensors);
+    struct ProgramFactory {
+        struct shared_variables_t {
+            std::optional<operation::OverrideAddressesCallback>  override_addresses_callback;
+            std::optional<operation::OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors);
-
-    return output_tensors;
-}
-
-template Tensors run_host_operation(const HostOperation<Tensors>& operation, const Tensors& input_tensors);
-template OptionalTensors run_host_operation(
-    const HostOperation<OptionalTensors>& operation, const Tensors& input_tensors);
-
-inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-
-template <typename OutputTensors>
-OutputTensors run_device_operation(
-    std::reference_wrapper<CommandQueue> queue,
-    DeviceOperation<OutputTensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    uint32_t op_id = assign_operation_id();
-
-    auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
-
-    auto device = detail::get_device(input_tensors, optional_input_tensors);
-    device->push_work([op_id, operation = std::move(operation), input_tensors, optional_input_tensors, output_tensors, optional_output_tensors, device, queue] mutable {
-        ZoneScopedN("TT_DNN_DEVICE_OP");
-        std::function<std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>(
-            const DeviceOperation<OutputTensors>&,
-            const Tensors&,
-            const OptionalConstTensors&,
-            OutputTensors&,
-            const OptionalTensors&)>
-            get_or_create_program;
-
-        auto& program_cache = input_tensors[0].device()->program_cache;
-
-        tt::stl::hash::hash_t program_hash = 0;
-        if (program_cache.is_enabled()) {
-            get_or_create_program = [&program_cache, &program_hash](
-                                        const DeviceOperation<OutputTensors>& operation,
-                                        const Tensors& input_tensors,
-                                        const OptionalConstTensors& optional_input_tensors,
-                                        OutputTensors& output_tensors,
-                                        const OptionalTensors& optional_output_tensors) -> std::reference_wrapper<Program> {
-                program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-                auto cache_hit = program_cache.contains(program_hash);
-
-                log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, cache_hit ? "HIT" : "MISS");
-
-                if (not cache_hit or operation.uses_custom_program_hash()) {
-                    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
-                }
-
-                if (not cache_hit) {
-                    program_cache.insert(
-                        program_hash, operation.create_program(input_tensors, optional_input_tensors, output_tensors));
-                }
-                auto& program_with_callbacks = program_cache.get<operation::CacheableProgram<OutputTensors>>(program_hash);
-                TT_ASSERT(program_with_callbacks.supports_program_cache());
-
-                if (cache_hit) {
-                    ZoneScopedN("Cache_hit_set_runtime_args");
-                    if (program_with_callbacks.override_addresses_callback.has_value()) {
-                        auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
-                        // Deprecated
-                        override_addresses(
-                            override_addresses_callback,
-                            program_with_callbacks.program,
-                            input_tensors,
-                            optional_input_tensors,
-                            output_tensors);
-                    }
-
-                    if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-                        auto override_runtime_arguments_callback =
-                            program_with_callbacks.override_runtime_arguments_callback.value();
-                        operation.override_runtime_arguments(
-                            override_runtime_arguments_callback,
-                            program_with_callbacks.program,
-                            input_tensors,
-                            optional_input_tensors,
-                            output_tensors);
-                    }
-                }
-                return program_with_callbacks.program;
-            };
-        } else {
-            get_or_create_program = [](const DeviceOperation<OutputTensors>& operation,
-                                    const Tensors& input_tensors,
-                                    const OptionalConstTensors& optional_input_tensors,
-                                    OutputTensors& output_tensors,
-                                    const OptionalTensors& optional_output_tensors) -> std::shared_ptr<Program> {
-                operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
-                auto program_with_callbacks =
-                    operation.create_program(input_tensors, optional_input_tensors, output_tensors);
-                return std::make_shared<Program>(std::move(program_with_callbacks.program));
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto program_with_callbacks = operation_attributes.create_program(
+                tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+            return cached_program_t{
+                std::move(program_with_callbacks.program),
+                shared_variables_t{
+                    program_with_callbacks.override_addresses_callback,
+                    program_with_callbacks.override_runtime_arguments_callback}
             };
         }
 
-        auto program = get_or_create_program(
-            operation, input_tensors, optional_input_tensors, output_tensors, optional_output_tensors);
-        uint32_t device_id = device->id();
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
+            auto& override_runtime_arguments_callback = cached_program.shared_variables.override_runtime_arguments_callback;
+            auto& program = cached_program.program;
 
-        // Enqueue or Launch Program
-        std::visit(
-            [&operation, &input_tensors, &optional_input_tensors, &output_tensors, queue, device](auto&& program) {
-                using T = std::decay_t<decltype(program)>;
-                if constexpr (
-                    std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>>) {
-                    if (USE_FAST_DISPATCH) {
-                        EnqueueProgram(queue, program, false);
-                    } else {
-                        ::detail::LaunchProgram(device, program);
-                    }
-                }
-            },
-            program);
+            if (override_addresses_callback.has_value()) {
+                // Deprecated
+                override_addresses(
+                    override_addresses_callback.value(),
+                    program,
+                    tensor_args.input_tensors,
+                    tensor_args.optional_input_tensors,
+                    tensor_return_value);
+            }
 
-        TracyOpTTNNDevice(
-            op_id,
-            program_hash,
-            program_cache.is_enabled(),
-            device_id,
-            operation,
-            program,
-            input_tensors,
-            optional_input_tensors,
-            output_tensors);
-    });
+            if (override_runtime_arguments_callback.has_value()) {
+                operation_attributes.override_runtime_arguments(
+                    override_runtime_arguments_callback.value(),
+                    program,
+                    tensor_args.input_tensors,
+                    tensor_args.optional_input_tensors,
+                    tensor_return_value);
+            }
+        }
+    };
 
-    return output_tensors;
-}
+    using program_factory_t = std::variant<ProgramFactory>;
 
-template Tensors run_device_operation(
-    std::reference_wrapper<CommandQueue> queue,
-    DeviceOperation<Tensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    // Mandatory methods
 
-template OptionalTensors run_device_operation(
-    std::reference_wrapper<CommandQueue> queue,
-    DeviceOperation<OptionalTensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    // Select the program factory based on the operation attributes and tensor args
+    static program_factory_t select_program_factory(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        return ProgramFactory{};
+    }
+
+    // Validate the operation when it creates a program. Usually will have more checks
+    static void validate_on_program_cache_miss(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        attributes.validate(tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_args.optional_output_tensors);
+    }
+
+    // Validate the operation when it reuses a program. Usually will have less checks
+    static void validate_on_program_cache_hit(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        validate_on_program_cache_miss(attributes, tensor_args);
+    }
+
+    // Compute the output shapes based on the operation attributes and tensor args
+    static shape_return_value_t compute_output_shapes(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        return attributes.compute_output_shapes(tensor_args.input_tensors);
+    }
+
+    // Create the output tensors based on the operation attributes and tensor args
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        return attributes.create_output_tensors(tensor_args.input_tensors, tensor_args.optional_output_tensors);
+    }
+
+     static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        return attributes.compute_program_hash(tensor_args.input_tensors, tensor_args.optional_input_tensors);
+    }
+
+    static operation::OpPerformanceModel create_op_performance_model(
+        const operation_attributes_t& attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value) {
+        return attributes.create_op_performance_model(tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+    }
+};
+
 
 }  // namespace detail
 
-template <class OutputTensors>
-OutputTensors run(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
-    return detail::decorate_host_operation(detail::run_host_operation<OutputTensors>)(operation, input_tensors);
-}
-template Tensors run(const HostOperation<Tensors>& operation, const Tensors& input_tensors);
-template OptionalTensors run(const HostOperation<OptionalTensors>& operation, const Tensors& input_tensors);
 
 template <class OutputTensors>
 OutputTensors run(
@@ -288,16 +219,11 @@ OutputTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
-    auto device = detail::get_device(input_tensors, optional_input_tensors);
-#ifdef DEBUG
-    detail::validate_op_launch(device);
-#endif
-    return detail::decorate_device_operation(detail::run_device_operation<OutputTensors>)(
-        std::ref(device->command_queue(cq_id)),
-        operation,
-        input_tensors,
-        optional_input_tensors,
-        optional_output_tensors);
+
+    return ttnn::device_operation::run<detail::OldInfraDeviceOperation<OutputTensors>>(
+        cq_id,
+        typename detail::OldInfraDeviceOperation<OutputTensors>::operation_attributes_t{std::move(operation)},
+        typename detail::OldInfraDeviceOperation<OutputTensors>::tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors});
 }
 
 template Tensors run(

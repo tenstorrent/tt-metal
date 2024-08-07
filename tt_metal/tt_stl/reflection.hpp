@@ -112,7 +112,7 @@ using AttributeName = std::string;
 
 struct Attribute final {
     static constexpr std::size_t ALIGNMENT = 32;
-    using storage_t = std::array<std::byte, 256>;
+    using storage_t = std::array<std::byte, 1312>;
 
     const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
     const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
@@ -282,7 +282,7 @@ Attributes get_attributes(const T& object) {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return attributes;
-    } else {
+    } else if constexpr (tt::stl::concepts::Reflectable<std::decay_t<T>>) {
         tt::stl::reflection::Attributes attributes;
         reflect::for_each(
             [&object, &attributes](auto I) {
@@ -292,6 +292,8 @@ Attributes get_attributes(const T& object) {
             },
             object);
         return attributes;
+    } else {
+        return object.attributes();
     }
 }
 

@@ -301,18 +301,6 @@ inline std::string op_meta_data_serialized_json(
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"], ser);
 }
 
-template <typename OutputTensors, template <typename> typename HostOperationType>
-inline std::string op_meta_data_serialized_json(
-    uint32_t opID,
-    const HostOperationType<OutputTensors>& op,
-    const std::vector<Tensor>& input_tensors,
-    OutputTensors& output_tensors) {
-    auto j = get_base_json(opID, op, input_tensors, output_tensors);
-    j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_cpu);
-    std::string ser = j.dump(4);
-    return fmt::format("`TT_DNN_HOST_OP:{} ->\n{}`", j["op_code"], ser);
-}
-
 template <typename OutputTensors, template <typename> typename DeviceOperationType>
 inline std::string op_meta_data_serialized_json(
     uint32_t opID,
