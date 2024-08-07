@@ -102,8 +102,16 @@ Tensor convert_torch_tensor_to_tt_tensor(
         }
     }
 
-    auto on_creation_callback = [tensor = contiguous_torch_tensor] { tensor.inc_ref(); };
-    auto on_destruction_callback = [tensor = contiguous_torch_tensor] { tensor.dec_ref(); };
+    auto on_creation_callback = [tensor = contiguous_torch_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.inc_ref();
+        py::gil_scoped_release release;
+    };
+    auto on_destruction_callback = [tensor = contiguous_torch_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.dec_ref();
+        py::gil_scoped_release release;
+    };
 
     auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
     auto torch_data_ptr = py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")());
@@ -270,9 +278,16 @@ Tensor convert_numpy_tensor_to_tt_tensor(
             break;
         }
     }
-
-    auto on_creation_callback = [tensor = contiguous_np_tensor] { tensor.inc_ref(); };
-    auto on_destruction_callback = [tensor = contiguous_np_tensor] { tensor.dec_ref(); };
+    auto on_creation_callback = [tensor = contiguous_np_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.inc_ref();
+        py::gil_scoped_release release;
+    };
+    auto on_destruction_callback = [tensor = contiguous_np_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.dec_ref();
+        py::gil_scoped_release release;
+    };
 
     auto num_elements = py::cast<std::size_t>(contiguous_np_tensor.attr("size"));
     auto np_data_ptr = py::cast<std::size_t>(

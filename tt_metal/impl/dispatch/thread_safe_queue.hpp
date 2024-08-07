@@ -2,77 +2,65 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
+#include <condition_variable>
 #include <mutex>
-#include <thread>
 #include <queue>
+#include <thread>
 
+namespace tt {
+namespace tt_metal {
+
+// A threadsafe-queue.
 template <class T>
-class TSQueue {
-    public:
-        TSQueue();
-        TSQueue(uint32_t capacity);
+class thread_safe_queue_t {
+    std::queue<T> queue;
+    mutable std::mutex mutex;
+    std::condition_variable condition_variable;
 
-        void push(T e);
-        T peek();
-        void pop();
+   public:
+    thread_safe_queue_t() : queue{}, mutex{}, condition_variable{} {}
 
-        size_t size();
-        std::queue<T> q;
-        std::condition_variable empty_condition;
-        std::condition_variable full_condition;
-        uint32_t capacity;
+    thread_safe_queue_t(const thread_safe_queue_t& other) = delete;
+    thread_safe_queue_t& operator=(const thread_safe_queue_t&& other) = delete;
 
-    private:
-        std::mutex m;
+    thread_safe_queue_t(thread_safe_queue_t&& other) {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue = std::move(other.queue);
+    }
+
+    thread_safe_queue_t& operator=(thread_safe_queue_t&& other) {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue = std::move(other.queue);
+        return *this;
+    }
+
+    void emplace_back(T&& element) {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue.emplace(element);
+        condition_variable.notify_one();
+    }
+
+    T pop_front(void) {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (queue.empty()) {
+            condition_variable.wait(lock);
+        }
+        T element = queue.front();
+        queue.pop();
+        return element;
+    }
+
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return this->queue.empty();
+    }
+
+    std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return this->queue.size();
+    }
 };
-
-
-template <class T>
-TSQueue<T>::TSQueue(uint32_t capacity) {
-    this->q = std::queue<T>();
-    this->capacity = capacity;
-}
-
-template <class T>
-TSQueue<T>::TSQueue() {
-    this->q = std::queue<T>();
-    this->capacity = 100;
-}
-
-template <class T>
-void TSQueue<T>::push(T t) {
-
-    std::unique_lock<std::mutex> lock(this->m);
-
-    this->full_condition.wait(lock, [this]() { return this->q.size() < this->capacity; });
-
-    this->q.push(t);
-
-    this->empty_condition.notify_one();
-}
-
-template <class T>
-T TSQueue<T>::peek() {
-    std::unique_lock<std::mutex> lock(this->m);
-
-    this->empty_condition.wait(lock, [this]() { return !this->q.empty(); });
-
-    T t = this->q.front();
-
-    this->full_condition.notify_one();
-    return t;
-}
-
-template <class T>
-void TSQueue<T>::pop() {
-    std::unique_lock<std::mutex> lock(this->m);
-
-    this->empty_condition.wait(lock, [this]() { return !this->q.empty(); });
-
-    this->q.pop();
-
-    this->full_condition.notify_one();
-}
-
-template <class T>
-size_t TSQueue<T>::size() { return this->q.size(); }
+}  // namespace tt_metal
+}  // namespace tt

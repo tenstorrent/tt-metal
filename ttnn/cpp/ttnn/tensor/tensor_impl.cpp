@@ -184,14 +184,14 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    const MemoryConfig& memory_config) {
+    const MemoryConfig& memory_config, bool allocate) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
+    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, std::nullopt, allocate);
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
-    uint32_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
+    uint32_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config, bool allocate) {
+    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes,  memory_config.buffer_type, memory_config.memory_layout, std::nullopt, allocate);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
@@ -201,13 +201,13 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     DataType data_type,
     Layout layout,
     const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config) {
+    const MemoryConfig& memory_config, bool allocate) {
     validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config);
     const auto& page_shape = shard_params.page_shape;
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape);
 
     return std::make_shared<Buffer>(
-        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
+        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params, allocate);
 }
 
 }  // namespace detail
@@ -219,16 +219,17 @@ DeviceBuffer allocate_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec) {
+    const std::optional<ShardSpecBuffer>& shard_spec,
+    bool allocate) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return detail::allocate_interleaved_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, memory_config, allocate);
     } else if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::SINGLE_BANK) {
-        return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
+        return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config, allocate);
     } else {
         TT_ASSERT(memory_config.is_sharded() && "Incorrect Memory Layout");
         return detail::allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, allocate);
     }
 }
 

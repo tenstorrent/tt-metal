@@ -179,6 +179,9 @@ class Buffer {
 
     void set_address(uint64_t addr) { address_ = addr; }
 
+    void set_is_allocated(bool is_allocated) { this->is_allocated_ = is_allocated; }
+    bool get_is_allocated() const { return this->is_allocated_; }
+
     uint32_t page_size() const { return page_size_; }
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
@@ -245,11 +248,11 @@ class Buffer {
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
-
-   private:
     virtual void allocate();
 
     virtual void deallocate();
+
+   private:
     friend void DeallocateBuffer(Buffer &buffer);
 
     uint64_t translate_page_address(uint64_t offset, uint32_t bank_id) const;
@@ -261,6 +264,7 @@ class Buffer {
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
+    bool is_allocated_;
 };
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);

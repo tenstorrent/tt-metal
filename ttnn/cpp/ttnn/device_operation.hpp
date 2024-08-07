@@ -88,6 +88,7 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
 
+namespace detail {
 template <typename... Ts>
 [[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
@@ -172,9 +173,16 @@ inline auto& create_or_get_program_from_cache(
     }
 }
 
-constexpr auto check_tensor_types = [](auto&& tensor) {
-    static_assert(std::same_as<std::decay_t<decltype(tensor)>, Tensor>);
+constexpr auto allocate_device_buffer = [](auto&& tensor) {
+    std::cout << "\tAllocating device buffer" << std::endl;
+    auto device_buffer = tensor.buffer();
+    if (device_buffer->get_is_allocated()) {
+        return;
+    }
+    device_buffer->allocate();
+    std::cout << "\tAllocated device buffer" << std::endl;
 };
+
 
 #ifdef DEBUG
 
@@ -253,73 +261,168 @@ inline void log_operation(
     bool program_cache_hit) {}
 #endif
 
+
+
+template <DeviceOperationConcept device_operation_t>
+void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
+    device->work_executor_v2.push_work(
+        [cq_id, operation_id, operation_attributes, tensor_args, tensor_return_value, device]() mutable {
+            ZoneScopedN("TT_DNN_DEVICE_OP");
+            tt::stl::reflection::visit_object_of_type<Tensor>(allocate_device_buffer, tensor_return_value);
+
+            std::cout << "\tRunning operation: " << tt::stl::get_type_name<device_operation_t>() << std::endl;
+
+            auto& program_cache = device->program_cache;
+
+            auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+            auto program_cache_hit = program_cache.contains(program_hash);
+
+            log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
+
+            if (program_cache_hit) {
+                ZoneScopedN("Validate on Program Cache Hit");
+                device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+            } else {
+                ZoneScopedN("Validate on Program Cache Miss");
+                device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+            }
+
+            auto& program = create_or_get_program_from_cache<device_operation_t>(
+                program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
+
+            if (USE_FAST_DISPATCH) {
+                ZoneScopedN("EnqueueProgram");
+                auto& queue = device->command_queue(cq_id);
+                // Program will temporarily own the input buffers. This is required, since with Async command
+                // queues, the input tensor can preemptively be deallocted on device, unless program maintains
+                // explicit ownership. This invocation of the program wicll give up ownership once its enqueued.
+                auto assign_global_buffer_to_program = [&program](auto&& tensor) {
+                    AssignGlobalBufferToProgram(tensor.device_buffer(), program);
+                };
+                tt::stl::reflection::visit_object_of_type<Tensor>(assign_global_buffer_to_program, tensor_args);
+                tt::tt_metal::EnqueueProgram(queue, program, false);
+            } else {
+                ZoneScopedN("LaunchProgram");
+                ::detail::LaunchProgram(device, program);
+            }
+
+            TracyOpTNNNDeviceV2(
+                device_operation_t{},
+                operation_id,
+                device->id(),
+                program,
+                program_hash,
+                operation_attributes,
+                tensor_args,
+                tensor_return_value);
+
+            std::cout << "\tFinished running operation: " << tt::stl::get_type_name<device_operation_t>() << std::endl;
+        });
+}
+
+template <DeviceOperationConcept device_operation_t>
+typename device_operation_t::tensor_return_value_t launch_on_single_device(
+    uint8_t cq_id,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN("Launch Device Operation");
+    std::cout << "Launching operation on single device" << std::endl;
+    auto operation_id = assign_operation_id();
+
+    // Create output tensor first
+    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
+    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
+    launch_on_worker_thread<device_operation_t>(cq_id, operation_id, operation_attributes, tensor_args, tensor_return_value, device);
+    return tensor_return_value;
+}
+
+template <DeviceOperationConcept device_operation_t>
+typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
+    auto get_shard = [device](const auto& tensor) {
+        auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
+        return Tensor{
+            DeviceStorage{storage.get_buffer_for_device(device)},
+            storage.get_tensor_shape_for_device(device),
+            tensor.get_dtype(),
+            tensor.get_layout()};
+    };
+    return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
+}
+
+// TODO: support all output types
+static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
+    return create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
+}
+
+template <DeviceOperationConcept device_operation_t>
+typename device_operation_t::tensor_return_value_t launch_on_multi_device(
+    uint8_t cq_id,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN("Launch Multi Device Operation");
+
+    using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
+
+    // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
+    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(first_tensor.get_storage());
+    using storage_t = std::remove_cvref_t<decltype(storage)>;
+
+    auto num_shards = storage.num_buffers();
+
+    std::vector<std::shared_future<tensor_return_value_t>> shard_futures;
+    shard_futures.reserve(num_shards);
+
+    // Launch each shard
+    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
+        shard_futures.emplace_back(
+            std::async(
+                std::launch::async,
+                [cq_id, &operation_attributes, &tensor_args, shard_index, &storage]() mutable {
+                    auto device = storage.get_buffer_for_device_id(shard_index)->device();
+                    auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
+                    return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
+                }));
+    }
+
+    // Combine shards into a multi-device storage
+    std::vector<tensor_return_value_t> outputs;
+    for (auto& shard_future : shard_futures) {
+        outputs.push_back(shard_future.get());
+    }
+    return make_tensor_return_value_from_shards(storage, outputs);
+}
+
+}  // namespace detail
+
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t run(
     uint8_t cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("TT_DNN_DEVICE_OP");
-    auto operation_id = assign_operation_id();
-
-    tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_args);
+    ZoneScopedN("Run Device Operation");
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
 
-    // TODO: support the case when tensor args are empty? Or add an overload for that case?
-    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
-    auto& program_cache = device->program_cache;
+    // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
+    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    const auto& storage = first_tensor.get_storage();
 
-    auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
-    auto program_cache_hit = program_cache.contains(program_hash);
-
-    log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
-
-    if (program_cache_hit) {
-        ZoneScopedN("Validate on Program Cache Hit");
-        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
-    } else {
-        ZoneScopedN("Validate on Program Cache Miss");
-        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-    }
-    auto tensor_return_value = [&operation_attributes, &tensor_args]() {
-        ZoneScopedN("Create Output Tensors");
-        return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-    }();
-
-    tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_return_value);
-
-    auto& program = create_or_get_program_from_cache<device_operation_t>(
-        program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
-
-    if (USE_FAST_DISPATCH) {
-        ZoneScopedN("EnqueueProgram");
-        auto& queue = device->command_queue(cq_id);
-        // Program will temporarily own the input buffers. This is required, since with Async command
-        // queues, the input tensor can preemptively be deallocted on device, unless program maintains
-        // explicit ownership. This invocation of the program wicll give up ownership once its enqueued.
-        auto assign_global_buffer_to_program = [&program](auto&& tensor) {
-            AssignGlobalBufferToProgram(tensor.device_buffer(), program);
-        };
-        tt::stl::reflection::visit_object_of_type<Tensor>(assign_global_buffer_to_program, tensor_args);
-        tt::tt_metal::EnqueueProgram(queue, program, false);
-    } else {
-        ZoneScopedN("LaunchProgram");
-        ::detail::LaunchProgram(device, program);
-    }
-
-    // TODO: update this to work properly take program cache info, as well as tensors
-    TracyOpTNNNDeviceV2(
-        device_operation_t{},
-        operation_id,
-        device->id(),
-        program,
-        program_hash,
-        operation_attributes,
-        tensor_args,
-        tensor_return_value);
-
-    return tensor_return_value;
+    return std::visit(
+        [&cq_id, &operation_attributes, &tensor_args](auto&& storage) -> tensor_return_value_t {
+            using storage_t = std::remove_cvref_t<decltype(storage)>;
+            if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
+                return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+            } else if constexpr (std::is_same_v<storage_t, tt::tt_metal::MultiDeviceStorage>) {
+                return detail::launch_on_multi_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+            }
+            else {
+                TT_THROW("Unsupported storage type");
+            }
+        },
+        storage);
 }
 
 }  // namespace device_operation

@@ -113,63 +113,59 @@ struct RelationalBinary {
 }  // binary
 }  // operations
 
-constexpr auto add = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add = ttnn::register_operation<
     "ttnn::add",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
-constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add_ = ttnn::register_operation<
     "ttnn::add_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>();
-constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subtract = ttnn::register_operation<
     "ttnn::subtract",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>();
-constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subtract_ = ttnn::register_operation<
     "ttnn::subtract_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>();
-constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
+constexpr auto multiply = ttnn::register_operation<
     "ttnn::multiply",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, false>>();
-constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto multiply_ = ttnn::register_operation<
     "ttnn::multiply_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, true>>();
 
-constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::eq",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>();
-constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::ne",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>();
-constexpr auto ge = ttnn::register_operation_with_auto_launch_op<
+constexpr auto eq = ttnn::
+    register_operation<"ttnn::eq", operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>();
+constexpr auto ne = ttnn::
+    register_operation<"ttnn::ne", operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>();
+constexpr auto ge = ttnn::register_operation<
     "ttnn::ge",
     operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE, false>>();
-constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::gt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>();
-constexpr auto le = ttnn::register_operation_with_auto_launch_op<
+constexpr auto gt = ttnn::
+    register_operation<"ttnn::gt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>();
+constexpr auto le = ttnn::register_operation<
     "ttnn::le",
     operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE, false>>();
-constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::lt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>();
-constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lt = ttnn::
+    register_operation<"ttnn::lt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>();
+constexpr auto logical_and = ttnn::register_operation<
     "ttnn::logical_and",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND, false>>();
-constexpr auto logical_or = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_or = ttnn::register_operation<
     "ttnn::logical_or",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_OR, false>>();
-constexpr auto ldexp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto ldexp = ttnn::register_operation<
     "ttnn::ldexp",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP, false>>();
 
-constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp = ttnn::register_operation<
     "ttnn::logaddexp",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP, false>>();
-constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp2 = ttnn::register_operation<
     "ttnn::logaddexp2",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2, false>>();
-constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op<
+constexpr auto squared_difference = ttnn::register_operation<
     "ttnn::squared_difference",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>();
-constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
+constexpr auto divide = ttnn::register_operation<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
 
