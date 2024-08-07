@@ -31,16 +31,27 @@ TEST_F(GalaxyFixture, ValidateNumLinksBetweenAdjacentGalaxyChips) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id))
         {
-            const std::unordered_set<chip_id_t>& connected_device_ids = tt::Cluster::instance().get_ethernet_connected_device_ids(device_id);
-            for (const chip_id_t connected_device_id : connected_device_ids)
+            std::unordered_map<chip_id_t, uint32_t> connected_devices_to_num_links_found;
+            const std::unordered_set<CoreCoord>& active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+            for (const CoreCoord& ethernet_core : active_ethernet_cores)
             {
-                if (!is_galaxy_device(connected_device_id))
-                {
+                const auto [connected_device_id, _] = tt::Cluster::instance().get_connected_ethernet_core({device_id, ethernet_core});
+
+                if (!is_galaxy_device(connected_device_id)) {
                     continue;
                 }
-                const std::vector<CoreCoord>& ethernet_sockets = tt::Cluster::instance().get_ethernet_sockets(device_id, connected_device_id);
-                const uint32_t num_links = ethernet_sockets.size();
-                ASSERT_TRUE(num_links == 4) << "Detected " << num_links << " links between chip " << device_id << " and chip " << connected_device_id << std::endl;
+
+                if (!connected_devices_to_num_links_found.contains(connected_device_id))
+                {
+                    connected_devices_to_num_links_found[connected_device_id] = 0;
+                }
+                connected_devices_to_num_links_found[connected_device_id]++;
+            }
+
+            for (const auto [connected_device_id, num_links_found] : connected_devices_to_num_links_found)
+            {
+                ASSERT_TRUE(num_links_found == 4) << "Detected " << num_links_found << " links between chip " << device_id
+                                                  << " and chip " << connected_device_id << std::endl;
             }
         }
     }
@@ -64,20 +75,24 @@ TEST_F(GalaxyFixture, ValidateLinksBetweenMMIOAndGalaxyChips) {
                 }
                 num_mmio_chips_that_curr_chip_is_linked_to++;
             }
-            ASSERT_TRUE(num_mmio_chips_that_curr_chip_is_linked_to <= 1) << "Detected " << num_mmio_chips_that_curr_chip_is_linked_to << " MMIO chips that chip " << device_id << " is linked to" << std::endl;
-        }
-        else
-        {
+            ASSERT_TRUE(num_mmio_chips_that_curr_chip_is_linked_to <= 1)
+                << "Detected " << num_mmio_chips_that_curr_chip_is_linked_to << " MMIO chips that chip " << device_id
+                << " is linked to" << std::endl;
+        } else {
             const uint32_t num_chips_that_curr_chip_is_linked_to = connected_device_ids.size();
             const bool do_both_links_go_to_separate_devices = num_chips_that_curr_chip_is_linked_to == 2;
-            ASSERT_TRUE(do_both_links_go_to_separate_devices) << "Detected " << num_chips_that_curr_chip_is_linked_to << " chips that chip " << device_id << " is linked to" << std::endl;
+            ASSERT_TRUE(do_both_links_go_to_separate_devices)
+                << "Detected " << num_chips_that_curr_chip_is_linked_to << " chips that chip " << device_id
+                << " is linked to" << std::endl;
 
             bool do_both_links_go_to_galaxy_devices = true;
             for (const chip_id_t connected_device_id : connected_device_ids)
             {
                 do_both_links_go_to_galaxy_devices = do_both_links_go_to_galaxy_devices && is_galaxy_device(connected_device_id);
             }
-            ASSERT_TRUE(do_both_links_go_to_galaxy_devices) << "Detected links from chip " << device_id << " to chip " << *(connected_device_ids.begin()) << " and chip " << *(++connected_device_ids.begin()) << std::endl;
+            ASSERT_TRUE(do_both_links_go_to_galaxy_devices)
+                << "Detected links from chip " << device_id << " to chip " << *(connected_device_ids.begin())
+                << " and chip " << *(++connected_device_ids.begin()) << std::endl;
         }
     }
 }
