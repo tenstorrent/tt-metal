@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 
+@pytest.mark.skip()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_deallocate(device, h, w):

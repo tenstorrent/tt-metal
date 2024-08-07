@@ -1914,11 +1914,11 @@ void Device::clear_device(){
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     // After device close, no buffers on this device should be used
-    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
-        if (std::get<0>(buf_attr) == this->id()) {
-            DeallocateBuffer(*buf);
-        }
-    }
+    // for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
+    //     if (std::get<0>(buf_attr) == this->id()) {
+    //         DeallocateBuffer(*buf);
+    //     }
+    // }
 }
 
 bool Device::close() {
@@ -1988,12 +1988,12 @@ bool Device::close() {
 
     // tt::Cluster::instance().l1_barrier(id_);
     // allocator::clear(*this->allocator_);
-    // // After device close, no buffers on this device should be used
-    // for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
-    //     if (std::get<0>(buf_attr) == this->id()) {
-    //         DeallocateBuffer(*buf);
-    //     }
-    // }
+    // After device close, no buffers on this device should be used
+    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
+        if (std::get<0>(buf_attr) == this->id()) {
+            DeallocateBuffer(*buf);
+        }
+    }
 
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
