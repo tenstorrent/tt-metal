@@ -63,6 +63,9 @@ def gen_func_with_cast_tt(gen_func, dtype):
         elif dtype == ttl.tensor.DataType.UINT32:
             x = x.to(torch.int32)
 
+        elif dtype == ttl.tensor.DataType.INT32:
+            x = x.to(torch.int32)
+
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")
 
