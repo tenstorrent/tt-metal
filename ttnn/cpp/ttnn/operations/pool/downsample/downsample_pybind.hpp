@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "pybind11/pybind_fwd.hpp"
 
 namespace py = pybind11;
 
