@@ -707,10 +707,15 @@ class resnet50:
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         unpadded_shape = x.shape_without_padding()
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
+            output_tensor_end=(
+                unpadded_shape[0] - 1,
+                unpadded_shape[1] - 1,
+                unpadded_shape[2] - 1,
+                unpadded_shape[3] - 1,
+            ),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         x = ttnn.reshape(
             x,
@@ -765,8 +770,8 @@ class resnet50:
             1 - 1,
             x.get_legacy_shape()[3] - 1,
         ]
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x, unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        x = ttnn.untilize_with_unpadding(
+            x, output_tensor_end=unpadded_shape_end, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
@@ -792,10 +797,10 @@ class resnet50:
         x = self.fc(x)
         desired_shape = list(x.shape_without_padding())
         desired_shape[-1] = 1000
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
+            output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         x = ttnn.reshape(
             x,
@@ -909,10 +914,15 @@ class resnet50:
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         unpadded_shape = x.shape_without_padding()
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
+            output_tensor_end=(
+                unpadded_shape[0] - 1,
+                unpadded_shape[1] - 1,
+                unpadded_shape[2] - 1,
+                unpadded_shape[3] - 1,
+            ),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         x = ttnn.reshape(
@@ -968,8 +978,8 @@ class resnet50:
             1 - 1,
             x.get_legacy_shape()[3] - 1,
         ]
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x, unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        x = ttnn.untilize_with_unpadding(
+            x, output_tensor_end=unpadded_shape_end, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
@@ -995,10 +1005,10 @@ class resnet50:
         x = self.fc(x)
         desired_shape = list(x.shape_without_padding())
         desired_shape[-1] = 1000
-        x = ttnn.experimental.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
-            ttnn.L1_MEMORY_CONFIG,
+            output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         x = ttnn.reshape(
             x,

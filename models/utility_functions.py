@@ -209,7 +209,7 @@ def tt_tensors_to_torch_tensors(tt_tensors_device):
                 )
         # Untilize using singlecore since multicore version runs out of l1 memory (TODO: change when multicore untilize is fixed)
         for i in range(len(tt_tensors_device)):
-            tt_tensors_device[i] = tt_lib.tensor.untilize(tt_tensors_device[i], use_multicore=False)
+            tt_tensors_device[i] = ttnn.untilize(tt_tensors_device[i], use_multicore=False)
 
     # Issue non-blocking reads across all devices. This allows for reads across devices to overlap
     tensors_on_host = [tt_tensor_device.cpu(False) for tt_tensor_device in tt_tensors_device]
@@ -990,7 +990,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
 
         logger.info("Going to run conv on tt device")
         if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = tt_lib.tensor.untilize(x)
+            x = ttnn.untilize(x)
         else:
             x_padded_shape = list(x.get_legacy_shape())
             x_padded_shape[-1] = roundup(x.get_legacy_shape()[-1], 16)
