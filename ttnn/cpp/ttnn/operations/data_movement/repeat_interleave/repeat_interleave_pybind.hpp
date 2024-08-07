@@ -18,7 +18,7 @@ namespace py = pybind11;
 
 void bind_repeat_interleave(py::module& module) {
     auto doc =
-    R"doc(repeat_interleave(input_tensor: ttnn.Tensor, repeats : int, dim: int = 0) -> ttnn.Tensor
+    R"doc(repeat_interleave(input_tensor: ttnn.Tensor, repeats : int, dim: int = 0, memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
 
         Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
 
@@ -26,6 +26,9 @@ void bind_repeat_interleave(py::module& module) {
             * :attr:`input_tensor`: the input_tensor to apply the repeate interleave operation.
             * :attr:`repeats`: The number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
             * :attr:`dim`: the dimension to expand with the repetitions.
+
+        Keyword Args:
+                * :attr:`memory_config`: Memory Config of the output tensor
 
         Example:
 
