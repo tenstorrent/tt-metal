@@ -9,9 +9,9 @@ from typing import Optional, Tuple
 
 from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
 import ttnn
+from ttnn import ReplicateTensorToMesh
 
 from models.utility_functions import (
-    pad_by_zero,
     nearest_32,
     is_wormhole_b0,
 )
@@ -92,7 +92,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -108,8 +108,7 @@ class TtFalconAttentionPrefill(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.devices = devices
-        self.num_devices = len(devices)
+        self.device_mesh = device_mesh
         self.state_dict = state_dict
         self.model_config = model_config
         self.padded_local_heads = nearest_32(num_heads)
@@ -125,7 +124,7 @@ class TtFalconAttentionPrefill(nn.Module):
         selfout_str = f"{layer_name}.dense.weight"
 
         self.query_key_value_weights = get_weights_cached(
-            devices,
+            device_mesh,
             model_config,
             tt_cache_path,
             query_key_value_str,
@@ -134,7 +133,7 @@ class TtFalconAttentionPrefill(nn.Module):
             weights_dict=weights_dict,
         )
         self.dense_weights = get_weights_cached(
-            devices,
+            device_mesh,
             model_config,
             tt_cache_path,
             selfout_str,
@@ -144,7 +143,7 @@ class TtFalconAttentionPrefill(nn.Module):
         )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            self.devices,
+            device_mesh,
             self.head_dim,
             base_url,
             layer_num,
@@ -153,14 +152,7 @@ class TtFalconAttentionPrefill(nn.Module):
             tt_cache_path=tt_cache_path,
         )
 
-        scale = 1 / math.sqrt(self.head_dim)
-        self.scalar = []
-        for device in self.devices:
-            self.scalar.append(pad_by_zero(torch.Tensor([scale]), device)[0])
-
-        # optimized version can utilize single float value for softmax
-        if self.model_config["PREFILL_OPTIMIZED_MODE"]:
-            self.scalar_for_optimized_prefill = 1 / math.sqrt(self.head_dim)
+        self.scalar = 1 / math.sqrt(self.head_dim)
 
         # generate output buffer on device
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and "ATTN_OUTPUT_TENSORS" not in self.model_config:
@@ -169,12 +161,13 @@ class TtFalconAttentionPrefill(nn.Module):
             for seq_len in [128, 1024, 2048]:
                 tensor = torch.zeros((1, self.num_heads, seq_len, self.head_dim)).bfloat16().float()
 
-                tt_tensors = torch_tensors_to_tt_tensors(
-                    [tensor.detach().clone() for _ in range(self.num_devices)],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    ttnn.experimental.tensor.DataType.BFLOAT16,
-                    self.model_config["ATTN_OPTIMIZED_MEMCFG"],
-                    self.devices,
+                tt_tensors = ttnn.from_torch(
+                    tensor.detach(),
+                    ttnn.bfloat16,
+                    device=self.device_mesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=self.model_config["ATTN_OPTIMIZED_MEMCFG"],
+                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 )
                 self.model_config["ATTN_OUTPUT_TENSORS"][seq_len] = tt_tensors
 
@@ -195,7 +188,7 @@ class TtFalconAttentionPrefill(nn.Module):
         """
         assert not output_attentions
 
-        seq_len = hidden_states[0].get_legacy_shape()[2]
+        seq_len = hidden_states.get_legacy_shape()[2]
 
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [128, 1024, 2048]:
             attn_output, layer_present = self._optimized_forward(
@@ -210,31 +203,22 @@ class TtFalconAttentionPrefill(nn.Module):
         #################
         ### FUSED QKV ###
         #################
-        fused_query_key_value = []
-        for i in range(self.num_devices):
-            fused_query_key_value.append(
-                ttnn.matmul(
-                    hidden_states[i],
-                    self.query_key_value_weights[i],
-                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    core_grid=get_falcon_default_core_grid(hidden_states[i].device()),
-                )
-            )
+        fused_query_key_value = ttnn.matmul(
+            hidden_states,
+            self.query_key_value_weights,
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+            core_grid=get_falcon_default_core_grid(hidden_states.device()),
+        )
 
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = [], [], []
-        for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
-                fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
-            )
-            fused_query_key_value[i].deallocate()
-            query_layer.append(query_layer_i)
-            key_layer.append(key_layer_i)
-            value_layer.append(value_layer_i)
+        query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            fused_query_key_value,
+            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+        )
+        fused_query_key_value.deallocate()
 
         #########################
         ### ROTARY EMBEDDINGS ###
@@ -245,105 +229,83 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
-        key_layer_transposed = []
-        for i in range(self.num_devices):
-            key_layer_transposed.append(
-                ttnn.transpose(
-                    key_layer[i],
-                    -2,
-                    -1,
-                    memory_config=(
-                        self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
-                        if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
-                        else ttnn.experimental.tensor.MemoryConfig(
-                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                            ttnn.experimental.tensor.BufferType.L1,
-                        )
-                    ),
-                ),
-            )
-            key_layer[i].deallocate()
-
-        attn_weights = []
-        for i in range(self.num_devices):
-            attn_weights.append(
-                ttnn.matmul(
-                    query_layer[i],
-                    key_layer_transposed[i],
-                    memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+        key_layer_transposed = ttnn.transpose(
+            key_layer,
+            -2,
+            -1,
+            memory_config=(
+                self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
+                if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
+                else ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.experimental.tensor.BufferType.L1,
                 )
-            )
-            query_layer[i].deallocate()
-            key_layer_transposed[i].deallocate()
+            ),
+        )
+        key_layer.deallocate()
 
-        for i in range(self.num_devices):
-            attn_weights[i] = ttnn.experimental.tensor.bcast(
-                attn_weights[i],
-                self.scalar[i],
-                ttnn.experimental.tensor.BcastOpMath.MUL,
-                ttnn.experimental.tensor.BcastOpDim.HW,
-                output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
-            )
+        attn_weights = ttnn.matmul(
+            query_layer,
+            key_layer_transposed,
+            memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+        )
+        query_layer.deallocate()
+        key_layer_transposed.deallocate()
+
+        attn_weights = ttnn.mul(
+            attn_weights, self.scalar, memory_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"]
+        )
 
         if attention_mask is not None:
-            for i in range(self.num_devices):
-                attn_weights[i] = ttnn.add(
-                    attn_weights[i],
-                    attention_mask[i],
-                    memory_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
-                )
+            attn_weights = ttnn.add(
+                attn_weights,
+                attention_mask,
+                memory_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+            )
+
         ###############
         ### SOFTMAX ###
         ###############
-        for i in range(self.num_devices):
-            attn_weights[i] = ttnn.scale_mask_softmax_in_place(attn_weights[i])
+        attn_weights = ttnn.scale_mask_softmax_in_place(attn_weights)
 
         ######################
         ### V CACHE UPDATE ###
         ######################
-        for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][1], value_layer[i], user_id)
+        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
         ########################
         ### POST-SOFTMAX MM ###
         ########################
-        attn_output = []
-        for i in range(self.num_devices):
-            attn_output.append(
-                ttnn.matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                )
-            )
-            attn_weights[i].deallocate()
-            value_layer[i].deallocate()
+        attn_output = ttnn.matmul(
+            attn_weights,
+            value_layer,
+            memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+        )
+        attn_weights.deallocate()
+        value_layer.deallocate()
 
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
-                attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-            )
+        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output,
+            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+        )
 
-        for i in range(self.num_devices):
-            attn_output[i] = ttnn.matmul(
-                attn_output[i],
-                self.dense_weights[i],
-                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-                core_grid=get_falcon_default_core_grid(attn_output[i].device()),
-            )
+        attn_output = ttnn.matmul(
+            attn_output,
+            self.dense_weights,
+            memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            core_grid=get_falcon_default_core_grid(attn_output.device()),
+        )
 
         return attn_output, layer_present
 
@@ -355,49 +317,38 @@ class TtFalconAttentionPrefill(nn.Module):
         layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
-        seq_len = hidden_states[0].get_legacy_shape()[2]
+        seq_len = hidden_states.get_legacy_shape()[2]
 
         #################
         ### FUSED QKV ###
         #################
         if seq_len == 2048:
-            fused_query_key_value = [
-                ttnn.matmul(
-                    hidden_states[device_id],
-                    self.query_key_value_weights[device_id],
-                    program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
-                    memory_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"],
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
-                    compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
-                )
-                for device_id in range(self.num_devices)
-            ]
+            fused_query_key_value = ttnn.matmul(
+                hidden_states,
+                self.query_key_value_weights,
+                program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
+                memory_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"],
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
+            )
         else:
-            fused_query_key_value = [
-                ttnn.matmul(
-                    hidden_states[device_id],
-                    self.query_key_value_weights[device_id],
-                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
-                    core_grid=ttnn.CoreGrid(y=7, x=8),
-                )
-                for device_id in range(self.num_devices)
-            ]
+            fused_query_key_value = ttnn.matmul(
+                hidden_states,
+                self.query_key_value_weights,
+                memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
+                core_grid=ttnn.CoreGrid(y=7, x=8),
+            )
 
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = [], [], []
-        for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
-                fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
-            )
-            fused_query_key_value[i].deallocate()
-            query_layer.append(query_layer_i)
-            key_layer.append(key_layer_i)
-            value_layer.append(value_layer_i)
+        query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            fused_query_key_value,
+            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+        )
+        fused_query_key_value.deallocate()
 
         #########################
         ### ROTARY EMBEDDINGS ###
@@ -408,23 +359,19 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
-        key_layer_transposed = []
-        for i in range(self.num_devices):
-            key_layer_transposed.append(
-                ttnn.transpose(
-                    key_layer[i],
-                    -2,
-                    -1,
-                    memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-                )
-            )
-            key_layer[i].deallocate()
+
+        key_layer_transposed = ttnn.transpose(
+            key_layer,
+            -2,
+            -1,
+            memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+        )
+        key_layer.deallocate()
 
         grid_size = self.model_config["ATTN_OPTIMIZED_GRID_SIZE"]
         allowed_num_cores = self.model_config["ATTN_OPTIMIZED_ALLOWED_NUM_CORES"]
@@ -439,18 +386,15 @@ class TtFalconAttentionPrefill(nn.Module):
 
         # Slice inputs and operate on each slice separately
         for i in range(num_slices):
-            slices = [
-                ttnn.experimental.tensor.interleaved_to_sharded_partial(
-                    query_layer[device_id],
-                    grid_size,
-                    mm_activations_height_shard_spec,
-                    num_slices,  # num_slices
-                    i,  # slice_index
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                )
-                for device_id in range(self.num_devices)
-            ]
+            slices = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                query_layer,
+                grid_size,
+                mm_activations_height_shard_spec,
+                num_slices,  # num_slices
+                i,  # slice_index
+                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            )
 
             subblock_h = 1
             subblock_w = 1
@@ -460,84 +404,66 @@ class TtFalconAttentionPrefill(nn.Module):
             qkt_prg_cfg = self.model_config["QKT_OPTIMIZED_PROGCFG"](tiles_per_shard, seq_len, subblock_h, subblock_w)
 
             ### QKT MATMUL ###
-            mm_slices = [
-                ttnn.matmul(
-                    slices[device_id],
-                    key_layer_transposed[device_id],
-                    program_config=qkt_prg_cfg,
-                    memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
-                    compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
-                )
-                for device_id in range(self.num_devices)
-            ]
+            mm_slices = ttnn.matmul(
+                slices,
+                key_layer_transposed,
+                program_config=qkt_prg_cfg,
+                memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
+            )
 
             softmax_program_config = self.model_config["SOFTMAX_OPTIMIZED_PROGCFG"](
                 grid_size, subblock_w, mm_output_height_shard_spec[0] // 32, mm_output_height_shard_spec[1] // 32
             )
             ### SOFTMAX ###
-            mm_slices = [
-                ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                    mm_slices[device_id],
-                    self.scalar_for_optimized_prefill,
-                    attention_mask[device_id][i],
-                    program_config=softmax_program_config,
-                    compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
-                )
-                for device_id in range(self.num_devices)
-            ]
+            mm_slices = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
+                mm_slices,
+                self.scalar,
+                attention_mask[i],
+                program_config=softmax_program_config,
+                compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
+            )
 
             ### QKTV MATMUL ###
             qktv_prg_cfg = self.model_config["QKTV_MM_OPTIMIZED_PROGCFG"](tiles_per_shard, seq_len, subblock_h)
-            attn_out_slices = [
-                ttnn.matmul(
-                    mm_slices[device_id],
-                    value_layer[device_id],
-                    program_config=qktv_prg_cfg,
-                    memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
-                    compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
-                )
-                for device_id in range(self.num_devices)
-            ]
+            attn_out_slices = ttnn.matmul(
+                mm_slices,
+                value_layer,
+                program_config=qktv_prg_cfg,
+                memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
+            )
 
-            for device_id in range(self.num_devices):
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
-                    attn_out_slices[device_id],
-                    attention_outputs_concatenated[device_id],
-                    num_slices,
-                    i,
-                    self.model_config["ATTN_OPTIMIZED_MEMCFG"],
-                )
-            for device_id in range(self.num_devices):
-                attn_out_slices[device_id].deallocate(True)
-                mm_slices[device_id].deallocate(True)
-                slices[device_id].deallocate(True)
+            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                attn_out_slices,
+                attention_outputs_concatenated,
+                num_slices,
+                i,
+                self.model_config["ATTN_OPTIMIZED_MEMCFG"],
+            )
+            attn_out_slices.deallocate(True)
+            mm_slices.deallocate(True)
+            slices.deallocate(True)
 
         # V cache update
-        for device_id in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[device_id][1], value_layer[device_id], user_id)
+        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
-        attn_outputs = [
-            ttnn.experimental.tensor.nlp_concat_heads(
-                attention_outputs_concatenated[device_id],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-            )
-            for device_id in range(self.num_devices)
-        ]
-        attn_outputs = [
-            ttnn.matmul(
-                attn_outputs[device_id],
-                self.dense_weights[device_id],
-                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["SELFOUT_MM_OPTIMIZED_KERNEL_CONFIG"],
-                core_grid=ttnn.CoreGrid(y=7, x=8),
-            )
-            for device_id in range(self.num_devices)
-        ]
+        attn_outputs = ttnn.experimental.tensor.nlp_concat_heads(
+            attention_outputs_concatenated,
+            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+        )
+        attn_outputs = ttnn.matmul(
+            attn_outputs,
+            self.dense_weights,
+            memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["SELFOUT_MM_OPTIMIZED_KERNEL_CONFIG"],
+            core_grid=ttnn.CoreGrid(y=7, x=8),
+        )
 
         return attn_outputs, layer_present
 

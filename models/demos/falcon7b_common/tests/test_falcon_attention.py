@@ -182,6 +182,9 @@ def test_FalconAttention_inference(
     device_mesh,
     async_mode,
 ):
+    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+        pytest.skip(f"prefill does not support L1_SHARDED")
+
     for device in device_mesh.get_devices():
         device.enable_async(async_mode)
 

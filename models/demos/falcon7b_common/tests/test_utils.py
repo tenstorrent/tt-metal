@@ -182,6 +182,7 @@ def get_rand_falcon_inputs(
                 )
                 device_shard_dim = 2
             else:
+                # Reshape width to tile-size since that is required by scale_mask_softmax_in_place with causal_mask=False (in falcon_attention.py)
                 attention_mask_bool_padded = attention_mask_bool_padded.reshape(global_batch, 1, -1, 32) * -100000
                 device_shard_dim = 0
             tt_attention_mask = ttnn.from_torch(
