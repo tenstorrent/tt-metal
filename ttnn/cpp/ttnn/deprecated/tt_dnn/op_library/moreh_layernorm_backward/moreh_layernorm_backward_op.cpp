@@ -179,9 +179,7 @@ Tensor moreh_layernorm_backward_input_grad(
     auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))};
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [normalized_dims, memory_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -195,7 +193,6 @@ Tensor moreh_layernorm_backward_input_grad(
                 optional_output_tensors);
         },
         {output_grad, input, mean, rstd},
-        output_tensors,
         {gamma},
         {input_grad});
 
@@ -223,15 +220,8 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
         return outputs;
     }
 
-    std::vector<Tensor> dummy_output_tensors = {};
-    if (gamma_grad.has_value()) {
-        dummy_output_tensors.push_back(Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {})));
-    }
 
-    if (gamma_grad.has_value()) {
-        dummy_output_tensors.push_back(Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {})));
-    }
-
+    const std::vector<std::optional<const Tensor>> optional_input_tensors;
     operation::launch_op(
         [normalized_dims, memory_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
@@ -246,8 +236,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
                 optional_output_tensors);
         },
         {output_grad, input, mean, rstd},
-        dummy_output_tensors,
-        {},
+        optional_input_tensors,
         {gamma_grad, beta_grad});
 
     if (gamma_grad.has_value()) {

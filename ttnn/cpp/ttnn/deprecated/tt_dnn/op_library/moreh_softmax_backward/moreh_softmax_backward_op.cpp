@@ -164,10 +164,7 @@ Tensor moreh_softmax_backward(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_tensor, output_grad_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -185,7 +182,6 @@ Tensor moreh_softmax_backward(
                 optional_output_tensors);
         },
         {output_tensor, output_grad_tensor},
-        output_tensors,
         {},
         {input_grad_tensor});
 
@@ -207,10 +203,7 @@ Tensor moreh_softmin_backward(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_tensor, output_grad_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -228,7 +221,6 @@ Tensor moreh_softmin_backward(
                 optional_output_tensors);
         },
         {output_tensor, output_grad_tensor},
-        output_tensors,
         {},
         {input_grad_tensor});
 
@@ -250,10 +242,7 @@ Tensor moreh_logsoftmax_backward(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_tensor, output_grad_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -271,7 +260,6 @@ Tensor moreh_logsoftmax_backward(
                 optional_output_tensors);
         },
         {output_tensor, output_grad_tensor},
-        output_tensors,
         {},
         {input_grad_tensor});
 

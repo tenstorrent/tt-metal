@@ -54,8 +54,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
     const int64_t& dim1,
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_with_autoformat(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim1, dim2, memory_config_arg] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& a = input_tensors.at(0);
             auto memory_config = memory_config_arg.value_or(a.memory_config());
@@ -94,7 +93,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
                 TT_ASSERT(false, "Unsupported transpose dims");
             }
             return {detail::transpose_(a, transpose_dim, memory_config)};
-        }, {input_tensor}, output_tensors);
+        }, {input_tensor});
     return output_tensors.at(0);
 
 }

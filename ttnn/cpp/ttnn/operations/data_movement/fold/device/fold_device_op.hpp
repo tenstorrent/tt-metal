@@ -21,7 +21,7 @@ struct Fold {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor;
+        const Tensor input_tensor;
     };
 
     using shape_return_value_t = ttnn::Shape;

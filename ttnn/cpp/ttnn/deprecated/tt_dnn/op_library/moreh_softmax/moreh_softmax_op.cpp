@@ -149,9 +149,7 @@ Tensor moreh_softmax(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -169,7 +167,6 @@ Tensor moreh_softmax(
                 optional_output_tensors);
         },
         {input_tensor},
-        output_tensors,
         {},
         {output_tensor});
 
@@ -190,9 +187,7 @@ Tensor moreh_softmin(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -210,7 +205,6 @@ Tensor moreh_softmin(
                 optional_output_tensors);
         },
         {input_tensor},
-        output_tensors,
         {},
         {output_tensor});
 
@@ -231,9 +225,7 @@ Tensor moreh_logsoftmax(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, all_cores, strategy, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -251,7 +243,6 @@ Tensor moreh_logsoftmax(
                 optional_output_tensors);
         },
         {input_tensor},
-        output_tensors,
         {},
         {output_tensor});
 

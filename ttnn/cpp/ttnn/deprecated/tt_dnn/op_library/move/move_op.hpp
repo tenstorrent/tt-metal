@@ -56,7 +56,8 @@ inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>
         return input_tensor;
     }
 
-    DeallocateBuffer(*input_tensor.buffer());
+
+    const_cast<Tensor&>(input_tensor).deallocate(true);
     auto output_tensor = create_device_tensor(input_tensor.get_legacy_shape(), input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), output_mem_config);
 
     bool tilized = input_tensor.get_layout() == Layout::TILE;
@@ -109,9 +110,8 @@ inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>
 }
 
 inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     bool from_multi_device = is_multi_device_tensor(input_tensor);
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [from_multi_device, mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
@@ -132,7 +132,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
             auto input_dtype = input_tensor.get_dtype();
             auto input_layout = input_tensor.get_layout();
 
-            DeallocateBuffer(*input_tensor.buffer());
+            const_cast<Tensor&>(input_tensor).deallocate(true);
             // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
             auto shard_mem_config = output_mem_config;
             shard_mem_config.shard_spec = shard_spec;
@@ -143,7 +143,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
             }
             MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
             return operation::run(Move{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor});
-        }, {input_tensor}, output_tensors);
+        }, {input_tensor});
     return output_tensors.at(0);
 }
 

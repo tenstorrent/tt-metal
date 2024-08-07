@@ -1,10 +1,9 @@
 set(ALL_TTNN_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operation_history.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.cpp

@@ -16,7 +16,7 @@ namespace ttnn {
 
 AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor) {
     std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
+    std::size_t tensor_size_bytes = input_tensor.shape.volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
     if (perf_degradation_from_full_tensor_mode) {
@@ -149,8 +149,7 @@ Tensor all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, num_links, memory_config, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -177,8 +176,7 @@ Tensor all_gather(
                     dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())},
                 {input_tensor});
         },
-        {input_tensor},
-        output_tensors);
+        {input_tensor});
     return output_tensors.at(0);
 }
 

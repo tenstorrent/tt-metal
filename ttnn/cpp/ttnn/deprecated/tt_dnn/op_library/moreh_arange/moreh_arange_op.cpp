@@ -220,9 +220,7 @@ Tensor moreh_arange(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({any}))};
-
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [start, end, step, untilize_out, output_dtype, all_cores, output_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -242,7 +240,6 @@ Tensor moreh_arange(
                 optional_output_tensors);
         },
         {any},
-        output_tensors,
         {},
         {output_tensor});
 

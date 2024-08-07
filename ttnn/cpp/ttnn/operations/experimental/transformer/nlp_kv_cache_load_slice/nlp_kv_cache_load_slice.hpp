@@ -30,7 +30,7 @@ struct NLPKVCacheLoadSliceOperation {
 
 namespace experimental {
 
-constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation_with_auto_launch_op<
+constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation<
     "ttnn::experimental::nlp_kv_cache_load_slice",
     ttnn::operations::experimental::transformer::NLPKVCacheLoadSliceOperation>();
 

@@ -9,6 +9,7 @@
 
 #include "hostdevcommon/common_values.hpp"
 #include "impl/dispatch/work_executor.hpp"
+#include "impl/dispatch/work_executor_v2.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
@@ -239,8 +240,8 @@ class Device {
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
+
     void push_work(std::function<void()>&& work, bool blocking = false);
-    void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);
@@ -274,6 +275,7 @@ class Device {
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
     WorkExecutor work_executor;
+    WorkExecutorV2 work_executor_v2;
     uint32_t worker_thread_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_;

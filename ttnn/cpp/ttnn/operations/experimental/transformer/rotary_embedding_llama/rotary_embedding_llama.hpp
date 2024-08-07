@@ -25,7 +25,7 @@ namespace operations::experimental::transformer {
 
 namespace experimental {
 
-constexpr auto rotary_embedding_llama = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rotary_embedding_llama = ttnn::register_operation<
     "ttnn::experimental::rotary_embedding_llama",
     ttnn::operations::experimental::transformer::RotaryEmbeddingLlamaOperation>();
 

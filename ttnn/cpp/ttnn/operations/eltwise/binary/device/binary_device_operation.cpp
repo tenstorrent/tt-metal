@@ -14,8 +14,8 @@ namespace ttnn::operations::binary {
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
-    const auto& input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
-    const auto& input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
+    const auto& input_shape_a = tensor_args.input_tensor_a.shape;
+    const auto& input_shape_b = tensor_args.input_tensor_b.shape;
 
     auto height_a = input_shape_a[-2];
     auto width_a = input_shape_a[-1];
@@ -153,8 +153,8 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
 
 BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
-    const auto input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
+    const auto input_shape_a = tensor_args.input_tensor_a.shape;
+    const auto input_shape_b = tensor_args.input_tensor_b.shape;
 
     auto rank = std::max(input_shape_a.rank(), input_shape_b.rank());
     std::vector<uint32_t> output_shape(rank, 0);
@@ -255,10 +255,11 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     operation::Hash hash = operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),
-        input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
-        input_tensor_b.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config());
+        input_tensor_a.shape,
+        input_tensor_a.dtype,
+        std::get<DeviceStorage>(input_tensor_a.storage).memory_config(),
+        input_tensor_b.dtype,
+        std::get<DeviceStorage>(input_tensor_b.storage).memory_config());
     return hash;
 }
 
@@ -306,7 +307,6 @@ std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation:
             output_dtype.value() == optional_output_tensor.value().get_dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
-
     return {
         operation_attributes_t{
             binary_op_type,

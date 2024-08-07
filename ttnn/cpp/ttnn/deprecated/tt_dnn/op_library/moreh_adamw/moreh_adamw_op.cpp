@@ -156,14 +156,8 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
-        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in}))
-        };
 
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [lr, beta1, beta2, eps, weight_decay, step, amsgrad, all_cores, mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -185,7 +179,6 @@ std::vector<std::optional<Tensor>> moreh_adamw(
                 optional_output_tensors);
         },
         {param_in, grad, exp_avg_in, exp_avg_sq_in},
-        output_tensors,
         {max_exp_avg_sq_in},
         {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out});
 

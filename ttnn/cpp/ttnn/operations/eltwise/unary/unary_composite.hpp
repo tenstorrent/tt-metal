@@ -171,141 +171,141 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
             original_shape);                                                                           \
     })
 
-constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
+constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
+constexpr auto pow = ttnn::register_operation<
     "ttnn::pow",
     operations::unary::ExecutePower>();
-constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
+constexpr auto tanhshrink = ttnn::register_operation<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
-constexpr auto deg2rad = ttnn::register_operation_with_auto_launch_op<
+constexpr auto deg2rad = ttnn::register_operation<
     "ttnn::deg2rad",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>();
-constexpr auto rad2deg = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rad2deg = ttnn::register_operation<
     "ttnn::rad2deg",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>();
-constexpr auto acosh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto acosh = ttnn::register_operation<
     "ttnn::acosh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>();
-constexpr auto asinh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto asinh = ttnn::register_operation<
     "ttnn::asinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ASINH>>();
-constexpr auto atanh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto atanh = ttnn::register_operation<
     "ttnn::atanh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ATANH>>();
-constexpr auto cbrt = ttnn::register_operation_with_auto_launch_op<
+constexpr auto cbrt = ttnn::register_operation<
     "ttnn::cbrt",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
-constexpr auto cosh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto cosh = ttnn::register_operation<
     "ttnn::cosh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
-constexpr auto digamma = ttnn::register_operation_with_auto_launch_op<
+constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
-constexpr auto lgamma = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lgamma = ttnn::register_operation<
     "ttnn::lgamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LGAMMA>>();
-constexpr auto log1p = ttnn::register_operation_with_auto_launch_op<
+constexpr auto log1p = ttnn::register_operation<
     "ttnn::log1p",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
-constexpr auto mish = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mish = ttnn::register_operation<
     "ttnn::mish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MISH>>();
-constexpr auto multigammaln = ttnn::register_operation_with_auto_launch_op<
+constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
-constexpr auto sinh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sinh = ttnn::register_operation<
     "ttnn::sinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
-constexpr auto softsign = ttnn::register_operation_with_auto_launch_op<
+constexpr auto softsign = ttnn::register_operation<
     "ttnn::softsign",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
-constexpr auto swish = ttnn::register_operation_with_auto_launch_op<
+constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
-constexpr auto trunc = ttnn::register_operation_with_auto_launch_op<
+constexpr auto trunc = ttnn::register_operation<
     "ttnn::trunc",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TRUNC>>();
-constexpr auto var_hw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto var_hw = ttnn::register_operation<
     "ttnn::var_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>();
-constexpr auto std_hw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto std_hw = ttnn::register_operation<
     "ttnn::std_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>>();
-constexpr auto normalize_hw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto normalize_hw = ttnn::register_operation<
     "ttnn::normalize_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
 
-constexpr auto hardswish = ttnn::register_operation_with_auto_launch_op<
+constexpr auto hardswish = ttnn::register_operation<
     "ttnn::hardswish",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
-constexpr auto hardsigmoid = ttnn::register_operation_with_auto_launch_op<
+constexpr auto hardsigmoid = ttnn::register_operation<
     "ttnn::hardsigmoid",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>();
 
-constexpr auto hardtanh = ttnn::register_operation_with_auto_launch_op<
+constexpr auto hardtanh = ttnn::register_operation<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
-constexpr auto clip = ttnn::register_operation_with_auto_launch_op<
+constexpr auto clip = ttnn::register_operation<
     "ttnn::clip",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::CLIP>>();
-constexpr auto clamp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto clamp = ttnn::register_operation<
     "ttnn::clamp",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::CLAMP>>();
-constexpr auto selu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto selu = ttnn::register_operation<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
-constexpr auto threshold = ttnn::register_operation_with_auto_launch_op<
+constexpr auto threshold = ttnn::register_operation<
     "ttnn::threshold",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::THRESHOLD>>();
 
-constexpr auto glu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
-constexpr auto reglu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto reglu = ttnn::register_operation<
     "ttnn::reglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>>();
-constexpr auto geglu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto geglu = ttnn::register_operation<
     "ttnn::geglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>>();
-constexpr auto swiglu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto swiglu = ttnn::register_operation<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
-constexpr auto hardshrink = ttnn::register_operation_with_auto_launch_op<
+constexpr auto hardshrink = ttnn::register_operation<
     "ttnn::hardshrink",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>();
-constexpr auto logical_not_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
-constexpr auto softshrink = ttnn::register_operation_with_auto_launch_op<
+constexpr auto softshrink = ttnn::register_operation<
     "ttnn::softshrink",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>();
-constexpr auto logit = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
-constexpr auto celu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto celu = ttnn::register_operation<
     "ttnn::celu",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
-constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
+constexpr auto tril = ttnn::register_operation<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();
-constexpr auto triu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto triu = ttnn::register_operation<
     "ttnn::triu",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIU>>();
-constexpr auto round = ttnn::register_operation_with_auto_launch_op<
+constexpr auto round = ttnn::register_operation<
     "ttnn::round",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::ROUND>>();
-constexpr auto polygamma = ttnn::register_operation_with_auto_launch_op<
+constexpr auto polygamma = ttnn::register_operation<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
-constexpr auto rpow = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rpow = ttnn::register_operation<
     "ttnn::rpow",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::RPOW>>();
-constexpr auto normalize_global = ttnn::register_operation_with_auto_launch_op<
+constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
-constexpr auto frac = ttnn::register_operation_with_auto_launch_op<
+constexpr auto frac = ttnn::register_operation<
     "ttnn::frac",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
 

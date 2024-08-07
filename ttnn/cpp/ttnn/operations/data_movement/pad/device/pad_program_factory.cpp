@@ -975,7 +975,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     Program program{};
 
     auto output_shape = output_tensor_shape;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0];
     uint32_t NCH = H * C * N;
     uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
     uint32_t NCH_padded = H_padded * C_padded * N_padded;
@@ -1099,7 +1099,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        auto output_tensor_shape = dst_tensor.shape();
+        auto output_tensor_shape = dst_tensor.shape;
         uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
         uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
@@ -1131,7 +1131,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     Program program{};
 
     auto output_shape = output_tensor_shape;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0];
     uint32_t total_height = H * C * N;
     uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
     uint32_t total_height_padded = H_padded * C_padded * N_padded;

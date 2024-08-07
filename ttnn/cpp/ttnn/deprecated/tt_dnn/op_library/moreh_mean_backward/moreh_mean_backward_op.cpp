@@ -73,8 +73,6 @@ std::vector<Shape> MorehMeanBackward::compute_output_shapes(const std::vector<Te
 }
 
 Tensor moreh_mean_backward_(const Tensor& output_grad, const Tensor& input_grad) {
-    std::vector<Tensor> dummy_output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_grad, input_grad}))};
 
     operation::launch_op(
         [](const std::vector<Tensor>& input_tensors,
@@ -82,8 +80,7 @@ Tensor moreh_mean_backward_(const Tensor& output_grad, const Tensor& input_grad)
            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(MorehMeanBackward{}, input_tensors, optional_input_tensors, optional_output_tensors);
         },
-        {output_grad, input_grad},
-        dummy_output_tensors);
+        {output_grad, input_grad});
 
     return input_grad;
 }

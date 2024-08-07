@@ -54,8 +54,7 @@ struct make_layernorm_pre_allgather {
         const Tensor& a,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const DataType output_dtype = DataType::BFLOAT16) const {
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a}))};
-        operation::launch_op(
+        auto output_tensors = operation::launch_op(
             [compute_kernel_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 const auto& a = input_tensors.at(0);
                 auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
@@ -66,7 +65,7 @@ struct make_layernorm_pre_allgather {
                             .compute_kernel_config = kernel_config_val,
                             .output_dtype = output_dtype},
                         {a});
-            }, {a}, output_tensors);
+            }, {a});
         return output_tensors.at(0);
     }
 };

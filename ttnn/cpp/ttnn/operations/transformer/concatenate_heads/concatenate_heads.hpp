@@ -14,7 +14,7 @@ struct ExecuteConcatenateHeads {
 }
 
 namespace transformer {
-constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
+constexpr auto concatenate_heads = ttnn::register_operation<
     "ttnn::transformer::concatenate_heads",
     ttnn::operations::transformer::ExecuteConcatenateHeads>();
 

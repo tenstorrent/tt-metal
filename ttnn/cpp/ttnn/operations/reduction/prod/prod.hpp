@@ -29,6 +29,6 @@ namespace operations::reduction {
 
 } // namespace operations::reduction
 
-constexpr auto prod = ttnn::register_operation_with_auto_launch_op<"ttnn::prod", ttnn::operations::reduction::ProdOperation>();
+constexpr auto prod = ttnn::register_operation<"ttnn::prod", ttnn::operations::reduction::ProdOperation>();
 
 } // namespace ttnn

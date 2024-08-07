@@ -43,8 +43,7 @@ struct AttnMatmul {
 };
 
 inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
@@ -52,7 +51,7 @@ inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tens
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
             return operation::run(AttnMatmul{std::nullopt, std::nullopt, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b});
         },
-    {input_tensor_a, input_tensor_b}, output_tensors);
+    {input_tensor_a, input_tensor_b});
     return output_tensors.at(0);
 }
 
@@ -85,8 +84,7 @@ struct GroupAttnMatmul {
 };
 
 inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
@@ -122,7 +120,7 @@ inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &inpu
 
             return operation::run(GroupAttnMatmul{std::nullopt, std::nullopt, out_subblock_w, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), row_major, kernel_config_val}, {input_tensor_a, input_tensor_b});
         },
-    {input_tensor_a, input_tensor_b}, output_tensors);
+    {input_tensor_a, input_tensor_b});
     return output_tensors.at(0);
 }
 
@@ -139,12 +137,11 @@ struct SSM1DSumReduce {
 };
 
 inline Tensor ssm_1d_sum_reduce(const Tensor &input_tensor_a, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [mem_config, output_dtype, math_fidelity] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             return operation::run(SSM1DSumReduce{mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), math_fidelity}, input_tensors);
-        }, {input_tensor_a}, output_tensors);
+        }, {input_tensor_a});
     return output_tensors.at(0);
 }
 

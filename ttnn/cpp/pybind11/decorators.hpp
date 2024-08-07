@@ -132,11 +132,10 @@ void def_primitive_operation_method(py_operation_t& py_operation, const pybind_o
 template <
     reflect::fixed_string cpp_fully_qualified_name,
     typename operation_t,
-    bool auto_launch_op,
     typename... overload_t>
 auto bind_registered_operation(
     py::module& module,
-    const registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>& operation,
+    const registered_operation_t<cpp_fully_qualified_name, operation_t>& operation,
     const std::string& doc,
     overload_t&&... overloads) {
     using registered_operation_t = std::decay_t<decltype(operation)>;

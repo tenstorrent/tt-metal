@@ -387,7 +387,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0];
     uint32_t NCH = N * C * H;
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
@@ -541,7 +541,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
 
-        uint32_t H = src_tensor.shape()[2], C = src_tensor.shape()[1], N = src_tensor.shape()[0];
+        uint32_t H = src_tensor.shape[2], C = src_tensor.shape[1], N = src_tensor.shape[0];
         uint32_t NCH = N * C * H;
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
@@ -581,7 +581,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
 
     const auto shape = a.get_legacy_shape();
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
 
@@ -936,8 +936,8 @@ std::vector< std::array< std::vector<uint32_t>, 3 > > get_runtime_args_wh_rm(con
                                                         )
 {
 
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.shape;
+    auto output_shape = output_tensor.shape;
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -985,7 +985,7 @@ std::vector< std::array< std::vector<uint32_t>, 3 > > get_runtime_args_wh_rm(con
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output) {
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0], NC = a.shape()[1] * a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0], NC = a.shape[1] * a.shape[0];
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1182,7 +1182,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = num_cores_x*num_cores_y;
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
-        uint32_t NC = src_tensor.shape()[1] * src_tensor.shape()[0];
+        uint32_t NC = src_tensor.shape[1] * src_tensor.shape[0];
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
@@ -1394,7 +1394,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
 
     const auto shape = a.get_legacy_shape();
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.shape[3], H = a.shape[2], C = a.shape[1], N = a.shape[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;

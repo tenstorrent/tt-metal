@@ -2561,6 +2561,7 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
             std::nullopt);
     }
     buffer->set_address(static_cast<uint64_t>(allocated_addr));
+    buffer->set_is_allocated(true);
 }
 
 void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {

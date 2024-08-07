@@ -38,7 +38,7 @@ struct ExecuteUntilizeWithHaloV2 {
 
 }  // namespace operations::data_movement
 
-constexpr auto untilize_with_halo_v2 = ttnn::register_operation_with_auto_launch_op<
+constexpr auto untilize_with_halo_v2 = ttnn::register_operation<
     "ttnn::untilize_with_halo_v2",
     ttnn::operations::data_movement::ExecuteUntilizeWithHaloV2>();
 

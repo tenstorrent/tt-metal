@@ -112,17 +112,17 @@ struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
 }  // namespace operations::normalization
 
 constexpr auto softmax =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::softmax", ttnn::operations::normalization::ExecuteSoftmax>();
-constexpr auto scale_mask_softmax = ttnn::register_operation_with_auto_launch_op<
+    ttnn::register_operation<"ttnn::softmax", ttnn::operations::normalization::ExecuteSoftmax>();
+constexpr auto scale_mask_softmax = ttnn::register_operation<
     "ttnn::scale_mask_softmax",
     ttnn::operations::normalization::ExecuteScaleMaskSoftmax>();
-constexpr auto softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+constexpr auto softmax_in_place = ttnn::register_operation<
     "ttnn::softmax_in_place",
     ttnn::operations::normalization::ExecuteSoftmaxInPlace>();
-constexpr auto scale_mask_softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+constexpr auto scale_mask_softmax_in_place = ttnn::register_operation<
     "ttnn::scale_mask_softmax_in_place",
     ttnn::operations::normalization::ExecuteScaleMaskSoftmaxInPlace>();
-constexpr auto scale_causal_mask_hw_dims_softmax_in_place = ttnn::register_operation_with_auto_launch_op<
+constexpr auto scale_causal_mask_hw_dims_softmax_in_place = ttnn::register_operation<
     "ttnn::scale_causal_mask_hw_dims_softmax_in_place",
     ttnn::operations::normalization::ExecuteScaleCausalMaskHWSoftmaxInPlace>();
 
