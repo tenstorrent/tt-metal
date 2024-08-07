@@ -50,16 +50,16 @@ jobs:
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
   check-yamllint:
-    name: 'Yamllint'
     runs-on: ubuntu-latest
     steps:
-      - name: 'Checkout'
-        uses: actions/checkout@master
-      - name: 'Yamllint'
-        uses: karancode/yamllint-github-action@master
+      - uses: actions/checkout@v4
+      - name: yaml-lint
+        uses: ibiqlik/action-yamllint@v3
         with:
-          yamllint_file_or_dir: TT_METAL_HOME=$(pwd) ./.yamllint.yml
-          yamllint_strict: false
-          yamllint_comment: true
-        env:
-          GITHUB_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          config_file: .yamllint.yml
+        id: yaml-lint
+      - uses: actions/upload-artifact@v2
+        if: always()
+        with:
+          name: yamllint-logfile
+          path: ${{ steps.yaml-lint.outputs.logfile }}
