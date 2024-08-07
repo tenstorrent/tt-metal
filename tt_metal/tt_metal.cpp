@@ -535,7 +535,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {

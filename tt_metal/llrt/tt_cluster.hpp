@@ -18,7 +18,6 @@
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 // clang-format off
-#include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "eth_interface.h"
 #include "dev_msgs.h"
