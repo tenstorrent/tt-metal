@@ -9,13 +9,12 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
 from loguru import logger
 import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
+from ttnn import ShardTensorToMesh
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -46,9 +45,9 @@ parameters = {
 
 
 def skip(
-    *, all_devices, input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, **_
+    *, t3k_device_mesh, input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, **_
 ) -> Tuple[bool, Optional[str]]:
-    if len(all_devices) != 8:
+    if t3k_device_mesh.get_num_devices() != 8:
         return True, "Not T3000!"
     (is_known_failure, message) = is_unsupported_case(
         input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
@@ -62,7 +61,7 @@ def skip(
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 def run(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -75,13 +74,12 @@ def run(
     enable_async,
     num_iters=1,
 ) -> list:
-    for device in all_devices:
+    for device in t3k_device_mesh.get_devices():
         device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
-    devices = get_devices_for_t3000(all_devices, num_devices)
     # for device in devices:
     #    device.disable_and_clear_program_cache()
 
@@ -90,19 +88,14 @@ def run(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         start_time = start_measuring_time()
         tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
         e2e_perf = stop_measuring_time(start_time)
 
-        for d in devices:
-            ttl.device.Synchronize(d)
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
