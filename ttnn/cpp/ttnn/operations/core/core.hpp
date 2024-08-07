@@ -19,10 +19,10 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape);
+ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape, const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 template <std::size_t Rank>
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>& shape) {
+ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>& shape, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
     std::int64_t new_volume = 1;
     std::int64_t index_of_negative_1 = -1;
     for (auto index = 0; index < Rank; ++index) {
@@ -41,7 +41,7 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>
         const auto volume = tensor.get_shape().with_tile_padding().volume();
         new_shape[index_of_negative_1] = volume / (-new_volume);
     }
-    return reshape(tensor, ttnn::Shape(new_shape));
+    return reshape(tensor, ttnn::Shape(new_shape), memory_config);
 }
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);

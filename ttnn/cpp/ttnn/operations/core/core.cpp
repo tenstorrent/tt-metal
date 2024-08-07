@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::core {
 
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape, const std::optional<MemoryConfig>& memory_config) {
     auto tensor_shape = tensor.get_shape();
     if (tensor_shape == shape) {
         return tensor;
