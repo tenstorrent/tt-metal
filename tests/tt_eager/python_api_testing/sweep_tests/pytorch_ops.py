@@ -2300,3 +2300,39 @@ def logaddexp2_bw(x, y, z, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return [in_data.grad, other_data.grad]
+
+
+def erf_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erf(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfc_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfc(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfinv_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfinv(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

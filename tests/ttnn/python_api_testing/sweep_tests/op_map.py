@@ -873,4 +873,16 @@ op_map = {
         "tt_op": ttnn_ops.normalize_hw,
         "pytorch_op": pytorch_ops.normalize_hw,
     },
+    "erf-bw": {
+        "tt_op": ttnn_ops.erf_bw,
+        "pytorch_op": pytorch_ops.erf_bw,
+    },
+    "erfc-bw": {
+        "tt_op": ttnn_ops.erfc_bw,
+        "pytorch_op": pytorch_ops.erfc_bw,
+    },
+    "erfinv-bw": {
+        "tt_op": ttnn_ops.erfinv_bw,
+        "pytorch_op": pytorch_ops.erfinv_bw,
+    },
 }
