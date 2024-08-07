@@ -157,8 +157,15 @@ Tensor line_all_gather(
             TT_ASSERT(selected_view != nullptr, "Device not found in any view");
 
             uint32_t num_devices = selected_view->size();
-            uint32_t receiver_device_id = (*selected_view)[(device_index + 1) % num_devices]->id();
-            uint32_t sender_device_id = (*selected_view)[(device_index + num_devices - 1) % num_devices]->id();
+
+            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+            std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>((*selected_view)[(device_index + 1) % num_devices]->id());
+            std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>((*selected_view)[(device_index + num_devices - 1) % num_devices]->id());
 
             return operation::run(
                 ttnn::LineAllGather{
