@@ -727,8 +727,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
-    model_config["ATTN_MASK_DTYPE"] = BFP4_DTYPE
-
     model_config["WORD_EMBEDDING_OUTPUT_DTYPE"] = BFLOAT16_DTYPE  # embeddings output and the residual stream
 
     # Set input df for AllGathers to bfp8 to save data bandwidth
@@ -736,11 +734,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["ATTENTION_OUT_DTYPE"] = BFP8_DTYPE  # Attention AllGather
     model_config["SELFOUT_MM_OUTPUT_DTYPE"] = BFP8_DTYPE  # AllGather at start of the decoder layer and final AllGather
 
-    head_dim = 64
     hidden_size = model_config_entries["hidden_size"]
-    vocab_size = model_config_entries["vocab_size"]
-    num_attention_heads = model_config_entries["num_attention_heads"]
-    num_kv_heads = model_config_entries["num_kv_heads"]
 
     batch_size, seq_len = input_shape[0], input_shape[1]
     row_height = seq_len
@@ -784,15 +778,10 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
             )
         return attention_mm_grid_size, attn_core_range_set
 
-    # Attetnion in slices: determine number of cores and shard spec
+    # Attention in slices: determine number of cores and shard spec
     attention_max_slice_size = 1024
     attention_slice_size = min(attention_max_slice_size, row_height)
     assert row_height % attention_slice_size == 0
-
-    attention_num_slices = row_height // attention_slice_size
-    attention_num_cores = min(attention_slice_size * 16 // 32, 64)
-
-    attention_mm_grid_size, attn_core_range_set = get_grid_size_and_core_range_based_on_num_cores(attention_num_cores)
 
     # MLP in slices: determine number of cores and shard spec
     use_mm_2d_start = 512
@@ -838,81 +827,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["PARTIAL_LN_INPLACE_PROGCFG"] = layernorm_block_sharded_prg_config_inplace
 
     model_config["layernorm_params"] = layernorm_params
-
-    model_config["attention_params"] = {
-        "attention_slice_size": attention_slice_size,
-        "attention_max_slice_size": attention_max_slice_size,
-        "attention_num_slices": attention_num_slices,
-    }
-
-    # Specify program configs
-    attetnion_mm_M = (
-        attention_slice_size * 16 // attention_num_cores // 32
-    )  # attetnion_slice_size * 16 qheads // attention_num_cores // TILE_SIZE
-
-    # Attention
-    model_config["ATTENTION_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=attention_mm_grid_size,
-        in0_block_w=head_dim // 32,
-        out_subblock_h=1,
-        out_subblock_w=1,  # use 8 for S=2k when hang is fixed
-        per_core_M=attetnion_mm_M,
-        per_core_N=row_height // 32,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-    )
-    model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=attention_mm_grid_size,
-        subblock_w=1,
-        block_h=attetnion_mm_M,
-        block_w=row_height // 32,
-    )
-    model_config["ATTENTION_MM_2_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=attention_mm_grid_size,
-        in0_block_w=row_height // 32,
-        out_subblock_h=1,  # use 4 for S=2k when hang is fixed
-        out_subblock_w=1,  # use 2 for S=2k when hang is fixed
-        per_core_M=attetnion_mm_M,
-        per_core_N=head_dim // 32,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-    )
-    model_config["ATTENTION_DTYPE"] = dtype
-
-    model_config["QUERY_HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            attn_core_range_set,
-            [16 * attention_slice_size // attention_num_cores, head_dim],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
-    model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            attn_core_range_set,
-            [16 * attention_slice_size // attention_num_cores, row_height],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
-    model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            attn_core_range_set,
-            [16 * attention_slice_size // attention_num_cores, head_dim],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
 
     # MLP sharding specs
 
@@ -985,8 +899,15 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
             ),
         )
 
-    # uncomment if need to see all the configs
-    # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
+    # Attention parameters
+    q_chunk_size = min(seq_len, 256)
+    k_chunk_size = min(seq_len, 256)
+
+    model_config["SDPA_PROGCFG"] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[8, 7],
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )
 
     return model_config
 
