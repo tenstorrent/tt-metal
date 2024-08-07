@@ -1,16 +1,7 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
-.github/ @tt-rkim
-
-# T3000 workflows
-.github/workflows/t3000*.yaml @ttmchiou
-
-# TG workflows
-.github/workflows/tg-*.yaml @ttmchiou
-
-# TGG workflows
-.github/workflows/tgg*.yaml @ttmchiou
+.github/ @tt-rkim @ttmchiou @TT-billteng
 
 /infra/ @tt-rkim
 
