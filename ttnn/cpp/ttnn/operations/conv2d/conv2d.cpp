@@ -4,7 +4,7 @@
 
 #include "conv2d.hpp"
 
-#include "ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
+#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
@@ -744,7 +744,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         Tensor matmul_input = input_tensor_post_tm;
         if (stride[0] > 1) {
             // run downsample
-            matmul_input = ttnn::operations::data_movement::downsample(
+            matmul_input = ttnn::operations::downsample::downsample(
                 input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
             if (conv_config.deallocate_activation) {
                 // input_tensor_post_tm.deallocate();
