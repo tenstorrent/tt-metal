@@ -385,4 +385,13 @@ def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.polyval, golden_function=_golden_function_polyval)
 
 
+def _golden_function_ne_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.ne_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ne_, golden_function=_golden_function_ne_)
+
+
 __all__ = []
