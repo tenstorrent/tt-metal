@@ -1101,6 +1101,28 @@ inline hash_t hash_object(const std::reference_wrapper<Ts...>& reference) noexce
     return hash_object(reference.get());
 }
 
+// Specialization for std::unordered_map
+template <typename Key, typename T, typename Hash, typename KeyEqual, typename Allocator>
+inline hash_t hash_object(const std::unordered_map<Key, T, Hash, KeyEqual, Allocator>& umap) {
+    std::size_t hash = 0;
+    for (const auto& pair : umap) {
+        hash ^= hash_object(pair.first) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= hash_object(pair.second) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+// Specialization for std::map
+template <typename Key, typename T, typename KeyEqual, typename Allocator>
+inline hash_t hash_object(const std::map<Key, T, KeyEqual, Allocator>& umap) {
+    std::size_t hash = 0;
+    for (const auto& pair : umap) {
+        hash ^= hash_object(pair.first) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= hash_object(pair.second) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
 template <typename T>
 inline hash_t hash_object(const T& object) noexcept {
     if constexpr (std::numeric_limits<T>::is_integer) {
