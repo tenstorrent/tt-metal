@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "device/halo_device_operation.hpp"
-
-namespace ttnn::operations::sliding_window {
+ #include "ttnn/decorators.hpp"
+ #include "ttnn/operations/sliding_window/sliding_window.hpp"
+namespace ttnn::operations::sliding_window::halo {
 
 // This is the main operation that will be called by the user
 struct HaloOperation {
@@ -19,7 +19,8 @@ struct HaloOperation {
                 bool remote_read = false,
                 bool transpose_mcast = true,
                 uint32_t reshard_num_cores_nhw = 0,
-                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                bool is_out_tiled = true);
 
     // operator() can be overloaded as many times as needed to provide all desired APIs
 };
@@ -30,7 +31,7 @@ namespace ttnn {
 
 // Register the operation. The name, in this case, "ttnn::example" should match the namespace of the operation
 // And the name will be directly mapped to python, where it will become "ttnn.example"
-constexpr auto halo = ttnn::register_operation<"ttnn::halo", operations::sliding_window::HaloOperation>();
+constexpr auto halo = ttnn::register_operation<"ttnn::halo", operations::sliding_window::halo::HaloOperation>();
 
 // Alternatively, the operation can be registered as asynchronous
 // constexpr auto example = ttnn::register_operation_with_auto_launch_op<"ttnn::example", operations::examples::ExampleOperation>();

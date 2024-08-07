@@ -1,7 +1,8 @@
 #include "halo.hpp"
+#include "device/halo_device_operation.hpp"
 namespace ttnn::operations::sliding_window::halo
 {
-    static Tensor HaloOperation::operator()(
+    Tensor HaloOperation::operator()(
                 uint8_t queue_id,
                 const Tensor& input_tensor,
                 const SlidingWindowConfig& config,
@@ -9,7 +10,8 @@ namespace ttnn::operations::sliding_window::halo
                 bool remote_read,
                 bool transpose_mcast,
                 uint32_t reshard_num_cores_nhw,
-                MemoryConfig output_memory_config)
+                MemoryConfig output_memory_config,
+                bool is_out_tiled)
     {
         return halo_op(
             input_tensor,
@@ -18,7 +20,8 @@ namespace ttnn::operations::sliding_window::halo
             remote_read,
             transpose_mcast,
             reshard_num_cores_nhw,
-            output_memory_config);
+            output_memory_config,
+            is_out_tiled);
 
     }
 };

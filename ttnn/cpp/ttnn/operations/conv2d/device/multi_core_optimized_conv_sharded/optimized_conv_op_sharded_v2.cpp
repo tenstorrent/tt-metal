@@ -1725,7 +1725,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     uint32_t stride_w = (uint32_t)conv_params[3];
     uint32_t pad_h = (uint32_t)conv_params[4];
     uint32_t pad_w = (uint32_t)conv_params[5];
-    ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
+    auto sliding_window_config = ttnn::operations::sliding_window::SlidingWindowConfig(
         input_tensor_shape[0],
         input_tensor_shape[1],
         input_tensor_shape[2],
@@ -1742,11 +1742,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         true);
 
     // create conv config tensors
-    auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
+    auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    auto shard_boundaries = ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto conv_sharded_input_top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
     // create sharded ttnn config tensors
     DataType indices_tt_dtype = DataType::UINT16;
     // For 2d convs, each core in a column or row share the same specs
@@ -1768,9 +1768,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     //     }
     // }
     bool is_block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    auto conv_reader_indices_tensor = sliding_window::construct_on_host_config_tensor(
+    auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
-    conv_reader_indices_tensor = sliding_window::move_config_tensor_to_device(
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
     // add config tensor to program

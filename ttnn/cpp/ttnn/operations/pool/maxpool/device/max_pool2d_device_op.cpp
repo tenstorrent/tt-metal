@@ -14,7 +14,7 @@ MaxPoolNew::program_factory_t MaxPoolNew::select_program_factory(const operation
     return MultiCore{};
 }
 
-void validate_maxpool(const Tensor& input, const tt::tt_metal::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config) {
+void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
