@@ -290,12 +290,12 @@ typename device_operation_t::tensor_return_value_t run(
 
     tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_return_value);
 
+    auto& program = create_or_get_program_from_cache<device_operation_t>(
+        program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
+
     if(GraphTracker::instance().block_run_program()) {
         return tensor_return_value;
     }
-
-    auto& program = create_or_get_program_from_cache<device_operation_t>(
-        program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
     if (USE_FAST_DISPATCH) {
         ZoneScopedN("EnqueueProgram");
