@@ -9,9 +9,12 @@ inputs:
     description: 'Docker image to run commands in'
     required: false
     default: tt-metalium/ubuntu-20.04-amd64
+<<<<<<< HEAD
   docker_image_arch:
     description: 'Is this a wormhole.b0, grayskull, or blackhole image'
     required: true
+=======
+>>>>>>> 1f1e36f7dc ( #8082: Build tt-metal and tests in build-artifacts.yaml with docker)
   docker_username:
     description: docker login username
     required: true
