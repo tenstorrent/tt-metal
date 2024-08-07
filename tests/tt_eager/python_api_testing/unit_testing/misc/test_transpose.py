@@ -401,6 +401,95 @@ def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache
 
 
 @pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [224])
+@pytest.mark.parametrize("h", [16])
+@pytest.mark.parametrize("w", [112])
+def test_tranpose_hw_sharded_rm(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config
+    num_cores_x = 8
+    num_cores_y = 8
+    if num_cores_y > device.core_grid.y:
+        num_cores_y = device.core_grid.y
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (n * h * c // (grid_size.x * grid_size.y), w), ttnn.ShardOrientation.COL_MAJOR, False
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config
+    grid_size = ttnn.CoreGrid(y=4, x=8)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (n * h * c // (grid_size.x * grid_size.y), w), ttnn.ShardOrientation.COL_MAJOR, False
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [2])
+@pytest.mark.parametrize("h", [16])
+@pytest.mark.parametrize("w", [16])
+def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+    for _ in range(2):
+        run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w)
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 3
+
+
+@pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
