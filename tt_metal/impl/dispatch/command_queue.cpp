@@ -892,7 +892,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                             .noc_xy_addr = noc_encoding,
                             .addr = dst_addr,
                             .length = (uint16_t)write_length,
-                            .num_mcast_dests = (uint16_t)num_mcast_dests});
+                            .num_mcast_dests = (uint16_t)num_mcast_dests,
+                            .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                         dst_addr += write_length;
 
                         kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
@@ -905,6 +906,10 @@ void EnqueueProgramCommand::assemble_device_commands(
                         kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
                     }
                 }
+            }
+            // Unlink the last subcmd of the current core range
+            if (!write_linear) {
+                kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
             }
         }
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {

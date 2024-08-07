@@ -117,18 +117,30 @@ void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config (dst_noc,
 // VC..) have been specified.
+template<bool write_last_packet = true>
 FORCE_INLINE
-void cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
-    while(size > NOC_MAX_BURST_SIZE) {
+uint32_t cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
+        while(size > NOC_MAX_BURST_SIZE) {
+            cq_noc_async_write_with_state<CQ_NOC_SnDl>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+        }
     }
-    cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+    if constexpr (write_last_packet) {
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+        return 0;
+    } else {
+        return size;
+    }
 }
 
-template<enum CQNocFlags flags, bool mcast = false>
+template<enum CQNocFlags flags, bool mcast = false, bool linked = false>
 FORCE_INLINE
 void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
 
@@ -139,9 +151,8 @@ void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_
     }
     DEBUG_STATUS("NSID");
 
-    constexpr bool multicast_path_reserve = mcast;
+    constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;
-    constexpr bool linked = false;
     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
     constexpr uint32_t noc_cmd_field =
