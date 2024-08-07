@@ -2234,6 +2234,6 @@ def gen_bitwise_and_args(
         do_sanitize_args=do_sanitize_args,
         coregrid=coregrid,
     ):
-        input_info.update({"value": random.randint(-100, 100) for _ in range(5)})
+        input_info.update({"value": random.randint(low, high) for _ in range(5)})
 
         yield input_info

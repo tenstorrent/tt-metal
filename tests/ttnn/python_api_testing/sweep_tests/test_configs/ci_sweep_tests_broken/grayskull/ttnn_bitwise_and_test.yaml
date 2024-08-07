@@ -15,7 +15,7 @@ test-list:
         function: gen_rand
         dtype: int32
         args:
-          low: -100
+          low: 0
           high: 100
       comparison:
         function: comp_pcc
