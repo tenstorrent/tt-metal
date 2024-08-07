@@ -3,11 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "device/tilize_op.hpp"
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -18,26 +15,13 @@ struct ExecuteTilize {
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        return operation::run(
-                   Tilize{
-                       memory_config.value_or(input_tensor.memory_config()),
-                       output_dtype.value_or(input_tensor.get_dtype()),
-                       use_multicore},
-                   {input_tensor},
-                   {},
-                   {},
-                   queue_id)
-            .at(0);
-    }
+        bool use_multicore = false);
 
     static ttnn::Tensor operator()(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
-    }
+        bool use_multicore = false);
 };
 
 }  // namespace operations::data_movement
