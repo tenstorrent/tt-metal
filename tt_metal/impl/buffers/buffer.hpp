@@ -35,7 +35,6 @@ enum class BufferType {
     TRACE,
 };
 
-
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;

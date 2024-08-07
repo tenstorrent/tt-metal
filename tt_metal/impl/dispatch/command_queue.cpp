@@ -29,6 +29,7 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "llrt/hal.hpp"
 
 using std::map;
 using std::pair;
@@ -1114,7 +1115,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    GET_MAILBOX_ADDRESS_HOST(launch),
+                    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::LAUNCH),
                     go_signal_sizeB,
                     multicast_go_signal_payload_sizeB,
                     multicast_go_signal_sub_cmds,
@@ -1140,7 +1141,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    GET_ETH_MAILBOX_ADDRESS_HOST(launch),
+                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::LAUNCH),
                     go_signal_sizeB,
                     unicast_go_signal_payload_sizeB,
                     unicast_go_signal_sub_cmds,

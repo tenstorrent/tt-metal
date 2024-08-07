@@ -161,6 +161,9 @@ if(ENABLE_TRACY)
     target_link_options(linker_flags INTERFACE -rdynamic)
 endif()
 
+string(TOUPPER $ENV{ARCH_NAME} ARCH_NAME_DEF)
+target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})
+
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
 target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR} ${flatbuffers_SOURCE_DIR}/include ${nanomsg_SOURCE_DIR}/include)

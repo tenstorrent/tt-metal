@@ -147,7 +147,8 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         read_vec = tt::llrt::read_hex_vec_from_core (
             device->id(),
             phys_core,
-            GET_MAILBOX_ADDRESS_HOST(watcher.debug_insert_delays), sizeof(debug_insert_delays_msg_t));
+            device->get_dev_addr(phys_core, HalMemAddrType::WATCHER) + offsetof(watcher_msg_t, debug_insert_delays),
+            sizeof(debug_insert_delays_msg_t));
 
         log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
         EXPECT_TRUE((read_vec[0] >> 24) == 0x3);

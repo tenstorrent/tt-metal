@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <tensix_types.h>
 #include "cfg_defines.h"
-#include "dev_mem_map.h"
 
 // Convenience and type defines
 typedef std::uint32_t uint;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llrt.hpp"
+#include "hal.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
@@ -147,37 +148,12 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, bool send_go) {
-
-    bool is_eth_core = is_ethernet_core(core, chip);
-    bool is_active_eth_core = false;
-    bool is_inactive_eth_core = false;
-
-    // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
-    if (is_eth_core) {
-        auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(chip);
-        auto inactive_eth_cores =  tt::Cluster::instance().get_inactive_ethernet_cores(chip);
-        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != active_eth_cores.end();
-        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != inactive_eth_cores.end();
-        //we should not be operating on any reserved cores here.
-        assert(is_active_eth_core or is_inactive_eth_core);
-    }
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
-    uint32_t launch_addr;
-    uint32_t go_addr;
-    if (is_active_eth_core) {
-        launch_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-        go_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.go);
-    } else {
-        if (is_inactive_eth_core) {
-            launch_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-            go_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go);
-        } else {
-            launch_addr = GET_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-            go_addr = GET_MAILBOX_ADDRESS_HOST(launch.go);
-        }
-    }
+
+    uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
+    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
 
     tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
@@ -327,8 +303,9 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         assert(is_active_eth_core or is_inactive_eth_core);
     }
 
-    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.go.run) :
-        is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go.run) : GET_MAILBOX_ADDRESS_HOST(launch.go.run);
+    tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
+        is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
+    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
 
     auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;

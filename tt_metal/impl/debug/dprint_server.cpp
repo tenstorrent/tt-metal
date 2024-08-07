@@ -18,7 +18,6 @@
 #include "llrt/tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/dprint_common.h"
 
 #include "tensix_types.h"
@@ -49,20 +48,8 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 }
 
 static inline uint64_t GetBaseAddr(Device *device, const CoreCoord &phys_core, int hart_id) {
-    // For tensix cores, compute the buffer address for the requested hart.
-    uint64_t base_addr = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
 
-    // Ethernet cores have a different address mapping.
-    if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
-        CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
-        if (device->is_active_ethernet_core(logical_core)) {
-            base_addr = GET_ETH_MAILBOX_ADDRESS_HOST(dprint_buf);
-        } else {
-            base_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
-        }
-    }
-
-    dprint_buf_msg_t *buf = reinterpret_cast<dprint_buf_msg_t *>(base_addr);
+    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, HalMemAddrType::DPRINT);
 
     return reinterpret_cast<uint64_t>(buf->data[hart_id]);
 }

@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "risc_attribs.h"
 
 
