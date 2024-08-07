@@ -17,6 +17,16 @@ namespace unary {
 struct UnaryWithParam;
 
 template <UnaryOpType... unary_op_types>
+struct ExecuteUnaryInvokeResult {
+  using type = ComplexTensor;
+};
+
+template <>
+struct ExecuteUnaryInvokeResult<UnaryOpType::ABS> {
+  using type = Tensor;
+};
+
+template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static Tensor operator()(
         uint8_t queue_id,
@@ -29,7 +39,7 @@ struct ExecuteUnary {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static typename ExecuteUnaryInvokeResult<unary_op_types...>::type operator()(
         const ComplexTensor& input_tensor,
         const MemoryConfig& memory_config);
 };
@@ -206,6 +216,11 @@ struct AsymmetricBinop {
         "ttnn::" #operation_name,                                \
         ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_OVERLOAD(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<    \
+        "ttnn::" #operation_name,                                \
+        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<                                   \
         "ttnn::" #operation_name,                                                               \
@@ -224,7 +239,7 @@ struct AsymmetricBinop {
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
 
-REGISTER_UNARY_OPERATION(abs, ABS);
+REGISTER_UNARY_OPERATION_OVERLOAD(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
@@ -251,7 +266,7 @@ REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
 REGISTER_UNARY_OPERATION(nez, NEZ);
-REGISTER_UNARY_OPERATION(reciprocal, RECIP);
+REGISTER_UNARY_OPERATION_OVERLOAD(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
 REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);

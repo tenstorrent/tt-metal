@@ -1203,7 +1203,7 @@ std::vector<ComplexTensor> ExecuteUnaryBackwardRecip::operator()(
     std::vector<ComplexTensor> grad_tensor;
     Tensor condition_nan = ttnn::logical_and(ttnn::eqz(input.real(),output_mem_config), ttnn::eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
-    ComplexTensor inp_recip = ttnn::operations::complex_unary::_reciprocal(input, output_mem_config);
+    ComplexTensor inp_recip = ttnn::reciprocal(input, output_mem_config);
     ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config), output_mem_config) ;
     neg_grad.deallocate();
     inp_recip.deallocate();
