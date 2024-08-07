@@ -16,7 +16,7 @@ namespace py = pybind11;
 void bind_tilize_with_val_padding(py::module &module) {
     auto doc =
         R"doc(
-            tilize_with_val_padding(input_tensor: ttnn.Tensor, output_tensor_shape: ttnn.Shape, pad_value: Union[int, float], *, memory_config: Optional[MemoryConfig] = None, output_dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
+            tilize_with_val_padding(input_tensor: ttnn.Tensor, output_tensor_shape: ttnn.Shape, pad_value: Union[int, float], *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
 
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
 
@@ -31,7 +31,7 @@ void bind_tilize_with_val_padding(py::module &module) {
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`output_dtype`: Data type of the output tensor.
+                * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
                 * :attr:`queue_id`: command queue id.
         )doc";
@@ -67,7 +67,7 @@ void bind_tilize_with_val_padding(py::module &module) {
 void bind_tilize_with_zero_padding(py::module &module) {
     auto doc =
         R"doc(
-            tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, output_dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
+            tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
 
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 
@@ -80,7 +80,7 @@ void bind_tilize_with_zero_padding(py::module &module) {
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`output_dtype`: Data type of the output tensor.
+                * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
                 * :attr:`queue_id`: command queue id.
         )doc";

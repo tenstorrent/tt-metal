@@ -1290,7 +1290,7 @@ def untilize_with_unpadding(x):
         shape[3] - 33,
     ]
 
-    tt_lib.tensor.untilize_with_unpadding(x, unpadded_shape_end)
+    ttnn.untilize_with_unpadding(x, output_tensor_end=unpadded_shape_end)
 
 
 def pad(x):

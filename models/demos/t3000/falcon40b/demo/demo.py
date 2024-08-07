@@ -424,7 +424,7 @@ def run_falcon_demo_kv(
 
             # untilize data first
             if tt_logits.get_layout() == ttnn.TILE_LAYOUT:
-                tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+                tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
 
             logits = ttnn.to_torch(
                 tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
@@ -489,7 +489,7 @@ def run_falcon_demo_kv(
             if tt_logits.memory_config().is_sharded():
                 tt_logits = ttnn.experimental.tensor.sharded_to_interleaved(tt_logits)
 
-            tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
 
         logits = ttnn.to_torch(
             tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)

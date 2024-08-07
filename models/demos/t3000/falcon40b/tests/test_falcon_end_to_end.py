@@ -228,7 +228,7 @@ def run_test_FalconCausalLM_end_to_end(
                     use_cache=use_cache,
                 )
                 if tt_out.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
-                    tt_out = ttnn.experimental.tensor.untilize(tt_out, use_multicore=False)
+                    tt_out = ttnn.untilize(tt_out, use_multicore=False)
                 tt_outs.append(tt_out)
 
             tt_outs = [

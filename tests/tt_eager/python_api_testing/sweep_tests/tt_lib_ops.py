@@ -2041,7 +2041,7 @@ def untilize(x, *args, device, dtype, layout, input_mem_config, output_mem_confi
             input_mem_config[0],
         )
 
-    t1 = ttl.tensor.untilize(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.untilize(t0, memory_config=output_mem_config)
     return t1.cpu().to_torch()
 
 
@@ -2074,7 +2074,7 @@ def untilize_with_unpadding(
             input_mem_config[0],
         )
 
-    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_end, output_mem_config=output_mem_config)
+    t1 = ttnn.untilize_with_unpadding(t0, output_tensor_end=output_tensor_end, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

@@ -29,7 +29,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
         else:
-            return tt_lib.tensor.untilize(x, output_mem_config, use_multicore=True)
+            return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
         assert False
 
