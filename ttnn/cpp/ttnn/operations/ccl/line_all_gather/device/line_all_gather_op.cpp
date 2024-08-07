@@ -102,10 +102,10 @@ Tensor line_all_gather(
                     device_index = i;
                     bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
                     bool is_last_chip_in_counter_clockwise_direction = i == 0;
-                    std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                    receiver_device_id = is_last_chip_in_clockwise_direction ?
                         std::nullopt :
                         std::optional<chip_id_t>(devices.at(i+1)->id());
-                    std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
                         std::nullopt :
                         std::optional<chip_id_t>(devices.at(i-1)->id());
                     break;
