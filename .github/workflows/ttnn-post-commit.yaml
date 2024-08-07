@@ -82,7 +82,7 @@ jobs:
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: 120
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}

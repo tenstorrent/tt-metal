@@ -21,3 +21,4 @@ cargo
 ninja-build
 libyaml-cpp-dev=0.6.2-4ubuntu1
 libboost-all-dev=1.71.0.0ubuntu2
+patchelf
