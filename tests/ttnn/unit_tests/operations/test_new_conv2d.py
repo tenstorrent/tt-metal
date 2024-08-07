@@ -1490,3 +1490,83 @@ def test_yolov4_conv_groups_larger_than_one(
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        # mlp sub_module
+        (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, True, None, False),  # ncrisc build failed
+        # (1, 32, 64, 128, 128, 3, 3, 2, 2, 1, 1, 1, True, None, False), #pass
+        # (1, 64, 160, 64, 64, 3, 3, 2, 2, 1, 1, 1, True, None, False), #pass
+        # (1, 160, 256, 32, 32, 3, 3, 2, 2, 1, 1, 1, True, None, False), #pass
+        # efficient selfattention sub_module
+        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        # (1, 160, 160, 32, 32, 2, 2,2, 2, 0, 0, 1, True, None, False), #pass , Two times called in model
+        # dwconv sub_module
+        # (1,128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, None, False),#pass , Two times called in model
+        # (1,256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),#pass , Two times called in model
+        # (1,640, 640, 32, 32, 3, 3, 1, 1, 1,  1, 640, False, {"act_block_h":32}, False),  #pass , Two times called in model
+        # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False),#pass , Two times called in model
+        # decode_head sub_module
+        # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, True,None, False), #pass for activation_dtype=bf8 but fails for bf16
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_segformer_512x512(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+    )
