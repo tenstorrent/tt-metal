@@ -1035,6 +1035,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
         sub_cmd.num_mcast_dests = (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
+        sub_cmd.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
 
         for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
             cmds.push_back(((uint32_t *)&sub_cmd)[i]);
