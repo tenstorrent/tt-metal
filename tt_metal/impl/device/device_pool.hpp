@@ -28,31 +28,7 @@ class DevicePool {
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        const std::vector<uint32_t> &l1_bank_remap = {}) noexcept {
-        log_debug(tt::LogMetal, "DevicePool initialize");
-        tt::tt_metal::dispatch_core_manager::initialize();
-
-        if (_inst == nullptr) {
-            static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
-            _inst = &device_pool;
-        }
-         _inst->l1_small_size = l1_small_size;
-         _inst->trace_region_size = trace_region_size;
-         _inst->num_hw_cqs = num_hw_cqs;
-         _inst->l1_bank_remap = l1_bank_remap;
-
-         // Never skip for TG Cluster
-         bool skip = not tt::Cluster::instance().is_galaxy_cluster();
-         for (const auto& device_id : device_ids) {
-            const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-            skip &= (device_id == mmio_device_id);
-         }
-         _inst->skip_remote_devices = skip;
-
-         _inst->add_devices_to_pool(device_ids);
-         _inst->init_firmware_on_active_devices();
-         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    }
+        const std::vector<uint32_t> &l1_bank_remap = {}) noexcept;
 
     Device *get_active_device(chip_id_t device_id) const;
     std::vector<Device *> get_all_active_devices() const;

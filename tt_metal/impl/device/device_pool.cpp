@@ -106,6 +106,39 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 DevicePool* DevicePool::_inst = nullptr;
 tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
+void DevicePool::initialize(
+    std::vector<chip_id_t> device_ids,
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const std::vector<uint32_t> &l1_bank_remap) noexcept {
+    log_debug(tt::LogMetal, "DevicePool initialize");
+    tt::tt_metal::dispatch_core_manager::initialize();
+
+    if (_inst == nullptr) {
+        static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
+        _inst = &device_pool;
+    }
+    _inst->l1_small_size = l1_small_size;
+    _inst->trace_region_size = trace_region_size;
+    _inst->num_hw_cqs = num_hw_cqs;
+    _inst->l1_bank_remap = l1_bank_remap;
+
+     // Never skip for TG Cluster
+    bool skip = not tt::Cluster::instance().is_galaxy_cluster();
+    for (const auto& device_id : device_ids) {
+        TT_FATAL(device_id < tt::Cluster::instance().number_of_devices(),
+        fmt::format("Device index {} out of range. There are {} devices available.", device_id, tt::Cluster::instance().number_of_devices()));
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        skip &= (device_id == mmio_device_id);
+    }
+     _inst->skip_remote_devices = skip;
+
+    _inst->add_devices_to_pool(device_ids);
+    _inst->init_firmware_on_active_devices();
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+}
+
 void DevicePool::initialize_device(Device* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
@@ -137,7 +170,8 @@ void DevicePool::initialize_device(Device* dev) const {
 }
 
 void DevicePool::activate_device(chip_id_t id) {
-    TT_ASSERT(id < tt::Cluster::instance().number_of_devices(), "Tried to add device id larger than available devices");
+    TT_FATAL(id < tt::Cluster::instance().number_of_devices(),
+        fmt::format("Device index {} out of range. There are {} devices available.", id, tt::Cluster::instance().number_of_devices()));
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
         this->devices.resize(id + 1);
