@@ -167,7 +167,7 @@ OutputTensors run(
 
 template<class OutputTensors=Tensors>
 OutputTensors run(
-    const DeviceOperation<OutputTensors>& operation,
+    DeviceOperation<OutputTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
@@ -184,11 +184,11 @@ inline auto run(
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_host_operation<ConcreteOperation>()) {
         TT_ASSERT(optional_input_tensors.empty());
-        const auto operation = HostOperation(concrete_op);
+        auto operation = HostOperation(concrete_op);
         return run<OutputTensors>(operation, input_tensors);
     } else if constexpr (detail::is_device_operation<ConcreteOperation>()) {
-        const auto operation = DeviceOperation(concrete_op);
-        return run<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
+        auto operation = DeviceOperation(concrete_op);
+        return run<OutputTensors>(std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
     } else {
         static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
@@ -196,7 +196,7 @@ inline auto run(
 
 template<class OutputTensors=Tensors>
 OutputTensors run_without_autoformat(
-    const DeviceOperation<OutputTensors>& operation,
+    DeviceOperation<OutputTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
@@ -211,12 +211,12 @@ inline auto run_without_autoformat(
     uint8_t cq_id = 0)
     -> ProgramOutputTensors<ConcreteOperation>{
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    const auto operation = DeviceOperation<OutputTensors>(concrete_op);
-    return run_without_autoformat<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
+    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    return run_without_autoformat<OutputTensors>(std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
 }
 
 Tensors run_with_autoformat(
-    const DeviceOperation<Tensors>& operation,
+    DeviceOperation<Tensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
@@ -236,12 +236,12 @@ inline auto run_with_autoformat(
     uint8_t cq_id = 0
 )-> Tensors {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    const auto operation = DeviceOperation<Tensors>(concrete_op);
-    return run_with_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c, cq_id);
+    auto operation = DeviceOperation<Tensors>(concrete_op);
+    return run_with_autoformat(std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c, cq_id);
 }
 
 Tensors run_with_autoformat(
-    const DeviceOperation<Tensors>& operation,
+    DeviceOperation<Tensors>&& operation,
     const Tensors& input_tensors,
     const std::vector<FormatParams>& input_formatting,
     const std::vector<Layout>& output_layouts,
@@ -262,8 +262,8 @@ inline auto run_with_autoformat(
     uint8_t cq_id = 0
 )-> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    const auto operation = DeviceOperation<OutputTensors>(concrete_op);
-    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
+    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    return run_with_autoformat(std::move(operation), input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
 }
 
 template<class Callable, class OutputType=Tensors>

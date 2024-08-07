@@ -174,13 +174,11 @@ inline auto& create_or_get_program_from_cache(
 }
 
 constexpr auto allocate_device_buffer = [](auto&& tensor) {
-    std::cout << "\tAllocating device buffer" << std::endl;
     auto device_buffer = tensor.buffer();
     if (device_buffer->get_is_allocated()) {
         return;
     }
     device_buffer->allocate();
-    std::cout << "\tAllocated device buffer" << std::endl;
 };
 
 
@@ -270,8 +268,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             ZoneScopedN("TT_DNN_DEVICE_OP");
             tt::stl::reflection::visit_object_of_type<Tensor>(allocate_device_buffer, tensor_return_value);
 
-            std::cout << "\tRunning operation: " << tt::stl::get_type_name<device_operation_t>() << std::endl;
-
             auto& program_cache = device->program_cache;
 
             auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
@@ -293,13 +289,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             if (USE_FAST_DISPATCH) {
                 ZoneScopedN("EnqueueProgram");
                 auto& queue = device->command_queue(cq_id);
-                // Program will temporarily own the input buffers. This is required, since with Async command
-                // queues, the input tensor can preemptively be deallocted on device, unless program maintains
-                // explicit ownership. This invocation of the program wicll give up ownership once its enqueued.
-                auto assign_global_buffer_to_program = [&program](auto&& tensor) {
-                    AssignGlobalBufferToProgram(tensor.device_buffer(), program);
-                };
-                tt::stl::reflection::visit_object_of_type<Tensor>(assign_global_buffer_to_program, tensor_args);
                 tt::tt_metal::EnqueueProgram(queue, program, false);
             } else {
                 ZoneScopedN("LaunchProgram");
@@ -315,8 +304,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
                 operation_attributes,
                 tensor_args,
                 tensor_return_value);
-
-            std::cout << "\tFinished running operation: " << tt::stl::get_type_name<device_operation_t>() << std::endl;
         });
 }
 
@@ -326,7 +313,6 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Device Operation");
-    std::cout << "Launching operation on single device" << std::endl;
     auto operation_id = assign_operation_id();
 
     // Create output tensor first

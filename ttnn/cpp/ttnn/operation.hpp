@@ -520,6 +520,7 @@ struct DeviceOperation final {
     }
 
     template <typename T>
+    requires (not std::same_as<std::decay_t<T>, DeviceOperation<OutputTensorsT>>)
     explicit DeviceOperation(T&& operation) :
 
         pointer{new(&type_erased_storage) std::decay_t<T>{std::forward<T>(operation)}},
@@ -527,6 +528,22 @@ struct DeviceOperation final {
         delete_storage{[](storage_t& self) {
             using Type = std::decay_t<T>;
             reinterpret_cast<Type*>(&self)->~Type();
+        }},
+        copy_storage{[](storage_t& self, const void* other) -> void* {
+            using Type = std::decay_t<T>;
+            if constexpr (std::is_copy_constructible_v<Type>) {
+                return new (&self) Type{*reinterpret_cast<const Type*>(other)};
+            } else {
+                static_assert(tt::stl::concepts::always_false_v<Type>);
+            }
+        }},
+        move_storage{[](storage_t& self, void* other) -> void* {
+            using Type = std::decay_t<T>;
+            if constexpr (std::is_move_constructible_v<Type>) {
+                return new (&self) Type{*reinterpret_cast<Type*>(other)};
+            } else {
+                static_assert(tt::stl::concepts::always_false_v<Type>);
+            }
         }},
 
         // Initialize methods
@@ -700,22 +717,103 @@ struct DeviceOperation final {
         static_assert(sizeof(T) <= sizeof(storage_t));
     }
 
-    DeviceOperation(const DeviceOperation&) = delete;
-    DeviceOperation& operator=(const DeviceOperation&) = delete;
+   DeviceOperation(const DeviceOperation& other) :
+        pointer{other.pointer ? other.copy_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        get_type_name_impl_{other.get_type_name_impl_},
+        validate_impl_{other.validate_impl_},
+        compute_output_shapes_impl_{other.compute_output_shapes_impl_},
+        create_output_tensors_impl_{other.create_output_tensors_impl_},
+        create_program_impl_{other.create_program_impl_},
+        create_op_performance_model_impl_{other.create_op_performance_model_impl_},
+        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
+        compute_program_hash_impl_{other.compute_program_hash_impl_},
+        create_profiler_info_impl_{other.create_profiler_info_impl_},
+        attributes_impl_{other.attributes_impl_} {}
 
-    DeviceOperation(DeviceOperation&&) = delete;
-    DeviceOperation& operator=(DeviceOperation&&) = delete;
+    DeviceOperation& operator=(const DeviceOperation& other) {
+        if (other.pointer != this->pointer) {
+            this->destruct();
+            this->pointer = nullptr;
+            if (other.pointer) {
+                this->pointer = other.copy_storage(this->type_erased_storage, other.pointer);
+            }
+            this->delete_storage = other.delete_storage;
+            this->copy_storage = other.copy_storage;
+            this->move_storage = other.move_storage;
+            this->get_type_name_impl_ = other.get_type_name_impl_;
+            this->validate_impl_ = other.validate_impl_;
+            this->compute_output_shapes_impl_ = other.compute_output_shapes_impl_;
+            this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
+            this->create_program_impl_ = other.create_program_impl_;
+            this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
+            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
+            this->compute_program_hash_impl_ = other.compute_program_hash_impl_;
+            this->create_profiler_info_impl_ = other.create_profiler_info_impl_;
+            this->attributes_impl_ = other.attributes_impl_;
+
+        }
+        return *this;
+    }
+
+    DeviceOperation(DeviceOperation&& other) :
+        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        get_type_name_impl_{other.get_type_name_impl_},
+        validate_impl_{other.validate_impl_},
+        compute_output_shapes_impl_{other.compute_output_shapes_impl_},
+        create_output_tensors_impl_{other.create_output_tensors_impl_},
+        create_program_impl_{other.create_program_impl_},
+        create_op_performance_model_impl_{other.create_op_performance_model_impl_},
+        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
+        compute_program_hash_impl_{other.compute_program_hash_impl_},
+        create_profiler_info_impl_{other.create_profiler_info_impl_},
+        attributes_impl_{other.attributes_impl_} {}
+
+    DeviceOperation& operator=(DeviceOperation&& other) {
+        if (other.pointer != this->pointer) {
+            this->destruct();
+            this->pointer = nullptr;
+            if (other.pointer) {
+                this->pointer = other.move_storage(this->type_erased_storage, other.pointer);
+            }
+            this->delete_storage = other.delete_storage;
+            this->copy_storage = other.copy_storage;
+            this->move_storage = other.move_storage;
+            this->get_type_name_impl_ = other.get_type_name_impl_;
+            this->validate_impl_ = other.validate_impl_;
+            this->compute_output_shapes_impl_ = other.compute_output_shapes_impl_;
+            this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
+            this->create_program_impl_ = other.create_program_impl_;
+            this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
+            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
+            this->compute_program_hash_impl_ = other.compute_program_hash_impl_;
+            this->create_profiler_info_impl_ = other.create_profiler_info_impl_;
+            this->attributes_impl_ = other.attributes_impl_;
+        }
+        return *this;
+    }
 
     ~DeviceOperation() {
-        this->delete_storage(this->type_erased_storage);
-        this->pointer = nullptr;
+        this->destruct();
     }
 
    private:
     alignas(32) void* pointer = nullptr;
     alignas(32) storage_t type_erased_storage;
 
+
     void (*delete_storage)(storage_t&) = nullptr;
+    void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
+    void* (*move_storage)(storage_t& storage, void*) = nullptr;
 
     const std::string (*get_type_name_impl_)(const storage_t& value);
     void (*validate_impl_)(
@@ -742,6 +840,14 @@ struct DeviceOperation final {
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&);
     const ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const Tensors& input_tensors);
     const tt::stl::reflection::Attributes (*attributes_impl_)(const storage_t& value);
+
+
+    void destruct() noexcept {
+        if (this->pointer) {
+            this->delete_storage(this->type_erased_storage);
+        }
+        this->pointer = nullptr;
+    }
 };
 
 struct ExternalOperation {
