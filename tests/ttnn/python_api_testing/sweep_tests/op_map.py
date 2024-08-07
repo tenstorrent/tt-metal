@@ -889,4 +889,8 @@ op_map = {
         "tt_op": ttnn_ops.expm1_bw,
         "pytorch_op": pytorch_ops.expm1_bw,
     },
+    "bitwise-and": {
+        "tt_op": ttnn_ops.eltwise_bitwise_and,
+        "pytorch_op": pytorch_ops.bitwise_and,
+    },    
 }
