@@ -21,6 +21,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
     ConcatMesh2DToTensor,
 )
+from models.demos.tg.llama3_70b.tt.llama_common import (
+    tt_all_reduce,
+    tt_all_gather,
+)
 
 
 class TtLlamaModel_galaxy:
@@ -260,69 +264,6 @@ class TtLlamaModel_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        reduction of a multi-device tensor
-        """
-        concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        out = torch.sum(out, dim=1, keepdim=True)
-
-        shape = (
-            out.shape[2],
-            out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
-        )
-
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            act_mem_config = None
-
-        act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
-
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=None):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=memory_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
-
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
@@ -332,10 +273,12 @@ class TtLlamaModel_galaxy:
         tt_stats = ttnn.reshape(
             tt_stats, ttnn.Shape((1, 1, 32, 32), (1, 1, 32, 32))
         )  # TODO: Figure out why we need this
-        tt_stats = self.tt_all_gather(
+        tt_stats = tt_all_gather(
             tt_stats,
+            device_mesh=self.device_mesh,
             dim=3,
-            cluster_axis=0,
+            cluster_axis=1,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -384,6 +327,13 @@ class TtLlamaModel_galaxy:
         )
         norm_out.deallocate(True)
 
-        lm_head_out = self.tt_all_reduce(lm_head_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        lm_head_out = tt_all_reduce(
+            lm_head_out,
+            device_mesh=self.device_mesh,
+            cluster_axis=1,
+            dim=0,
+            num_links=2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
 
         return lm_head_out
