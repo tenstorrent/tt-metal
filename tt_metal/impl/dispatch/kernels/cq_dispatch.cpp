@@ -662,8 +662,6 @@ void process_write_packed_large() {
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeSubCmd);
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
-    cq_noc_async_write_init_state<CQ_NOC_sndl, true>(0, 0);
-
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
         (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t), l1_cache);
@@ -672,17 +670,24 @@ void process_write_packed_large() {
     uint32_t mcasts = noc_nonposted_writes_acked[noc_index];
     CQDispatchWritePackedLargeSubCmd *sub_cmd_ptr = (CQDispatchWritePackedLargeSubCmd *)l1_cache;
 
+    bool init_state = true;
     while (count != 0) {
-        uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
+        uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+
+        // Only re-init state after we have unlinked the last transaction
+        // Otherwise we assume NOC coord hasn't changed
+        // TODO: If we are able to send 0 length txn to unset link, we don't need a flag and can compare dst_noc to prev to determine linking
+        if (init_state) {
+            uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+            // TODO: Linking should be set to true once atomic txn is handled properly
+            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+        }
 
         sub_cmd_ptr++;
-
-        // Note: expect to only have 1 or a few pages, so this doesn't optimize writing length
-        cq_noc_async_write_with_state<CQ_NOC_sNdl, CQ_NOC_WAIT, CQ_NOC_send>(0, get_noc_addr_helper(dst_noc, dst_addr));
 
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
@@ -705,14 +710,29 @@ void process_write_packed_large() {
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
             uint32_t available_data = cb_fence - data_ptr;
-            uint32_t xfer_size = (length > available_data) ? available_data : length;
-            cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
-            uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
-            writes += num_noc_packets_written;
+            uint32_t xfer_size;
+            if (length > available_data) {
+                xfer_size = available_data;
+                cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+            } else {
+                xfer_size = length;
+                if (unlink) {
+                    uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len<false>(data_ptr, dst_addr, xfer_size, num_dests);
+                    // Unset Link flag
+                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0);
+                    uint32_t data_offset = xfer_size - rem_xfer_size;
+                    cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(data_ptr + data_offset, dst_addr + data_offset, rem_xfer_size, num_dests);
+                } else {
+                    cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                }
+            }
+            writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);
             length -= xfer_size;
             data_ptr += xfer_size;
             dst_addr += xfer_size;
         }
+
+        init_state = unlink;
 
         // Release pages for prefetcher
         // Releasing here requires the sub_cmds to be read into local memory above
