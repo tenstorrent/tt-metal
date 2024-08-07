@@ -12,7 +12,6 @@
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
-#include "ttnn/operations/data_movement/downsample/downsample_op_pybind.hpp"
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_pybind.hpp"
@@ -62,7 +61,6 @@ void py_module(py::module& module) {
     detail::bind_concat(module);
     detail::bind_pad(module);
     detail::bind_slice(module);
-    detail::bind_downsample(module);
     bind_repeat(module);
     detail::bind_repeat_interleave(module);
     detail::bind_tilize(module);

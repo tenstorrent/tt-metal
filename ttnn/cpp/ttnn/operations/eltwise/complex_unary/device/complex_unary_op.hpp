@@ -18,9 +18,7 @@ enum class ComplexUnaryOpType {
     ANGLE,
     IS_IMAG,
     IS_REAL,
-    ABS,
     CONJ,
-    RECIPROCAL,
     POLAR,
 };
 
@@ -30,11 +28,9 @@ Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config);
-Tensor _abs(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 //ComplexTensor return type
 ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config);
-ComplexTensor _reciprocal(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 ComplexTensor _polar(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 
 template <ComplexUnaryOpType OpType>
@@ -76,23 +72,9 @@ struct OpHandler<ComplexUnaryOpType::IS_REAL> {
 };
 
 template <>
-struct OpHandler<ComplexUnaryOpType::ABS> {
-    static Tensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
-        return _abs(input, output_mem_config);
-    }
-};
-
-template <>
 struct OpHandler<ComplexUnaryOpType::CONJ> {
     static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
         return _conj(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::RECIPROCAL> {
-    static ComplexTensor handle( const ComplexTensor& input, const MemoryConfig& output_mem_config ) {
-        return _reciprocal(input, output_mem_config);
     }
 };
 

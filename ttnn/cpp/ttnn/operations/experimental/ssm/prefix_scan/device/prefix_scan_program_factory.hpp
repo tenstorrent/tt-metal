@@ -6,7 +6,7 @@
 
 #include "ttnn/operation.hpp"
 
-namespace tt::operations::experimental::ssm::detail {
+namespace ttnn::operations::experimental::ssm::detail {
 
 operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const Tensor& a,
@@ -16,4 +16,4 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size);
 
-}  // namespace tt::operations::experimental::ssm::detail
+}  // namespace ttnn::operations::experimental::ssm::detail

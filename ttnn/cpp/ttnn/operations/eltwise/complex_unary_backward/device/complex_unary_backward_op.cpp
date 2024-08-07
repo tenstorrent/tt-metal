@@ -26,7 +26,7 @@ namespace ttnn::operations::complex_unary_backward {
 std::vector<ComplexTensor> _polar_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor result = ttnn::polar(input, output_mem_config);
-    Tensor abs_result = ttnn::operations::complex_unary::_abs(result, output_mem_config);
+    Tensor abs_result = ttnn::abs(result, output_mem_config);
     Tensor sgn_result_r = ttnn::where(ttnn::eqz(abs_result, output_mem_config), ttnn::operations::creation::zeros_like(result.real(), result.real().get_dtype(), result.real().get_layout(), std::nullopt, output_mem_config), ttnn::multiply(result.real(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     Tensor sgn_result_i = ttnn::where(ttnn::eqz(abs_result, output_mem_config), ttnn::operations::creation::zeros_like(result.imag(), result.imag().get_dtype(), result.imag().get_layout(), std::nullopt, output_mem_config), ttnn::multiply(result.imag(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     abs_result.deallocate();
@@ -101,7 +101,7 @@ std::vector<ComplexTensor> _conj_bw(const ComplexTensor& grad, const ComplexTens
 // self: grad * self.sgn()
 std::vector<ComplexTensor> _complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor result = ttnn::operations::complex_unary::_abs(input, output_mem_config);
+    Tensor result = ttnn::abs(input, output_mem_config);
     Tensor grad_inp_r = ttnn::where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     Tensor grad_inp_i = ttnn::where(ttnn::eqz(result, output_mem_config), ttnn::operations::creation::zeros_like(result, result.get_dtype(), result.get_layout(), std::nullopt, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
