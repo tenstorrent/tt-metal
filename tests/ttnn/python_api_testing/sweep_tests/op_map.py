@@ -893,11 +893,11 @@ op_map = {
         "tt_op": ttnn_ops.frac,
         "pytorch_op": pytorch_ops.frac,
     },
-    "trunc": {
+    "eltwise-trunc": {
         "tt_op": ttnn_ops.trunc,
         "pytorch_op": pytorch_ops.trunc,
     },
-    "ceil": {
+    "eltwise-ceil": {
         "tt_op": ttnn_ops.ceil,
         "pytorch_op": pytorch_ops.ceil,
     },

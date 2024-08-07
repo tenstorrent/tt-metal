@@ -603,6 +603,11 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
+        is_ttnn_op = False
+
+        if round_off_method in ["ceil", "trunc"]:
+            is_ttnn_op = True
+
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ]
@@ -621,6 +626,7 @@ class TestEltwiseUnary:
             comparison_func,
             device,
             test_args,
+            ttnn_op=is_ttnn_op,
         )
 
     @pytest.mark.parametrize("scalar", [0.5])
