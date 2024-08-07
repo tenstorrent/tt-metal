@@ -15,9 +15,11 @@
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "llrt/hal.hpp"
 #include "dev_msgs.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "program_cache.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -307,6 +309,9 @@ class Device {
     }
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+
+    DeviceAddr get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
+
    private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };

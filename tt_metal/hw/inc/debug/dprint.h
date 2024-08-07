@@ -31,7 +31,6 @@
 #include "risc_common.h"
 #endif
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 
 #include "dprint_buffer.h"
 #include "status.h"

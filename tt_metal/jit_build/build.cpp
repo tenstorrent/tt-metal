@@ -14,8 +14,6 @@
 #include <thread>
 
 #include "common/executor.hpp"
-#include "dev_mem_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "tools/profiler/common.hpp"
