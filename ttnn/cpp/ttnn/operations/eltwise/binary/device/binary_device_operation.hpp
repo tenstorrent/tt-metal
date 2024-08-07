@@ -39,8 +39,8 @@ struct BinaryDeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
     };
     struct tensor_args_t {
-        const Tensor& input_tensor_a;
-        const Tensor& input_tensor_b;
+        const Tensor input_tensor_a;
+        const Tensor input_tensor_b;
         std::optional<Tensor> output_tensor;
     };
     using shape_return_value_t = ttnn::Shape;

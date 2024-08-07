@@ -163,8 +163,7 @@ Tensor moreh_norm_backward_impl(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, output, output_grad}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [p, dims, keepdim, memory_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -178,7 +177,6 @@ Tensor moreh_norm_backward_impl(
                 }, input_tensors, optional_input_tensors, optional_output_tensors);
         },
         {input, output, output_grad},
-        output_tensors,
         {},
         {input_grad});
 

@@ -42,6 +42,6 @@ struct FoldOperation {
 
 } // namespace operations::data_movement
 
-constexpr auto fold = register_operation_with_auto_launch_op<"ttnn::fold", operations::data_movement::FoldOperation>();
+constexpr auto fold = register_operation<"ttnn::fold", operations::data_movement::FoldOperation>();
 
 } // namespace ttnn

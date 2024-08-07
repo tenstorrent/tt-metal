@@ -58,7 +58,7 @@ ttnn::Tensor SliceOperation::invoke(
                 new_shape[-2] -= unpad_val;
                 new_pad[-2].back -= std::min(unpad_val, new_pad[-2].back);
                 auto padded_shape = ttnn::Shape(tt::tt_metal::Shape(new_shape, new_pad));
-                return Tensor(input_tensor.storage(), padded_shape, input_tensor.dtype(), input_tensor.layout());
+                return Tensor(input_tensor.storage, padded_shape, input_tensor.dtype, input_tensor.layout);
             }
         }
 
@@ -121,5 +121,3 @@ ttnn::Tensor SliceOperation::invoke(
 }
 
 }  // namespace operations
-
-

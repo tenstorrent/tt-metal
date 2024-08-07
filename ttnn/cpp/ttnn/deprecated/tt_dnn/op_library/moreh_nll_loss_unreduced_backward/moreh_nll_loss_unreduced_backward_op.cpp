@@ -141,10 +141,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(
-        operation::get_workers_for_op_output({target_tensor, output_grad_tensor}, {weight_tensor}))};
-
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [ignore_index, memory_config, all_cores, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -160,7 +157,6 @@ Tensor moreh_nll_loss_unreduced_backward(
                 optional_output_tensors);
         },
         {target_tensor, output_grad_tensor},
-        output_tensors,
         {weight_tensor},
         {input_grad_tensor});
 

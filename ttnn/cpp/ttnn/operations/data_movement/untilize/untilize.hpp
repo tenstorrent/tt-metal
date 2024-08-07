@@ -27,6 +27,6 @@ struct ExecuteUntilize {
 }  // namespace operations::data_movement
 
 constexpr auto untilize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::untilize", ttnn::operations::data_movement::ExecuteUntilize>();
+    ttnn::register_operation<"ttnn::untilize", ttnn::operations::data_movement::ExecuteUntilize>();
 
 }  // namespace ttnn

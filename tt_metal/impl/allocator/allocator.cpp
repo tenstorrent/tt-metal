@@ -358,6 +358,8 @@ void disable_allocs(Allocator &allocator) { allocator.disabled_allocs = true; }
 
 void enable_allocs(Allocator &allocator) { allocator.disabled_allocs = false; }
 
+std::mutex allocater_mutex;
+
 uint64_t allocate_buffer(
     Allocator &allocator,
     uint32_t size,
@@ -365,6 +367,7 @@ uint64_t allocate_buffer(
     const BufferType &buffer_type,
     bool bottom_up,
     std::optional<uint32_t> num_shards) {
+    std::lock_guard<std::mutex> lock(allocater_mutex);
     uint64_t address = 0;
     TT_FATAL(!allocator.disabled_allocs, "Allocation of new buffers has been disabled");
     switch (buffer_type) {
@@ -390,6 +393,7 @@ uint64_t allocate_buffer(
 }
 
 void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type) {
+    std::lock_guard<std::mutex> lock(allocater_mutex);
     switch (buffer_type) {
         case BufferType::DRAM: allocator.dram_manager.deallocate_buffer(address); break;
         case BufferType::L1: allocator.l1_manager.deallocate_buffer(address); break;

@@ -101,7 +101,7 @@ MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const operat
 
 tt::stl::hash::hash_t MaxPoolNew::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
-    auto dtype = tensors.input_tensor_.dtype();
+    auto dtype = tensors.input_tensor_.dtype;
     return operation::hash_operation<MaxPoolNew>(op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
 }
 

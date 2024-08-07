@@ -114,6 +114,6 @@ struct WhereOperation
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto where = ttnn::register_operation_with_auto_launch_op<"ttnn::where", operations::ternary::WhereOperation>();
+constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
 
 }  // namespace ttnn

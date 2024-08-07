@@ -62,34 +62,31 @@ CopyOpParallelizationStrategy Copy::get_parallelization_strategy(const std::vect
 }
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
-    std::vector<Tensor> dummy_outputs = {Tensor(operation::get_workers_for_op_output({src_tensor}))};
     operation::launch_op(
         [] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& src_tensor = input_tensors.at(0);
             auto& dst_tensor = optional_output_tensors.at(0).value();
             operation::run(Copy{dst_tensor.memory_config(), dst_tensor.get_dtype()}, {src_tensor, dst_tensor});
             return {};
-        }, {src_tensor}, dummy_outputs, {}, {dst_tensor});
+        }, {src_tensor}, {}, {dst_tensor});
     return dst_tensor;
 }
 
 Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
     [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         const auto& input = input_tensors.at(0);
         return operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input});
-    }, {input}, output_tensors);
+    }, {input});
     return output_tensors.at(0);
 }
 
 Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config ) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
     [dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         const auto& input_tensor = input_tensors.at(0);
         return operation::run(Copy{output_mem_config, dtype}, {input_tensor});
-    }, {input_tensor}, output_tensors);
+    }, {input_tensor});
     return output_tensors.at(0);
 }
 

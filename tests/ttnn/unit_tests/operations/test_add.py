@@ -249,18 +249,62 @@ def test_in_place_add_and_apply_activations(device, shape, activations):
     assert output_tensor.shape == shape
 
 
-@pytest.mark.parametrize("shape", [(32, 32)])
-def test_prim_add(device, shape):
-    torch.manual_seed(0)
-
+@pytest.mark.parametrize("shape", [(256, 256)])
+def test_async_add(all_devices, shape):
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.prim.binary(input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, in_place=True)
-    output_tensor = ttnn.to_torch(output_tensor)
+    input_tensors = [
+        (
+            ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device),
+            ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device),
+        )
+        for device in all_devices
+    ]
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
-    assert output_tensor.shape == shape
+    outputs = []
+    for _ in range(100):
+        outputs_per_device = [input_tensor_a + input_tensor_b for input_tensor_a, input_tensor_b in input_tensors]
+        outputs.append(outputs_per_device)
+
+    for outputs_per_device in outputs:
+        for output_tensor in outputs_per_device:
+            output_tensor = ttnn.to_torch(output_tensor)
+            assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+            assert output_tensor.shape == shape
+
+
+def test_multi_device_async_add(device_mesh):
+    num_devices = device_mesh.get_num_devices()
+    torch_input_a_tensor = torch.rand((128, 128 * num_devices), dtype=torch.bfloat16)
+    torch_input_b_tensor = torch.rand((128, 128 * num_devices), dtype=torch.bfloat16)
+
+    torch_output_golden = torch_input_a_tensor + torch_input_b_tensor
+
+    ttnn_input_a_tensor = ttnn.from_torch(
+        torch_input_a_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=1),
+    )
+    ttnn_input_b_tensor = ttnn.from_torch(
+        torch_input_b_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=1),
+    )
+
+    outputs = []
+    for _ in range(100):
+        ttnn_output_tensor = ttnn_input_a_tensor + ttnn_input_b_tensor
+        outputs.append(ttnn_output_tensor)
+
+    # for device in device_mesh.get_devices():
+    #     ttnn.synchronize_device(device)
+
+    for ttnn_output_tensor in outputs:
+        ttnn_torch_output_tensor = ttnn.to_torch(
+            ttnn_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=1)
+        )
+        assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)

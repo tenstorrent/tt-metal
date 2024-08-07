@@ -237,13 +237,13 @@ struct Arange {
 }  // namespace operations
 
 constexpr auto full =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full", ttnn::operations::creation::Full>();
+    ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();
 constexpr auto ones = ttnn::decorators::register_operation<"ttnn::ones", ttnn::operations::creation::Ones>();
 constexpr auto empty = ttnn::decorators::register_operation<"ttnn::empty", ttnn::operations::creation::Empty>();
 
 constexpr auto full_like =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::full_like", ttnn::operations::creation::FullLike>();
+    ttnn::decorators::register_operation<"ttnn::full_like", ttnn::operations::creation::FullLike>();
 constexpr auto zeros_like =
     ttnn::decorators::register_operation<"ttnn::zeros_like", ttnn::operations::creation::ZerosLike>();
 constexpr auto ones_like =
@@ -252,6 +252,6 @@ constexpr auto empty_like =
     ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
 
 constexpr auto arange =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
+    ttnn::decorators::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn

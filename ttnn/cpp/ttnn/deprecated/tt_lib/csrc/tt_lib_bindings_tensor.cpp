@@ -526,7 +526,7 @@ void TensorModule(py::module& m_tensor) {
 
     m_tensor.def(
         "write_tensor",
-        py::overload_cast<Tensor, Tensor, uint8_t>(&write_tensor),
+        py::overload_cast<const Tensor&, Tensor&, uint8_t>(&write_tensor),
         py::arg("host_tensor"),
         py::arg("device_tensor"),
         py::arg("cq_id") = 0,

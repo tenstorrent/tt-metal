@@ -29,6 +29,6 @@ struct RepeatOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto repeat = ttnn::register_operation_with_auto_launch_op<"ttnn::repeat", ttnn::operations::data_movement::RepeatOperation>();
+constexpr auto repeat = ttnn::register_operation<"ttnn::repeat", ttnn::operations::data_movement::RepeatOperation>();
 
 }  // namespace ttnn

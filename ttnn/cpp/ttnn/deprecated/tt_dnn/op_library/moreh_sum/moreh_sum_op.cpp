@@ -107,12 +107,11 @@ Tensor _moreh_sum(
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, keep_batch_dim, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -128,7 +127,6 @@ Tensor _moreh_sum(
                 optional_output_tensors);
         },
         {input},
-        output_tensors,
         {},
         {output});
 
@@ -217,7 +215,7 @@ operation::ProgramWithCallbacks MorehSum::create_program(
     auto& output = outputs.at(0);
 
     const auto input_rank = input.get_legacy_shape().rank();
-    const auto dtype = input.dtype();
+    const auto dtype = input.dtype;
     log_debug(LogOp, "{}:{} dtype {}", __func__, __LINE__, dtype);
     auto call_moreh_sum_impl = [&](auto moreh_sum_w_impl, auto moreh_sum_h_impl, auto moreh_sum_nc_impl) {
         if (this->dim == input_rank - 1) {

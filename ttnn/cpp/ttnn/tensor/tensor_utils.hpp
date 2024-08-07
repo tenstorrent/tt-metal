@@ -125,12 +125,6 @@ uint32_t num_buffers_in_tensor(const Tensor& tensor);
 Tensor get_shard_for_device(
     const Tensor& tensor, Device* target_device, std::optional<int> buffer_index = std::nullopt);
 
-void insert_buffer_and_shape_for_device(
-    Device* target_device,
-    const Tensor& shard,
-    Tensor& tensor_to_modify,
-    std::optional<int> buffer_index = std::nullopt);
-
 Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
 
 template <typename TensorContainer>

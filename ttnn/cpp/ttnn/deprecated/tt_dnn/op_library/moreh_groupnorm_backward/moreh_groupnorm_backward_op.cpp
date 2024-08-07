@@ -104,10 +104,8 @@ Tensor moreh_groupnorm_backward_input_grad(
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))};
 
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [num_groups, input_grad_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -120,7 +118,6 @@ Tensor moreh_groupnorm_backward_input_grad(
                 optional_output_tensors);
         },
         {output_grad, input, mean, rstd},
-        output_tensors,
         {gamma},
         {input_grad});
 
@@ -267,20 +264,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
 
     TT_ASSERT(gamma_requires_grad || beta_requires_grad, "At least one of gamma or beta must require grad.");
 
-    std::vector<std::optional<Tensor>> dgamma_dbeta(2);
-    uint32_t num_outputs = 0;
-    if (gamma_grad.has_value() || gamma_requires_grad) {
-        dgamma_dbeta[0] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
-        num_outputs++;
-    }
-    if (beta_grad.has_value() || beta_requires_grad) {
-        dgamma_dbeta[1] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
-        num_outputs++;
-    }
-    if(num_outputs == 0) {
-        dgamma_dbeta[0] = Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}));
-    }
-    operation::launch_op(
+    auto dgamma_dbeta = operation::launch_op<std::vector<std::optional<Tensor>>>(
         [num_groups, are_required_outputs, gamma_grad_mem_config, beta_grad_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -296,10 +280,8 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
                 optional_output_tensors);
         },
         {output_grad, input, mean, rstd},
-        dgamma_dbeta,
         {},
         {gamma_grad, beta_grad});
-
 
     return dgamma_dbeta;
 }

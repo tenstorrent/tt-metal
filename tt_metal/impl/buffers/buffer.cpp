@@ -128,7 +128,8 @@ Buffer::Buffer(
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up) {
+    bottom_up_(bottom_up),
+    is_allocated_(false) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
@@ -199,11 +200,13 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
 Buffer::Buffer(const Buffer &other) :
     device_(other.device_),
     size_(other.size_),
+    address_(0),
     page_size_(other.page_size_),
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
     shard_parameters_(other.shard_parameters_),
-    bottom_up_(other.bottom_up_) {
+    bottom_up_(other.bottom_up_),
+    is_allocated_(false) {
     this->allocate();
 }
 
@@ -211,11 +214,13 @@ Buffer &Buffer::operator=(const Buffer &other) {
     if (this != &other) {
         this->device_ = other.device_;
         this->size_ = other.size_;
+        this->address_ = 0;
         this->page_size_ = other.page_size_;
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
         this->bottom_up_ = other.bottom_up_;
+        this->is_allocated_ = false;
         this->allocate();
     }
     return *this;
@@ -229,7 +234,8 @@ Buffer::Buffer(Buffer &&other) :
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
     shard_parameters_(other.shard_parameters_),
-    bottom_up_(other.bottom_up_) {
+    bottom_up_(other.bottom_up_),
+    is_allocated_(other.is_allocated_) {
     // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
     // transferred to `this`
     other.device_ = nullptr;
@@ -239,25 +245,18 @@ Buffer &Buffer::operator=(Buffer &&other) {
     if (this != &other) {
         this->device_ = other.device_;
         this->size_ = other.size_;
-        this->address_ = other.address_;
+        this->address_ = other.address_;;
         this->page_size_ = other.page_size_;
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
         this->bottom_up_ = other.bottom_up_;
+        this->is_allocated_ = other.is_allocated_;;
         // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
         // transferred to `this`
         other.device_ = nullptr;
     }
     return *this;
-}
-
-void Buffer::allocate() {
-    TT_ASSERT(this->device_ != nullptr);
-    // L1 and Trace buffers (which live in DRAM) are allocated top down!
-    bool bottom_up = this->bottom_up_.value_or(this->is_dram());
-    detail::AllocateBuffer(this, bottom_up);
-    detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -307,19 +306,33 @@ uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) con
 }
 
 uint64_t Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    uint64_t base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
+    uint64_t base_page_address = this->address() + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
+void Buffer::allocate() {
+    TT_ASSERT(this->device_ != nullptr);
+    // L1 and Trace buffers (which live in DRAM) are allocated top down!
+    tt::log_debug(tt::LogAsync, "Allocating buffer of size {} bytes", this->size_);
+    bool bottom_up = this->bottom_up_.value_or(this->is_dram());
+    detail::AllocateBuffer(this, bottom_up);
+    detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
+    tt::log_debug(tt::LogAsync, "Allocated buffer of size {} bytes at address 0x{:x}", this->size_, this->address());
+}
+
 void Buffer::deallocate() {
-    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0) {
+    auto size = this->size();
+    tt::log_debug(tt::LogAsync, "Deallocating buffer of size {} bytes at address 0x{:x}", this->size_, this->address());
+    if (this->device_ == nullptr or not this->device_->initialized_ or not this->is_allocated_) {
+        tt::log_debug(tt::LogAsync, "Buffer is not allocated, skipping deallocation");
         return;
     }
-    // Mark as deallocated
-    this->size_ = 0;
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+
+    this->is_allocated_ = false;
     detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
     detail::DeallocateBuffer(this);
+    tt::log_debug(tt::LogAsync, "Deallocated buffer of size {} bytes", this->size_);
 }
 
 Buffer::~Buffer() { this->deallocate(); }

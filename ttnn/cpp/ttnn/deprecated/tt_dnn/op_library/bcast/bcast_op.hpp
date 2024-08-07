@@ -73,8 +73,7 @@ inline Tensor run_bcast(
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<Tensor> output_tensor = std::nullopt) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
-    operation::launch_with_autoformat(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [bcast_op, bcast_dim, output_mem_config, output_tensor, queue_id] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             using tt::constants::TILE_HEIGHT;
             using tt::constants::TILE_WIDTH;
@@ -112,7 +111,7 @@ inline Tensor run_bcast(
             }
             return operation::run_with_autoformat(
                     EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config}, {input_tensor_a, input_tensor_b}, {}, {output_tensor}, queue_id);
-        }, {input_tensor_a, input_tensor_b}, output_tensors, {}, {output_tensor});
+        }, {input_tensor_a, input_tensor_b}, {}, {output_tensor});
     return output_tensors.at(0);
 }
 

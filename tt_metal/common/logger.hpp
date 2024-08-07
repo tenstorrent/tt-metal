@@ -35,6 +35,7 @@ namespace tt {
     X(Verif)         \
     X(Golden)        \
     X(Op)            \
+    X(Async)         \
     X(HLK)           \
     X(HLKC)          \
     X(Reportify)     \

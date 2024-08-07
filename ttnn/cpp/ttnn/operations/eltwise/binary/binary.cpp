@@ -237,8 +237,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a_arg, input_tensor_b_arg}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [queue_id, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -288,8 +287,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
                 activations,
                 input_tensor_a_activation)};
         },
-        {input_tensor_a_arg, input_tensor_b_arg},
-        output_tensors);
+        {input_tensor_a_arg, input_tensor_b_arg});
 
     return output_tensors[0];
 }

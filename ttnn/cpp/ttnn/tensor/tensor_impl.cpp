@@ -178,6 +178,29 @@ void validate_sharded_buffer_allocation(
 
 namespace detail {
 
+DeviceBuffer allocate_buffer_on_device_impl(
+   Device *device,
+        uint64_t size,
+        uint64_t page_size,
+        const BufferType buffer_type,
+        const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<bool> bottom_up = std::nullopt)
+{
+    bool allocate = false;
+    auto buffer = std::make_shared<Buffer>(
+        device, size, page_size, buffer_type, buffer_layout, shard_parameter, bottom_up, allocate);
+    device->push_work(
+        [=]() {
+            tt::log_debug(tt::LogAsync, "Device {}: Allocating buffer", device->id());
+            buffer->allocate();
+            tt::log_debug(tt::LogAsync, "Device {}: Allocated buffer at address 0x{:x}", device->id(), buffer->address());
+        },
+        true
+    );
+    return buffer;
+}
+
 DeviceBuffer allocate_interleaved_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device* device,
@@ -186,12 +209,14 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     Layout layout,
     const MemoryConfig& memory_config) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
+    return allocate_buffer_on_device_impl(
+        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, std::nullopt, std::nullopt);
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
     uint32_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
+    return allocate_buffer_on_device_impl(
+        device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type, memory_config.memory_layout, std::nullopt, std::nullopt);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
@@ -206,8 +231,8 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const auto& page_shape = shard_params.page_shape;
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape);
 
-    return std::make_shared<Buffer>(
-        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
+    return allocate_buffer_on_device_impl(
+        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params, std::nullopt);
 }
 
 }  // namespace detail
@@ -646,41 +671,59 @@ std::string to_string<bfloat4_b>(const Tensor& tensor, std::optional<DataType> o
 // ======================================================================================
 
 template <typename T>
-Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.device_buffer();
+std::future<OwnedBuffer> to_host_helper(const Tensor& tensor, bool blocking = true) {
+
+    std::shared_ptr<std::promise<OwnedBuffer>> promise = std::make_shared<std::promise<OwnedBuffer>>();
+    std::future<OwnedBuffer> future = promise->get_future();
     auto device = tensor.device();
-    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
-    vector<T> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(), device_buffer, data_vec.data(), blocking);
-    } else {
-        read_data_from_device_buffer<T>(device_buffer, data_vec);
-    }
-    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+
+    device->push_work(
+        [=]() mutable {
+            TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+            auto device_buffer = tensor.device_buffer();
+            tt::log_debug(tt::LogAsync, "Device {}: Copying data from device buffer at address 0x{:x} to host", device->id(), device_buffer->address());
+            TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+            uint32_t size_in_bytes = device_buffer->size();
+            std::vector<T> data_vec;
+            const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+                data_vec.resize(size_in_bytes / sizeof(T));
+                auto& queue = device->command_queue();
+                read_data_from_device_buffer<T>(queue, device_buffer, data_vec.data(), blocking);
+            } else {
+                read_data_from_device_buffer<T>(device_buffer, data_vec);
+            }
+            promise->set_value(owned_buffer::create<T>(std::move(data_vec)));
+            tt::log_debug(tt::LogAsync, "Device {}: Copied data from device buffer at address 0x{:x} to host", device->id(), device_buffer->address());
+        },
+        true
+    );
+
+    return future;
 }
 
 template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking) {
     if (tensor.storage_type() == StorageType::DEVICE) {
-        return to_host_helper<T>(tensor, blocking);
+        auto future = to_host_helper<T>(tensor, blocking);
+        return Tensor{OwnedStorage{future.get()}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()};
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
-        Tensor host_tensor({}, devices.size());
+        auto strategy = std::get<MultiDeviceStorage>(tensor.get_storage()).strategy;
+
+        std::vector<std::future<OwnedBuffer>> buffer_shard_futures;
+        buffer_shard_futures.reserve(devices.size());
         for (int device_index = 0; device_index < devices.size(); ++device_index) {
             const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);
-            shard = to_host_helper<T>(shard, blocking);
-            host_tensor.set_shape(tensor.get_shape());
-            host_tensor.set_dtype(tensor.get_dtype());
-            host_tensor.set_layout(tensor.get_layout());
-            insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
+            buffer_shard_futures.emplace_back(to_host_helper<T>(shard, blocking));
         }
-        return host_tensor;
+        std::vector<Tensor> tensor_shards;
+        tensor_shards.reserve(devices.size());
+        for (int i = 0; i < devices.size(); ++i) {
+            tensor_shards.push_back(Tensor(OwnedStorage{buffer_shard_futures[i].get()}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()));
+        }
+        return create_multi_device_tensor(std::move(tensor_shards), StorageType::MULTI_DEVICE_HOST, strategy);
     } else {
         return tensor;
     }
@@ -749,26 +792,12 @@ Tensor to_host_sharded<bfloat8_b>(const Tensor& tensor) {
 
 template <typename T, template <typename> typename BufferType>
 void write_data_to_device_buffer(
-    CommandQueue& cq, const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
+    CommandQueue& cq, const BufferType<T>& host_buffer, DeviceBuffer device_buffer, bool blocking = true) {
     ZoneScoped;
-    // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
-    // And effectively get rid of any additional allocation
-    if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
-        if constexpr (std::is_same_v<BufferType<T>, borrowed_buffer::Buffer<T>>) {
-            // When writing borrowed storage asynchronously, we have no control over when host memory is deallocated by
-            // the main thread. To ensure that worker threads enqueues the correct buffer, make a copy and caputre it in
-            // an owned buffer.
-            uint32_t borrowed_buf_size_words =
-                device_buffer->num_pages() * device_buffer->page_size() / sizeof(uint32_t);
-            const uint32_t* borrowed_buf_base = static_cast<const uint32_t*>(host_buffer.data());
-            std::vector<uint32_t> owned_copy_vec(borrowed_buf_base, borrowed_buf_base + borrowed_buf_size_words);
-            owned_buffer::Buffer<uint32_t> owned_copy(std::make_shared<std::vector<uint32_t>>(owned_copy_vec));
-            EnqueueWriteBuffer(cq, device_buffer, owned_copy.get_ptr(), false);
-        } else if constexpr (std::is_same_v<BufferType<T>, owned_buffer::Buffer<T>>) {
-            EnqueueWriteBuffer(cq, device_buffer, host_buffer.get_ptr(), false);
-        }
-    } else {
-        EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
+    if constexpr (std::is_same_v<BufferType<T>, borrowed_buffer::Buffer<T>>) {
+        EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), blocking);
+    } else if constexpr (std::is_same_v<BufferType<T>, owned_buffer::Buffer<T>>) {
+        EnqueueWriteBuffer(cq, device_buffer, host_buffer.get_ptr(), blocking);
     }
 }
 
@@ -798,13 +827,20 @@ DeviceBuffer initialize_data_on_device(
 
     auto device_buffer =
         allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        write_data_to_device_buffer<T>(
-            queue.has_value() ? queue.value().get() : device->command_queue(), data_to_write, device_buffer);
-    } else {
-        write_data_to_device_buffer<T>(data_to_write, *device_buffer);
-    }
+    device->push_work(
+        [=] {
+            tt::log_debug(tt::LogAsync, "Device {}: Copying data from host to device buffer at address 0x{:x}", device->id(), device_buffer->address());
+            const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+                auto& queue_to_use = queue.has_value() ? queue.value().get() : device->command_queue();
+                write_data_to_device_buffer<T>(queue_to_use, data_to_write, device_buffer);
+            } else {
+                write_data_to_device_buffer<T>(data_to_write, *device_buffer);
+            }
+            tt::log_debug(tt::LogAsync, "Device {}: Copied data from host to device buffer at address 0x{:x}", device->id(), device_buffer->address());
+        },
+        true
+    );
     return device_buffer;
 }
 
@@ -862,6 +898,7 @@ Tensor to_device(
     Device* target_device,
     const MemoryConfig& memory_config,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
+
     TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
     if (tensor.storage_type() == StorageType::OWNED) {
         TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
@@ -889,7 +926,7 @@ Tensor to_device(
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+    return Tensor{DeviceStorage{device_buffer}, shape, data_type, layout};
 }
 
 template Tensor to_device<bfloat16>(

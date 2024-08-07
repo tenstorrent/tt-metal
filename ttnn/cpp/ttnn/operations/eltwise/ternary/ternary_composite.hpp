@@ -74,16 +74,16 @@ struct ExecuteTernaryCompositeMac
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto addcmul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto addcmul = ttnn::register_operation<
     "ttnn::addcmul",
     operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>();
-constexpr auto addcdiv = ttnn::register_operation_with_auto_launch_op<
+constexpr auto addcdiv = ttnn::register_operation<
     "ttnn::addcdiv",
     operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>();
-constexpr auto lerp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lerp = ttnn::register_operation<
     "ttnn::lerp",
     operations::ternary::ExecuteTernaryCompositeLerp<operations::ternary::TernaryCompositeOpType::LERP>>();
-constexpr auto mac = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mac = ttnn::register_operation<
     "ttnn::mac",
     operations::ternary::ExecuteTernaryCompositeMac<operations::ternary::TernaryCompositeOpType::MAC>>();
 

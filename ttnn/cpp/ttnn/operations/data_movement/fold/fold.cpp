@@ -29,7 +29,7 @@ std::vector<Tensor> fold_with_transpose_(
         device = input.device();
     }
 
-    uint32_t n = input.shape()[0], c = input.shape()[1], h = input.shape()[2], w = input.shape()[3];
+    uint32_t n = input.shape[0], c = input.shape[1], h = input.shape[2], w = input.shape[3];
     auto padded_c = c + pad_c; // end padding only
     auto padded_h = h + pad_h * 2; // front and end padding
     auto padded_w = w + pad_w * 2; // front and end padding
@@ -38,45 +38,45 @@ std::vector<Tensor> fold_with_transpose_(
 
     auto L1_mem_config = tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::L1};
 
-    tt::log_debug("input: {}", input.shape());
+    tt::log_debug("input: {}", input.shape);
 
     // pad input tensor
     tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, padded_w32};
     auto pad_output = ttnn::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
-    tt::log_debug("pad_output: {}", pad_output.shape());
+    tt::log_debug("pad_output: {}", pad_output.shape);
 
     // transpose
     auto transpose_hw_output = ttnn::transpose(pad_output, 2, 3, L1_mem_config);
 
-    tt::log_debug("transpose_hw_output: {}", transpose_hw_output.shape());
+    tt::log_debug("transpose_hw_output: {}", transpose_hw_output.shape);
 
     // transpose
     auto transpose_hc_output = ttnn::transpose(transpose_hw_output, 1, 2, L1_mem_config);
 
-    tt::log_debug("transpose_hc_output: {}", transpose_hc_output.shape());
+    tt::log_debug("transpose_hc_output: {}", transpose_hc_output.shape);
 
     // reshape
-    n = transpose_hc_output.shape()[0], w = transpose_hc_output.shape()[1], c = transpose_hc_output.shape()[2], h = transpose_hc_output.shape()[3];
+    n = transpose_hc_output.shape[0], w = transpose_hc_output.shape[1], c = transpose_hc_output.shape[2], h = transpose_hc_output.shape[3];
     auto reshape_hc_output = tt::tt_metal::reshape(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
 
-    tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape());
+    tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape);
 
     // transpose
     auto transpose_hw_output2 = ttnn::transpose(reshape_hc_output, 2, 3, L1_mem_config);
 
-    tt::log_debug("transpose_hw_output2: {}", transpose_hw_output2.shape());
+    tt::log_debug("transpose_hw_output2: {}", transpose_hw_output2.shape);
 
     // reshape
-    n = transpose_hw_output2.shape()[0], w = transpose_hw_output2.shape()[1], h = transpose_hw_output2.shape()[2], c = transpose_hw_output2.shape()[3];
+    n = transpose_hw_output2.shape[0], w = transpose_hw_output2.shape[1], h = transpose_hw_output2.shape[2], c = transpose_hw_output2.shape[3];
     auto reshape_hw_output = tt::tt_metal::reshape(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
 
-    tt::log_debug("reshape_hw_output: {}", reshape_hw_output.shape());
+    tt::log_debug("reshape_hw_output: {}", reshape_hw_output.shape);
 
     // transpose
     auto transpose_hc_output2 = ttnn::transpose(reshape_hw_output, 1, 2, L1_mem_config);
 
-    tt::log_debug("transpose_hc_output2: {}", transpose_hc_output2.shape());
+    tt::log_debug("transpose_hc_output2: {}", transpose_hc_output2.shape);
 
     std::vector<Tensor> output_tensors;
     if (output_shape.has_value()) {
@@ -88,7 +88,7 @@ std::vector<Tensor> fold_with_transpose_(
 
         output_tensors.emplace_back(slice_output);
 
-        tt::log_debug("slice_output: {}", slice_output.shape());
+        tt::log_debug("slice_output: {}", slice_output.shape);
     } else {
         output_tensors.emplace_back(transpose_hc_output2);
     }

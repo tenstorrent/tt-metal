@@ -114,16 +114,16 @@ operation::ProgramWithCallbacks AttnMatmul::create_program(
 }
 
 const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()),__FILE__, __LINE__));
     return operation::hash_operation<AttnMatmul>(
         this->transpose_hw,
         this->output_mem_config,
         this->output_dtype,
-        std::get<DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
-        input_tensors.at(0).dtype(),
-        std::get<DeviceStorage>(input_tensors.at(1).storage()).memory_config(),
-        input_tensors.at(1).dtype());
+        std::get<DeviceStorage>(input_tensors.at(0).storage).memory_config(),
+        input_tensors.at(0).dtype,
+        std::get<DeviceStorage>(input_tensors.at(1).storage).memory_config(),
+        input_tensors.at(1).dtype);
 }
 
 void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
@@ -311,8 +311,8 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.storage),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.storage),__FILE__, __LINE__));
 
     return operation::hash_operation<GroupAttnMatmul>(
         this->transpose_hw,
@@ -322,14 +322,14 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
         this->output_mem_config.buffer_type,
         this->output_dtype,
         this->row_major,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type,
-        input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout,
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type,
-        input_tensor_b.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id());
+        std::get<DeviceStorage>(input_tensor_a.storage).memory_config().memory_layout,
+        std::get<DeviceStorage>(input_tensor_a.storage).memory_config().buffer_type,
+        input_tensor_a.dtype,
+        std::get<DeviceStorage>(input_tensor_b.storage).buffer->device()->id(),
+        std::get<DeviceStorage>(input_tensor_b.storage).memory_config().memory_layout,
+        std::get<DeviceStorage>(input_tensor_b.storage).memory_config().buffer_type,
+        input_tensor_b.dtype,
+        std::get<DeviceStorage>(input_tensor_b.storage).buffer->device()->id());
 }
 
 

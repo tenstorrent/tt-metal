@@ -20,8 +20,6 @@ ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DataType> & data_type_arg) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     auto shard_spec = input_tensor.shard_spec().value();
     TT_FATAL(input_tensor.shard_spec().has_value());

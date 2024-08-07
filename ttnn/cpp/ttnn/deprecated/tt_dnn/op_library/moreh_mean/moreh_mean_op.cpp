@@ -92,7 +92,6 @@ inline Tensor create_output_tensor(
 
 // output as arg
 Tensor moreh_mean_(const Tensor& input, const Tensor& output, const int64_t& dim) {
-    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
 
     operation::launch_op(
         [dim](
@@ -102,8 +101,7 @@ Tensor moreh_mean_(const Tensor& input, const Tensor& output, const int64_t& dim
             return operation::run(
                 MorehMean{.dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
         },
-        {input, output},
-        dummy_output_tensors);
+        {input, output});
 
     return output;
 }
@@ -114,8 +112,6 @@ Tensor moreh_mean_(const Tensor& input, const int64_t& dim, const MemoryConfig& 
     const auto& output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
-
     operation::launch_op(
         [dim](
             const std::vector<Tensor>& input_tensors,
@@ -124,8 +120,7 @@ Tensor moreh_mean_(const Tensor& input, const int64_t& dim, const MemoryConfig& 
             return operation::run(
                 MorehMean{.dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
         },
-        {input, output},
-        dummy_output_tensors);
+        {input, output});
 
     return output;
 }

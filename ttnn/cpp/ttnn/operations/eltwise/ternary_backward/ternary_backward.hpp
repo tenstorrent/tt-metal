@@ -15,14 +15,6 @@ namespace operations::ternary_backward {
 template <TernaryBackwardOpType ternary_backward_op_type>
 struct ExecuteTernaryBackward {
 
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
-
      //Type 0: 3 inputs, 1 grad tensor, 1 float
 
     static std::vector<Tensor> invoke(
@@ -37,14 +29,6 @@ struct ExecuteTernaryBackward {
 
 template <TernaryBackwardOpType ternary_backward_op_type>
 struct ExecuteTernaryBackwardFloat {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
 
     //Type 1: 3 inputs, 1 grad tensor, 1 float
 
@@ -61,14 +45,6 @@ struct ExecuteTernaryBackwardFloat {
 
 template <TernaryBackwardOpType ternary_backward_op_type>
 struct ExecuteTernaryBackwardOptional {
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
 
     //Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
 
@@ -122,11 +98,11 @@ struct ExecuteTernaryBackwardLerp {
 }  // operations::ternary_backward
 
 //type 1
-constexpr auto addcmul_bw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto addcmul_bw = ttnn::register_operation<
     "ttnn::addcmul_bw",
     operations::ternary_backward::ExecuteTernaryBackwardFloat<
         operations::ternary_backward::TernaryBackwardOpType::ADDCMUL_BW>>();
-constexpr auto addcdiv_bw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto addcdiv_bw = ttnn::register_operation<
     "ttnn::addcdiv_bw",
     operations::ternary_backward::ExecuteTernaryBackwardFloat<
         operations::ternary_backward::TernaryBackwardOpType::ADDCDIV_BW>>();

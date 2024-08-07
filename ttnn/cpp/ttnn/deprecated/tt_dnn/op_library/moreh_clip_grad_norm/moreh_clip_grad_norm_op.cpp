@@ -73,8 +73,6 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
     for (uint32_t i = 0; i < num_iter; ++i) {
         const auto num_inputs_at_this_iter = std::min(num_inputs, max_num_inputs);
 
-        std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({tmp_pow_sum}))};
-
         operation::launch_op(
             [norm_type, tile_offset](
                 const std::vector<Tensor> &input_tensors,
@@ -87,7 +85,6 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
                     optional_output_tensors);
             },
             std::vector<Tensor>(inputs.begin() + tile_offset, inputs.begin() + tile_offset + num_inputs_at_this_iter),
-            dummy_output_tensors,
             {tmp_pow_sum});
 
         if (i < (num_iter - 1)) {
@@ -117,8 +114,6 @@ operation::ProgramWithCallbacks MorehClipGradNormStep2::create_program(
 }
 
 void moreh_clip_grad_norm_step2(const Tensor &tmp_pow_sum, float norm_type, const Tensor &total_norm) {
-    std::vector<Tensor> dummy_output_tensors = {
-        Tensor(operation::get_workers_for_op_output({tmp_pow_sum, total_norm}))};
 
     operation::launch_op(
         [norm_type](
@@ -131,8 +126,7 @@ void moreh_clip_grad_norm_step2(const Tensor &tmp_pow_sum, float norm_type, cons
                 optional_input_tensors,
                 optional_output_tensors);
         },
-        {tmp_pow_sum, total_norm},
-        dummy_output_tensors);
+        {tmp_pow_sum, total_norm});
 }
 
 void MorehClipGradNormStep3::validate(
@@ -172,7 +166,6 @@ void moreh_clip_grad_norm_step3(const std::vector<Tensor> &inputs, const Tensor 
 
         auto input_tensors = std::vector<Tensor>(
             inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter);
-        std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output(input_tensors))};
 
         operation::launch_op(
             [](const std::vector<Tensor> &input_tensors,
@@ -182,7 +175,6 @@ void moreh_clip_grad_norm_step3(const std::vector<Tensor> &inputs, const Tensor 
                     MorehClipGradNormStep3{}, input_tensors, optional_input_tensors, optional_output_tensors);
             },
             input_tensors,
-            dummy_output_tensors,
             {clip_coef_clamped});
 
         if (i < (num_iter - 1)) {

@@ -27,11 +27,11 @@ struct ExecuteAttentionSoftmax {
 
 namespace transformer {
 
-constexpr auto attention_softmax = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attention_softmax = ttnn::register_operation<
     "ttnn::transformer::attention_softmax",
     ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>();
 
-constexpr auto attention_softmax_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attention_softmax_ = ttnn::register_operation<
     "ttnn::transformer::attention_softmax_",
     ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>();
 

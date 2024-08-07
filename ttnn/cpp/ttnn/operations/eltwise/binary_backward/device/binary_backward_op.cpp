@@ -347,7 +347,7 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
         if (opt_tensor) {
             output_tensors.emplace_back(*opt_tensor);
         } else {
-            output_tensors.emplace_back();
+            output_tensors.emplace_back(ttnn::Tensor{});
         }
     }
     return output_tensors;

@@ -199,8 +199,7 @@ Tensor max_pool2d_legacy(const Tensor &input,
                   const MemoryConfig& out_mem_config,
                   uint32_t nblocks,
                   bool use_multicore) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, reader_indices}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [in_n, in_h, in_w, kernel_size_h, kernel_size_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, out_mem_config, nblocks, use_multicore]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 TT_ASSERT(dilation_h == 1 && dilation_w == 1 && "Dilation not yet supported in max_pool2d.");
@@ -219,7 +218,7 @@ Tensor max_pool2d_legacy(const Tensor &input,
                                                                 nblocks,
                                                                 use_multicore},
                                                         input_tensors);
-            }, {input, reader_indices}, output_tensors);
+            }, {input, reader_indices});
     return output_tensors.at(0);
 }
 

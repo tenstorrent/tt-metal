@@ -83,8 +83,7 @@ Tensor line_all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [dim, num_links, memory_config, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -117,8 +116,7 @@ Tensor line_all_gather(
                     dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
                 {input_tensor});
         },
-        {input_tensor},
-        output_tensors);
+        {input_tensor});
     return output_tensors.at(0);
 }
 
@@ -133,10 +131,8 @@ Tensor line_all_gather(
     const auto mesh_view = device_mesh.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
-    operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices](
+    std::vector<Tensor> output_tensors = operation::launch_op(
+        [=](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -167,8 +163,7 @@ Tensor line_all_gather(
                     dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
                 {input_device_tensor});
         },
-        {input_tensor},
-        output_tensors);
+        {input_tensor});
     return output_tensors.at(0);
 
 }

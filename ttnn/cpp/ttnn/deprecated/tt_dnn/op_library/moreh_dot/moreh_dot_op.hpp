@@ -37,10 +37,8 @@ inline Tensor moreh_dot(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
 
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [mem_config, input_tensor_a](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -51,8 +49,7 @@ inline Tensor moreh_dot(
                 optional_input_tensors,
                 optional_output_tensors);
         },
-        {input_tensor_a, input_tensor_b},
-        output_tensors);
+        {input_tensor_a, input_tensor_b});
 
     return output_tensors.at(0);
 }

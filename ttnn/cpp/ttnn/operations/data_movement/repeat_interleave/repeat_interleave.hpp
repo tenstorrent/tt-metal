@@ -33,6 +33,6 @@ struct ExecuteRepeatInterleave {
 }  // namespace operations
 
 constexpr auto repeat_interleave =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();
+    ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();
 
 }  // namespace ttnn

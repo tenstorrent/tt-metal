@@ -37,6 +37,6 @@ struct ConcatOperation {
 }  // namespace operations
 
 constexpr auto concat =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
+    ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
 
 }  // namespace ttnn

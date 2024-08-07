@@ -174,10 +174,10 @@ Tensor reduce(
     DeviceComputeKernelConfig config = compute_kernel_config.value_or(
         init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors;
     if (is_multicore_hw) {
-        operation::launch_op(
-            [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config](
+        output_tensors = operation::launch_op(
+            [=](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -217,11 +217,9 @@ Tensor reduce(
                         config},
                     {output_tensor});
             },
-            {input_tensor},
-            output_tensors);
+            {input_tensor});
     } else {
-        operation::launch_with_autoformat(
-            [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config](
+        output_tensors = operation::launch_op([=](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -239,8 +237,7 @@ Tensor reduce(
                     {},
                     pad_value);
             },
-            {input_tensor},
-            output_tensors);
+            {input_tensor});
     }
     return output_tensors.at(0);
 }

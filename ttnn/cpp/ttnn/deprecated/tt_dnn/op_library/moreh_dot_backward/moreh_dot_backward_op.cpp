@@ -92,17 +92,14 @@ std::vector<std::optional<Tensor>> moreh_dot_backward(
     std::optional<const Tensor> input_grad,
     std::optional<const Tensor> other_grad,
     const MemoryConfig& mem_config) {
-    std::vector<Tensor> dummy_output_tensors = {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, other}, {input_grad, other_grad}))};
 
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [](const std::vector<Tensor>& input_tensors,
            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(MorehDotBackward{}, input_tensors, optional_input_tensors, optional_output_tensors);
         },
         {output_grad, input, other},
-        dummy_output_tensors,
         {input_grad, other_grad});
 
     std::vector<std::optional<Tensor>> outputs(2);

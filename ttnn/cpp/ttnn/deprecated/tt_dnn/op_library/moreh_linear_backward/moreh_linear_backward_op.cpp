@@ -142,8 +142,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
         if (bias) {
             input_tensors.emplace_back(*bias);
         }
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad}))};
-        operation::launch_op(
+        auto output_tensors = operation::launch_op(
             [bias_grad_mem_config, kernel_config_val](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -155,7 +154,6 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
                     optional_output_tensors);
             },
             input_tensors,
-            output_tensors,
             {},
             {bias_grad});
 

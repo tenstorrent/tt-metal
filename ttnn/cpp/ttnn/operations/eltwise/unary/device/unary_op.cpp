@@ -125,12 +125,12 @@ UnaryOpParallelizationStrategy Unary::get_parallelization_strategy(
 
 const tt::tt_metal::operation::Hash Unary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.legacy_shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
 
     tt::tt_metal::operation::Hash hash = operation::hash_operation<Unary>(
         compute_volume(input_shape),
-        input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        input_tensor.dtype,
+        std::get<DeviceStorage>(input_tensor.storage).memory_config(),
         this->output_mem_config);
 
     for (const auto& unary_with_param_op : this->op_chain) {

@@ -55,8 +55,7 @@ inline Tensor interleaved_to_sharded(
     const TensorMemoryLayout shard_scheme,
     const ShardOrientation shard_orientation,
     const std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [grid, shard_shape, shard_scheme, shard_orientation, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
@@ -96,7 +95,7 @@ inline Tensor interleaved_to_sharded(
                         .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                     {input_tensor});
         },
-    {input_tensor}, output_tensors);
+    {input_tensor});
     return output_tensors.at(0);
 }
 
@@ -104,8 +103,7 @@ inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
     const MemoryConfig &sharded_mem_config,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [sharded_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             TT_FATAL(sharded_mem_config.is_sharded());
@@ -119,7 +117,7 @@ inline Tensor interleaved_to_sharded(
                         .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                     {input_tensor});
         },
-    {input_tensor}, output_tensors);
+    {input_tensor});
     return output_tensors.at(0);
 }
 
@@ -127,8 +125,7 @@ inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             return operation::run(
@@ -139,7 +136,7 @@ inline Tensor sharded_to_interleaved(
                         .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                     {input_tensor});
         },
-    {input_tensor}, output_tensors);
+    {input_tensor});
     return output_tensors.at(0);
 }
 
@@ -190,12 +187,11 @@ struct Reshard {
 };
 
 inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}, {}, {optional_output_tensors});
-        }, {input_tensor}, output_tensors, {}, {output_tensor});
+        }, {input_tensor}, {}, {output_tensor});
     return output_tensors.at(0);
 }
 

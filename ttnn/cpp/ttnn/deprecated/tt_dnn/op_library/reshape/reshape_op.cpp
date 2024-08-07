@@ -490,7 +490,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        auto output_shape = dst_tensor.shape();
+        auto output_shape = dst_tensor.shape;
 
         uint32_t num_old_sticks = src_tensor.get_legacy_shape()[0] * src_tensor.get_legacy_shape()[1] * src_tensor.get_legacy_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
@@ -594,11 +594,10 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         TT_FATAL(input_tensor_a.get_dtype()==DataType::BFLOAT16);
         return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
     }
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [N, C, H, W, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, input_tensors);
-        }, {input_tensor_a}, output_tensors);
+        }, {input_tensor_a});
     return output_tensors.at(0);
 }
 

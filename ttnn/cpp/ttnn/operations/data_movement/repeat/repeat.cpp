@@ -18,8 +18,7 @@ ttnn::Tensor RepeatOperation::invoke(
     const Shape & repeat_dims,
     const std::optional<MemoryConfig>& memory_config_arg) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [repeat_dims, memory_config_arg] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
@@ -39,7 +38,7 @@ ttnn::Tensor RepeatOperation::invoke(
                 output = operation::run_without_autoformat(RepeatDeviceOperation{dim, repeat_dims[dim], memory_config}, {output}).at(0);
             }
             return {output};
-        }, {input_tensor}, output_tensors);
+        }, {input_tensor});
     return output_tensors.at(0);
 
 }

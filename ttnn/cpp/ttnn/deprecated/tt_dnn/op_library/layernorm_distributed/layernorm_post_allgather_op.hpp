@@ -64,9 +64,8 @@ struct make_layernorm_post_allgather {
         const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         // const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{},
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a}))};
         log_debug("layernorm_post_allgather: before launch_op");
-        operation::launch_op(
+        auto output_tensors = operation::launch_op(
             [eps, mem_config,
             // program_config,
             compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -85,7 +84,7 @@ struct make_layernorm_post_allgather {
                             .compute_kernel_config = kernel_config_val},
                         {a, stats},
                         {gamma, beta});
-            }, {a, stats}, output_tensors, {gamma, beta});
+            }, {a, stats}, {gamma, beta});
         return output_tensors.at(0);
     }
 };

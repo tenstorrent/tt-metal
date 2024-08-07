@@ -167,12 +167,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
     const MemoryConfig &rstd_mem_config) {
     TT_ASSERT(are_required_outputs.at(0) == true, "output is always required.");
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})),
-        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})),
-        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
-
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [num_groups, eps, are_required_outputs, output_mem_config, mean_mem_config, rstd_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -190,7 +185,6 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
                 optional_output_tensors);
         },
         {input},
-        output_tensors,
         {gamma, beta},
         {output, mean, rstd});
 

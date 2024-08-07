@@ -34,7 +34,7 @@ struct CreateQKVHeadsOperation {
 
 namespace experimental {
 
-constexpr auto create_qkv_heads = ttnn::register_operation_with_auto_launch_op<
+constexpr auto create_qkv_heads = ttnn::register_operation<
     "ttnn::experimental::create_qkv_heads",
     ttnn::operations::experimental::transformer::CreateQKVHeadsOperation>();
 

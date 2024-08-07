@@ -40,6 +40,6 @@ struct ExecutePad {
 
 }  // namespace operations::data_movement
 
-constexpr auto pad = ttnn::register_operation_with_auto_launch_op<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
+constexpr auto pad = ttnn::register_operation<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
 
 }  // namespace ttnn

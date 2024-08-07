@@ -23,7 +23,8 @@ Tensor create_owned_tensor(T* data_ptr, size_t num_elements, std::vector<uint32_
 }
 
 Tensor convert_torch_tensor_to_tt_tensor(
-    const py::handle &torch_tensor, std::optional<DataType> optional_data_type = std::nullopt, bool enable_borrow = true) {
+    const py::handle &torch_tensor, std::optional<DataType> optional_data_type = std::nullopt, bool enable_borrow = false) {
+    tt::log_debug(tt::LogAsync, "MAIN THREAD: Convert torch tensor to tt tensor (enable_borrow: {})", enable_borrow);
     py::object torch = py::module_::import("torch");
     if (not py::isinstance(torch_tensor, torch.attr("Tensor"))) {
         TT_THROW("The argument must be of type torch.Tensor!");
@@ -102,8 +103,14 @@ Tensor convert_torch_tensor_to_tt_tensor(
         }
     }
 
-    auto on_creation_callback = [tensor = contiguous_torch_tensor] { tensor.inc_ref(); };
-    auto on_destruction_callback = [tensor = contiguous_torch_tensor] { tensor.dec_ref(); };
+    auto on_creation_callback = [tensor = contiguous_torch_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.inc_ref();
+    };
+    auto on_destruction_callback = [tensor = contiguous_torch_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.dec_ref();
+    };
 
     auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
     auto torch_data_ptr = py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")());
@@ -270,9 +277,14 @@ Tensor convert_numpy_tensor_to_tt_tensor(
             break;
         }
     }
-
-    auto on_creation_callback = [tensor = contiguous_np_tensor] { tensor.inc_ref(); };
-    auto on_destruction_callback = [tensor = contiguous_np_tensor] { tensor.dec_ref(); };
+    auto on_creation_callback = [tensor = contiguous_np_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.inc_ref();
+    };
+    auto on_destruction_callback = [tensor = contiguous_np_tensor] {
+        py::gil_scoped_acquire acquire;
+        tensor.dec_ref();
+    };
 
     auto num_elements = py::cast<std::size_t>(contiguous_np_tensor.attr("size"));
     auto np_data_ptr = py::cast<std::size_t>(
@@ -343,7 +355,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
-    const py::handle &tensor, std::optional<DataType> optional_data_type = std::nullopt, bool enable_borrow = true) {
+    const py::handle &tensor, std::optional<DataType> optional_data_type = std::nullopt, bool enable_borrow = false) {
     py::object torch = py::module_::import("torch");
     py::object np = py::module_::import("numpy");
     if (py::isinstance(tensor, torch.attr("Tensor"))) {
@@ -904,12 +916,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
             .def(
-                "track_ref_count",
-                [](Tensor &self) { return self.track_ref_count(); },
-                R"doc(
-                    Log the reference count (as seen by the main and worker threads) of a tensor as it evolves during runtime.
-                )doc")
-            .def(
                 "to",
                 py::overload_cast<DeviceMesh *, const MemoryConfig &>(&Tensor::to, py::const_),
                 py::arg("device_mesh").noconvert(),
@@ -934,7 +940,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
-            .def("sync", [](Tensor &self) { return self.wait_for_tensor_data_populated(); })
             .def(
                 "extract_shard",
                 [](const Tensor &self, CoreCoord core) { return self.extract_shard(core); },

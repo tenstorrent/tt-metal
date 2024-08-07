@@ -32,7 +32,7 @@ struct MaxPoolNew {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_;
+        const Tensor input_tensor_;
     };
 
     using shape_return_value_t = ttnn::Shape;

@@ -248,7 +248,7 @@ static Tensor conv_group_weight_zero_pad_helper(
     uint32_t num_groups,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
-    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    auto conv_weight_tensor_buffer = host_buffer::get_as<T>(conv_weight_tensor);
 
     for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
         int new_batch_idx = curr_batch_idx;
@@ -293,7 +293,7 @@ static Tensor conv_depthwise_weight_bcast_helper(
     Shape& output_weight_shape,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
-    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    auto conv_weight_tensor_buffer = host_buffer::get_as<T>(conv_weight_tensor);
     // Copy the original weight tensor to the output tensor
     for (int i = 0; i < output_weight_shape[0]; i++) {
         for (int j = 0; j < output_weight_shape[1]; j++) {
@@ -666,7 +666,7 @@ uint32_t num_buffers_in_tensor(const Tensor& tensor) {
 Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::optional<int> buffer_index) {
     ZoneScopedN("GetShardForDevice");
     Tensor shard = Tensor();
-    auto& storage = tensor.tensor_attributes->storage;
+    auto& storage = tensor.storage;
     std::visit(
         [target_device, buffer_index, &tensor, &shard](auto&& s) {
             using T = std::decay_t<decltype(s)>;
@@ -697,42 +697,12 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::op
     return shard;
 }
 
-void insert_buffer_and_shape_for_device(
-    Device* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
-    ZoneScopedN("InsertBufferAndShapeForDevice");
-    std::visit(
-        [target_device, &shard, &tensor_to_modify, buffer_index](auto&& s) {
-            using T = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                s.insert_buffer_and_shape_for_device(
-                    buffer_index.value(),
-                    std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                s.insert_buffer_and_shape_for_device(
-                    target_device,
-                    std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
-            } else if constexpr (std::is_same_v<T, OwnedStorage>) {
-                s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                s.insert_buffer(std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer());
-            } else {
-                TT_FATAL(false, "Unsupported storage in insert_buffer_and_shape_for_device");
-            }
-        },
-        tensor_to_modify.tensor_attributes->storage);
-}
-
 Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) {
     // When using async mode, tensors with borrowed storage cannot be passed to workers.
     // They need to be copied to owned storage before being passed to the worker.
     ZoneScopedN("ConvertBorrowedToOwned");
     // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
     // No need to check for borrowed storage.
-    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-        tensor.tensor_attributes->num_shards_to_be_populated > 1)
-        return tensor;
 
     if (tensor.storage_type() == StorageType::BORROWED) {
         ZoneScopedN("CopyBorrowedStorage");

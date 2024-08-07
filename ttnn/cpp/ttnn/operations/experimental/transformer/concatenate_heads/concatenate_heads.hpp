@@ -38,7 +38,7 @@ struct ConcatenateHeadsOperation {
 
 namespace experimental {
 
-constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
+constexpr auto concatenate_heads = ttnn::register_operation<
     "ttnn::experimental::concatenate_heads",
     ttnn::operations::experimental::transformer::ConcatenateHeadsOperation>();
 

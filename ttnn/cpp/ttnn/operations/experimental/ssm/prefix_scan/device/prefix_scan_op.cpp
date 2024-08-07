@@ -13,8 +13,8 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
 
     const auto& a = input_tensors[0];
     const auto& bx = input_tensors[1];
-    TT_FATAL(a.dtype() == bx.dtype(), "Expected input tensors to have the same data type");
-    TT_FATAL(a.layout() == Layout::TILE && bx.layout() == Layout::TILE, "Expected input tensors to be tile layout");
+    TT_FATAL(a.dtype == bx.dtype, "Expected input tensors to have the same data type");
+    TT_FATAL(a.layout == Layout::TILE && bx.layout == Layout::TILE, "Expected input tensors to be tile layout");
     TT_FATAL(a.get_legacy_shape() == bx.get_legacy_shape(), "Expected input tensors to have the same shape");
 
     const auto& shape = a.get_legacy_shape();
@@ -23,8 +23,8 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(shape[2] >= TILE_HEIGHT && shape[2] % TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
 
     const auto& h = input_tensors.at(2);
-    TT_FATAL(h.dtype() == DataType::BFLOAT16, "Expected initial hidden state to be bfloat16");
-    TT_FATAL(h.layout() == Layout::ROW_MAJOR, "Expected initial hidden state to be row-major");
+    TT_FATAL(h.dtype == DataType::BFLOAT16, "Expected initial hidden state to be bfloat16");
+    TT_FATAL(h.layout == Layout::ROW_MAJOR, "Expected initial hidden state to be row-major");
 
     TT_FATAL(a.is_sharded() && bx.is_sharded() && h.is_sharded(), "Expected input tensors to be sharded");
     TT_FATAL(

@@ -180,6 +180,9 @@ class Buffer {
 
     void set_address(uint64_t addr) { address_ = addr; }
 
+    void set_is_allocated(bool is_allocated) { this->is_allocated_ = is_allocated; }
+    bool get_is_allocated() const { return this->is_allocated_; }
+
     uint32_t page_size() const { return page_size_; }
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
@@ -246,11 +249,11 @@ class Buffer {
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
-
-   private:
     virtual void allocate();
 
     virtual void deallocate();
+
+   private:
     friend void DeallocateBuffer(Buffer &buffer);
 
     uint64_t translate_page_address(uint64_t offset, uint32_t bank_id) const;
@@ -264,6 +267,7 @@ class Buffer {
     std::optional<ShardSpecBuffer> shard_parameters_;
    protected:
     std::optional<bool> bottom_up_;
+    bool is_allocated_;
 };
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
@@ -287,6 +291,22 @@ class buffer_map_t {
     std::map<std::tuple<Deviceid, PageAddress>, Buffer *> value() {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         return this->map;
+    }
+
+    void clear() {
+        std::scoped_lock<std::mutex> lock(this->map_mutex);
+        this->map.clear();
+    }
+
+    void clear_entries_of_device(Deviceid device_id) {
+        std::scoped_lock<std::mutex> lock(this->map_mutex);
+        for (auto it = this->map.begin(); it != this->map.end();) {
+            if (std::get<0>(it->first) == device_id) {
+                it = this->map.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     ~buffer_map_t() { TT_ASSERT(this->map.empty(), "Not all buffers deallocated by runtime!"); }

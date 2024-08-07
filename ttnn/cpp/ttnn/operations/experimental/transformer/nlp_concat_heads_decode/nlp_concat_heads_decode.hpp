@@ -28,7 +28,7 @@ struct NLPConcatHeadsDecodeOperation {
 
 namespace experimental {
 
-constexpr auto nlp_concat_heads_decode = ttnn::register_operation_with_auto_launch_op<
+constexpr auto nlp_concat_heads_decode = ttnn::register_operation<
     "ttnn::experimental::nlp_concat_heads_decode",
     ttnn::operations::experimental::transformer::NLPConcatHeadsDecodeOperation>();
 
