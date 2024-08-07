@@ -313,6 +313,7 @@ Pointwise Binary
    ttnn/lt
    ttnn/le
    ttnn/eq
+   ttnn/eq_
    ttnn/ne
    ttnn/isclose
    ttnn/nextafter
