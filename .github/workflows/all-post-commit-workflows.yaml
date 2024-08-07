@@ -11,10 +11,15 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  packages: write
 
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/eager-package-main.yaml
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -57,7 +62,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -73,7 +78,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -89,7 +94,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -119,13 +124,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-
   profiler-regression:
     needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-  eager-package-main:
-    uses: ./.github/workflows/eager-package-main.yaml
     secrets: inherit
   build-docs:
     needs: build-artifact
