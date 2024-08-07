@@ -16,7 +16,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::downsample{
 
 void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
