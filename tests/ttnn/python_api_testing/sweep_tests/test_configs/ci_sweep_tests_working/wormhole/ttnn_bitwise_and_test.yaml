@@ -23,7 +23,7 @@ test-list:
       sanitize-args: False
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["INT32"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: bitwise_and_sweep.csv
