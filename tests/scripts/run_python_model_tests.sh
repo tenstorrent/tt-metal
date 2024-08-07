@@ -56,10 +56,4 @@ if [ "$ARCH_NAME" != "wormhole_b0" ]; then
     pytest $TT_METAL_HOME/tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_new.py -k "pretrained_weight_false"
 
     SLOW_MATMULS=1 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py -k 512 --timeout=420
-
-    # Llama 3.1 8b tests
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/models/demos/wormhole/llama31_8b/tests/test_llama_attention.py
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/models/demos/wormhole/llama31_8b/tests/test_llama_attention_prefill.py
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/models/demos/wormhole/llama31_8b/tests/test_llama_mlp.py
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/models/demos/wormhole/llama31_8b/tests/test_llama_rms_norm.py
 fi
