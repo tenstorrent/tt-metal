@@ -11,7 +11,7 @@ namespace ttnn {
 
 namespace operations {
 
-namespace data_movement {
+namespace downsample{
 
 // TODO: Accept parallelization
 
