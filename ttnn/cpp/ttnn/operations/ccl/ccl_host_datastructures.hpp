@@ -62,54 +62,18 @@ struct EriscDatamoverConfig {
 struct CCLOpConfig {
    public:
     CCLOpConfig(
-     // We currently pass non-const vectors because we take the address of an an const ref
-     // can accept an r-value, which will not necessarily have a persistent address after
-     // the constructor returns. In general this is an indication that this data structure
-     // should be redesigned, in particular to hold some sort of shared pointer or the like
-     // to a tensor to ensure lifetime correctness.
-     std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors, Topology topology) :
-        input_tensors(&input_tensors),
-        output_tensors(&output_tensors),
-        input_sharded(input_tensors.at(0).is_sharded()),
-        output_sharded(output_tensors.at(0).is_sharded()),
-        page_size(input_tensors.at(0).buffer()->page_size()),
-        input_shard_size_bytes(
-            input_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                   (input_tensors.at(0).buffer()->page_size() *
-                                                    input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                    input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                   input_tensors.at(0).shard_spec()->num_cores())
-                                             : std::nullopt),
-        output_shard_size_bytes(
-            output_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                    (output_tensors.at(0).buffer()->page_size() *
-                                                     output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                     output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                    input_tensors.at(0).shard_spec()->num_cores())
-                                              : std::nullopt),
-        shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
-        topology(topology) {
-        TT_ASSERT(this->input_tensors->size() > 0);
-        TT_ASSERT(this->output_tensors->size() > 0);
-        TT_ASSERT(!this->is_input_sharded() || input_shard_size_bytes.has_value());
-        TT_ASSERT(!this->is_output_sharded() || output_shard_size_bytes.has_value());
-    }
+        std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
-    uint32_t get_input_shard_size_bytes() const {
-        TT_ASSERT(input_shard_size_bytes.has_value());
-        return input_shard_size_bytes.value();
-    }
-    uint32_t get_output_shard_size_bytes() const {
-        TT_ASSERT(output_shard_size_bytes.has_value());
-        return output_shard_size_bytes.value();
-    }
-    uint32_t get_page_size() const { return this->page_size; }
-    Topology get_topology() const { return this->topology; }
-    bool is_input_sharded() const { return this->input_sharded; }
-    bool is_output_sharded() const { return this->output_sharded; }
-    bool get_shard_grid_size() const { return this->shard_grid_size; }
-    Tensor const& get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
-    Tensor const& get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
+    uint32_t get_input_shard_size_bytes() const;
+    uint32_t get_output_shard_size_bytes() const;
+    uint32_t get_page_size() const;
+    Topology get_topology() const;
+    bool is_input_sharded() const;
+    bool is_output_sharded() const;
+    bool get_shard_grid_size() const;
+    Tensor const& get_input_tensor(std::size_t i) const;
+    Tensor const& get_output_tensor(std::size_t i) const;
+    std::map<string, string> emit_worker_defines() const;
 
    private:
     std::optional<uint32_t> input_shard_size_bytes;
@@ -119,6 +83,7 @@ struct CCLOpConfig {
     Topology topology;
     bool input_sharded;
     bool output_sharded;
+    bool is_row_major;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;

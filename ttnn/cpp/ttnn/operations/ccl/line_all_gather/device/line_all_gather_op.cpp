@@ -71,18 +71,7 @@ std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tenso
 }
 
 operation::ProgramWithCallbacks LineAllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    AllGatherMode line_all_gather_mode = choose_all_gather_mode(input_tensors.at(0), output_tensors.at(0), dim);
-    switch (line_all_gather_mode) {
-        case AllGatherMode::RING_INTERLEAVED:
-        case AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED:
-            return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
-        break;
-        case AllGatherMode::FULL_WORKER_GRID_SHARDED:
-            TT_THROW("Unsupported AllGatherMode");
-        break;
-        default:
-            TT_THROW("Unsupported AllGatherMode");
-    };
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
 }
 
 namespace operations {

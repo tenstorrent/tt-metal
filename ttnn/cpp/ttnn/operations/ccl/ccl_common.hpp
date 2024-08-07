@@ -26,53 +26,9 @@ struct RingTopology {
         std::optional<uint32_t> receiver_device_id,
         uint32_t num_links,
         uint32_t ring_size,
-        uint32_t ring_index) :
-        num_links(num_links), ring_size(ring_size), ring_index(ring_index), is_linear(topology == Topology::Linear) {
-        eth_sender_cores.reserve(num_links);
-        eth_receiver_cores.reserve(num_links);
+        uint32_t ring_index);
 
-        uint32_t sender_socket_idx = 0;
-        uint32_t receiver_socket_idx = 0;
-        if (receiver_device_id == sender_device_id) {
-            if (ring_index == 0) {
-                receiver_socket_idx = 1;
-            } else {
-                sender_socket_idx = 1;
-            }
-        }
-
-        for (uint32_t l = 0; l < num_links; ++l) {
-            // Get the cores for the sender and receiver worker cores
-            if (!is_linear || ring_index != ring_size - 1) {
-                uint32_t receiver_device = receiver_device_id.value();
-                auto const& sockets = device->get_ethernet_sockets(receiver_device);
-                auto eth_sender_core = sockets.at(sender_socket_idx);
-                eth_sender_cores.push_back(eth_sender_core);
-                log_trace(
-                    tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
-            }
-            if (!is_linear || ring_index != 0) {
-                uint32_t sender_device = sender_device_id.value();
-                auto const& sockets = device->get_ethernet_sockets(sender_device);
-                auto eth_receiver_core = sockets.at(receiver_socket_idx);
-                eth_receiver_cores.push_back(eth_receiver_core);
-                log_trace(
-                    tt::LogOp,
-                    "\teth_receiver_core on link {}: (x={},y={})",
-                    l,
-                    eth_receiver_core.x,
-                    eth_receiver_core.y);
-            }
-
-            if (receiver_device_id == sender_device_id) {
-                receiver_socket_idx += 2;
-                sender_socket_idx += 2;
-            } else {
-                receiver_socket_idx += 1;
-                sender_socket_idx += 1;
-            }
-        }
-    }
+    const Device *device;
 
     std::vector<CoreCoord> eth_sender_cores;
     std::vector<CoreCoord> eth_receiver_cores;
@@ -87,68 +43,32 @@ class CclOpTensorConfig {
    public:
     static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(Tensor const& tensor);
 
-    CclOpTensorConfig(Tensor const& tensor) :
-        buffer_start_address(tensor.buffer()->address()),
-        df(tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype())) {}
+    CclOpTensorConfig(Tensor const& tensor);
+    uint32_t get_page_size() const;
 
-    virtual uint32_t get_page_size() const = 0;
-    virtual uint32_t get_unit_size() const = 0;
+    uint32_t get_buffer_start_address() const;
 
-    uint32_t get_buffer_start_address() const { return this->buffer_start_address; }
-
-    virtual ~CclOpTensorConfig() {};
+    virtual ~CclOpTensorConfig()=default;
 
    protected:
+    uint32_t page_size;
     uint32_t buffer_start_address;
     tt::DataFormat df;
 };
 
 class CclOpInterleavedTensorConfig final : public virtual CclOpTensorConfig {
    public:
-    CclOpInterleavedTensorConfig(Tensor const& input_tensor) : CclOpTensorConfig(input_tensor) {
-        if (input_tensor.get_layout() == Layout::TILE) {
-            this->page_size =tt::tt_metal::detail::TileSize(this->df);
-        } else {
-            this->page_size = input_tensor.buffer()->page_size();
-        }
-    }
-    virtual uint32_t get_page_size() const override { return this->page_size; }
-    virtual uint32_t get_unit_size() const override { return this->page_size; }
-
-   private:
-    uint32_t page_size;
+    CclOpInterleavedTensorConfig(Tensor const& input_tensor);
 };
 
 class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
    public:
-    CclOpShardedTensorConfig(Tensor const& tensor) :
-        CclOpTensorConfig(tensor), shard_spec(tensor.shard_spec().value()) {
-        if (tensor.get_layout() == Layout::TILE) {
-            this->page_size =tt::tt_metal::detail::TileSize(this->df);
-            TT_ASSERT(
-                this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) %
-                    (tt::constants::TILE_HEIGHT *tt::constants::TILE_WIDTH) ==
-                0);
-            this->unit_size = (this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) /
-                               (tt::constants::TILE_HEIGHT *tt::constants::TILE_WIDTH)) *
-                              this->page_size;
-        } else {
-            this->page_size = tensor.get_legacy_shape()[-1] * tensor.element_size();
-            this->unit_size = (this->page_size * this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1)) /
-                              tensor.shard_spec()->num_cores();
-        }
-    }
+    CclOpShardedTensorConfig(Tensor const& tensor);
 
-    virtual uint32_t get_page_size() const override { return this->page_size; }
-    virtual uint32_t get_unit_size() const override { return this->unit_size; }
-
-    uint32_t get_shard_size_in_bytes() const { return this->get_unit_size(); }
-
-    ShardSpec const& get_shard_spec() const { return this->shard_spec; }
+    ShardSpec const& get_shard_spec() const;
 
    private:
     uint32_t page_size;
-    uint32_t unit_size;
     ShardSpec const shard_spec;
 };
 
@@ -438,13 +358,8 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
-        int32_t shard_size_in_bytes =
-            is_sharded ? (input_tensor.buffer()->page_size() * input_tensor.buffer()->shard_spec().tensor2d_shape[0] *
-                          input_tensor.buffer()->shard_spec().tensor2d_shape[1]) /
-                             input_tensor.shard_spec()->num_cores()
-                       : -1;
-        this->input_page_size = is_sharded ? shard_size_in_bytes : input_tensor.buffer()->page_size();
-        ;
+        this->input_page_size = input_tensor.buffer()->page_size();
+
         if (row_major) {
             this->num_cols = input_tensor.get_legacy_shape()[-1];
             auto input_shape = input_tensor.get_legacy_shape();
@@ -492,30 +407,34 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 
     virtual void increment(uint32_t num_pages) override {
-        if (is_sharded) {
-            // nothing to do here - is handled by
-        } else {
-            // Only for interleaved
-            if (num_pages /*pages_per_worker*/ > 0) {
-                if (row_major) {
-                    uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
-                    uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
-                    this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_blocks_shifted * row_offset;
-                    this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
-                } else {
-                    uint32_t num_cols_shifted = col_idx + num_pages /*pages_per_worker*/;
-                    uint32_t num_rows_shifted = num_cols_shifted / num_cols;
-                    uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
-                    this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_rows_shifted * col_offset +
-                                                   num_blocks_shifted * row_offset;
-                    this->col_idx = num_cols_shifted % num_cols;
-                    this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
-                }
+        if (num_pages /*pages_per_worker*/ > 0) {
+            if (row_major) {
+                uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
+                uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
+                this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_blocks_shifted * row_offset;
+                this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
+            } else {
+                uint32_t num_cols_shifted = col_idx + num_pages /*pages_per_worker*/;
+                uint32_t num_rows_shifted = num_cols_shifted / num_cols;
+                uint32_t num_blocks_shifted = slice_dim_is_width ? 0 : num_rows_shifted / num_rows;
+                this->output_start_page_idx += num_pages /*pages_per_worker*/ + num_rows_shifted * col_offset +
+                                                num_blocks_shifted * row_offset;
+                this->col_idx = num_cols_shifted % num_cols;
+                this->row_idx = slice_dim_is_width ? 0 : num_rows_shifted % num_rows;
             }
-            this->input_start_page_idx += num_pages /*pages_per_worker*/;
         }
+        this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
+
+struct ShardedAddrGenArgBuilder {
+    static bool shard_grid_is_transposed(Tensor const& t);
+    static std::vector<uint32_t> emit_ct_args(Tensor const& t);
+    static std::vector<uint32_t> emit_rt_args(Device const* d, Tensor const& t);
+    static void log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix);
+};
+
+
 
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,

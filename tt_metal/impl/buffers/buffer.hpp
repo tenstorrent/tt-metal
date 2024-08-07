@@ -16,6 +16,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/allocator/allocator_types.hpp"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
@@ -34,22 +35,15 @@ enum class BufferType {
     TRACE,
 };
 
-enum class TensorMemoryLayout {
-    INTERLEAVED,
-    SINGLE_BANK,
-    HEIGHT_SHARDED,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
-};
-
-enum class ShardOrientation {
-    ROW_MAJOR,
-    COL_MAJOR,
-};
 
 struct ShardSpec {
+    /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
+
+    /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
+
+    /* The sequence order of the grid cores that the shards are layed out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
@@ -101,6 +95,8 @@ struct ShardSpecBuffer {
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     bool halo() const { return tensor_shard_spec.halo; }
+
+    /* Shape in pages of the full tensor, not per core */
     std::array<uint32_t, 2> shape_in_pages() const {
         auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
         auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
