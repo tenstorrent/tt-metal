@@ -154,8 +154,7 @@ class Program {
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
     // The buffer that holds the kernel/binaries/etc for this program
-    std::vector<std::shared_ptr<Buffer>> kg_buffers;
-    std::unique_ptr<Buffer> buffer;
+    std::shared_ptr<Buffer> kernels_buffer = nullptr;
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
