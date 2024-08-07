@@ -9,6 +9,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -55,6 +57,28 @@ Tensor ExecuteUnary<unary_op_types...>::operator()(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
+}
+
+template <>
+Tensor ExecuteUnary<UnaryOpType::ABS>::operator()(
+    const ComplexTensor& input_tensor,
+    const MemoryConfig& output_mem_config) {
+    return ttnn::hypot(input_tensor[0],input_tensor[1],output_mem_config);
+}
+
+template <>
+ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::operator()(
+    const ComplexTensor& input,
+    const MemoryConfig& output_mem_config) {
+    Tensor a_plus_b = ttnn::add(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor a_minus_b = ttnn::subtract(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(ttnn::square(input[0],output_mem_config),ttnn::square(input[1],output_mem_config),
+                                std::nullopt,output_mem_config);
+    Tensor inv_dr = ttnn::reciprocal( asqr_plus_bsqr, output_mem_config );
+    Tensor conj_im = ttnn::multiply( ttnn::neg(input[1],output_mem_config), inv_dr, std::nullopt, output_mem_config);
+    Tensor conj_re = ttnn::multiply( input[0], inv_dr, std::nullopt, output_mem_config);
+    return ComplexTensor({ conj_re, conj_im});
+
 }
 
 template struct ExecuteUnary<UnaryOpType::ABS>;
