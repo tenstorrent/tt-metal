@@ -727,10 +727,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
-    model_config[
-        "ATTN_MASK_DTYPE"
-    ] = BFP8_DTYPE  # SPDA op requires all inputs to have the same dtype and only supposts bfp8 and fp16
-
     model_config["WORD_EMBEDDING_OUTPUT_DTYPE"] = BFLOAT16_DTYPE  # embeddings output and the residual stream
 
     # Set input df for AllGathers to bfp8 to save data bandwidth
