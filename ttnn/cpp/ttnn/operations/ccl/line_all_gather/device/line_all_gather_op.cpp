@@ -94,14 +94,20 @@ Tensor line_all_gather(
             uint32_t num_devices = devices.size();
 
             uint32_t device_index = 0; // Initialize device index
-            uint32_t receiver_device_id = 0; // Initialize receiver device ID
-            uint32_t sender_device_id = 0; // Initialize sender device ID
+            std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
+            std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
 
             for (uint32_t i = 0; i < num_devices; ++i) {
                 if (devices[i] == input_tensor.device()) {
                     device_index = i;
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+                    bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
+                    bool is_last_chip_in_counter_clockwise_direction = i == 0;
+                    std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i+1)->id());
+                    std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i-1)->id());
                     break;
                 }
             }
