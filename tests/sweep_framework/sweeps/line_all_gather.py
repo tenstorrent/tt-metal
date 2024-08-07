@@ -15,62 +15,10 @@ import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
-
-
-def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
-    if layout == ttl.tensor.Layout.ROW_MAJOR and input_dtype == ttl.tensor.DataType.BFLOAT8_B:
-        return True, "Invalid combination"
-
-    if num_devices < 2:
-        return True, "Requires multiple devices to run"
-    elif num_devices == 2 and num_links <= 2:
-        return True, "Not enough links to run"
-
-    if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
-        return True, "Unsupported test case"
-
-    ## Check that we can readback results
-    fast_dispatch_page_size_limit = 55 * 1024
-    elem_size = 2 if input_dtype == ttl.tensor.DataType.BFLOAT16 else 1
-    if layout == ttl.tensor.Layout.ROW_MAJOR and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
-        # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
-        # limited to ~55K pages.
-        return True, "Fast dispatch can't support reading back this page size in one shot"
-
-    # Check that we can fit in L1 (if L1 config)
-    tensor_size_bytes = elem_size
-    for i in input_shape:
-        tensor_size_bytes *= i
-    num_l1_banks = 64
-    if mem_config.buffer_type == ttl.tensor.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
-        return True, "L1 buffer can't support large tensor sizes"
-
-    # Check that each chip has a non-zero amount of data available
-    min_sized_chunks_on_dim = input_shape[dim]
-    if dim == 3:
-        min_sized_chunks_on_dim //= 32
-    if dim == 2:
-        if layout == ttl.tensor.Layout.TILE:
-            min_sized_chunks_on_dim //= 32
-    if min_sized_chunks_on_dim < num_devices:
-        return (
-            True,
-            f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
-        )
-
-    if (
-        input_shape == [8, 8, 256, 384]
-        and dim == 1
-        and layout == ttl.tensor.Layout.TILE
-        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
-    ):
-        return True, "Known failure"
-
-    return False, ""
-
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -95,15 +43,6 @@ parameters = {
         "enable_async": [True, False],
     },
 }
-
-
-# Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["broadcast"] in {"w", "hw"} and test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Broadcasting along width is not supported for row major layout"
-    return False, None
 
 
 def skip(
