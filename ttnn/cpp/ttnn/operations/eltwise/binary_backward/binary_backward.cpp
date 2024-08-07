@@ -21,11 +21,11 @@
 #include "ttnn/cpp/ttnn/common/constants.hpp"
 #include "ttnn/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 

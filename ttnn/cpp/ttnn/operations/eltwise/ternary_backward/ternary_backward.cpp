@@ -10,7 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include <magic_enum/magic_enum.hpp>
 
