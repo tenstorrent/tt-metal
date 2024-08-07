@@ -14,6 +14,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
     ConcatMesh2DToTensor,
 )
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather
 
 
 class TtLlamaDecoder_galaxy:
@@ -214,29 +215,6 @@ class TtLlamaDecoder_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=None):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=memory_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
-
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
@@ -246,10 +224,13 @@ class TtLlamaDecoder_galaxy:
         tt_stats = ttnn.reshape(
             tt_stats, ttnn.Shape((1, 1, 32, 32), (1, 1, 32, 32))
         )  # TODO: Figure out why we need this
-        tt_stats = self.tt_all_gather(
+
+        tt_stats = tt_all_gather(
             tt_stats,
+            device_mesh=self.device_mesh,
             dim=3,
-            cluster_axis=0,
+            cluster_axis=1,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

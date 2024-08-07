@@ -74,7 +74,7 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = CIRCULAR_BUFFER_CONF
 
 // 4 uint32_t semaphores per core aligned to 16B
 constexpr static std::uint32_t SEMAPHORE_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
-constexpr static std::uint32_t NUM_SEMAPHORES = 4;
+constexpr static std::uint32_t NUM_SEMAPHORES = 8;
 constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
 
 constexpr static std::uint32_t L1_UNRESERVED_BASE = ((SEMAPHORE_BASE + SEMAPHORE_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
