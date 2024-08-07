@@ -18,7 +18,7 @@ namespace detail {
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
 // TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
 struct ProgramCache {
-    inline bool contains(uint64_t program_hash) { return this->cache_.count(program_hash) > 0; }
+    inline bool contains(uint64_t program_hash) { return is_enabled() ? this->cache_.count(program_hash) > 0 : false; }
 
     template <typename T>
     inline T& get(uint64_t program_hash) {
@@ -27,6 +27,9 @@ struct ProgramCache {
 
     template <typename T>
     inline void insert(uint64_t program_hash, T&& program) {
+        if ( !is_enabled()) {
+            return;
+        }
         using cache_t = decltype(this->cache_);
         this->cache_.try_emplace(program_hash, program);
     }
@@ -39,7 +42,7 @@ struct ProgramCache {
         is_enabled_ = false;
     }
 
-    bool is_enabled()  {
+    bool is_enabled() const {
         return is_enabled_;
     }
 

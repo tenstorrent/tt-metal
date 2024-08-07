@@ -15,7 +15,7 @@
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unique_any.hpp"
-
+#include "tt_metal/graph_tracking.hpp"
 namespace ttnn {
 
 namespace device_operation {
@@ -133,13 +133,15 @@ inline auto& create_or_get_program_from_cache(
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
                 using cached_program_t =
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+
+                auto cached_program_factory = CachedProgramFactory{
+                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
+                        program_factory_index};
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 program_cache.insert(
                     program_hash,
-                    CachedProgramFactory{
-                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
-                        program_factory_index});
-                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
-                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
+                    std::move(cached_program_factory)
+                    );
                 return cached_program.program;
             },
             program_factory);
@@ -259,6 +261,7 @@ typename device_operation_t::tensor_return_value_t run(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
     auto operation_id = assign_operation_id();
 
     tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_args);
@@ -291,6 +294,10 @@ typename device_operation_t::tensor_return_value_t run(
 
     auto& program = create_or_get_program_from_cache<device_operation_t>(
         program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
+
+    if(GraphTracker::instance().block_run_program()) {
+        return tensor_return_value;
+    }
 
     if (USE_FAST_DISPATCH) {
         ZoneScopedN("EnqueueProgram");
