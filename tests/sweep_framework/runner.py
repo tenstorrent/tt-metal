@@ -148,7 +148,11 @@ def sanitize_inputs(test_vectors):
 def get_suite_vectors(client, vector_index, suite):
     response = client.search(
         index=vector_index,
-        query={"bool": {"must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name": suite}}]}},
+        query={
+            "bool": {
+                "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name.keyword": suite}}]
+            }
+        },
         size=10000,
     )
     test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
