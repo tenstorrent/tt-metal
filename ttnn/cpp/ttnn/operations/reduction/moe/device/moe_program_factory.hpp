@@ -231,19 +231,11 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
         reader_runtime_args[0] = input_buffer->address();
         reader_runtime_args[1] = topk_mask_buffer->address();
         reader_runtime_args[2] = expert_mask_buffer->address();
-        tt::log_info("reader_runtime_args[0]: {}", reader_runtime_args[0]);
-        tt::log_info("reader_runtime_args[1]: {}", reader_runtime_args[1]);
-        tt::log_info("reader_runtime_args[2]: {}", reader_runtime_args[2]);
 
         auto &writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
         writer_runtime_args[0] = output_buffer->address();
-        tt::log_info("writer_runtime_args[0]: {}", writer_runtime_args[0]);
-
 
     };
-
-    tt::log_info("reader_runtime_args[0]: {}",GetRuntimeArgs(program, unary_reader_kernel_id)[0]);
-    tt::log_info("writer_runtime_args[1]: {}",GetRuntimeArgs(program, unary_writer_kernel_id)[0]);
 
     return {std::move(program), override_runtime_args_callback};
 }

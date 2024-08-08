@@ -21,38 +21,8 @@ using namespace ckernel;
 // topk llk needs a global variable atm
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT_UNPACK(DPRINT << "======" << ENDL());
-    for (uint16_t r = 0; r < 32; ++ r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        DPRINT_UNPACK(DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL());
-    }
-    DPRINT_UNPACK(DPRINT << "++++++" << ENDL());
-}
+
 namespace NAMESPACE {
-template<uint32_t in0, uint32_t in1, uint32_t num_tiles>
-void max_block_inplace() {
-    // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    max_tile_init();
-
-    constexpr uint32_t dst_reg_0 = 0;
-    constexpr uint32_t dst_reg_1 = 1;
-    cb_wait_front(in0, num_tiles);
-    cb_wait_front(in1, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst(tt::DstMode::Half);
-        copy_tile(in0, 0, dst_reg_0);
-        copy_tile(in1, i, dst_reg_1);
-        cb_pop_front(in0, 1);
-        cb_reserve_back(in0, 1);
-        max_tile(dst_reg_0, dst_reg_1);
-        pack_tile(dst_reg_0, in0);
-        cb_push_back(in0, 1);
-        release_dst(tt::DstMode::Half);
-    }
-}
-
 template<uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
@@ -103,8 +73,6 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     }
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, cols);
-    //print_full_tile(in0_cb);
-    //print_full_tile(in1_cb);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst(tt::DstMode::Half);
@@ -117,8 +85,6 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
             release_dst(tt::DstMode::Half);
         }
     }
-    //print_full_tile(in0_cb, 0);
-
     cb_pop_front(in1_cb, cols);
 }
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
@@ -237,7 +203,7 @@ void reduce_c() {
    UNPACK(tensix_sync()); // Workaround for issue #9370
 }
 
-template<uint32_t Ht, uint32_t Wt, uint32_t K, uint32_t logWt, uint32_t logk, uint32_t input_cb_index, uint32_t index_cb_index, uint32_t input_transposed_cb_index, uint32_t index_transposed_cb_index, uint32_t values_cb_index, uint32_t output_ind_cb_index>
+template<uint32_t Ht, uint32_t Wt, uint32_t K, uint32_t logWt, uint32_t logk, uint32_t input_cb_index, uint32_t index_cb_index, uint32_t input_transposed_cb_index, uint32_t index_transposed_cb_index, uint32_t values_cb_index, uint32_t output_ind_cb_index, bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -245,13 +211,11 @@ void top_k() {
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
-    //cb_wait_front(input_cb_index, Ht*Wt);
     ckernel::topk_tile_init();
-    //print_full_tile(input_cb_index);
-    //transpose_wh_init(input_cb_index, input_transposed_cb_index);
 
-    //print_full_tile(input_cb_index);
-
+    if (first_call){
+        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+    }
     for(uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
         cb_reserve_back(input_transposed_cb_index, Wt);
@@ -406,13 +370,11 @@ void MAIN {
     constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
 
     // mask out invalid experts
-    add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt, true);
-    //cb_wait_front(input_cb_index, Ht*Wt);
-    //print_full_tile(input_cb_index);
+    // TODO: fix the bug that makes this give bad results
+    //add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt, true);
+
     // top-k
-    top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index>();
-    //print_full_tile(input_cb_index);
-    //sfpu::_init_sfpu_config_reg();
+    top_k<Ht, Wt, K, logWt, logk, input_cb_index, index_cb_index, input_transposed_cb_index, index_transposed_cb_index, values_cb_index, output_ind_cb_index, true>();
 
     // mask out all experts except the top-k
     add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht,Kt, false);

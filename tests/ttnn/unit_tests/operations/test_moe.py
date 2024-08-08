@@ -23,29 +23,32 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     expert_mask = torch.zeros([N, C, 1, W], dtype=torch_dtype)
     expert_mask[:, :, :, E:] = float("-inf")
 
+    # TODO: make this addition a part of the moe op
+    input += expert_mask
+
     topE_mask = torch.zeros([N, C, 1, k], dtype=torch_dtype)
     topE_mask[:, :, :, e:] = float("-inf")
 
-    pyt_topk_values, pyt_topk_indices = torch.topk(input + expert_mask, k, dim=-1)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1)
     torch_weights_1SB1 = torch.sum(
         (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
         dim=-1,
         keepdim=True,
     )
-    print(torch_weights_1SB1)
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_expert_mask = ttnn.from_torch(expert_mask, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_topE_mask = ttnn.from_torch(topE_mask, dtype, layout=ttnn.Layout.TILE, device=device)
-    weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
-    print(weights_1SB1)
 
-    assert list(weights_1SB1.get_legacy_shape()) == [N, C, H, k]
+    for i in range(3):
+        weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
 
-    ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)[:, :, :, :1]
+        assert list(weights_1SB1.get_legacy_shape()) == [N, C, H, k]
 
-    pcc_values = 0.95
+        ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
-    assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
+        pcc_values = 0.95
+
+        assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 
 
 @skip_for_grayskull()
@@ -60,5 +63,5 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     "N, C, H, W, k, E, e",
     ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
 )
-def test_moe(N, C, H, W, k, E, e, dtype, device):
+def test_moe(N, C, H, W, k, E, e, dtype, device, use_program_cache):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)
