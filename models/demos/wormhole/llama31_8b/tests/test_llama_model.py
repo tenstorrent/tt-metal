@@ -48,7 +48,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()

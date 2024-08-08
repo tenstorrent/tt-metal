@@ -50,7 +50,7 @@ def test_llama_model_perf(
     profiler.clear()
 
     profiler.start("weight_loading")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()
