@@ -729,7 +729,7 @@ bool Tensor::is_allocated() const {
             if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return bool(storage.buffer) and storage.buffer->size() > 0;
+                return bool(storage.buffer) and storage.buffer->get_is_allocated();
             } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return true;
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {

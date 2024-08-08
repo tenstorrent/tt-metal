@@ -2266,6 +2266,7 @@ void Device::set_worker_mode(const WorkExecutorMode& mode) {
 }
 
 void Device::enable_async(bool enable) {
+    return; // TODO: delete this function
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
 }

@@ -248,7 +248,7 @@ static Tensor conv_group_weight_zero_pad_helper(
     uint32_t num_groups,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
-    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    auto conv_weight_tensor_buffer = host_buffer::get_as<T>(conv_weight_tensor);
 
     for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
         int new_batch_idx = curr_batch_idx;
@@ -293,7 +293,7 @@ static Tensor conv_depthwise_weight_bcast_helper(
     Shape& output_weight_shape,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
-    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+    auto conv_weight_tensor_buffer = host_buffer::get_as<T>(conv_weight_tensor);
     // Copy the original weight tensor to the output tensor
     for (int i = 0; i < output_weight_shape[0]; i++) {
         for (int j = 0; j < output_weight_shape[1]; j++) {

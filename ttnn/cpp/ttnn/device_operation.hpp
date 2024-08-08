@@ -173,7 +173,18 @@ inline auto& create_or_get_program_from_cache(
     }
 }
 
-constexpr auto allocate_device_buffer = [](auto&& tensor) {
+struct AssertDeviceBufferIsAllocated {
+    std::size_t index = 0;
+
+    void operator()(const Tensor& tensor) {
+        if (not tensor.is_allocated()) {
+            tt::log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
+        }
+        index++;
+    }
+};
+
+constexpr auto allocate_device_buffer = [](const Tensor& tensor) {
     auto device_buffer = tensor.buffer();
     if (device_buffer->get_is_allocated()) {
         return;
@@ -257,8 +268,9 @@ template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     device->push_work(
         [cq_id, operation_id, operation_attributes, tensor_args, tensor_return_value, device]() mutable {
-            ZoneScopedN("TT_DNN_DEVICE_OP");
             tt::stl::reflection::visit_object_of_type<Tensor>(allocate_device_buffer, tensor_return_value);
+
+            ZoneScopedN("TT_DNN_DEVICE_OP");
 
             auto& program_cache = device->program_cache;
 
@@ -266,6 +278,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             auto program_cache_hit = program_cache.contains(program_hash);
 
             log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
+
+            tt::stl::reflection::visit_object_of_type<Tensor>(AssertDeviceBufferIsAllocated{}, tensor_args);
 
             if (program_cache_hit) {
                 ZoneScopedN("Validate on Program Cache Hit");
@@ -385,7 +399,7 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
 
     auto num_shards = storage.num_buffers();
 
-    std::vector<std::shared_future<tensor_return_value_t>> shard_futures;
+    std::vector<std::future<tensor_return_value_t>> shard_futures;
     shard_futures.reserve(num_shards);
 
     // Launch each shard
@@ -393,7 +407,7 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
         shard_futures.emplace_back(
             std::async(
                 std::launch::async,
-                [cq_id, &operation_attributes, &tensor_args, shard_index, &storage]() mutable {
+                [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
                     auto device = storage.get_buffer_for_device_id(shard_index)->device();
                     auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
                     return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);

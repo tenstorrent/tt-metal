@@ -192,7 +192,7 @@ struct OldInfraDeviceOperation {
         return attributes.compute_program_hash(tensor_args.input_tensors, tensor_args.optional_input_tensors);
     }
 
-    static operation::OpPerformanceModel create_op_performance_model(
+    static auto create_op_performance_model(
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
