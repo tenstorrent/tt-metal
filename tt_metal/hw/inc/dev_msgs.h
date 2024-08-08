@@ -231,7 +231,7 @@ struct watcher_msg_t {
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    volatile uint32_t l1_barrier;
+    uint32_t pad;
     struct launch_msg_t launch;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;

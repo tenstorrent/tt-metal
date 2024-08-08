@@ -309,7 +309,7 @@ class Cluster {
         (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
         (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
         (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
-        (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
+        (uint32_t)MEM_L1_BARRIER,
         (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
         (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
     };
