@@ -39,6 +39,18 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     std::cout << "scale mask softmax multi core" << std::endl;
 
+    if (mask.has_value()) {
+        std::cout << "mask has value" << std::endl;
+    } else {
+        std::cout << "mask no value" << std::endl;
+    }
+
+    if (scale.has_value()) {
+        std::cout << "scale has value" << std::endl;
+    } else {
+        std::cout << "scale no value" << std::endl;
+    }
+
     const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
@@ -157,8 +169,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         softmax_defines["CAUSAL_MASK"] = "1";
     }
 
-    // TODO(pjanevski): finished here
-
     auto reader_kernels_id = CreateKernel(
         program, "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(
@@ -199,9 +209,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto cb_out0_id = CreateCircularBuffer( program, all_device_cores, c_out0_config );
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CB::c_intermed1, im_cb_data_format}}).set_page_size(tt::CB::c_intermed1, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
-
-    // TODO(pjanevski): continue from here
-
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CB::c_in2, scalar_cb_data_format}}).set_page_size(tt::CB::c_in2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer( program, all_device_cores, c_in2_config );
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{tt::CB::c_intermed0, im_cb_data_format}}).set_page_size(tt::CB::c_intermed0, im_tile_size);
