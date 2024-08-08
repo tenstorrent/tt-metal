@@ -634,8 +634,9 @@ static bool is_cb_buffering_sufficient_to_avoid_deadlock(
     uint32_t cb_short_circuit_size_pages,
     std::size_t edm_channel_buffer_size,
     uint32_t page_size) {
+    static constexpr std::size_t num_cbs_deep_per_worker = 2;
     uint32_t worker_size_pages_rounded_up =
-        tt::round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / 2);
+        tt::round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / num_cbs_deep_per_worker);
     uint32_t worker_slice_size_bytes = worker_size_pages_rounded_up * page_size;
     uint32_t available_buffering_capacity = compute_maximum_worker_slice_in_bytes(
         cb_src0_size_pages, cb_dst0_size_pages, cb_short_circuit_size_pages, edm_channel_buffer_size, page_size);
@@ -726,11 +727,11 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
-    uint32_t per_step_dim_size = input_tensor.get_legacy_shape()[scatter_split_dim] / ring_size;
+    uint32_t per_step_dim_size = input_tensor.volume() / ring_size;
     uint32_t input_tensor_num_units_per_scatter_dim =
-        per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
+        per_step_dim_size / (tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT);  // if tile - for RM - this will be off.
     TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
-    uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_scatter_dim);
+    uint32_t max_num_workers = input_tensor_num_units_per_scatter_dim;
     bool enable_bidirectional = true;
     auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
@@ -767,9 +768,10 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto worker_receiver_semaphore_address = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
     auto worker_sender_semaphore_address = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
 
+    std::size_t cb_buffering_depth = 4;
     uint32_t cb_num_pages =
-        (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size()) * 2;
-    uint32_t cb_num_pages_per_packet = cb_num_pages / 2;
+        (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size()) * cb_buffering_depth;
+    uint32_t cb_num_pages_per_packet = cb_num_pages / cb_buffering_depth;
     log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
     auto const& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers] =
         create_worker_circular_buffers(local_chip_tensor, op_config, worker_core_range, cb_num_pages, program);
@@ -790,7 +792,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ring_size,
         num_workers,
         max_worker_slice_in_bytes,
-        cb_num_pages / 2);
+        cb_num_pages / cb_buffering_depth);
 
     // Not per buffer because the buffer sharing mode may cause some buffers to share EDM transfers
     WorkerTransferInfo const& worker_transfer_info = compute_num_edm_messages_per_channel(
@@ -803,9 +805,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ring_size);
 
     // Configure the EDM builders
-    std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [enable_bidirectional, num_edm_channels](uint32_t x) {
-                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
-            };
+    std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn =
+        [enable_bidirectional](uint32_t x) { return enable_bidirectional ? (x % 2 == 0) : true; };
     EdmInterfaceAddresses edm_interface_addresses;
     for (std::size_t link = 0; link < num_links; link++) {
         add_worker_config_to_edm_builders(
