@@ -8,6 +8,7 @@
 #include "common/constants.hpp"
 #include "core_coord.h"
 #include "logger.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -536,10 +537,8 @@ void test_numerically() {
         auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16);
         auto host_output = host_function<std::plus<float>>(input_tensor_a, input_tensor_b);
 
-
         auto device_input_tensor_a = input_tensor_a.to(Layout::TILE).to(device);
         auto device_input_tensor_b = input_tensor_b.to(Layout::TILE).to(device);
-
 
         // Data movement kernel needs output tensor address to be passed as a runtime argument.
         auto device_output_tensor = tt::tt_metal::create_device_tensor(
@@ -556,7 +555,6 @@ void test_numerically() {
         auto input_a_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_a.get_dtype());
         auto input_b_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_b.get_dtype());
         auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.get_dtype());
-
 
         bool src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
         bool src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -915,31 +913,37 @@ void test_numerically() {
     }
 
     // =================
-    // softmax original
+    // softmax original and generic test
     // from test_softmax_op.cpp
     {
         std::cout << "Starting original softmax test" << std::endl;
-        Shape softmax_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-        Tensor input_tensor = tt::numpy::random::random(softmax_shape).to(Layout::TILE).to(device);
-        Tensor device_output_tensor = ttnn::softmax_in_place(input_tensor);
-        Tensor output_tensor = device_output_tensor.cpu();
-    }
+        const Shape softmax_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+        Tensor input_tensor_generic = tt::numpy::random::random(softmax_shape);
+        Tensor input_tensor_original = input_tensor_generic;
+        input_tensor_original = input_tensor_original.to(Layout::TILE).to(device);
+        Tensor device_output_tensor_original = ttnn::softmax_in_place(input_tensor_original);
+        Tensor output_tensor_original = device_output_tensor_original.cpu();
+        std::cout << "Finished original softmax test" << std::endl;
 
-    // softmax generic
-    {
-         // TODO(pjanevski): assume mask is nullopt, for now
+        // Softmax generic test
+
+        std::cout << "Starting generic softmax test" << std::endl;
+
+        input_tensor_generic = input_tensor_generic.to(Layout::TILE).to(device);
+
+        auto device_output_tensor = tt::tt_metal::create_device_tensor(
+            input_tensor_generic.tensor_attributes->shape,
+            input_tensor_generic.tensor_attributes->dtype,
+            input_tensor_generic.tensor_attributes->layout,
+            input_tensor_generic.device(),
+            input_tensor_generic.memory_config());
+
+        auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_generic);
+
+         // TODO(pjanevski): Copy paste arguments from original softmax call.
         std::optional<const Tensor> mask = nullopt;
+        std::optional<float> scale = std::nullopt;
         bool causal_mask = false;
-
-        Shape softmax_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-        Tensor input_tensor = tt::numpy::random::random(softmax_shape).to(Layout::TILE).to(device);
-
-        auto output_tensor = tt::tt_metal::create_device_tensor(
-            input_tensor.tensor_attributes->shape,
-            input_tensor.tensor_attributes->dtype,
-            input_tensor.tensor_attributes->layout,
-            input_tensor.device(),
-            input_tensor.memory_config());
 
         const auto shape = input_tensor.get_legacy_shape();
         uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
@@ -969,18 +973,15 @@ void test_numerically() {
         tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
         uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
 
-        MathFidelity math_fidelity;
-        bool math_approx_mode;
-        bool fp32_dest_acc_en;
-
-        math_fidelity = MathFidelity::HiFi4;
-        math_approx_mode = true;
-        fp32_dest_acc_en = false;
+        // Copied from original softmax call
+        MathFidelity math_fidelity = MathFidelity::HiFi4;
+        bool math_approx_mode = true;
+        bool fp32_dest_acc_en = false;
 
         tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
         uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
 
-        tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+        tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.get_dtype());
         uint32_t out0_tile_size = tt::tt_metal::detail::TileSize(out0_cb_data_format);
 
         tt::DataFormat mask_cb_data_format = mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype()) : tt::DataFormat::Float16_b;
@@ -998,7 +999,7 @@ void test_numerically() {
         tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
         auto src0_buffer = input_tensor.buffer();
-        auto out0_buffer = output_tensor.buffer();
+        auto out0_buffer = device_output_tensor.buffer();
 
         uint32_t num_tiles = input_tensor.volume()/TILE_HW;
 
@@ -1034,6 +1035,8 @@ void test_numerically() {
         auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
         auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
+        auto all_device_cores_set = CoreRangeSet({all_device_cores});
+
         bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
         bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> reader_compile_time_args = {
@@ -1059,9 +1062,7 @@ void test_numerically() {
             softmax_defines["CAUSAL_MASK"] = "1";
         }
 
-        // TODO(pjanevski): try changing all_cores with all_device_cores or in different
-        // direction if something is not working
-        // we are assuming again that mask is nullopt here
+        // TODO(pjanevski): if mask is not nullopt we need to add more circular buffers
 
        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes =
         {
@@ -1070,63 +1071,153 @@ void test_numerically() {
                 {
                     tt::CB::c_in0,
                     {
-                        .core_spec = all_cores,
+                        .core_spec = all_device_cores_set,
                         .total_size = in0_t * in0_tile_size,
                         .page_size = in0_tile_size,
                         .data_format = in0_cb_data_format,
-                        .set_globally_allocated_address = 0,
                     }
                 },
                 {
                     tt::CB::c_out0,
                     {
-                        .core_spec = all_cores,
+                        .core_spec = all_device_cores_set,
                         .total_size = out0_t * out0_tile_size,
                         .page_size = out0_tile_size,
                         .data_format = out0_cb_data_format,
-                        .set_globally_allocated_address = 0,
                     }
                 },
                 {
                     tt::CB::c_intermed1,
                     {
-                        .core_spec = all_cores,
+                        .core_spec = all_device_cores_set,
                         .total_size = im1_t * im_tile_size,
                         .page_size = im_tile_size,
                         .data_format = im_cb_data_format,
-                        .set_globally_allocated_address = 0,
+                    }
+                },
+                {
+                    tt::CB::c_in2,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = in2_t * scalar_tile_size,
+                        .page_size = scalar_tile_size,
+                        .data_format = scalar_cb_data_format,
+                    }
+                },
+                {
+                    tt::CB::c_intermed0,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = im0_t * im_tile_size,
+                        .page_size = im_tile_size,
+                        .data_format = im_cb_data_format,
+                    }
+                },
+                {
+                    tt::CB::c_in5,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = in5_t * mask_tile_size,
+                        .page_size = mask_tile_size,
+                        .data_format = mask_cb_data_format,
                     }
                 }
             },
             .data_movement_attributes =
             {
                 {
-                    .core_spec = all_cores,
+                    .core_spec = all_device_cores_set,
                     .kernel_path = "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp",
                     .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines)
                 },
                 {
-                    .core_spec = all_cores,
+                    .core_spec = all_device_cores_set,
                     .kernel_path = "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp",
                     .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, softmax_defines)
                 }
             },
-            .compute_attributes = // TODO(pjanevski): softmax_defines should contain
+        };
+
+        softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+
+        program_attributes.compute_attributes = {
             {
-                {
-                    .core_spec = all_cores,
-                    .kernel_path = "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp",
-                    .config = {
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .preserve_fp32_precision = false,
-                        .math_approx_mode = math_approx_mode,
-                        .compile_args = {},
-                        .defines = softmax_defines,
-                    },
+                .core_spec = all_device_cores_set,
+                .kernel_path = "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp",
+                .config = {
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_approx_mode = math_approx_mode,
+                    .compile_args = {},
+                    .defines = softmax_defines,
                 },
             },
         };
+
+        std::cout << "Finished creating program attributes" << std::endl;
+
+        uint32_t src_addr = src0_buffer->address();
+        uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
+        uint32_t out_addr = out0_buffer->address();
+
+        uint32_t curr_row = 0;
+        union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
+        for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            if (i >= num_cores) {
+                program_attributes.data_movement_attributes[0].runtime_args_per_core[core] =  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // [8]=1.0f is scaler
+                program_attributes.compute_attributes[0].runtime_args_per_core[core] =  { 0, 0, 0, 0, 0, 0 };
+                program_attributes.data_movement_attributes[1].runtime_args_per_core[core] =  { 0, 0, 0, 0, 0, 0, 0};
+
+                // SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
+                // SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
+                // SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0});
+                continue;
+            }
+            uint32_t num_tile_rows_per_core = 0;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_tile_rows_per_core = num_tile_rows_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_tile_rows_per_core = num_tile_rows_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
+
+            uint32_t tile_offset = curr_row * Wt;
+            uint32_t curr_ht = curr_row % Ht;
+            uint32_t mask_curr_ht = curr_ht % mask_Ht;   // the start offset for causal mask
+            uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt; // causal mask batch offset
+            uint32_t mask_id = causal_mask ? (mask_curr_ht * Wt + mask_offset) : (curr_row / Ht * Wt); // causal mask start offset + causal mask batch offset
+
+            if (causal_mask) {
+                program_attributes.data_movement_attributes[0].runtime_args_per_core[core] =  { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80, mask_curr_ht, mask_offset }; // [8]=1.0f is scaler
+                // SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80, mask_curr_ht, mask_offset }); // [10]=1.0f is scaler
+            } else {
+                program_attributes.data_movement_attributes[0].runtime_args_per_core[core] =  { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }; // [8]=1.0f is scaler
+                // SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
+            }
+
+            program_attributes.compute_attributes[0].runtime_args_per_core[core] = { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data };
+            // SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data });
+
+            program_attributes.data_movement_attributes[1].runtime_args_per_core[core] =  { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00};
+            // SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00});
+
+            curr_row += num_tile_rows_per_core;
+        }
+
+        std::cout << "Running softmax generic op" << std::endl;
+        ttnn::generic_op(std::vector<Tensor>{input_tensor}, device_output_tensor, program_attributes);
+
+        auto reshaped_device_output_tensor = ttnn::reshape(device_output_tensor, input_tensor_generic.get_shape());
+
+        auto output_tensor = reshaped_device_output_tensor.cpu();
+
+        auto allclose = tt::numpy::allclose<bfloat16>(output_tensor_original, output_tensor);
+
+        TT_FATAL(allclose);
+
+        std::cout << "Finished softmax generic test" << std::endl;
     }
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
