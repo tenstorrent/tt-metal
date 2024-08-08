@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 from loguru import logger
+import ttnn
 
 import pytest
 
@@ -100,7 +101,7 @@ def test_reproduce_matmul_2d_hang(
         a_t.append(torch2tt_tensor(A, devices[device_idx], ttl.tensor.Layout.TILE, in0_mem_config, in0_dtype))
         b_t.append(torch2tt_tensor(B, devices[device_idx], ttl.tensor.Layout.TILE, in1_mem_config, in1_dtype))
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=in_block_w,
         out_subblock_h=out_subblock_h,
@@ -122,12 +123,12 @@ def test_reproduce_matmul_2d_hang(
     # First run for a reference output
     for device_idx in range(num_devices):
         out.append(
-            ttl.operations.primary.matmul(
+            ttnn.matmul(
                 a_t[device_idx],
                 b_t[device_idx],
                 program_config=program_config,
-                output_mem_config=out_mem_config,
-                output_dtype=out_dtype,
+                memory_config=out_mem_config,
+                dtype=out_dtype,
                 compute_kernel_config=compute_config,
             )
         )
@@ -140,12 +141,12 @@ def test_reproduce_matmul_2d_hang(
     for i in range(loop_count):
         for device_idx in range(num_devices):
             out[device_idx].deallocate(True)
-            out[device_idx] = ttl.operations.primary.matmul(
+            out[device_idx] = ttnn.matmul(
                 a_t[device_idx],
                 b_t[device_idx],
                 program_config=program_config,
-                output_mem_config=out_mem_config,
-                output_dtype=out_dtype,
+                memory_config=out_mem_config,
+                dtype=out_dtype,
                 compute_kernel_config=compute_config,
             )
 
