@@ -131,8 +131,8 @@ def run(
         core_grid=core_grid or device.core_grid,
         compute_kernel_config=compute_kernel_config,
     )
-    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
     # TODO: For larger inner dims (ie. 2048), output in bfloat8_b will have low PCC
     expected_pcc = 0.99

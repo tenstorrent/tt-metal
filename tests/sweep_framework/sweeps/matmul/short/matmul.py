@@ -77,7 +77,7 @@ def run(
     output_tensor = ttnn.matmul(
         input_tensor_a, input_tensor_b, dtype=output_dtype, memory_config=output_memory_config, core_grid=core_grid
     )
-    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]

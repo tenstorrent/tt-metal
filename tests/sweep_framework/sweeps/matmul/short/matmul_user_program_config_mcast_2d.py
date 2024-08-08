@@ -516,8 +516,8 @@ def run(
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
-    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
