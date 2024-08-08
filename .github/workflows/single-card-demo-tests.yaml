@@ -1,4 +1,4 @@
-name: "[Single-card] Demo tests"
+name: "(Single-card) Demo tests"
 
 on:
   workflow_dispatch:
