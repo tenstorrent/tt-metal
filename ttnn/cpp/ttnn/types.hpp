@@ -78,7 +78,7 @@ class Buffer : public tt::tt_metal::Buffer, public std::enable_shared_from_this<
             this->deallocate(); // Asynchronously clean up device state used by this buffer
         }
         uint32_t address() {
-            while (not this->allocated_); // Wait until buffer is allocated
+            this->allocated_.wait(false); // Wait until buffer is allocated
             return static_cast<tt::tt_metal::Buffer*>(this)->address();
         }
 
@@ -96,7 +96,9 @@ class Buffer : public tt::tt_metal::Buffer, public std::enable_shared_from_this<
             this->device()->push_work([shared_buffer_ptr = shared_from_this()] () mutable {
                 bool bottom_up = shared_buffer_ptr->buffer_type() == BufferType::DRAM;
                 tt::tt_metal::detail::AllocateBuffer(shared_buffer_ptr.get(), bottom_up);
-                shared_buffer_ptr->allocated_ = true; // Notify address getter that this buffer was allocated
+                // Notify address getter that this buffer was allocated
+                shared_buffer_ptr->allocated_ = true;
+                shared_buffer_ptr->allocated_.notify_one();
                 // The address inserted here, will be used during asynchronous deallocate
                 Buffer::buf_id_to_address_map.insert({shared_buffer_ptr->buffer_instance_id, shared_buffer_ptr->address()});
             });
