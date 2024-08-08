@@ -4,6 +4,8 @@ FROM ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 
+RUN touch /tmp/invalidate_docker.txt
+
 # Install build and runtime deps
 COPY /scripts/docker/requirements.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
