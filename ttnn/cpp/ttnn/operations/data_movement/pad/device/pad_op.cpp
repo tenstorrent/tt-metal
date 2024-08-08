@@ -31,8 +31,18 @@ void Pad::validate_with_output_tensors(
         TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
         TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
+
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR);
+
+        TT_FATAL(this->output_mem_config.is_sharded());
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+
+        const auto shard_spec = input_tensor.shard_spec().value();
+        TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1]);
+        TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2]);
+    }
 }
 
 std::vector<tt::tt_metal::Shape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -42,17 +52,31 @@ std::vector<tt::tt_metal::Shape> Pad::compute_output_shapes(const std::vector<Te
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto shapes = compute_output_shapes(input_tensors);
-    return {create_device_tensor(shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+
+    if (this->output_mem_config.is_sharded()) {
+        return {create_device_tensor(
+            shapes[0],
+            input_tensor.get_dtype(),
+            input_tensor.get_layout(),
+            input_tensor.device(),
+            this->output_mem_config)};
+    } else {
+        return {create_device_tensor(shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+    }
 }
 
 operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        if (use_multicore) {
-            return detail::pad_rm_reader_writer_multi_core_v2(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        if (input_tensor.is_sharded()) {
+            return detail::pad_rm_sharded(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         } else {
-            return detail::pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            if (use_multicore) {
+                return detail::pad_rm_reader_writer_multi_core_v2(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            } else {
+                return detail::pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            }
         }
     } else if (input_tensor.get_layout() == Layout::TILE) {
         if (this->use_multicore) {
