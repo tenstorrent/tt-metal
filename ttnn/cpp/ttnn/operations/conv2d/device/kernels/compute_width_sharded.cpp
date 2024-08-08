@@ -94,7 +94,7 @@ void MAIN {
     constexpr uint32_t in1_block_w            = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
     constexpr uint32_t in0_num_blocks_h       = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_num_blocks_w       = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_num_blocks_w       = get_compile_time_arg_val(9); // Total number of blocks along width.
     constexpr uint32_t in1_num_blocks_w       = get_compile_time_arg_val(10);
     constexpr uint32_t out_subblock_h         = get_compile_time_arg_val(11); // inner row block size in tiles
     constexpr uint32_t out_subblock_w         = get_compile_time_arg_val(12); // inner column block size in tiles
@@ -131,30 +131,12 @@ void MAIN {
     #endif
 
     constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
-    #ifdef PACKER_L1_ACC
-    DPRINT_MATH(DPRINT<<"Packer L1 Acc"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No Packer L1 Acc"<<"\n";)
-    #endif
-    #ifdef PRE_TILIZE
-    DPRINT_MATH(DPRINT<<"PRE_TILIZE"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No PRE_TILIZE"<<"\n";)
-    #endif
-
-    #ifdef FUSE_BIAS
-    DPRINT_MATH(DPRINT<<"FUSE_BIAS"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No FUSE_BIAS"<<"\n";)
-    #endif
 
     #ifdef SPLIT_READER
-    DPRINT_MATH(DPRINT<<"Split Reader Enabled"<<"\n";)
     constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks - in0_num_subblocks_read_last;
     #else
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
-    DPRINT_MATH(DPRINT<<"No Split Reader"<<"\n";)
     #endif
 
 
@@ -180,7 +162,10 @@ void MAIN {
             UNPACK( const uint32_t partials_cb_read_ptr = cb_interface[matmul_partials_cb].fifo_rd_ptr );
             PACK( const uint32_t partials_cb_write_ptr = cb_interface[matmul_partials_cb].fifo_wr_ptr );
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
+            //Iterates over total number of blocks across the entire Tensor.
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
+                //Tilization is carried out multiple times for each core along the width dimension.
+                //At the beginning of each width block in the reader kernel do tilization.
                 if(in0_block_w_i%in0_nblocks_w_tilize==0)
                 {
                     #ifdef PRE_TILIZE

@@ -594,8 +594,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
+
+    //Number of bytes to be read from the channel dimension in one block.
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (total_num_cores*per_core_num_blocks_act_w);
 
+    //Compute only on cores that have an input shard.
     CoreRangeSet all_cores = a.memory_config().shard_spec.value().grid;
 
 
@@ -725,7 +728,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (weight_matrix_width_ntiles * input_channels_padded)/32,    //weight_next_channel_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_this_core_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
-        per_core_num_blocks_act_w,
+                                         per_core_num_blocks_act_w,
         total_num_cores,                                            //other_core_weight_height_blocks
         per_core_num_blocks_act_w,                                  //this_core_weight_height_blocks
         bias_cb,
@@ -793,7 +796,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         out_subblock_w_ntiles,        //out_sublock_w
         out_subblock_num_tiles,       //out_sublock_num_tiles
 
-        total_num_cores,              //in0_nblocks_w_tilize
+        total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
         tilize_in0,                   //tilize_in0
         untilize_out,                 //untilize_out
@@ -959,13 +962,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         std::vector<uint32_t> rt_args = {
             core_x,
             core_y,
-            full_core_grid.x,
+            full_core_grid.x, //num_cores_x
         };
+
+        //Mcast X Lookup table
         rt_args.insert(
             rt_args.end(),
             act_mcast_noc_x.begin(),
             act_mcast_noc_x.end()
         );
+
+        //Mcast Y Lookup Table
         rt_args.insert(
             rt_args.end(),
             act_mcast_noc_y.begin(),
