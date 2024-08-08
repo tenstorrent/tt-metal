@@ -159,10 +159,10 @@ class TtFalconModelShared(torch.nn.Module):
                 )
                 # Repeat attn masks for all heads
                 for i in range(self.num_devices):
-                    tt_attention_mask[i] = ttnn.experimental.tensor.repeat(
+                    tt_attention_mask[i] = ttnn.repeat(
                         tt_attention_mask[i],
-                        [1, self.config.num_attention_heads, 1, 1],
-                        output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
+                        ttnn.Shape([1, self.config.num_attention_heads, 1, 1]),
+                        memory_config=self.model_config["ATTN_MASK_MEMCFG"],
                     )
                 # Tilize attn masks
                 for i in range(self.num_devices):
