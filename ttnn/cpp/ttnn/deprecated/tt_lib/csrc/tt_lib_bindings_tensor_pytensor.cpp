@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 
 namespace tt::tt_metal::detail {
 

@@ -11,7 +11,7 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include <type_traits>
 #include <optional>

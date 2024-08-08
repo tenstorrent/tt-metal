@@ -10,8 +10,8 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operation_history.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unique_any.hpp"
