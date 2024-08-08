@@ -10,7 +10,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [20, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20-device_params0", 7700],
+        [20, "False-LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20-device_params0", 7700],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
