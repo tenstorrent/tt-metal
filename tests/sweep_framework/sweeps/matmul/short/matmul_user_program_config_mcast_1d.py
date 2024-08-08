@@ -315,7 +315,7 @@ def run(
     else:
         input_a_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    if output_memory_config == "TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG":
+    if output_memory_config == TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG:
         output_memory_config = (
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if program_config.mcast_in0 else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )

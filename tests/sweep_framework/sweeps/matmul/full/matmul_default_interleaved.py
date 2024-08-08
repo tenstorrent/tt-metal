@@ -26,12 +26,6 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat8_b],
         "output_dtype": [ttnn.bfloat16],
-        # "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        # "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        # "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        # "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        # "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "compute_kernel_config": [None],
     }
