@@ -389,15 +389,17 @@ Tensor create_device_tensor(
     DataType dtype,
     Layout layout,
     Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    bool allocate = false);
 
 static Tensor create_device_tensor(
     const ttnn::Shape &shape,
     DataType dtype,
     Layout layout,
     Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return create_device_tensor(shape.value, dtype, layout, device, memory_config);
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    bool allocate = false) {
+    return create_device_tensor(shape.value, dtype, layout, device, memory_config, allocate);
 }
 
 // template<typename Buffer>

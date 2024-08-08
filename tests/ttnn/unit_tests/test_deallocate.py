@@ -24,6 +24,8 @@ def test_deallocate(device, h, w):
     output_tensor_reference = ttnn.reshape(output_tensor, (h, w))
 
     ttnn.deallocate(output_tensor)
+    ttnn.synchronize_device(device)
+
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
 

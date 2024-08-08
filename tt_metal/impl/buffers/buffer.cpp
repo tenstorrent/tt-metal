@@ -126,7 +126,8 @@ Buffer::Buffer(
     page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
-    shard_parameters_(shard_parameters) {
+    shard_parameters_(shard_parameters),
+    is_allocated_(false) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
@@ -311,6 +312,7 @@ void Buffer::deallocate() {
     }
     // Mark as deallocated
     this->size_ = 0;
+    this->set_is_allocated(false);
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
     detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
     detail::DeallocateBuffer(this);

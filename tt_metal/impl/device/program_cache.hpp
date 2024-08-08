@@ -27,8 +27,7 @@ struct ProgramCache {
 
     template <typename T>
     inline void insert(uint64_t program_hash, T&& program) {
-        using cache_t = decltype(this->cache_);
-        this->cache_.try_emplace(program_hash, program);
+        this->cache_.insert({program_hash, std::move(program)});
     }
 
     void enable() {

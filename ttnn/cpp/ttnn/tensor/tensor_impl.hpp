@@ -255,7 +255,8 @@ DeviceBuffer allocate_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
+    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt,
+    bool allocate = true);
 
 template <typename T>
 inline void read_data_from_device_buffer(

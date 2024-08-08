@@ -208,7 +208,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
                 auto memory_config = operation_attributes.memory_config;
                 memory_config.shard_spec = shard_spec;
                 return create_device_tensor(
-                    output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+                    output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config, false);
             }
         } else {
             if (operation_attributes.memory_config.is_sharded()) {
@@ -220,7 +220,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
                 auto memory_config = operation_attributes.memory_config;
                 memory_config.shard_spec = shard_spec;
                 return create_device_tensor(
-                    output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+                    output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config, false);
             }
         }
         return create_device_tensor(
@@ -228,7 +228,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             operation_attributes.dtype,
             Layout::TILE,
             input_tensor_a.device(),
-            operation_attributes.memory_config);
+            operation_attributes.memory_config, false);
     }
 }
 
