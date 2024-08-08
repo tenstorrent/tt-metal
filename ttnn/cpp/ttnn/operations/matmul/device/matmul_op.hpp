@@ -359,4 +359,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
     const bool matmul = false,
     const std::optional<const CoreCoord> user_core_coord = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+
 }  // namespace bmm_op_utils
