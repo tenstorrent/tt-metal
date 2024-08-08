@@ -12,14 +12,14 @@ from models.utility_functions import (
 import os
 import torch
 from typing import Optional, Dict
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
     permute_conv_parameters,
     weight_to_bfp8,
     dealloc_input,
 )
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 from loguru import logger
 
 

@@ -14,11 +14,8 @@ from models.utility_functions import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
-# from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
-    transformer_2d_model as transformer_2d_model_tt2,
-)
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
 )
@@ -223,66 +220,43 @@ def test_transformer_2d_model_512x512(
         encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    tt1 = False
-    if tt1:
-        ttnn_transformer = transformer_2d_model(
-            hidden_states=ttnn_hidden_state,
-            parameters=parameters,
-            config=config,
-            encoder_hidden_states=ttnn_encoder_hidden_states,
-            timestep=timestep,
-            class_labels=class_labels,
-            cross_attention_kwargs=cross_attention_kwargs,
-            return_dict=return_dict,
-            num_attention_heads=num_attention_heads,
-            attention_head_dim=attention_head_dim,
-            in_channels=in_channels,
-            out_channels=in_channels,
-            num_layers=num_layers,
-            norm_num_groups=norm_num_groups,
-            norm_type=norm_type,
-            device=device,
-            cross_attention_dim=cross_attention_dim,
-            upcast_attention=upcast_attention,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-        model = transformer_2d_model_tt2(
-            device, parameters, {}, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
-        )
-        ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
-        output = model(
-            hidden_states=ttnn_hidden_state,
-            config=config,
-            encoder_hidden_states=ttnn_encoder_hidden_states,
-            timestep=timestep,
-            class_labels=class_labels,
-            cross_attention_kwargs=cross_attention_kwargs,
-            return_dict=return_dict,
-            num_attention_heads=num_attention_heads,
-            attention_head_dim=attention_head_dim,
-            in_channels=in_channels,
-            out_channels=in_channels,
-            num_layers=num_layers,
-            norm_num_groups=norm_num_groups,
-            norm_type=norm_type,
-            cross_attention_dim=cross_attention_dim,
-            upcast_attention=upcast_attention,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = transformer_2d_model(
+        device, parameters, {}, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
+    )
+    ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
+    output = model(
+        hidden_states=ttnn_hidden_state,
+        config=config,
+        encoder_hidden_states=ttnn_encoder_hidden_states,
+        timestep=timestep,
+        class_labels=class_labels,
+        cross_attention_kwargs=cross_attention_kwargs,
+        return_dict=return_dict,
+        num_attention_heads=num_attention_heads,
+        attention_head_dim=attention_head_dim,
+        in_channels=in_channels,
+        out_channels=in_channels,
+        num_layers=num_layers,
+        norm_num_groups=norm_num_groups,
+        norm_type=norm_type,
+        cross_attention_dim=cross_attention_dim,
+        upcast_attention=upcast_attention,
+    )
 
-        output = post_process_output(
-            model.device,
-            output,
-            model.batch_size,
-            model.input_height,
-            model.input_width,
-            model.proj_out_out_channels,
-        )
+    output = post_process_output(
+        model.device,
+        output,
+        model.batch_size,
+        model.input_height,
+        model.input_width,
+        model.proj_out_out_channels,
+    )
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

@@ -9,16 +9,16 @@ from typing import Optional, Dict
 import os
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_basic_transformer_block import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block,
 )
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
     pad_group_norm_weight,
     permute_conv_parameters,
     dealloc_input,
 )
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 from loguru import logger
 

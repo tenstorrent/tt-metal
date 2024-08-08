@@ -5,8 +5,8 @@
 import ttnn
 import torch
 from typing import Optional
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_downsample_2d import downsample_2d
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
 
 
 class downblock2d:

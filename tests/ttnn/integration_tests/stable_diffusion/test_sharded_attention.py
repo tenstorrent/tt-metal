@@ -16,7 +16,7 @@ from models.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_grayskull,
 )
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
     determine_blocking,
 )
