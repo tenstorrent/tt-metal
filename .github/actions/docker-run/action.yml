@@ -1,0 +1,69 @@
+name: "Run set of commands in Docker"
+description: "Run commands in docker"
+
+inputs:
+  run_args:
+    description: 'Commands to run in docker'
+    required: true
+  docker_image:
+    description: 'Docker image to run commands in'
+    required: false
+    default: tt-metalium/ubuntu-20.04-amd64
+  docker_image_arch:
+    description: 'Is this a wormhole.b0, grayskull, or blackhole image'
+    required: true
+  docker_username:
+    description: docker login username
+    required: true
+  docker_password:
+    description: docker login password
+    required: true
+  docker_opts:
+    description: 'Docker options'
+    required: false
+
+runs:
+  using: "composite"
+  steps:  
+    - name: Set up dynamic env vars for build
+      shell: bash
+      run: |
+        echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+        echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+        echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
+    - name: Create correct Docker Tag
+      shell: bash
+      run: |
+        if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+          echo "BASE_IMAGE_TAG=latest" >> $GITHUB_ENV
+          echo "OUTPUT_IMAGE_TAG=${{ env.ARCH_NAME }}" >> $GITHUB_ENV
+        else
+          echo "BASE_IMAGE_TAG=${GITHUB_ACTOR}" >> $GITHUB_ENV
+          echo "OUTPUT_IMAGE_TAG=dev-${GITHUB_ACTOR}.${{ inputs.docker_image_arch }}.${{ github.sha }}" >> $GITHUB_ENV
+          echo "RUNNER UID"
+          echo "${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}"
+        fi
+    - name: Docker login
+      uses: docker/login-action@v3
+      with:
+        registry: https://ghcr.io
+        username: ${{ inputs.docker_username }}
+        password: ${{ inputs.docker_password }}
+    - uses: addnab/docker-run-action@v3
+      with:
+        shell: bash
+        username: ${{ inputs.docker_username }}
+        password: ${{ inputs.docker_password }}
+        registry: ghcr.io
+        image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}/${{ inputs.docker_image_arch }}:${{ env.OUTPUT_IMAGE_TAG }}
+        options: |
+          -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+          -v ${{ github.workspace }}:/app/mtl
+          -v /home/ubuntu/.cache/huggingface:/home/ubuntu/.cache/huggingface
+          -v /home/ubuntu/.cache/matplotlib:/home/ubuntu/.cache/matplotlib
+          -v /home/ubuntu/.cache/pre-commit:/home/ubuntu/.cache/pre-commit
+          -v /home/ubuntu/.cache/torch:/home/ubuntu/.cache/torch
+          --net=host
+          ${{ inputs.docker_opts }}
+        run: |
+          ${{ inputs.run_args }}
